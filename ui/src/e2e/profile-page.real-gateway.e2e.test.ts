@@ -1,6 +1,7 @@
 // Control UI proof against an isolated real Gateway and trusted user identity.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Page, WebSocket as PlaywrightWebSocket } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
@@ -8,6 +9,7 @@ import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -18,6 +20,79 @@ const suite = createControlUiE2eSuite({
 });
 
 const authenticatedUser = "primary.user@example.test";
+const onboardingName = "Integration Test Person";
+
+function observeGatewayMethodResponse(page: Page, method: string) {
+  const subscriptions: Array<{
+    socket: PlaywrightWebSocket;
+    onFrameSent: (event: { payload: string | Buffer }) => void;
+    onFrameReceived: (event: { payload: string | Buffer }) => void;
+    onClose: () => void;
+  }> = [];
+  let resolveResponse!: (payload: unknown) => void;
+  let rejectResponse!: (error: Error) => void;
+  let settled = false;
+  const response = new Promise<unknown>((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
+  });
+  void response.catch(() => {});
+  const settle = (payload?: unknown, error?: Error) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (error) {
+      rejectResponse(error);
+    } else {
+      resolveResponse(payload);
+    }
+  };
+  const onSocket = (socket: PlaywrightWebSocket) => {
+    const pending = new Set<string>();
+    const onFrameSent = ({ payload }: { payload: string | Buffer }) => {
+      try {
+        const frame = JSON.parse(String(payload)) as Record<string, unknown>;
+        if (frame.type === "req" && frame.method === method && typeof frame.id === "string") {
+          pending.add(frame.id);
+        }
+      } catch {
+        // Ignore non-JSON frames; only matching Gateway RPC receipts establish readiness.
+      }
+    };
+    const onFrameReceived = ({ payload }: { payload: string | Buffer }) => {
+      try {
+        const frame = JSON.parse(String(payload)) as Record<string, unknown>;
+        if (frame.type === "res" && typeof frame.id === "string" && pending.delete(frame.id)) {
+          settle(
+            frame.payload,
+            frame.ok === true ? undefined : new Error(`Gateway ${method} request failed`),
+          );
+        }
+      } catch {
+        // Ignore non-JSON frames; only matching Gateway RPC receipts establish readiness.
+      }
+    };
+    const onClose = () => pending.clear();
+    subscriptions.push({ socket, onFrameSent, onFrameReceived, onClose });
+    socket.on("framesent", onFrameSent);
+    socket.on("framereceived", onFrameReceived);
+    socket.on("close", onClose);
+  };
+  page.on("websocket", onSocket);
+  return {
+    response,
+    stop() {
+      page.off("websocket", onSocket);
+      for (const { socket, onFrameSent, onFrameReceived, onClose } of subscriptions) {
+        socket.off("framesent", onFrameSent);
+        socket.off("framereceived", onFrameReceived);
+        socket.off("close", onClose);
+      }
+      subscriptions.length = 0;
+    },
+  };
+}
 
 suite.define(() => {
   it("shows the authenticated user instead of the default agent through a real Gateway", async () => {
@@ -131,6 +206,9 @@ suite.define(() => {
             : {}),
         },
         async ({ page }) => {
+          await page.context().addInitScript((inviteKey) => {
+            localStorage.setItem(inviteKey, JSON.stringify({ dismissedAtMs: 1770000000000 }));
+          }, COMMUNITY_INVITE_KEY);
           const url = new URL("settings/profile", suite.server.baseUrl);
           url.hash = new URLSearchParams({ gatewayUrl: gatewayUrl.href }).toString();
           const response = await page.goto(url.href);
@@ -179,6 +257,99 @@ suite.define(() => {
               path: path.join(proofDir, "02-real-gateway-cleared-profile.png"),
             });
           }
+
+          const onboardingUrl = new URL("custodian?onboarding=1", suite.server.baseUrl);
+          const profileUrl = new URL("settings/profile", suite.server.baseUrl);
+          await editor.goto(onboardingUrl.href);
+          const onboardingPrompt = editor.locator(".custodian__name-prompt");
+          await onboardingPrompt.waitFor({ state: "visible" });
+          await expect
+            .poll(() => editor.locator("#custodian-onboarding-display-name").inputValue())
+            .toBe("");
+          if (proofDir) {
+            await editor.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "03-real-gateway-onboarding-name-prompt.png"),
+            });
+          }
+
+          await editor.getByRole("button", { name: "Maybe later", exact: true }).click();
+          await expect.poll(() => onboardingPrompt.count()).toBe(0);
+          await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
+          if (proofDir) {
+            await editor.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "04-real-gateway-onboarding-skipped.png"),
+            });
+          }
+
+          await editor.goto(profileUrl.href);
+          await expect
+            .poll(() => editor.locator(".profile-hero__name").textContent())
+            .toBe(authenticatedUser);
+          await expect
+            .poll(() => editor.locator(".identity-name-control input").inputValue())
+            .toBe("");
+
+          await editor.goto(onboardingUrl.href);
+          await editor.locator(".custodian__name-prompt").waitFor({ state: "visible" });
+          await editor.getByLabel("Your name", { exact: true }).fill(onboardingName);
+          await editor.getByRole("button", { name: "Save name", exact: true }).click();
+          await expect.poll(() => editor.locator(".custodian__name-prompt").count()).toBe(0);
+          await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
+
+          await editor.goto(profileUrl.href);
+          await expect
+            .poll(() => editor.locator(".profile-hero__name").textContent())
+            .toBe(onboardingName);
+          await expect
+            .poll(() => editor.locator(".identity-name-control input").inputValue())
+            .toBe(onboardingName);
+          if (proofDir) {
+            await editor.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "05-real-gateway-profile-name-persisted.png"),
+            });
+          }
+
+          const selfProfileRead = observeGatewayMethodResponse(editor, "users.self");
+          try {
+            await editor.goto(onboardingUrl.href);
+            const selfProfileResult = await selfProfileRead.response;
+            expect(selfProfileResult).toMatchObject({ profile: { displayName: onboardingName } });
+            const custodianPage = editor.locator("openclaw-custodian-page");
+            await expect
+              .poll(() =>
+                custodianPage.evaluate((element) => {
+                  const custodian = element as HTMLElement & {
+                    onboardingNameProfile: { displayName?: string | null } | null;
+                  };
+                  return custodian.onboardingNameProfile?.displayName ?? null;
+                }),
+              )
+              .toBe(onboardingName);
+            await custodianPage.evaluate(async (element) => {
+              await (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+            });
+            await expect.poll(() => editor.locator(".custodian__name-prompt").count()).toBe(0);
+            await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
+            if (proofDir) {
+              await editor.screenshot({
+                animations: "disabled",
+                path: path.join(proofDir, "06-real-gateway-onboarding-existing-name.png"),
+              });
+            }
+          } finally {
+            selfProfileRead.stop();
+          }
+
+          await editor.goto(profileUrl.href);
+          await expect
+            .poll(() => editor.locator(".profile-hero__name").textContent())
+            .toBe(onboardingName);
+          await expect
+            .poll(() => editor.locator(".identity-name-control input").inputValue())
+            .toBe(onboardingName);
         },
       );
     } finally {

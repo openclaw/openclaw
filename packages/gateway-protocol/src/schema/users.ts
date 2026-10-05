@@ -162,6 +162,7 @@ export const UsersListChannelIdentitiesResultSchema = closedObject({
 export const UsersSetDisplayNameParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
   displayName: Type.Union([UserProfileDisplayNameSchema, Type.Null()]),
+  onlyIfUnset: Type.Optional(Type.Boolean()),
 });
 export const UsersSetDisplayNameResultSchema = closedObject({ profile: UserProfileSchema });
 

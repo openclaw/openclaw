@@ -127,8 +127,8 @@ const userProfileWriteOperations = {
   ),
   "userProfiles.setDisplayName": createUserProfileWriteOperation(
     "userProfiles.setDisplayName",
-    (input: { profileId: string; name: string | null }, owned, display) => ({
-      profile: setDisplayName(input.profileId, input.name, owned),
+    (input: { profileId: string; name: string | null; onlyIfUnset?: boolean }, owned, display) => ({
+      profile: setDisplayName(input.profileId, input.name, owned, input.onlyIfUnset),
       display: display(),
     }),
     (input) => input.profileId,

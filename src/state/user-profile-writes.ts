@@ -203,8 +203,15 @@ export async function setCanonicalUserProfileDisplayName(
   profileId: string,
   name: string | null,
   options: ProfileWriteOptions = {},
+  onlyIfUnset = false,
 ) {
-  return unwrap(await write("userProfiles.setDisplayName", { profileId, name }, options));
+  return unwrap(
+    await write(
+      "userProfiles.setDisplayName",
+      { profileId, name, ...(onlyIfUnset ? { onlyIfUnset: true } : {}) },
+      options,
+    ),
+  );
 }
 export async function setCanonicalUserProfileAvatar(
   profileId: string,
