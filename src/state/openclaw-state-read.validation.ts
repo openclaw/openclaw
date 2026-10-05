@@ -46,6 +46,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         isRecord(input.command.input) &&
         typeof input.command.input.channel === "string" &&
         typeof input.command.input.accountId === "string") ||
+      (input.command.type === "sessionState.pendingNotices" && input.command.input === undefined) ||
       (input.command.type === "sessionState.ambientTargets" &&
         isRecord(input.command.input) &&
         typeof input.command.input.watcherSessionKey === "string") ||

@@ -13,9 +13,11 @@ import {
   SubagentRegistryMutationRejectedError,
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
+  isRequesterCompletionCohortCurrent,
   isRequesterYieldCohortMember,
   isRequesterSettleWakeForRun,
 } from "./subagent-requester-settle-identity.js";
@@ -210,19 +212,39 @@ export function listUnsettledRequesterChildrenInRuns(params: {
 }
 
 /** Completion children that a requester turn still claims. */
-function selectRequesterTurnChildren(
-  runs: Map<string, SubagentRunRecord>,
+export function selectRequesterTurnChildren(
+  runs: ReadonlyMap<string, SubagentRunRecord>,
   requesterSessionKey: string,
   requesterAgentId: string | undefined,
   requesterTurnRunId: string,
+  onSuperseded?: (entry: SubagentRunRecord) => void,
 ): SubagentRunRecord[] {
-  return [...runs.values()].filter(
-    (entry) =>
-      entry.requesterSessionKey === requesterSessionKey &&
-      (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
-      entry.requesterTurnRunId === requesterTurnRunId &&
-      entry.expectsCompletionMessage === true,
-  );
+  return [...runs.values()]
+    .filter(
+      (entry) =>
+        entry.requesterSessionKey === requesterSessionKey &&
+        (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
+        entry.requesterTurnRunId === requesterTurnRunId &&
+        entry.expectsCompletionMessage === true,
+    )
+    .filter((entry) => {
+      if (
+        isRequesterCompletionCohortCurrent(
+          entry,
+          (key, matches, childAgentId) =>
+            getLatestSubagentRunByChildSessionKeyFromRuns(
+              runs.values(),
+              key,
+              matches,
+              childAgentId,
+            ) ?? null,
+        )
+      ) {
+        return true;
+      }
+      onSuperseded?.(entry);
+      return false;
+    });
 }
 
 const nextRearmGeneration = (entries: readonly SubagentRunRecord[]) =>

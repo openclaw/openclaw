@@ -15,15 +15,7 @@ function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normal
   return last ? normalizeCodexResponseTokenUsage(last) : undefined;
 }
 
-export function readCodexThreadContextSnapshot(params: JsonObject): {
-  activeContextTokens?: number;
-  cachedInputTokens?: number;
-  cacheWriteInputTokens?: number;
-  inputTokens?: number;
-  modelContextWindow?: number;
-  promptTokens?: number;
-  reasoningOutputTokens?: number;
-} {
+export function readCodexThreadContextSnapshot(params: JsonObject) {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
   const modelContextWindow = tokenUsage

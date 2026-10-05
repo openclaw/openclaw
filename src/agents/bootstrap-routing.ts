@@ -40,7 +40,6 @@ type WorkspaceBootstrapRouting = {
   /** Every workspace bootstrap file reached the prompt, so a continuation can skip re-injection. */
   deliversCompleteWorkspaceContext: boolean;
   includeBootstrapInSystemContext: boolean;
-  includeBootstrapInRuntimeContext: boolean;
 };
 
 /**
@@ -82,6 +81,5 @@ export async function resolveWorkspaceBootstrapRouting(
       (bootstrapMode === "full" || !(workspaceBootstrapPending || hasBootstrapContent)) &&
       !(params.bootstrapFiles ?? []).some(isUnreadableWorkspaceBootstrapFile),
     includeBootstrapInSystemContext: bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
   };
 }

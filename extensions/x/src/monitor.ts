@@ -6,10 +6,18 @@ import {
   createChannelIngressMonitor,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import type { ResolvedXAccount } from "./accounts.js";
+import { resolveXAccount, type ResolvedXAccount } from "./accounts.js";
+import { XAllowlistChangedError } from "./allowlist.js";
 import { parseXPost, parseXPostEnvelope, type XPostEnvelope } from "./api.js";
 import { getXApi, getXTokenState } from "./client.js";
 import { runXEvents, type XEventStatus } from "./events.js";
+import {
+  formatXSenderLine,
+  resolveXGuestSettings,
+  resolveXGuestToolPolicy,
+} from "./guest-policy.js";
+import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
+import { getXGuestStatus, resolveXGuestContainmentError } from "./guests.js";
 import { resolveXIngress, xMentionFacts } from "./ingress.js";
 import type { XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
@@ -18,7 +26,12 @@ import { assembleXThread } from "./thread.js";
 
 const InvalidXEvent = createChannelIngressError("InvalidXEvent");
 type IngressPayload = { version: number; rawEvent: string };
-type Stats = XEventStatus & { droppedMentions: number; lastDroppedAuthor?: string };
+type Stats = XEventStatus & {
+  droppedMentions: number;
+  lastDroppedAuthor?: string;
+  guestModeBlockedReason?: string;
+  guests?: Awaited<ReturnType<typeof getXGuestStatus>>;
+};
 
 export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>) {
   const core = getXRuntime();
@@ -27,6 +40,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
   const api = await getXApi(account.accountId, ctx.cfg);
   const log = core.logging.getChildLogger({ channel: "x", accountId: account.accountId });
   const stats: Stats = { droppedMentions: 0 };
+  const guestUsage = openXGuestUsage(core);
   const publish = (next: Partial<Stats> = {}) => {
     Object.assign(stats, next);
     if (next.message) {
@@ -35,6 +49,15 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
     ctx.setStatus({
       ...ctx.getStatus(),
       ...stats,
+      ...(stats.guests
+        ? {
+            guests: {
+              ...stats.guests,
+              enabled: resolveXGuestSettings(resolveXAccount(readConfig(), account.accountId))
+                .enabled,
+            },
+          }
+        : {}),
       accountId: account.accountId,
       mode: stats.eventMode,
       connected: stats.eventMode === "poll" || stats.streamConnected,
@@ -96,17 +119,75 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
     abortSignal: ctx.abortSignal,
     deliver: async ({ post, users }, lifecycle) => {
       let cfg = readConfig();
-      const { ingress: initial } = await resolveXIngress(account.accountId, post, cfg);
+      const initialAuthorization = await resolveXIngress(account.accountId, post, cfg);
+      const initial = initialAuthorization.ingress;
       if (post.author_id === account.userId || !initial.senderAccess.allowed) {
         publish({ droppedMentions: stats.droppedMentions + 1, lastDroppedAuthor: post.author_id });
         log.info(`mention post=${post.id} author=${post.author_id} dropped`);
+        return;
+      }
+      const admitGuest = async (
+        authorization: typeof initialAuthorization,
+        currentCfg: typeof cfg,
+      ) => {
+        const guestAccount = resolveXAccount(currentCfg, account.accountId);
+        const { route: guestRoute } = resolveChannelInboundRouteEnvelope({
+          cfg: currentCfg,
+          channel: "x",
+          accountId: account.accountId,
+          peer: { kind: "group", id: post.conversation_id },
+        });
+        const blocked = resolveXGuestContainmentError(currentCfg, guestRoute.agentId);
+        const assertGuestCurrent = () => {
+          assertCurrent();
+          lifecycle.abortSignal.throwIfAborted();
+          authorization.assertCurrent();
+          if (currentCfg !== readConfig()) {
+            throw new Error("X guest configuration changed during admission; retrying mention");
+          }
+        };
+        let admitted = false;
+        let blockedReason = blocked;
+        if (!blockedReason) {
+          try {
+            admitted = await guestUsage.admit({
+              accountId: account.accountId,
+              authorId: post.author_id,
+              postId: post.id,
+              limit: resolveXGuestSettings(guestAccount).maxMentionsPerAuthorPerDay,
+              assertCurrent: assertGuestCurrent,
+            });
+          } catch (error) {
+            if (!(error instanceof XGuestUsageUnavailableError)) {
+              throw error;
+            }
+            blockedReason = error.message;
+          }
+        }
+        const guests = await getXGuestStatus(core, guestAccount, currentCfg, guestRoute.agentId);
+        assertGuestCurrent();
+        publish({
+          guests,
+          guestModeBlockedReason: blockedReason,
+          ...(blockedReason ? { message: blockedReason } : {}),
+          ...(!admitted
+            ? { droppedMentions: stats.droppedMentions + 1, lastDroppedAuthor: post.author_id }
+            : {}),
+        });
+        return admitted;
+      };
+      const initialSettings = resolveXGuestSettings(resolveXAccount(cfg, account.accountId));
+      if (initialAuthorization.tier === "guest" && !(await admitGuest(initialAuthorization, cfg))) {
         return;
       }
       const thread = await assembleXThread({
         api,
         mention: post,
         users,
-        maxPosts: account.config.threadContext?.maxPosts ?? 50,
+        maxPosts:
+          initialAuthorization.tier === "guest"
+            ? initialSettings.threadContextMaxPosts
+            : (resolveXAccount(cfg, account.accountId).config.threadContext?.maxPosts ?? 50),
         signal: lifecycle.abortSignal,
       });
       cfg = readConfig();
@@ -116,9 +197,14 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         accountId: account.accountId,
         peer: { kind: "group", id: post.conversation_id },
       });
+      // Guest mentions never reuse a maintainer's session permissions, root, or skill state.
+      const sessionKey =
+        initialAuthorization.tier === "guest"
+          ? `${route.sessionKey}:guest:${post.id}`
+          : route.sessionKey;
       const authorization = await resolveXIngress(account.accountId, post, cfg, {
         agentId: route.agentId,
-        sessionKey: route.sessionKey,
+        sessionKey,
         messageId: post.id,
         inboundEventKind: "user_request",
       });
@@ -137,12 +223,27 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         log.info(`mention post=${post.id} author=${post.author_id} dropped`);
         return;
       }
+      if (
+        authorization.tier !== initialAuthorization.tier ||
+        (authorization.tier === "guest" &&
+          initialSettings.threadContextMaxPosts !==
+            resolveXGuestSettings(resolveXAccount(cfg, account.accountId)).threadContextMaxPosts)
+      ) {
+        throw new XAllowlistChangedError();
+      }
+      const guest = authorization.tier === "guest";
+      if (guest && !(await admitGuest(authorization, cfg))) {
+        return;
+      }
       const handle =
         thread.users.find((user) => user.id === post.author_id)?.username ?? post.author_id;
       const ctxPayload = core.channel.inbound.buildContext({
         channelIngress,
         access: {
           mentions: { ...xMentionFacts, requireMention: true, explicitlyMentionedBot: true },
+          ...(guest
+            ? { toolPolicy: resolveXGuestToolPolicy(resolveXAccount(cfg, account.accountId)) }
+            : {}),
         },
         channel: "x",
         accountId: account.accountId,
@@ -159,14 +260,18 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         route: {
           agentId: route.agentId,
           accountId: route.accountId,
-          routeSessionKey: route.sessionKey,
+          routeSessionKey: sessionKey,
         },
         reply: { to: `x:${post.id}`, replyToId: post.id },
         message: {
           body: post.text,
           rawBody: post.text,
           commandBody: post.text,
-          bodyForAgent: thread.bodyForAgent,
+          bodyForAgent: `${formatXSenderLine(
+            authorization.tier,
+            post.author_id,
+            thread.users.find((user) => user.id === post.author_id),
+          )}\n${thread.bodyForAgent}`,
         },
       });
       const sessions: XVisibleWorkSession[] = [];
@@ -176,12 +281,14 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         cfg,
         channel: "x",
         accountId: account.accountId,
-        route: { agentId: route.agentId, sessionKey: route.sessionKey },
+        route: { agentId: route.agentId, sessionKey },
         ctxPayload,
         ...bindIngressLifecycleToReplyOptions(lifecycle),
         replyOptions: {
           onVisibleWorkSessions: (visible) => {
-            sessions.push(...visible);
+            if (!guest) {
+              sessions.push(...visible);
+            }
           },
         },
         delivery: {
@@ -199,7 +306,8 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
               mediaUrl: payload.mediaUrl,
               mediaUrls: payload.mediaUrls,
               mention: post,
-              visibleWorkSessions: sessions,
+              visibleWorkSessions: guest ? undefined : sessions,
+              senderTier: authorization.tier,
               signal: lifecycle.abortSignal,
             });
             ctx.setStatus({ ...ctx.getStatus(), lastOutboundAt: Date.now() });
@@ -216,6 +324,12 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         error instanceof InvalidXEvent ? { reason: "invalid-event", message: error.message } : null,
     },
   });
+  const startupConfig = readConfig();
+  stats.guests = await getXGuestStatus(
+    core,
+    resolveXAccount(startupConfig, account.accountId),
+    startupConfig,
+  );
   ingress.start();
   ctx.setStatus({ ...ctx.getStatus(), running: true, lifecycle: "ready" });
   publish();

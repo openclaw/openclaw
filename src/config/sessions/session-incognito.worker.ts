@@ -26,6 +26,7 @@ import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import {
   isIncognitoComputeCommand,
   isIncognitoComputeWrite,
+  isIncognitoStoreComputeCommand,
 } from "./session-incognito-compute-contract.js";
 import { createIncognitoComputeWorker } from "./session-incognito-compute.worker.js";
 import type {
@@ -261,7 +262,9 @@ export function createIncognitoSessionWorker(
         return { value, facts: read(sessionKey).facts };
       }
       if (isIncognitoComputeCommand(command)) {
-        assertKey(command.input.sessionKey);
+        if (!isIncognitoStoreComputeCommand(command)) {
+          assertKey(command.input.sessionKey);
+        }
         const execute = () => {
           const { value, keys } = compute.execute(command);
           return { value, facts: keys.flatMap((key) => read(key).facts) };
@@ -270,6 +273,15 @@ export function createIncognitoSessionWorker(
           return execute();
         }
         return readOnly(() => {
+          if (isIncognitoStoreComputeCommand(command)) {
+            const result = execute();
+            result.facts.forEach((fact) => assertKey(fact.sessionKey));
+            requestSqliteWorkerOperationAdmission({
+              stage: "prepare",
+              facts: { identity, sessions: result.facts },
+            });
+            return result;
+          }
           const facts = read(command.input.sessionKey).facts;
           requestSqliteWorkerOperationAdmission({
             stage: "prepare",

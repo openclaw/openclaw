@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+import { selectRequesterTurnChildren } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Reconstruct requester claims without owning retries or altering failed cohort custody. */
@@ -11,14 +12,16 @@ export async function settleRestoredRequesterTurns({
   stateContext,
   assertCurrent,
   settleRequesterTurn,
+  warn,
 }: {
   cfg: OpenClawConfig;
   runs: ReadonlyMap<string, SubagentRunRecord>;
   stateContext: OpenClawStateWorkerContext;
   assertCurrent: () => void;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
+  warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<unknown[]> {
-  const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
+  const requesterTurns = new Map<string, Map<string, SubagentRunRecord>>();
   const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
     resolveSubagentRequesterAgentId(cfg, entry);
   for (const entry of runs.values()) {
@@ -32,25 +35,33 @@ export async function settleRestoredRequesterTurns({
       turns = new Map();
       requesterTurns.set(requesterIdentity, turns);
     }
-    const entries = turns.get(requesterTurnRunId) ?? [];
-    entries.push(entry);
-    turns.set(requesterTurnRunId, entries);
+    turns.set(requesterTurnRunId, turns.get(requesterTurnRunId) ?? entry);
   }
   const transferFailures: unknown[] = [];
   for (const [, turns] of requesterTurns) {
-    for (const [requesterTurnRunId, entries] of turns) {
-      const firstEntry = entries[0];
-      if (!firstEntry) {
+    for (const [requesterTurnRunId, firstEntry] of turns) {
+      assertCurrent();
+      const requesterAgentId = resolveRequesterAgentId(firstEntry);
+      const entries = selectRequesterTurnChildren(
+        runs,
+        firstEntry.requesterSessionKey,
+        requesterAgentId,
+        requesterTurnRunId,
+        (entry) =>
+          warn("skipped superseded requester transfer during restart recovery", {
+            runId: entry.runId,
+          }),
+      );
+      if (entries.length === 0) {
         continue;
       }
-      assertCurrent();
       try {
         await settleRequesterTurn(
           {
             requesterSessionKey: firstEntry.requesterSessionKey,
             stateContext,
             assertCurrent,
-            requesterAgentId: resolveRequesterAgentId(firstEntry),
+            requesterAgentId,
             requesterTurnRunId,
             requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
             acceptedSessionSpawns: entries.map((entry) => ({

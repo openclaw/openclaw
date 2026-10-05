@@ -402,8 +402,8 @@ export async function materializePendingSupervisionBranch(
       await params.abandonClient();
       throw error;
     }
-    const cleanup = await cleanPendingSupervisionArtifacts(params.client, pending);
-    const nextPending = withPendingSupervisionCleanup(pending, cleanup.remaining);
+    const remaining = await cleanPendingSupervisionArtifacts(params.client, pending);
+    const nextPending = withPendingSupervisionCleanup(pending, remaining);
     let cleanupStateError: unknown;
     // A rejected tracking CAS permits artifact compensation, never a successor write.
     if (cleanupExpected && !isDeepStrictEqual(cleanupExpected, nextPending)) {
@@ -418,7 +418,7 @@ export async function materializePendingSupervisionBranch(
       }
     }
     const unsafeCleanup =
-      cleanup.remaining.length > 0 || error instanceof CodexAppServerUnsafeSubscriptionError;
+      remaining.length > 0 || error instanceof CodexAppServerUnsafeSubscriptionError;
     if (unsafeCleanup) {
       await params.abandonClient();
     }
@@ -436,9 +436,9 @@ export async function materializePendingSupervisionBranch(
       }
       throw cause;
     }
-    if (cleanup.remaining.length > 0) {
+    if (remaining.length > 0) {
       throw new CodexAppServerUnsafeSubscriptionError(
-        `Codex supervised branch cleanup remains pending: ${cleanup.remaining.join(", ")}`,
+        `Codex supervised branch cleanup remains pending: ${remaining.join(", ")}`,
         { cause: error },
       );
     }
@@ -573,10 +573,10 @@ async function recoverPendingSupervisionArtifacts(
   if (!pending.cleanupThreadIds?.length) {
     return pending;
   }
-  const cleanup = await cleanPendingSupervisionArtifacts(params.client, pending);
-  const next = withPendingSupervisionCleanup(pending, cleanup.remaining);
-  const incomplete = cleanup.remaining.length > 0;
-  if (!incomplete || cleanup.remaining.length !== pending.cleanupThreadIds.length) {
+  const remaining = await cleanPendingSupervisionArtifacts(params.client, pending);
+  const next = withPendingSupervisionCleanup(pending, remaining);
+  const incomplete = remaining.length > 0;
+  if (!incomplete || remaining.length !== pending.cleanupThreadIds.length) {
     const updated = await params.bindingStore.mutate(params.bindingIdentity, {
       kind: "patch-pending-supervision-branch",
       expected: pending,
@@ -593,7 +593,7 @@ async function recoverPendingSupervisionArtifacts(
   }
   if (incomplete) {
     throw new Error(
-      `Codex supervised branch cleanup must finish before retry: ${cleanup.remaining.join(", ")}`,
+      `Codex supervised branch cleanup must finish before retry: ${remaining.join(", ")}`,
     );
   }
   return next;

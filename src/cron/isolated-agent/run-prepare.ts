@@ -247,7 +247,7 @@ export async function prepareCronRunContext(params: {
       await patchSessionEntryCore(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
-        { fallbackEntry, replaceEntry: true, assertCommitAllowed },
+        { fallbackEntry, replaceEntry: true, workerGuard: { assertCurrent: assertCommitAllowed } },
       );
     };
     const persistSessionEntry = createPersistCronSessionEntry({

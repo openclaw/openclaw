@@ -56,6 +56,12 @@ type SqliteBackupAsset = {
   skippedSourcePaths: Set<string>;
 };
 
+function ignoreMissingSource(error: unknown): undefined {
+  if (!hasErrnoCode(error, "ENOENT")) {
+    throw error;
+  }
+}
+
 function findLegacyAuditBackupStateChange(
   error: unknown,
 ): LegacyAuditBackupStateChangedError | undefined {
@@ -328,12 +334,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     ...process.env,
     OPENCLAW_STATE_DIR: params.resources.stateDir,
   });
-  const globalEntry = await fs.lstat(globalPath).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const globalEntry = await fs.lstat(globalPath).catch(ignoreMissingSource);
   let globalIdentity: Stats | undefined;
   let globalGroup: BackupSqliteSourceGroup | undefined;
   if (globalEntry) {
@@ -363,12 +364,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     await captureSource(globalPath, globalGroup, globalSource);
   } else {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
-      const exists = await fs.lstat(sidecar).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const exists = await fs.lstat(sidecar).catch(ignoreMissingSource);
       if (exists) {
         throw new Error(
           `Canonical global SQLite database is missing but a sidecar remains: ${sidecar}`,
@@ -405,12 +401,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
       })),
   ];
   for (const { discoveredPath, ...database } of candidates) {
-    const identity = await fs.stat(database.sourcePath).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const identity = await fs.stat(database.sourcePath).catch(ignoreMissingSource);
     if (identity && !identity.isFile()) {
       throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
     }

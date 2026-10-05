@@ -30,9 +30,46 @@ export class XApiError extends Error {
   constructor(
     public readonly status: number,
     public readonly operation: string,
+    detail?: string,
   ) {
-    super(`X API ${operation} failed (HTTP ${status})`);
+    super(`X API ${operation} failed (HTTP ${status})${detail ? `: ${detail}` : ""}`);
     this.name = "XApiError";
+  }
+}
+
+async function readActivityErrorDetail(
+  response: Response,
+  signal: AbortSignal,
+  secrets: (string | undefined)[],
+): Promise<string | undefined> {
+  try {
+    const { readResponseWithLimit } = await import("openclaw/plugin-sdk/response-limit-runtime");
+    const body = record(
+      JSON.parse(
+        (await readResponseWithLimit(response, 16_384, { signal, timeoutMs: 30_000 })).toString(),
+      ),
+    );
+    const first = record(Array.isArray(body?.errors) ? body.errors[0] : undefined);
+    let detail = [
+      first?.message,
+      first?.detail,
+      first?.title,
+      body?.detail,
+      body?.message,
+      body?.title,
+    ].find((value): value is string => typeof value === "string" && Boolean(value.trim()));
+    if (!detail) {
+      return undefined;
+    }
+    // Redact reflected credentials before truncation, including rotated user tokens.
+    for (const secret of secrets
+      .filter((value): value is string => Boolean(value))
+      .toSorted((a, b) => b.length - a.length)) {
+      detail = detail.replaceAll(secret, "[redacted]");
+    }
+    return detail.replace(/\s+/g, " ").trim().slice(0, 512);
+  } catch {
+    return undefined;
   }
 }
 
@@ -364,8 +401,20 @@ export function createXApiClient(options: {
         continue;
       }
       if (!response.ok) {
-        await response.body?.cancel();
-        throw new XApiError(response.status, path.split("?")[0] ?? path);
+        let detail: string | undefined;
+        if (path.startsWith("/2/activity/")) {
+          detail = await readActivityErrorDetail(response, signal, [
+            token,
+            accessToken,
+            options.bearerToken,
+            refreshToken,
+            options.refreshToken,
+            options.clientSecret,
+          ]);
+        } else {
+          await response.body?.cancel();
+        }
+        throw new XApiError(response.status, path.split("?")[0] ?? path, detail);
       }
       return response;
     }
@@ -500,7 +549,7 @@ export function createXApiClient(options: {
       const created = await request("/2/activity/subscriptions", {
         method: "POST",
         body: { event_type: "post.mention.create", filter: { user_id: userId } },
-        appOnly: true,
+        appOnly: false,
         signal,
       });
       await created.body?.cancel();

@@ -60,11 +60,8 @@ import {
   type SkillsWatchChange,
   type SkillsWatchOwner,
 } from "./refresh-watch-registry.js";
-import {
-  compareSkillsWatchTargets,
-  resolveSkillsWatchTargets,
-  type WatchTarget,
-} from "./refresh-watch-targets.js";
+import { compareSkillsWatchTargets, resolveSkillsWatchTargets } from "./refresh-watch-targets.js";
+import type { WatchTarget } from "./refresh-watch-targets.types.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 const log = createSubsystemLogger("gateway/skills");

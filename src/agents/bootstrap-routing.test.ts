@@ -55,7 +55,6 @@ describe("resolveWorkspaceBootstrapRouting", () => {
     expect(isWorkspaceBootstrapPending).not.toHaveBeenCalledWith(sandboxWorkspace);
     expect(routing.bootstrapMode).toBe("none");
     expect(routing.includeBootstrapInSystemContext).toBe(false);
-    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
   it("falls back to limited bootstrap wording when a primary run cannot read files", async () => {
@@ -66,7 +65,6 @@ describe("resolveWorkspaceBootstrapRouting", () => {
 
     expect(routing.bootstrapMode).toBe("limited");
     expect(routing.includeBootstrapInSystemContext).toBe(false);
-    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
     expect(routing.deliversCompleteWorkspaceContext).toBe(false);
   });
 
@@ -140,7 +138,6 @@ describe("resolveWorkspaceBootstrapRouting", () => {
 
     expect(routing.bootstrapMode).toBe("full");
     expect(routing.includeBootstrapInSystemContext).toBe(true);
-    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
   it("uses hook-provided BOOTSTRAP.md content even when normal file reads are unavailable", async () => {
@@ -151,7 +148,6 @@ describe("resolveWorkspaceBootstrapRouting", () => {
 
     expect(routing.bootstrapMode).toBe("full");
     expect(routing.includeBootstrapInSystemContext).toBe(true);
-    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
   it("does not infer file access from loaded bootstrap content when the caller opts out", async () => {
@@ -163,7 +159,6 @@ describe("resolveWorkspaceBootstrapRouting", () => {
 
     expect(routing.bootstrapMode).toBe("limited");
     expect(routing.includeBootstrapInSystemContext).toBe(false);
-    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
   it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", async () => {
@@ -173,6 +168,5 @@ describe("resolveWorkspaceBootstrapRouting", () => {
 
     expect(routing.bootstrapMode).toBe("none");
     expect(routing.includeBootstrapInSystemContext).toBe(false);
-    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 });

@@ -167,7 +167,7 @@ export async function handleComputerUseCommand(
     pluginConfig,
     config: ctx.config,
     agentDir,
-    forceEnable: parsed.action === "install" || parsed.hasOverrides,
+    forceEnable: parsed.action === "install" || Object.keys(parsed.overrides).length > 0,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
   if (parsed.action === "install") {

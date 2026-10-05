@@ -22,8 +22,8 @@ import {
 } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
 import {
   createAppServerOptions,
   createCodexLifecycleHarness,

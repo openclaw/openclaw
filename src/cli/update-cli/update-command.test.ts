@@ -545,14 +545,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("skips disabled tracked records when requested", async () => {
+  it("skips disabled nonofficial tracked records", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
           config: {
             plugins: {
               entries: {
@@ -576,15 +575,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("keeps disabled trusted official npm records eligible for payload repair when requested", async () => {
+  it("keeps disabled trusted official npm records eligible for payload repair", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "codex");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
-          syncOfficialPluginInstalls: true,
           config: {
             plugins: {
               entries: {
@@ -616,15 +613,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("keeps disabled trusted official ClawHub records eligible for payload repair when requested", async () => {
+  it("keeps disabled trusted official ClawHub records eligible for payload repair", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "clawhub", "diagnostics-otel");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
-          syncOfficialPluginInstalls: true,
           config: {
             plugins: {
               entries: {

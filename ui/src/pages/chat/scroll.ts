@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
@@ -26,13 +27,7 @@ function getPaneScrollTops(paneId: string): Map<string, ChatSessionScrollPositio
   }
   const created = new Map<string, ChatSessionScrollPosition>();
   transcriptScrollTopByPane.set(paneId, created);
-  while (transcriptScrollTopByPane.size > MAX_CACHED_TRANSCRIPT_SCROLL_PANES) {
-    const oldest = transcriptScrollTopByPane.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    transcriptScrollTopByPane.delete(oldest);
-  }
+  pruneMapToMaxSize(transcriptScrollTopByPane, MAX_CACHED_TRANSCRIPT_SCROLL_PANES);
   return created;
 }
 

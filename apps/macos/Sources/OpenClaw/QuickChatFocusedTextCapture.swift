@@ -228,14 +228,14 @@ enum QuickChatFocusedTextCaptureService {
             // to the detached worker so cooperative traversal also stops.
             let (title, collection) = try await AsyncTimeout.withTimeout(
                 seconds: 4,
-                onTimeout: { URLError(.timedOut) })
-            {
-                await withTaskCancellationHandler {
-                    await walk.value
-                } onCancel: {
-                    walk.cancel()
-                }
-            }
+                onTimeout: { URLError(.timedOut) },
+                operation: {
+                    await withTaskCancellationHandler {
+                        await walk.value
+                    } onCancel: {
+                        walk.cancel()
+                    }
+                })
             guard collection.textEntryCount > 0 else {
                 return .failed(String(format: String(localized: "No readable text was found in %@."), appName))
             }

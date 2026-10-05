@@ -36,7 +36,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
-import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
+import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnection) {

@@ -14,7 +14,7 @@ export function captureToolAuthoredSourceReply(params: {
   /** Effective tool result after hooks and middleware; only `details.sourceReply` is read. */
   result: unknown;
   toolCallId: string;
-  /** Stable scope for the idempotency key: the run id, or the harness turn id without one. */
+  /** Stable scope: the issuing assistant turn, else the run id or harness turn id. */
   idempotencyScope: string;
 }): MessagingToolSourceReplyPayload | undefined {
   const extracted = extractToolAuthoredSourceReplyPayload(params.result);

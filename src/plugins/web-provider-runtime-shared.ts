@@ -18,8 +18,6 @@ export type ResolvePluginWebProvidersParams = {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
-  activate?: boolean;
-  cache?: boolean;
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
@@ -28,7 +26,7 @@ export type ResolvePluginWebProvidersParams = {
 
 export type ResolveRuntimeWebProvidersParams = Omit<
   ResolvePluginWebProvidersParams,
-  "activate" | "cache" | "mode" | "sandboxed"
+  "mode" | "sandboxed"
 >;
 
 export type WebProviderRuntimeResolution<TEntry> = {
@@ -44,7 +42,7 @@ export type WebProviderRuntimeResolution<TEntry> = {
     manifestRecords?: readonly PluginManifestRecord[];
   };
   resolveCandidatePluginIds: (
-    params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
+    params: Omit<ResolvePluginWebProvidersParams, "mode">,
   ) => string[] | undefined;
   mapRegistryProviders: (params: {
     registry: PluginRegistry;
@@ -138,17 +136,15 @@ export function resolvePluginWebProviders<TEntry>(
     if (pluginIds.length === 0) {
       return [];
     }
-    if (params.activate !== true) {
-      const bundledArtifactProviders = deps.resolveBundledPublicArtifactProviders?.({
-        config: params.config,
-        workspaceDir,
-        env,
-        onlyPluginIds: pluginIds,
-        ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
-      });
-      if (bundledArtifactProviders) {
-        return bundledArtifactProviders;
-      }
+    const bundledArtifactProviders = deps.resolveBundledPublicArtifactProviders?.({
+      config: params.config,
+      workspaceDir,
+      env,
+      onlyPluginIds: pluginIds,
+      ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
+    });
+    if (bundledArtifactProviders) {
+      return bundledArtifactProviders;
     }
     const registry = loadOpenClawPlugins(
       buildPluginRuntimeLoadOptions(
@@ -168,8 +164,8 @@ export function resolvePluginWebProviders<TEntry>(
         },
         {
           onlyPluginIds: pluginIds,
-          cache: params.cache ?? true,
-          activate: params.activate ?? false,
+          cache: true,
+          activate: false,
         },
       ),
     );
@@ -184,8 +180,8 @@ export function resolvePluginWebProviders<TEntry>(
       manifestRegistry: context.preparedManifestRegistry,
     },
     {
-      cache: params.cache ?? true,
-      activate: params.activate ?? false,
+      cache: true,
+      activate: false,
       ...(hasExplicitPluginIdScope(context.loadPluginIds)
         ? { onlyPluginIds: context.loadPluginIds }
         : {}),
@@ -216,11 +212,7 @@ export function resolvePluginWebProviders<TEntry>(
   if (hasExplicitEmptyScope) {
     return [];
   }
-  if (
-    params.activate !== true &&
-    context.loadPluginIds &&
-    deps.resolveBundledRuntimeArtifactProviders
-  ) {
+  if (context.loadPluginIds && deps.resolveBundledRuntimeArtifactProviders) {
     const bundledArtifactProviders = deps.resolveBundledRuntimeArtifactProviders({
       config: context.config,
       workspaceDir: context.workspaceDir,

@@ -15,7 +15,7 @@ import {
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
+import { runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
 import {
   buildDevTargetRefResolutionCandidates,
@@ -32,7 +32,7 @@ import {
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
 import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
-import { runGitCleanCheckStep } from "./update-runner-git-steps.js";
+import { runClassifiedGitStep, runGitCleanCheckStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -79,34 +79,28 @@ async function resolveExplicitTarget(params: {
           ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
           params.gitRoot,
         );
-        const fetchStep = await runStep({
-          ...options,
-          progress: { ...options.progress, onStepComplete: undefined },
+        const fetchOutcome = await runClassifiedGitStep(options, (fetchStep) => {
+          const interrupted =
+            fetchStep.termination === "signal" ||
+            fetchStep.exitCode === 130 ||
+            fetchStep.exitCode === 143;
+          const fetchedSuccessfully = fetchStep.exitCode === 0 && !isFailedUpdateStep(fetchStep);
+          if (!fetchedSuccessfully && !interrupted) {
+            fetchStep.advisory = {
+              kind: "recoverable-maintenance",
+              message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
+            };
+            warnings.push(fetchStep.advisory.message);
+          }
+          if (warnings.length > 0) {
+            fetchStep.warnings = [...warnings];
+          }
+          return { interrupted, fetchedSuccessfully };
         });
-        const interrupted =
-          fetchStep.termination === "signal" ||
-          fetchStep.exitCode === 130 ||
-          fetchStep.exitCode === 143;
-        const fetchedSuccessfully = fetchStep.exitCode === 0 && !isFailedUpdateStep(fetchStep);
-        if (!fetchedSuccessfully && !interrupted) {
-          fetchStep.advisory = {
-            kind: "recoverable-maintenance",
-            message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
-          };
-          warnings.push(fetchStep.advisory.message);
-        }
-        if (warnings.length > 0) {
-          fetchStep.warnings = [...warnings];
-        }
-        await reportUpdateStepCompletion(options.progress, {
-          ...fetchStep,
-          index: options.stepIndex,
-          total: options.totalSteps,
-        });
-        if (interrupted) {
+        if (fetchOutcome.interrupted) {
           return null;
         }
-        if (fetchedSuccessfully) {
+        if (fetchOutcome.fetchedSuccessfully) {
           fetchedTag = true;
           break;
         }

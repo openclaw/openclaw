@@ -26,7 +26,9 @@ export function isVisibleAssistantResultEventForRun(event: unknown, runId: strin
     !isRecord(event) ||
     !isRecord(event.message) ||
     readSessionTranscriptRunId(event.message) !== runId ||
-    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined
+    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined ||
+    // An interim stop asked the provider to continue, so it is progress, not the answer.
+    event.message.endTurn === false
   ) {
     return false;
   }

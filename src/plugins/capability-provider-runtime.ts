@@ -88,78 +88,67 @@ function shouldSkipCapabilityResolution(params: {
   return params.cfg?.plugins?.enabled === false && params.key !== "speechProviders";
 }
 
-/** Loads the manifest snapshot used to resolve capability-provider ownership. */
-function loadCapabilityManifestSnapshot(params: {
+function prepareCapabilityPluginResolution(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;
-}): Pick<PluginMetadataSnapshot, "index" | "plugins"> {
-  if (params.pluginMetadataSnapshot) {
-    return params.pluginMetadataSnapshot;
-  }
-  return loadManifestContractSnapshot({
-    config: params.cfg,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-}
-
-function resolveCapabilityPluginIds(params: {
-  key: CapabilityProviderRegistryKey;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  providerId?: string;
-  providerIds?: ReadonlySet<string>;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;
-}): CapabilityPluginResolution {
-  const snapshot = loadCapabilityManifestSnapshot(params);
+}) {
+  const snapshot =
+    params.pluginMetadataSnapshot ??
+    loadManifestContractSnapshot({
+      config: params.cfg,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
   const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg);
   let normalizedConfig: NormalizedPluginsConfig | undefined;
-  const providerIds = params.providerIds;
-  const matchedProviderIds = providerIds ? new Set<string>() : undefined;
-  const availableContractPlugins = snapshot.plugins.filter((plugin) => {
-    if (
-      !hasManifestContractValue({
-        plugin,
-        contract: params.key,
-        value: params.providerId,
-      }) ||
-      (providerIds && !plugin.contracts?.[params.key]?.some((value) => providerIds.has(value))) ||
-      !isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config: params.cfg,
-        isInstalledPluginEnabled: isEnabled,
-        normalizedConfig:
-          params.cfg?.plugins && (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins)),
-        // Legacy TTS remains available when the operator disables plugins globally.
-        allowRestrictiveAllowlistBypass:
-          params.key === "speechProviders" && params.cfg?.plugins?.enabled === false,
-        allowBundledProviderCompat: isBundledProviderCompatContract(params.key),
-      })
-    ) {
-      return false;
-    }
-    if (providerIds && matchedProviderIds) {
-      for (const value of plugin.contracts?.[params.key] ?? []) {
-        if (providerIds.has(value)) {
-          matchedProviderIds.add(value);
+  return function resolve(
+    key: CapabilityProviderRegistryKey,
+    providerId?: string,
+    providerIds?: ReadonlySet<string>,
+  ): CapabilityPluginResolution {
+    const matchedProviderIds = providerIds ? new Set<string>() : undefined;
+    const availableContractPlugins = snapshot.plugins.filter((plugin) => {
+      if (
+        !hasManifestContractValue({ plugin, contract: key, value: providerId }) ||
+        (providerIds && !plugin.contracts?.[key]?.some((value) => providerIds.has(value))) ||
+        !isManifestPluginAvailableForControlPlane({
+          snapshot,
+          plugin,
+          config: params.cfg,
+          isInstalledPluginEnabled: isEnabled,
+          normalizedConfig:
+            params.cfg?.plugins &&
+            (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins)),
+          // Legacy TTS remains available when the operator disables plugins globally.
+          allowRestrictiveAllowlistBypass:
+            key === "speechProviders" && params.cfg?.plugins?.enabled === false,
+          allowBundledProviderCompat: isBundledProviderCompatContract(key),
+        })
+      ) {
+        return false;
+      }
+      if (providerIds && matchedProviderIds) {
+        for (const value of plugin.contracts?.[key] ?? []) {
+          if (providerIds.has(value)) {
+            matchedProviderIds.add(value);
+          }
         }
       }
+      return true;
+    });
+    // Runtime aliases may be absent from manifests. Partial coverage needs all
+    // eligible owners; zero coverage stays empty so cold catalogs remain unfiltered.
+    if (providerIds && matchedProviderIds?.size && matchedProviderIds.size < providerIds.size) {
+      return resolve(key, providerId);
     }
-    return true;
-  });
-  // Runtime aliases may be absent from manifests. Partial coverage needs all
-  // eligible owners; zero coverage stays empty so cold catalogs remain unfiltered.
-  if (providerIds && matchedProviderIds?.size && matchedProviderIds.size < providerIds.size) {
-    return resolveCapabilityPluginIds({ ...params, providerIds: undefined });
-  }
-  return {
-    runtimePluginIds: sortUniqueStrings(availableContractPlugins.map((plugin) => plugin.id)),
-    bundledCompatPluginIds: sortUniqueStrings(
-      availableContractPlugins
-        .filter((plugin) => plugin.origin === "bundled")
-        .map((plugin) => plugin.id),
-    ),
+    return {
+      runtimePluginIds: sortUniqueStrings(availableContractPlugins.map((plugin) => plugin.id)),
+      bundledCompatPluginIds: sortUniqueStrings(
+        availableContractPlugins
+          .filter((plugin) => plugin.origin === "bundled")
+          .map((plugin) => plugin.id),
+      ),
+    };
   };
 }
 
@@ -504,25 +493,16 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
   }
 
   const loadContext = resolveCapabilityLoadContext(activeRegistry, params.cfg);
-  const pluginMetadataSnapshot = loadCapabilityManifestSnapshot({
+  const resolvePluginIds = prepareCapabilityPluginResolution({
     cfg: params.cfg,
     pluginMetadataSnapshot: loadContext?.metadataSnapshot,
   });
-  let pluginIds = resolveCapabilityPluginIds({
-    key: params.key,
-    cfg: params.cfg,
-    providerId: params.providerId,
-    pluginMetadataSnapshot,
-  });
+  let pluginIds = resolvePluginIds(params.key, params.providerId);
   if (pluginIds.runtimePluginIds.length === 0) {
     // Manifest contracts index canonical provider ids, while runtime providers
     // may expose aliases. Fall back to the capability owners so a configured
     // alias can still resolve when its provider is absent from the active registry.
-    pluginIds = resolveCapabilityPluginIds({
-      key: params.key,
-      cfg: params.cfg,
-      pluginMetadataSnapshot,
-    });
+    pluginIds = resolvePluginIds(params.key);
     if (pluginIds.runtimePluginIds.length === 0) {
       return { load: undefined, resolve: (_entries: PluginRegistry[K]) => undefined };
     }
@@ -601,17 +581,12 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
       ? requestedProviders
       : undefined;
   const loadContext = resolveCapabilityLoadContext(activeRegistry, params.cfg);
-  const pluginMetadataSnapshot = loadCapabilityManifestSnapshot({
+  const resolvePluginIds = prepareCapabilityPluginResolution({
     cfg: params.cfg,
     pluginMetadataSnapshot: loadContext?.metadataSnapshot,
   });
   const requestedPluginIds = requestedProviderLoadScope
-    ? resolveCapabilityPluginIds({
-        key: params.key,
-        cfg: params.cfg,
-        providerIds: requestedProviderLoadScope,
-        pluginMetadataSnapshot,
-      })
+    ? resolvePluginIds(params.key, undefined, requestedProviderLoadScope)
     : undefined;
   const requestedProviderFilter =
     requestedProviders &&
@@ -621,11 +596,7 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
       : undefined;
   const pluginIds = requestedPluginIds?.runtimePluginIds.length
     ? requestedPluginIds
-    : resolveCapabilityPluginIds({
-        key: params.key,
-        cfg: params.cfg,
-        pluginMetadataSnapshot,
-      });
+    : resolvePluginIds(params.key);
   const loadOptions = createCapabilityProviderLoadOptions({
     cfg: params.cfg,
     resolution: pluginIds,
@@ -675,17 +646,14 @@ export function prepareMediaCapabilityProviders(params: {
   pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
   registry?: PluginRegistry;
 }) {
+  const resolvePluginIds = prepareCapabilityPluginResolution(params);
   const providers = <K extends CapabilityProviderRegistryKey>(
     key: K,
   ): readonly CapabilityProviderFor<K>[] | undefined => {
     if (shouldSkipCapabilityResolution({ key, cfg: params.cfg })) {
       return [];
     }
-    const resolution = resolveCapabilityPluginIds({
-      key,
-      cfg: params.cfg,
-      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-    });
+    const resolution = resolvePluginIds(key);
     const requiredPluginIds = resolution.runtimePluginIds;
     if (
       requiredPluginIds.length === 0 &&

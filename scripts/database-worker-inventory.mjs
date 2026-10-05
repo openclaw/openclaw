@@ -278,9 +278,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn"],
+        operations: [
+          "createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn",
+          "createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn.transition",
+        ],
         evidence:
-          "Only placementTurns.failResult in placement-turn-claims.worker.ts constructs the terminal-failure kernel; all runtime callers await its worker facade",
+          "Only placementTurns.failResult in placement-turn-claims.worker.ts constructs the terminal-failure kernel, including its transaction-local transition helper; all runtime callers await its worker facade",
       },
     ],
   ],

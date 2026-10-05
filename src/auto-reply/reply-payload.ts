@@ -240,6 +240,8 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** First index of this block's physical assistant message; each content item advances the index. */
+  assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
   precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */

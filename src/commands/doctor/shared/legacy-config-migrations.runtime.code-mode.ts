@@ -1,9 +1,8 @@
-import { defineLegacyConfigMigration, getRecord } from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { visitAgentEntries } from "./legacy-config-record-shared.js";
 
-export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE = defineLegacyConfigMigration({
+export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE: LegacyConfigMigrationSpec = {
   id: "tools.codeMode.javascript-only",
-  describe: "Remove the retired Code Mode language setting",
   legacyRules: [
     {
       path: ["tools", "codeMode", "languages"],
@@ -35,11 +34,10 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE = defineLegacyConfigMigra
     removeLanguages(raw.tools, "tools");
     visitAgentEntries(raw, (agent, path) => removeLanguages(agent.tools, `${path}.tools`));
   },
-});
+};
 
-export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE_EXECUTOR = defineLegacyConfigMigration({
+export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE_EXECUTOR: LegacyConfigMigrationSpec = {
   id: "tools.codeMode.executor",
-  describe: "Move the explicit Code Mode runtime to its executor setting",
   legacyRules: [
     {
       path: ["tools", "codeMode", "runtime"],
@@ -76,4 +74,4 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE_EXECUTOR = defineLegacyCo
     migrateRuntime(raw.tools, "tools");
     visitAgentEntries(raw, (agent, path) => migrateRuntime(agent.tools, `${path}.tools`));
   },
-});
+};

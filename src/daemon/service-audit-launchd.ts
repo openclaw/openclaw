@@ -1,6 +1,8 @@
+import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   LAUNCH_AGENT_POLICY,
   decodeLaunchdPlistMetadata,
 } from "./launchd-plist.js";
@@ -12,6 +14,7 @@ import {
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
+import { resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
   isInstallerServiceDescription,
@@ -20,6 +23,39 @@ import {
 } from "./service-audit-preservation.js";
 import type { ServiceConfigIssue, ServiceDefinitionDrift } from "./service-audit-types.js";
 import type { GatewayServiceEnv } from "./service-types.js";
+
+function isRetiredLaunchAgentCommand(value: unknown, env: GatewayServiceEnv): boolean {
+  if (!Array.isArray(value) || !value.every((arg): arg is string => typeof arg === "string")) {
+    return false;
+  }
+  const label = resolveLaunchAgentLabel(env);
+  const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, label);
+  const wrapperIndex = value[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL ? 1 : 0;
+  const wrapped = value[wrapperIndex] === wrapperPath;
+  if (wrapped && value[wrapperIndex + 1] !== resolveLaunchAgentEnvFilePath(env, label)) {
+    return false;
+  }
+  const args = wrapped ? value.slice(wrapperIndex + 2) : value;
+  if (!/\/(node|bun)$/u.test(args[0] ?? "")) {
+    return false;
+  }
+  // Recognize the released command shape, not arbitrary runtime or Gateway flags.
+  let entry = 1;
+  if (/^--max-old-space-size=\d+$/u.test(args[entry] ?? "") || args[entry] === "--no-install") {
+    entry++;
+  }
+  if (!/^\/.*\/(?:index|entry)\.(?:cjs|mjs|js)$/u.test(args[entry] ?? "")) {
+    return false;
+  }
+  const command = args.slice(entry + 1);
+  return (
+    command[0] === "gateway" &&
+    (command.length === 1 ||
+      (command[1] === "--port" &&
+        /^\d+$/u.test(command[2] ?? "") &&
+        (command.length === 3 || (command.length === 4 && command[3] === "--allow-unconfigured"))))
+  );
+}
 
 /** Native decoding keeps XML and binary plists on the same read-only audit path. */
 export async function auditLaunchdDefinition(
@@ -123,13 +159,48 @@ export async function auditLaunchdDefinition(
     "Comment",
   ]);
   const legacyLogs = resolveGatewayLogPaths(env);
-  // Stable releases used 60s/1s throttles, state-directory logs, and discarded stderr.
+  // Stable releases used 60s/1s throttles and state-directory logs.
   // Installation age alone does not attribute arbitrary explicit values to the installer.
   const released: Record<string, readonly (string | number)[]> = {
     ThrottleInterval: [60, 1],
     StandardOutPath: [legacyLogs.stdoutPath],
     StandardErrorPath: [legacyLogs.stderrPath, "/dev/null"],
   };
+  // A 20s value alone is ambiguous. Even an installer comment can survive an
+  // operator edit, so require the rest of the released template before migrating.
+  const retiredTemplate =
+    installed.Label === resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE) &&
+    isInstallerServiceDescription(installed.Comment, env) &&
+    isRetiredLaunchAgentCommand(installed.ProgramArguments, env) &&
+    (installed.WorkingDirectory === undefined ||
+      installed.WorkingDirectory === resolveGatewayStateDir(env)) &&
+    Object.keys(installed).every((key) => Object.hasOwn(expected, key) || preserved.has(key)) &&
+    Object.entries(expected).every(
+      ([key, value]) =>
+        key === "ExitTimeOut" ||
+        installed[key] === value ||
+        released[key]?.some((legacy) => installed[key] === legacy),
+    );
+  if (retiredTemplate) {
+    released.ExitTimeOut = [20];
+  }
+  const customizedTimeout = installed.ExitTimeOut === 20 && !retiredTemplate;
+  const timeoutMessage = customizedTimeout
+    ? `Stop timeout 20 s is below the ${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS} s drain budget; not changed because the definition is customized.`
+    : `ExitTimeOut=${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS} or longer is required for the Gateway drain and final cleanup; the loaded launchd job may enforce a shorter deadline.`;
+  const exitTimeout = installed.ExitTimeOut ?? 20;
+  if (
+    typeof exitTimeout === "number" &&
+    exitTimeout > 0 &&
+    exitTimeout < LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS
+  ) {
+    issues.push({
+      code: "launchd-stop-timeout",
+      message: timeoutMessage,
+      detail: `${sourcePath}: ${exitTimeout}s`,
+      level: "recommended",
+    });
+  }
   for (const key of new Set([...Object.keys(installed), ...Object.keys(expected)])) {
     if (preserved.has(key) || installed[key] === expected[key]) {
       continue;
@@ -152,7 +223,11 @@ export async function auditLaunchdDefinition(
         message: `LaunchAgent ${key} differs from the installer value ${String(value)}.`,
       });
     } else if (value !== undefined && key !== "Label") {
-      findings.push(serviceDefinitionPreserved(key, sourcePath));
+      const finding = serviceDefinitionPreserved(key, sourcePath);
+      if (key === "ExitTimeOut" && customizedTimeout) {
+        finding.message = timeoutMessage;
+      }
+      findings.push(finding);
     } else {
       findings.push({
         kind: "unknown-edit",
