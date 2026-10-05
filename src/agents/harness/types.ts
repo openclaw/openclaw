@@ -33,6 +33,8 @@ export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
   modelProvider?: {
+    /** Configured auth mode for a declared provider route. */
+    auth?: string;
     api?: string;
     baseUrl?: string;
     azureApiVersion?: string;
@@ -42,6 +44,8 @@ export type AgentHarnessSupportContext = {
     endpointOverrides?: ProviderRouteOverridePresence;
     /** Provider-owned native-runtime compatibility for the prepared route. */
     runtimePolicy?: ProviderModelRouteRuntimePolicy;
+    /** Model/provider runtime declared in config, excluding QA overrides. */
+    declaredRuntimeId?: string;
     /** Secret-free auth source the native runtime must reproduce for this attempt. */
     preparedAuth?: AgentHarnessPreparedAuthSupport;
     request?: {
@@ -481,6 +485,8 @@ type AgentHarnessContract<
   conversationToolPolicySupport?: "exact";
   /** Certifies binding the actual native model through the host before every inference dispatch. */
   nativeModelPolicySupport?: "exact";
+  /** Enforces provider-required endpoint binding for every operation it executes. */
+  providerEndpointBindingSupport?: "exact";
   /**
    * Canonical OpenClaw tool names whose exact denies the harness can also enforce
    * against native equivalents. Every other deny remains fail-closed.

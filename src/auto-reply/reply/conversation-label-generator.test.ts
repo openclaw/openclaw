@@ -198,6 +198,37 @@ describe("generateConversationLabelWithFallback", () => {
     preferredProfile: "work",
   };
 
+  it.each([false, true])(
+    "keeps local development utility failure off the primary model (local mode: %s)",
+    async (localDevUtilityOnly) => {
+      runIsolatedCompletion
+        .mockRejectedValueOnce(new Error("Copilot unavailable"))
+        .mockResolvedValueOnce({ text: "Primary label" });
+      const operation = generateConversationLabelWithFallback({
+        ...params,
+        cfg: {
+          agents: {
+            defaults: { localDevUtilityOnly, utilityModel: "copilot/gpt-6.1-sol" },
+          },
+        },
+        utilityModelRef: "copilot/gpt-6.1-sol",
+        regularModelRef: "autodev/gpt-56-reasoning-sol",
+      });
+      if (localDevUtilityOnly) {
+        await expect(operation).rejects.toThrow("conversation label generation failed (utility)");
+        expect(runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ provider: "copilot", model: "gpt-6.1-sol" }),
+        );
+      } else {
+        await expect(operation).resolves.toBe("Primary label");
+        expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
+        expect(runIsolatedCompletion).toHaveBeenLastCalledWith(
+          expect.objectContaining({ provider: "autodev", model: "gpt-56-reasoning-sol" }),
+        );
+      }
+    },
+  );
+
   it("skips a denied utility model and carries the requester into the permitted regular fallback", async () => {
     const cfg = { agents: { entries: { main: {} }, defaults: { model: "label-test/regular" } } };
     const operatorAuthority = createAdmittedRunOperatorAuthority({

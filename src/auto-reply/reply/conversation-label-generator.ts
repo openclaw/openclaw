@@ -9,6 +9,7 @@ import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
+import { isLocalDevUtilityOnly } from "../../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
@@ -191,7 +192,14 @@ export async function generateConversationLabel(
         { useUtilityModel: true, phase: "utility" },
         { useUtilityModel: false, phase: "primary fallback" },
       ];
-  return await runLabelAttempts({ ...params, agentId, attempts });
+  return await runLabelAttempts({
+    ...params,
+    agentId,
+    attempts:
+      isLocalDevUtilityOnly(params.cfg) && !params.modelRef
+        ? attempts.filter((attempt) => attempt.phase === "utility")
+        : attempts,
+  });
 }
 
 /** Tries an explicit utility model once, then the regular model once when needed. */
@@ -231,7 +239,10 @@ export async function generateConversationLabelWithFallback(
     agentId,
     // Utility-only callers pre-claim the regular selection so a utility ref that
     // resolves onto the primary model is skipped instead of spending on it.
-    attempts: params.utilityOnly ? utilityAttempts : [...utilityAttempts, regularAttempt],
+    attempts:
+      params.utilityOnly || isLocalDevUtilityOnly(params.cfg)
+        ? utilityAttempts
+        : [...utilityAttempts, regularAttempt],
     ...(params.utilityOnly ? { skipAttempts: [regularAttempt] } : {}),
   });
 }

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { ProviderModelRouteCandidate } from "openclaw/plugin-sdk/provider-model-types";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -50,6 +51,32 @@ const owners = defineCodexBuildState(
 )();
 const MAX_ROUTES = 8;
 const MAX_THREADS = 256;
+
+/** Conditional native admission is fulfilled only by this lifecycle-owned transport. */
+export function assertCodexPreparedEndpointBinding(
+  client: CodexAppServerClient | undefined,
+  prepared: ProviderModelRouteCandidate | undefined,
+  inference?: CodexInferenceProxy,
+): void {
+  if (!prepared?.runtimePolicy?.requiresEndpointBinding) {
+    return;
+  }
+  const owner = client ? owners.get(client) : undefined;
+  if (
+    !owner ||
+    owner.closed ||
+    owner.authRoute !== "apiKey" ||
+    (inference && owner.handles.get(inference)?.provider !== "openai") ||
+    prepared.api !== "openai-responses" ||
+    prepared.authRequirement !== "api-key" ||
+    prepared.requestTransportOverrides !== "none" ||
+    !inference ||
+    inference.upstream !== new URL(prepared.baseUrl).toString()
+  ) {
+    throw new Error("Codex cannot bind the exact prepared provider endpoint for this operation.");
+  }
+  inference.assertCurrent();
+}
 
 /** Only managed native stdio startup calls this; locality or metadata cannot opt a client in. */
 export function ownCodexInferenceClient(
@@ -117,7 +144,7 @@ export function ownCodexInferenceClient(
   });
 }
 
-async function prepareCodexInferenceRoute(params: {
+export async function prepareCodexInferenceRoute(params: {
   client: CodexAppServerClient;
   cwd: string;
   modelProvider?: string;

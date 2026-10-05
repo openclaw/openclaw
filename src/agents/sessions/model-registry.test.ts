@@ -67,6 +67,29 @@ function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfig
 }
 
 describe("ModelRegistry models.json auth", () => {
+  it("loads a generated native-command model catalog", () => {
+    const modelsPath = writeModelsJson({
+      providers: {
+        autodev: {
+          baseUrl: "https://devapi.example.test/v1",
+          api: "openai-responses",
+          auth: "native-command",
+          models: [{ id: "gpt-56-reasoning-sol", name: "Sol" }],
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("autodev", "gpt-56-reasoning-sol")).toMatchObject({
+      provider: "autodev",
+      id: "gpt-56-reasoning-sol",
+      api: "openai-responses",
+      baseUrl: "https://devapi.example.test/v1",
+    });
+  });
+
   it("accepts Bedrock AWS SDK auth without apiKey", async () => {
     // AWS SDK credential resolution is provider-owned; requiring an apiKey here
     // would make Bedrock catalogs impossible to express in models.json.

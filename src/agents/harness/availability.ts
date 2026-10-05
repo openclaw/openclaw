@@ -2,7 +2,7 @@
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy, type AgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
-import { buildAgentHarnessSupportContext } from "./support.js";
+import { buildAgentHarnessSupportContext, probeAgentHarnessSupport } from "./support.js";
 import type { AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
 type AgentHarnessAvailabilityParams = Parameters<typeof resolveAgentHarnessPolicy>[0] & {
@@ -67,7 +67,8 @@ export function resolveAgentHarnessAvailabilityDecision(
   if (params.provider === undefined) {
     return { kind: "available", policy };
   }
-  const support = registered.harness.supports(
+  const support = probeAgentHarnessSupport(
+    registered.harness,
     buildAgentHarnessSupportContext({
       ...params,
       provider,

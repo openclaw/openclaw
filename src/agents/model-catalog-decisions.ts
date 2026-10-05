@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderRefOwnership } from "../plugins/providers.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -25,7 +26,11 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./harness/availability.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessId } from "./harness/support.js";
+import {
+  buildAgentHarnessSupportContext,
+  probeAgentHarnessSupport,
+  resolveAutoAgentHarnessId,
+} from "./harness/support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   createModelAuthAvailabilityResolver,
@@ -527,13 +532,20 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
             unknown ||= params.pluginRegistry === undefined;
             continue;
           }
-          const supported = harness.supports(
+          const supported = probeAgentHarnessSupport(
+            harness,
             buildAgentHarnessSupportContext({
               config: params.cfg,
               agentId: params.agentId,
               provider: entry.provider,
               modelId: entry.id,
               requestedRuntime: runtimeId,
+              providerOwnership: resolveProviderRefOwnership({
+                provider: entry.provider,
+                config: params.cfg,
+                workspaceDir,
+                metadataSnapshot,
+              }),
               modelProvider: {
                 api: route?.api ?? entry.api,
                 baseUrl: route?.baseUrl ?? entry.baseUrl,

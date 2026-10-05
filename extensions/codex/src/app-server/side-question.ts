@@ -4,11 +4,9 @@ import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
-  resolveSandboxContext,
   runAgentCleanupStep,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
-  type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -47,9 +45,7 @@ import {
   withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 import {
-  buildDynamicTools,
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
-  resolveCodexMessageToolProvider,
   resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldRequireCodexSandboxExecServerEnvironment,
@@ -64,12 +60,14 @@ import {
   resolveDynamicToolCallTimeoutMs,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
-import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import {
+  assertCodexPreparedEndpointBinding,
+  prepareCodexInferenceRoute,
+} from "./inference-routing.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
@@ -112,7 +110,6 @@ import {
   CODEX_SESSION_PERMISSION_EXEC_MODES,
   resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
-  type CodexEffectiveSessionPermissionPolicy,
 } from "./session-permission-policy.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -124,6 +121,7 @@ import {
 import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import { buildSideRunAttemptParams } from "./side-question-run-params.js";
+import { createCodexSideToolBridge } from "./side-question-tools.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerThreadModelSelection,
@@ -138,11 +136,7 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 import { buildCodexUserInput } from "./user-input.js";
-import {
-  resolveCodexWebSearchPlan,
-  type CodexNativeWebSearchSupport,
-  type CodexWebSearchPlan,
-} from "./web-search.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 
@@ -385,6 +379,7 @@ export async function runCodexAppServerSideQuestion(
   let childThreadId: string | undefined;
   let pluginAppPolicyContext = binding.pluginAppPolicyContext;
   let childClient: CodexAppServerClient | undefined;
+  let sideEndpointBinding: Awaited<ReturnType<typeof prepareCodexInferenceRoute>>;
   let policyWriteUncertain = false;
   let turnId: string | undefined;
   let sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
@@ -706,6 +701,23 @@ export async function runCodexAppServerSideQuestion(
                 pluginAppsConfigPatch,
                 appServer.networkProxy?.configPatch,
               ) ?? runtimeThreadConfig;
+            const preparedRoute = preparedRuntimeAuth.plan.modelRoute;
+            const endpointBinding = preparedRoute?.runtimePolicy?.requiresEndpointBinding
+              ? await prepareCodexInferenceRoute({
+                  client: forkClient,
+                  cwd: executionCwd,
+                  config: threadConfig,
+                  modelProvider: modelSelection.modelProvider,
+                  signal: runAbortController.signal,
+                  assertCurrent: assertCurrentBinding,
+                })
+              : undefined;
+            const forkOptions = currentRequestOptions();
+            const assertForkCurrent = () => {
+              forkOptions.assertCurrent();
+              assertCodexPreparedEndpointBinding(forkClient, preparedRoute, endpointBinding);
+            };
+            assertForkCurrent();
             const response = assertCodexThreadForkResponse(
               await forkCodexSideThread(
                 forkClient,
@@ -723,14 +735,17 @@ export async function runCodexAppServerSideQuestion(
                   approvalsReviewer: appServer.approvalsReviewer,
                   ...(sandboxEnvironment || appServer.networkProxy ? {} : { sandbox }),
                   ...(serviceTier ? { serviceTier } : {}),
-                  config: threadConfig,
+                  // Forks use native inference; bind the verified upstream, not the parent's relay.
+                  config: endpointBinding
+                    ? { ...threadConfig, openai_base_url: endpointBinding.upstream }
+                    : threadConfig,
                   developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
                   ephemeral: true,
                   // Paginated ephemeral forks require metadata-only responses; history stays native.
                   excludeTurns: true,
                   threadSource: "user",
                 },
-                currentRequestOptions(),
+                { ...forkOptions, assertCurrent: assertForkCurrent },
               ),
             );
             if (!response.thread.id.trim() || response.thread.id === binding.threadId) {
@@ -739,6 +754,7 @@ export async function runCodexAppServerSideQuestion(
             }
             childThreadId = response.thread.id;
             childClient = forkClient;
+            sideEndpointBinding = endpointBinding;
             collector = new CodexEphemeralTurn(forkClient, childThreadId, {
               textMode: "last",
               onRequest: handleServerRequest,
@@ -806,6 +822,15 @@ export async function runCodexAppServerSideQuestion(
             params.runtimeModel?.compat,
           ),
         });
+    const assertSideTurnCurrent = () => {
+      assertCurrent();
+      assertCodexPreparedEndpointBinding(
+        client,
+        preparedRuntimeAuth.plan.modelRoute,
+        sideEndpointBinding,
+      );
+    };
+    assertSideTurnCurrent();
     const turnResponse = assertCodexTurnStartResponse(
       await client
         .request(
@@ -850,7 +875,7 @@ export async function runCodexAppServerSideQuestion(
           {
             timeoutMs: appServer.requestTimeoutMs,
             signal: runAbortController.signal,
-            assertCurrent,
+            assertCurrent: assertSideTurnCurrent,
             withCurrent: authority.withCurrent,
           },
         )
@@ -964,89 +989,10 @@ export async function runCodexAppServerSideQuestion(
   }
 }
 
-async function createCodexSideToolBridge(input: {
-  params: EmbeddedRunAttemptParamsV2;
-  cwd: string;
-  resolvedWorkspace: string;
-  pluginConfig: ReturnType<typeof readCodexPluginConfig>;
-  sessionAgentId: string;
-  nativeToolSurfaceEnabled: boolean;
-  nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
-  sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
-  runAbortController: AbortController;
-}): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
-  const { params } = input;
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() ||
-    params.sessionKey?.trim() ||
-    params.sessionId ||
-    input.sessionAgentId;
-  const sandbox =
-    params.sandbox !== undefined
-      ? params.sandbox
-      : await resolveSandboxContext({
-          config: params.config,
-          sessionKey: sandboxSessionKey,
-          workspaceDir: input.cwd,
-        });
-  let webSearchAllowed = false;
-  const tools = await buildDynamicTools({
-    params,
-    resolvedWorkspace: input.resolvedWorkspace,
-    effectiveWorkspace: input.cwd,
-    sandboxSessionKey,
-    sandbox,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    sessionPermissionPolicy: input.sessionPermissionPolicy,
-    runAbortController: input.runAbortController,
-    sessionAgentId: input.sessionAgentId,
-    policyAgentId: input.sessionAgentId,
-    pluginConfig: input.pluginConfig,
-    onYieldDetected: () => {},
-    onWebSearchPolicyResolved: (allowed) => {
-      webSearchAllowed = allowed;
-    },
-  });
-  const requestedWebSearchPlan = resolveCodexWebSearchPlan({
-    config: params.config,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    webSearchAllowed,
-  });
-  // Forks inherit dynamic declarations; BTW retains its native-only search policy.
-  const webSearchPlan =
-    requestedWebSearchPlan.kind === "managed"
-      ? resolveCodexWebSearchPlan({ config: params.config, webSearchAllowed: false })
-      : requestedWebSearchPlan;
-  // Side threads do not own the compaction lifecycle that expires screenshot coordinates.
-  const exposedTools = tools.filter(
-    (tool) => tool.name !== "web_search" && tool.name !== "computer",
-  );
-  return {
-    toolBridge: createCodexDynamicToolBridge({
-      tools: exposedTools,
-      signal: input.runAbortController.signal,
-      loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
-      hookContext: {
-        agentId: input.sessionAgentId,
-        config: params.config,
-        contextWindowTokens: params.model.contextWindow,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-        currentChannelProvider: resolveCodexMessageToolProvider(params),
-        ...buildAgentHookContextChannelFields(params),
-      },
-    }),
-    webSearchPlan,
-  };
-}
-
 async function forkCodexSideThread(
   client: CodexAppServerClient,
   params: CodexThreadForkParams,
-  options: { timeoutMs: number; signal?: AbortSignal },
+  options: { timeoutMs: number; signal?: AbortSignal; assertCurrent?: () => void },
 ): Promise<unknown> {
   try {
     return await client.request("thread/fork", params, options);

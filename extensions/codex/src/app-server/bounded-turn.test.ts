@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -730,6 +731,156 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       }),
     ).rejects.toThrow("Codex app-server model not found: missing-model");
     expect(fake.methods).toEqual(["model/list"]);
+  });
+
+  it.each(["native-provider-fixture", "openai"])(
+    "starts a declared %s native-command Responses model missing from Codex model/list",
+    async (configuredProvider) => {
+      const fake = createClientFactory();
+      const model = "synthetic-native-model";
+      const config = {
+        models: {
+          providers: {
+            [configuredProvider]: {
+              auth: "native-command" as const,
+              baseUrl: "https://native.models.example.test/v1",
+              models: [
+                {
+                  id: model,
+                  name: model,
+                  api: "openai-responses" as const,
+                  reasoning: true,
+                  input: ["text" as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      };
+      await expect(
+        runBoundedCodexAppServerTurn({
+          config,
+          model: { mode: "required", id: model },
+          configuredProvider,
+          thinkLevel: "high",
+          timeoutMs: 5_000,
+          options: { clientFactory: fake.factory },
+          taskLabel: "isolated completion",
+          developerInstructions: "Name this conversation.",
+          input: [{ type: "text", text: "Garden planning.", text_elements: [] }],
+          requiredModalities: ["text"],
+          isolation: "configured-transport",
+        }),
+      ).resolves.toMatchObject({ model, text: "The message was sent successfully." });
+      expect(
+        fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
+      ).toMatchObject({ model });
+      expect(
+        fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
+      ).not.toHaveProperty("modelProvider");
+      expect(
+        fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1],
+      ).toMatchObject({
+        effort: "high",
+      });
+      await expect(
+        runBoundedCodexAppServerTurn({
+          config,
+          model: { mode: "required", id: "undeclared-model" },
+          configuredProvider,
+          timeoutMs: 5_000,
+          options: { clientFactory: fake.factory },
+          taskLabel: "isolated completion",
+          developerInstructions: "Name this conversation.",
+          input: [{ type: "text", text: "Garden planning.", text_elements: [] }],
+          requiredModalities: ["text"],
+          isolation: "configured-transport",
+        }),
+      ).rejects.toThrow("Codex app-server model not found: undeclared-model");
+      await expect(
+        runBoundedCodexAppServerTurn({
+          config,
+          model: { mode: "required", id: model },
+          configuredProvider,
+          timeoutMs: 5_000,
+          options: { clientFactory: fake.factory },
+          taskLabel: "isolated completion",
+          developerInstructions: "Describe this image.",
+          input: [],
+          requiredModalities: ["image"],
+          isolation: "configured-transport",
+        }),
+      ).rejects.toThrow(`Codex app-server model not found: ${model}`);
+    },
+  );
+
+  it("copies only the selected native-command provider into a private completion home", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-private-provider-"));
+    const nativeHome = path.join(agentDir, "codex-home");
+    const model = "synthetic-native-model";
+    const baseUrl = "https://native.models.example.test/v1";
+    await fs.mkdir(nativeHome);
+    await fs.writeFile(
+      path.join(nativeHome, "config.toml"),
+      `model_provider = "native-provider-fixture"\n[model_providers.native-provider-fixture]\nname = "Native Provider Fixture"\nbase_url = "${baseUrl}"\nwire_api = "responses"\n[model_providers.native-provider-fixture.auth]\ncommand = "/opt/native-fixture/provider-token"\nargs = ["token"]\n[mcp_servers.unsafe]\ncommand = "unsafe"\n[features]\nhooks = true\n`,
+    );
+    const fake = createClientFactory();
+    let privateConfig = "";
+    const factory = vi.fn(async (options: Parameters<typeof fake.factory>[0]) => {
+      const privateHome = options?.startOptions?.env?.CODEX_HOME;
+      if (!privateHome) {
+        throw new Error("Private Codex home was not supplied");
+      }
+      privateConfig = await fs.readFile(path.join(privateHome, "config.toml"), "utf8");
+      return fake.factory(options);
+    });
+    try {
+      await runBoundedCodexAppServerTurn({
+        agentDir,
+        config: {
+          models: {
+            providers: {
+              "native-provider-fixture": {
+                auth: "native-command",
+                api: "openai-responses",
+                baseUrl,
+                models: [
+                  {
+                    id: model,
+                    name: model,
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 16_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        model: { mode: "required", id: model },
+        configuredProvider: "native-provider-fixture",
+        modelProvider: "native-provider-fixture",
+        timeoutMs: 5_000,
+        options: { clientFactory: factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Name this conversation.",
+        input: [{ type: "text", text: "Garden planning.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      });
+      expect(privateConfig).toContain("[model_providers.native-provider-fixture]");
+      expect(privateConfig).toContain('command = "/opt/native-fixture/provider-token"');
+      expect(privateConfig).not.toContain("mcp_servers");
+      expect(privateConfig).not.toContain("hooks");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 
   it.each([false, true])(

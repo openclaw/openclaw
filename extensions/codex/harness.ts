@@ -142,6 +142,7 @@ export function createCodexAppServerAgentHarness(
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
     nativeModelPolicySupport: "exact",
+    providerEndpointBindingSupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_REQUIREMENTS,
     deliveryDefaults: {
@@ -268,7 +269,28 @@ export function createCodexAppServerAgentHarness(
     },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
-      if (!providerIds.has(provider)) {
+      const modelProvider = ctx.modelProvider;
+      // A declared custom Responses route may delegate native auth to Codex.
+      // It is eligible only when the selected model explicitly owns this runtime.
+      const customNativeCommandRoute =
+        options.providerIds === undefined &&
+        !providerIds.has(provider) &&
+        provider.length > 0 &&
+        ctx.providerOwnerStatus === "unowned" &&
+        ctx.requestedRuntime === normalizedHarnessRuntimeId &&
+        modelProvider?.declaredRuntimeId === normalizedHarnessRuntimeId &&
+        modelProvider.auth === "native-command" &&
+        modelProvider.api === "openai-responses" &&
+        modelProvider.baseUrl?.startsWith("https://") === true &&
+        modelProvider.requestTransportOverrides === "none" &&
+        modelProvider.request === undefined &&
+        modelProvider.azureApiVersion === undefined &&
+        (modelProvider.preparedAuth === undefined ||
+          modelProvider.preparedAuth.mode === "native-command" ||
+          (modelProvider.preparedAuth.source === "harness" &&
+            modelProvider.preparedAuth.mode === undefined &&
+            modelProvider.preparedAuth.requirement === undefined));
+      if (!providerIds.has(provider) && !customNativeCommandRoute) {
         return {
           supported: false,
           reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
@@ -281,8 +303,8 @@ export function createCodexAppServerAgentHarness(
           fallbackRuntime: "openclaw",
         };
       }
-      const preparedAuth = ctx.modelProvider?.preparedAuth;
-      const runtimePolicy = ctx.modelProvider?.runtimePolicy;
+      const preparedAuth = modelProvider?.preparedAuth;
+      const runtimePolicy = modelProvider?.runtimePolicy;
       // Codex owns discovery and auth for new first-party models. Only trust that
       // native account when no authored transport or host credential is involved.
       const nativeAccountOwnsUnobservedModel =
@@ -306,7 +328,12 @@ export function createCodexAppServerAgentHarness(
             reason: "Codex cannot reproduce the prepared provider route",
           };
         }
-      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
+      } else if (
+        modelProvider &&
+        provider !== "codex" &&
+        !nativeAccountOwnsUnobservedModel &&
+        !customNativeCommandRoute
+      ) {
         return {
           supported: false,
           reason: "provider route compatibility with Codex is not declared",

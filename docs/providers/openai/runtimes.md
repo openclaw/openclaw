@@ -52,6 +52,25 @@ the completed result's actual harness when a recipe depends on native execution.
 Runtime compatibility does not establish credential type or billing: Platform API-key
 auth and ChatGPT/Codex subscription auth remain distinct.
 
+An explicit Codex runtime can also execute custom HTTPS `openai-responses`
+API-key routes without authored request overrides. Configure the same exact
+endpoint in `models.providers.openai.baseUrl` and the managed Codex agent home's
+`openai_base_url`, with native `model_provider = "openai"`. Before starting or
+reusing a thread, Codex verifies that its owned native inference route matches
+the prepared endpoint and uses API-key authentication. A mismatch or a connection
+without an owned route fails before inference; it does not switch endpoints or
+runtimes. Custom Completions, subscription relays, plaintext endpoints, URL query
+or fragment overrides, and custom request headers/transport options remain outside
+this native capability. Automatic custom-endpoint runtime selection stays OpenClaw.
+
+Fresh zero-tool API-key completions, including conversation labels, use Codex's
+existing host-prepared completion operation with the exact prepared endpoint and
+credential. They do not require a native catalog entry or inherit a native home.
+This does not enable utility routing or change the runtime of coding turns.
+Side-question forks bind the verified native upstream in their request config.
+Native compaction requires the retained owned route;
+without it, compaction fails closed.
+
 An official Completions adapter alone does not pin a supported model to metered
 billing: older configurations used that adapter with Codex subscription auth.
 When both credential kinds are eligible, automatic selection prefers the

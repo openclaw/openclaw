@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveModelRoutes } from "../../../openai/provider-policy-api.js";
 import {
   ensureCodexAppServerClientRuntime,
   hasCodexAppServerLiveThread,
@@ -19,6 +20,7 @@ import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
+  createCodexRuntimePlanFixture,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -65,6 +67,87 @@ describe("Codex native configuration lifecycle", () => {
     }
     throw new Error(`unexpected method: ${method}`);
   }
+  it.each(["matching", "mismatched", "unowned", "subscription"] as const)(
+    "binds the prepared hosted endpoint before native dispatch: %s",
+    async (variant) => {
+      const baseUrl = "https://hosted.example.com/v1";
+      const resolution = resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-test",
+        configuredProvider: { api: "openai-responses", baseUrl },
+      });
+      if (resolution?.kind !== "routes") {
+        throw new Error("Expected the provider-owned hosted route");
+      }
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "config/read") {
+            return {
+              config: {
+                openai_base_url:
+                  variant === "mismatched" ? "https://different.example.com/v1" : baseUrl,
+              },
+              origins: {},
+              layers: [],
+            };
+          }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "account/read") {
+            return { account: { type: variant === "subscription" ? "chatgpt" : "apiKey" } };
+          }
+          if (method === "thread/start") {
+            return threadStartResult("hosted-thread");
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      if (variant !== "unowned") {
+        ownCodexInferenceClient(fixture.client);
+      }
+      const hostedWorkspaceDir = path.join(tempDir, "hosted-workspace");
+      const hostedParams = createParams(
+        path.join(tempDir, "hosted-session.jsonl"),
+        hostedWorkspaceDir,
+      );
+      hostedParams.runtimePlan = {
+        ...createCodexRuntimePlanFixture(),
+        auth: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          modelRoute: { ...resolution.routes[0], provider: "openai", modelId: "gpt-test" },
+        },
+      };
+      try {
+        const pending = startOrResumeThread({
+          client: fixture.client,
+          params: hostedParams,
+          cwd: hostedWorkspaceDir,
+          dynamicTools: [],
+          appServer: createAppServerOptions(),
+          userMcpServersEnabled: false,
+        });
+        if (variant === "matching") {
+          const binding = await pending;
+          expect(getCodexInferenceThread(fixture.client, binding.threadId)?.upstream).toBe(baseUrl);
+          expect(
+            fixture.request.mock.calls.filter(([method]) => method === "thread/start"),
+          ).toHaveLength(1);
+        } else {
+          await expect(pending).rejects.toThrow(
+            "Codex cannot bind the exact prepared provider endpoint",
+          );
+          expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
+            false,
+          );
+        }
+      } finally {
+        fixture.client.close();
+      }
+    },
+  );
 
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",

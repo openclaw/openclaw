@@ -41,7 +41,11 @@ import {
   skippedCodexNativeCompactionResult,
 } from "./compact-result.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
-import { getCodexInferenceThreadQualification } from "./inference-routing.js";
+import {
+  assertCodexPreparedEndpointBinding,
+  getCodexInferenceThread,
+  getCodexInferenceThreadQualification,
+} from "./inference-routing.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { JsonObject } from "./protocol.js";
@@ -496,6 +500,11 @@ export async function maybeCompactCodexAppServerSession(
                     )
                   : undefined;
                 assertAdmissionCurrent();
+                assertCodexPreparedEndpointBinding(
+                  client,
+                  runtimeAuthPlan?.modelRoute,
+                  getCodexInferenceThread(client, binding.threadId),
+                );
                 await acquireThreadSubscription(guardedRequestTimeoutMs);
                 canRetainThreadOwnership = true;
                 attempt.abortSignal.throwIfAborted();
@@ -543,7 +552,14 @@ export async function maybeCompactCodexAppServerSession(
                         : { timeoutMs: guardedRequestTimeoutMs }),
                       signal: attempt.abortSignal,
                       withCurrent: authority.withCurrent,
-                      assertCurrent: assertAdmissionCurrent,
+                      assertCurrent: () => {
+                        assertAdmissionCurrent();
+                        assertCodexPreparedEndpointBinding(
+                          client,
+                          runtimeAuthPlan?.modelRoute,
+                          getCodexInferenceThread(client, binding.threadId),
+                        );
+                      },
                     },
                   );
                   return { started: true as const, accepted: true as const };

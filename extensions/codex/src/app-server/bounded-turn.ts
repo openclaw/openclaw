@@ -3,13 +3,16 @@ import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { parse as parseToml } from "smol-toml";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
+import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -97,6 +100,7 @@ class CodexBoundedTurnTimeoutError extends Error {
 type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: CodexBoundedTurnModelSelection;
+  configuredProvider?: string;
   modelProvider?: string;
   profile?: string;
   preparedAuth?: CodexAppServerPreparedAuth;
@@ -148,8 +152,50 @@ export async function runBoundedCodexAppServerTurn(
         fs.mkdir(codexHome, { recursive: true }),
         fs.mkdir(cwd, { recursive: true }),
       ]);
+      await stagePrivateCodexNativeProvider(params, appServer.start, codexHome);
       return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, { codexHome, cwd });
     },
+  );
+}
+
+async function stagePrivateCodexNativeProvider(
+  params: CodexBoundedTurnParams,
+  start: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"],
+  privateHome: string,
+): Promise<void> {
+  if (!params.configuredProvider || !params.modelProvider || params.model.mode !== "required") {
+    return;
+  }
+  const modelId = params.model.id;
+  const provider = resolveMergedModelProviderConfig(params.config, params.configuredProvider);
+  const declared = provider?.models?.find((entry) => entry.id === modelId);
+  if (
+    provider?.auth !== "native-command" ||
+    !declared ||
+    (declared.api ?? provider.api) !== "openai-responses"
+  ) {
+    return;
+  }
+  const sourceHome = resolveCodexAppServerLocalHomeDir(start, params.agentDir);
+  const source = parseToml(await fs.readFile(path.join(sourceHome, "config.toml"), "utf8"));
+  const nativeProviders = source.model_providers;
+  const nativeProvider = isRecord(nativeProviders)
+    ? nativeProviders[params.modelProvider]
+    : undefined;
+  const expectedBaseUrl = declared.baseUrl ?? provider.baseUrl;
+  if (
+    !isRecord(nativeProvider) ||
+    nativeProvider.base_url !== expectedBaseUrl ||
+    nativeProvider.wire_api !== "responses" ||
+    !isRecord(nativeProvider.auth) ||
+    typeof nativeProvider.auth.command !== "string"
+  ) {
+    throw new Error("Selected Codex native provider is unavailable for private completion.");
+  }
+  await fs.writeFile(
+    path.join(privateHome, "config.toml"),
+    stringifyToml({ model_providers: { [params.modelProvider]: nativeProvider } }),
+    { mode: 0o600 },
   );
 }
 
@@ -245,6 +291,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     const modelSelection = await resolveCodexBoundedTurnModel({
       client,
       selection: params.model,
+      config: params.config,
+      configuredProvider: params.configuredProvider,
       requiredModalities: params.requiredModalities,
       ...requestOptions,
     });
@@ -573,11 +621,17 @@ function createCodexBoundedApprovalHandler(taskLabel: string) {
 async function resolveCodexBoundedTurnModel(params: {
   client: CodexAppServerClient;
   selection: CodexBoundedTurnModelSelection;
+  config?: OpenClawConfig;
+  configuredProvider?: string;
   requiredModalities: string[];
   timeoutMs: number;
   signal: AbortSignal;
   assertCurrent?: () => void;
-}): Promise<CodexAppServerModel> {
+}): Promise<
+  Omit<CodexAppServerModel, "supportedReasoningEfforts"> & {
+    supportedReasoningEfforts?: string[];
+  }
+> {
   const result = await params.client.request<unknown>(
     "model/list",
     { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
@@ -604,6 +658,24 @@ async function resolveCodexBoundedTurnModel(params: {
   const model = params.selection.id;
   const match = listed.find((entry) => entry.model === model || entry.id === model);
   if (!match) {
+    const provider = params.configuredProvider
+      ? resolveMergedModelProviderConfig(params.config, params.configuredProvider)
+      : undefined;
+    const declared =
+      provider?.auth === "native-command"
+        ? provider.models?.find((entry) => entry.id === model)
+        : undefined;
+    if (declared && (declared.api ?? provider?.api) === "openai-responses") {
+      const inputModalities: string[] = declared.input ?? ["text"];
+      if (params.requiredModalities.every((modality) => inputModalities.includes(modality))) {
+        return {
+          id: model,
+          model,
+          inputModalities,
+          supportedReasoningEfforts: declared.compat?.supportedReasoningEfforts,
+        };
+      }
+    }
     throw new Error(`Codex app-server model not found: ${model}`);
   }
   if (params.requiredModalities.includes("image") && !match.inputModalities.includes("image")) {

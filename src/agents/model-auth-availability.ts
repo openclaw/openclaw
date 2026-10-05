@@ -6,7 +6,6 @@ import {
 import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   ProviderModelRouteAuthRequirement,
@@ -953,6 +952,44 @@ export function createModelAuthAvailabilityResolver(
   ): ModelAuthAvailabilityEvaluation => {
     const provider = normalizeProviderIdForAuth(rawProvider);
     if (provider !== OPENAI_PROVIDER_ID) {
+      const configured = resolveMergedModelProviderConfig(params.cfg, provider);
+      const modelId = ref.modelId && normalizeModelIdForProvider(provider, ref.modelId);
+      const model = configured?.models.find((entry) => entry.id === modelId);
+      const api = model?.api ?? configured?.api;
+      const baseUrl = model?.baseUrl ?? configured?.baseUrl;
+      if (
+        configured?.auth === "native-command" &&
+        ref.runtimeId === "codex" &&
+        synthetic.has("codex") &&
+        !ref.requiredProfileId &&
+        !ref.preferredProfileId &&
+        !ref.pinnedProfileId &&
+        model?.agentRuntime?.id === "codex" &&
+        api === "openai-responses" &&
+        typeof baseUrl === "string" &&
+        baseUrl.startsWith("https://") &&
+        (ref.api == null || ref.api === api) &&
+        (ref.baseUrl == null || ref.baseUrl === baseUrl) &&
+        configured.apiKey === undefined &&
+        configured.headers === undefined &&
+        configured.request === undefined &&
+        model.headers === undefined &&
+        !hasAuthoredProviderRequestParams({
+          config: params.cfg,
+          provider,
+          modelId,
+          agentId: params.agentId,
+        })
+      ) {
+        return {
+          availability: true,
+          availabilityAuthoritative: true,
+          routeResolution: null,
+          selectedAuthMode: "native-command",
+          evidence: "runtime",
+          runtimeAuth: { id: "codex", source: "native" },
+        };
+      }
       return {
         ...resolveProviderEvaluation(provider, ref),
         routeResolution: null,

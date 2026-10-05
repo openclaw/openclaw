@@ -19,7 +19,6 @@ import {
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
@@ -31,6 +30,7 @@ import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { registerSideQuestionStartupAuthorityTests } from "./side-question.startup-authority.test-support.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const {
@@ -155,53 +155,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   useSideQuestionTestSetup();
 
-  it("fences a recovered predecessor when its host rotates before the fork", async () => {
-    const root = tempDirs.make();
-    const storePath = path.join(root, "admitted", "sessions.json");
-    const previous = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionKey: "agent:main:side-continuity",
-      sessionId: "before-compaction",
-    };
-    const current = { ...previous, sessionId: "after-compaction" };
-    const scope = { agentId: previous.agentId, sessionKey: previous.sessionKey, storePath };
-    await upsertSessionEntry({
-      ...scope,
-      entry: { sessionId: previous.sessionId, updatedAt: 1 },
-    });
-    const sessionEntry = await patchSessionEntry({
-      ...scope,
-      update: () => ({ sessionId: current.sessionId }),
-    });
-    if (!sessionEntry) {
-      throw new Error("Expected the committed successor session");
-    }
-    const parent = { threadId: "parent-thread", cwd: "/tmp/workspace" };
-    const persistedBindings = createCodexTestBindingStore();
-    await persistedBindings.mutate(previous, { kind: "set", binding: parent });
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockImplementationOnce(async () => {
-      expect(persistedBindings.read(current)).toEqual(parent);
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
-      return client;
-    });
-
-    const operation = runCodexAppServerSideQuestionImpl(
-      sideParams({
-        cfg: { session: { store: path.join(root, "configured", "sessions.json") } },
-        storePath,
-        agentId: current.agentId,
-        sessionKey: current.sessionKey,
-        sessionId: current.sessionId,
-        sessionEntry,
-      }),
-      { bindingStore: persistedBindings },
-    );
-    await expect(operation).rejects.toThrow("Codex session generation is no longer current");
-    expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
-    expect(persistedBindings.read(current)).toEqual(parent);
-  });
+  registerSideQuestionStartupAuthorityTests(tempDirs);
 
   it("rejects a waiting side question when its app-server client closes", async () => {
     const client = createFakeClient({ completeTurn: false });

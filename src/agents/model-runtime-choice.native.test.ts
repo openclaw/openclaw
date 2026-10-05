@@ -2,9 +2,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareModelSelectionRuntime } from "../auto-reply/reply/model-runtime-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
-import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
+import {
+  createModelRuntimeChoiceOwnerFixture,
+  createCustomNativeCommandChoiceFixture,
+} from "./model-runtime-choice.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
@@ -38,6 +42,64 @@ const custom: OpenClawConfig = {
     },
   },
 };
+
+it.each(["unowned", "owned", "ambiguous", "host-auth", "transport"] as const)(
+  "admits a configured custom Codex route only under its captured ownership/auth contract: %s",
+  async (condition) => {
+    let current = true;
+    const { cfg, provider, model, entry, metadataSnapshot, pluginRegistry, owner } =
+      await createCustomNativeCommandChoiceFixture(condition, () => current);
+    published.owner = owner;
+    const decisions = createModelCatalogDecisions({
+      cfg,
+      agentId: "main",
+      metadataSnapshot,
+      snapshot: owner.modelCatalog,
+      preparedAuthStore: { version: 1, profiles: {} },
+      pluginRegistry,
+      isCurrent: owner.isCurrent,
+    });
+    const choices = decisions.runtimeChoices(entry);
+    const result = await prepareModelSelectionRuntime({
+      cfg,
+      agentId: "main",
+      provider,
+      model,
+      catalog: [entry],
+      hydrateThinkingCatalog: false,
+    });
+    if (condition !== "unowned") {
+      expect(choices).not.toContain("codex");
+      if (condition !== "host-auth") {
+        expect(result).toMatchObject({ status: "rejected", reason: "invalid-runtime" });
+      }
+      expect(
+        await preparePublishedModelRuntimeChoice({
+          cfg,
+          agentId: "main",
+          provider,
+          model,
+          runtimeId: "codex",
+        }),
+      ).toMatchObject({ kind: "unavailable" });
+      return;
+    }
+    expect(decisions.evaluateEntry(entry, [entry], "codex")).toMatchObject({
+      availability: true,
+      selectedAuthMode: "native-command",
+      runtimeAuth: { id: "codex" },
+    });
+    expect(choices).toEqual(["codex"]);
+    expect(result).toMatchObject({ status: "ready", runtime: { kind: "set", runtime: "codex" } });
+    if (result.status !== "ready" || !result.validateRuntimeSelection) {
+      throw new Error("The custom native route did not prepare session runtime admission");
+    }
+    expect(result.validateRuntimeSelection()).toBeUndefined();
+    current = false;
+    expect(result.validateRuntimeSelection()).toContain("not available");
+    expect(() => decisions.runtimeChoices(entry)).toThrow("Model catalog changed");
+  },
+);
 
 it("keeps keyless host selection after an explicit runtime reset without granting explicit availability", async () => {
   for (const agentRuntimeOverride of [undefined, "claude-cli"]) {

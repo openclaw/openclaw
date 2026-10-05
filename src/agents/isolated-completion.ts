@@ -60,8 +60,12 @@ import {
   type PreparedAgentRuntimeAuthAttempt,
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
-import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
+import {
+  prepareSimpleCompletionModel,
+  resolveSimpleCompletionSelectionForAgent,
+} from "./simple-completion-runtime.js";
 import type { UsageLike } from "./usage.js";
+import { isLocalDevUtilityOnly, readUtilityModelSetting } from "./utility-model-setting.js";
 
 type RunIsolatedCompletionParams = {
   config?: OpenClawConfig;
@@ -295,11 +299,34 @@ async function runIsolatedCompletionOwned(
   });
   let closed = false;
   let modelForAuthorization: ModelRef | undefined = { provider, model: input.model };
+  const utilitySetting = isLocalDevUtilityOnly(requestConfig)
+    ? readUtilityModelSetting(requestConfig, agentId)
+    : undefined;
+  const localUtility =
+    utilitySetting?.kind === "explicit"
+      ? resolveSimpleCompletionSelectionForAgent({
+          cfg: requestConfig,
+          agentId,
+          modelRef: utilitySetting.modelRef,
+        })
+      : undefined;
   const assertCurrent = () => {
     if (closed) {
       throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion has ended.");
     }
     input.assertCurrent?.();
+    if (
+      utilitySetting &&
+      (!localUtility ||
+        modelForAuthorization?.provider !== localUtility.provider ||
+        modelForAuthorization.model !== localUtility.modelId ||
+        (localUtility.profileId !== undefined && input.authProfileId !== localUtility.profileId))
+    ) {
+      throw new IsolatedCompletionError(
+        "runtime-unavailable",
+        "Local development isolated completion requires the explicitly configured utility model; no primary fallback was dispatched.",
+      );
+    }
     try {
       assertOperatorModelAllowed(input.operatorAuthority, modelForAuthorization);
     } catch (error) {

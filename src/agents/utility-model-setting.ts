@@ -6,6 +6,10 @@ type UtilityModelSetting =
   | { kind: "disabled" }
   | { kind: "auto" };
 
+export function isLocalDevUtilityOnly(cfg: OpenClawConfig): boolean {
+  return cfg.agents?.defaults?.localDevUtilityOnly === true;
+}
+
 /** An agent's defined empty value disables utility routing instead of inheriting defaults. */
 export function readUtilityModelSetting(
   cfg: OpenClawConfig,

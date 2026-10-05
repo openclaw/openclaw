@@ -38,6 +38,7 @@ export function sameAgentRuntimeAuthModelRoute(
     left.api === right.api &&
     left.authRequirement === right.authRequirement &&
     left.requestTransportOverrides === right.requestTransportOverrides &&
+    left.runtimePolicy?.requiresEndpointBinding === right.runtimePolicy?.requiresEndpointBinding &&
     sameCompatibleRuntimeIds(
       left.runtimePolicy?.compatibleIds,
       right.runtimePolicy?.compatibleIds,

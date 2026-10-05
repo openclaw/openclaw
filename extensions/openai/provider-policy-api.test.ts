@@ -436,11 +436,33 @@ describe("OpenAI provider policy artifact", () => {
           baseUrl: "https://model.example.test/v1",
           authRequirement: "api-key",
           requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw"] },
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"], requiresEndpointBinding: true },
         },
       ],
     });
   });
+
+  it.each([
+    ["http://hosted.example.com/v1", "none"],
+    ["https://hosted.example.com/v1?api-version=1", "none"],
+    ["https://hosted.example.com/v1#fragment", "none"],
+    ["https://hosted.example.com/v1", "present"],
+  ] as const)(
+    "keeps unsupported custom transport on the host: %s/%s",
+    (baseUrl, requestTransportOverrides) => {
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-test",
+          configuredProvider: { api: "openai-responses", baseUrl },
+          requestTransportOverrides,
+        }),
+      ).toMatchObject({
+        kind: "routes",
+        routes: [{ runtimePolicy: { compatibleIds: ["openclaw"] } }],
+      });
+    },
+  );
 
   it("preserves custom ChatGPT relays as subscription routes", () => {
     expect(

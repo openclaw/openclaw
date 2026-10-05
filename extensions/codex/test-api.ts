@@ -31,6 +31,14 @@ import {
   buildTurnStartParams,
 } from "./src/app-server/turn-params.js";
 
+/** Real harness and its plugin-owned in-memory store for host admission integration tests. */
+export async function createCodexHarnessForTest() {
+  const { createCodexAppServerAgentHarness } = await import("./harness.js");
+  const { createCodexTestBindingStore } =
+    await import("./src/app-server/session-binding.test-helpers.js");
+  return createCodexAppServerAgentHarness({ bindingStore: createCodexTestBindingStore() });
+}
+
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 export { createCodexDynamicToolBridge };
 

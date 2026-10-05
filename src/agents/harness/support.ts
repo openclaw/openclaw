@@ -16,6 +16,7 @@ import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.
 import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import {
   resolveAgentRuntimePolicyAgentId,
+  resolveModelRuntimePolicy,
   resolveModelRouteIntent,
   type AgentRuntimePolicyScope,
 } from "../model-runtime-policy.js";
@@ -171,6 +172,7 @@ export function buildAgentHarnessSupportContext(
       ? "present"
       : "none";
   const modelProviderFacts = {
+    auth: params.modelProvider?.auth ?? providerConfig?.auth,
     api: params.modelProvider?.api ?? configuredModelProvider?.api,
     baseUrl: params.modelProvider?.baseUrl ?? configuredModelProvider?.baseUrl,
     azureApiVersion:
@@ -180,6 +182,12 @@ export function buildAgentHarnessSupportContext(
     requestTransportOverrides,
     endpointOverrides,
   };
+  const declaredRuntime = resolveModelRuntimePolicy({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId,
+  });
   // Finalized routes carry the owner decision. Earlier selection resolves the same provider
   // artifact once so an indeterminate route cannot regain provider-id-only native support.
   const runtimePolicy = params.modelProvider?.runtimePolicy
@@ -209,6 +217,9 @@ export function buildAgentHarnessSupportContext(
   const modelProvider = {
     ...modelProviderFacts,
     runtimePolicy,
+    declaredRuntimeId:
+      params.modelProvider?.declaredRuntimeId ??
+      (declaredRuntime.forcedByEnvironment ? undefined : declaredRuntime.policy?.id),
   };
   return {
     provider: params.provider,
@@ -253,11 +264,28 @@ function resolveHarnessRouteRuntimePolicy(params: {
     return undefined;
   }
   return {
+    ...(policies.some((policy) => policy?.requiresEndpointBinding)
+      ? { requiresEndpointBinding: true as const }
+      : {}),
     compatibleIds: first.compatibleIds.filter(
       (id, index, ids) =>
         ids.indexOf(id) === index && policies.every((policy) => policy?.compatibleIds.includes(id)),
     ),
   };
+}
+
+/** Capability admission precedes plugin support so older runtimes cannot lose route constraints. */
+export function probeAgentHarnessSupport(
+  harness: AgentHarness,
+  context: AgentHarnessSupportContext,
+): AgentHarnessSupport {
+  if (
+    context.modelProvider?.runtimePolicy?.requiresEndpointBinding &&
+    harness.providerEndpointBindingSupport !== "exact"
+  ) {
+    return { supported: false, reason: "runtime cannot bind the prepared provider endpoint" };
+  }
+  return harness.supports(context);
 }
 
 /** Resolves the registered plugin harness that auto selection would choose. */
@@ -289,7 +317,8 @@ export function resolveAutoAgentHarnessSelection(
   let supportContext: AgentHarnessSupportContext | undefined;
   const candidates = hintedCandidates.map(({ harness, support }) => ({
     harness,
-    support: support ?? harness.supports((supportContext ??= createSupportContext())),
+    support:
+      support ?? probeAgentHarnessSupport(harness, (supportContext ??= createSupportContext())),
   }));
   const selected = candidates
     .filter(isSupportedHarness)

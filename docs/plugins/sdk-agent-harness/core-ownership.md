@@ -420,3 +420,18 @@ Call it for each turn, after the final tool surface is known. Pass
 is unavailable. Carry the result through the native runtime's existing
 per-turn application or developer context instead of appending it to stable
 thread instructions.
+
+### Provider endpoint binding
+
+A provider route may set `runtimePolicy.requiresEndpointBinding: true` alongside
+its compatible runtime ids. A plugin harness must declare
+`providerEndpointBindingSupport: "exact"` to pass admission for that route.
+Core preserves this requirement through deferred auth and prepared route
+comparison; older harnesses fail closed.
+
+The capability means every executing operation verifies the exact prepared
+endpoint against its lifecycle-owned transport before inference, rechecks current
+authority at dispatch, and rejects operations that cannot attest the endpoint.
+Host-prepared isolated completion satisfies the contract by using the supplied
+model and credential directly. Compatibility alone never authorizes ambient
+native configuration, another account, or an endpoint substitution.

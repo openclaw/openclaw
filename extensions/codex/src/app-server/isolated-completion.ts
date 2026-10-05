@@ -1,10 +1,13 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { readCodexPluginConfig, resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
+import { assertCodexPreparedEndpointBinding } from "./inference-routing.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
+import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 
 type CodexIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
@@ -23,6 +26,8 @@ export async function runCodexIsolatedCompletion(
   if (authorization.owner !== "harness") {
     throw new Error("Codex native isolated completion requires harness-owned authorization.");
   }
+  // API-key custom routes belong to the host-prepared isolated operation.
+  assertCodexPreparedEndpointBinding(undefined, authorization.plan.modelRoute);
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const homeScope = resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer });
   const authRequirement = authorization.plan.modelRoute?.authRequirement;
@@ -41,8 +46,27 @@ export async function runCodexIsolatedCompletion(
   const authSelection = authHandoff.preparedAuth
     ? { preparedAuth: authHandoff.preparedAuth }
     : { profile: authHandoff.authProfileId };
+  const declaredProvider = resolveMergedModelProviderConfig(params.config, params.provider);
+  const declaredModel = declaredProvider?.models?.find((entry) => entry.id === params.modelId);
+  const nativeProvider =
+    params.provider !== "openai" &&
+    authorization.plan.credentialSource?.kind === "none" &&
+    authorization.plan.forwardedAuthProfileId === undefined &&
+    declaredProvider?.auth === "native-command" &&
+    (declaredModel?.api ?? declaredProvider.api) === "openai-responses"
+      ? resolveCodexAppServerModelProvider({
+          provider: params.provider,
+          homeScope,
+          authProfileId: authHandoff.authProfileId,
+          authProfileStore: authorization.authProfileStore,
+          agentDir: params.agentDir,
+          config: params.config,
+        })
+      : undefined;
   const result = await runBoundedCodexAppServerTurn({
     config: params.config,
+    configuredProvider: params.provider,
+    ...(nativeProvider ? { modelProvider: nativeProvider } : {}),
     model: {
       mode: "required",
       id: params.modelId,

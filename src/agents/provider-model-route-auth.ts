@@ -288,7 +288,12 @@ function resolveDeferredRouteSupport(
     )
       ? "present"
       : "none",
-    runtimePolicy: { compatibleIds },
+    runtimePolicy: {
+      compatibleIds,
+      ...(resolution.routes.some((route) => route.runtimePolicy?.requiresEndpointBinding)
+        ? { requiresEndpointBinding: true as const }
+        : {}),
+    },
   };
 }
 

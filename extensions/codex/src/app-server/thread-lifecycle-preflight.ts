@@ -20,6 +20,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import {
   assertCodexInferenceRouteConfig,
+  assertCodexPreparedEndpointBinding,
   bindCodexInferenceThread,
   getCodexInferenceThread,
   prepareCodexInferenceThreadConfig,
@@ -154,6 +155,11 @@ export async function prepareCodexThreadRequestContext(
   params.assertCurrent = () => {
     options.throwIfAborted();
     options.assertCurrent();
+    assertCodexPreparedEndpointBinding(
+      params.client,
+      params.params.runtimePlan?.auth.modelRoute,
+      params.inferenceRoute,
+    );
     assertCodexThreadInferenceAuthority(params, modelPolicyEnforced);
   };
   params.assertCurrent();

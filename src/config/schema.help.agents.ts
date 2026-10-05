@@ -80,6 +80,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.entries.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
+  "agents.defaults.localDevUtilityOnly":
+    "Local development only: restrict isolated completions to each agent's explicitly configured utilityModel and omit primary-model title fallback. Other isolated requests fail before runtime/auth preparation; ordinary agent and worker turns are unchanged. Default false.",
   "agents.defaults.decisionModel":
     "Optional provider/model for typed choices, scores, and boolean probabilities. Unset or empty disables decision calls. Supporting plugins send bounded task evidence to this provider; chat and utility models are unchanged.",
   "agents.entries.*.decisionModel":

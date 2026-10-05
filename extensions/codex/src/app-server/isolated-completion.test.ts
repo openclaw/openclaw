@@ -128,6 +128,68 @@ describe("runCodexIsolatedCompletion", () => {
     expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
   });
 
+  it("projects the declared custom provider through Codex native selection", async () => {
+    const base = createParams();
+    const modelId = "synthetic-native-model";
+    const params = {
+      ...base,
+      provider: "native-provider-fixture",
+      modelId,
+      config: {
+        models: {
+          providers: {
+            "native-provider-fixture": {
+              auth: "native-command",
+              api: "openai-responses",
+              baseUrl: "https://native.models.example.test/v1",
+              models: [{ id: modelId, name: modelId }],
+            },
+          },
+        },
+      },
+      authorization: {
+        owner: "harness",
+        plan: {
+          providerForAuth: "native-provider-fixture",
+          authProfileProviderForAuth: "native-provider-fixture",
+          harnessAuthProvider: "openai",
+          credentialSource: { kind: "none" },
+        },
+        authProfileStore,
+      },
+    } as unknown as IsolatedParams;
+    mocks.resolveAuthHandoff.mockResolvedValueOnce({ authProfileId: undefined });
+
+    await runCodexIsolatedCompletion(params, {});
+
+    expect(mocks.runBoundedTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuredProvider: "native-provider-fixture",
+        modelProvider: "native-provider-fixture",
+      }),
+    );
+
+    const authorization = params.authorization as Extract<
+      IsolatedParams["authorization"],
+      { owner: "harness" }
+    >;
+    const pinnedParams = {
+      ...params,
+      authorization: {
+        ...authorization,
+        plan: {
+          ...authorization.plan,
+          forwardedAuthProfileId: "openai:test",
+          forwardedAuthProfileSource: "user",
+          selectedAuthMode: "subscription",
+        },
+      },
+    } as IsolatedParams;
+    mocks.resolveAuthHandoff.mockResolvedValueOnce({ authProfileId: "openai:test" });
+    await runCodexIsolatedCompletion(pinnedParams, {});
+    expect(mocks.runBoundedTurn.mock.calls[1]?.[0]).not.toHaveProperty("modelProvider");
+  });
+
   it("forwards prepared profile auth without also selecting a profile", async () => {
     const preparedAuth = {
       kind: "profile",

@@ -55,6 +55,8 @@ export type ProviderRouteOverridePresence = "none" | "present";
 export type ProviderModelRouteRuntimePolicy = {
   /** Agent runtime ids that can reproduce this route without losing transport behavior. */
   compatibleIds: readonly string[];
+  /** Native execution must bind and verify the exact prepared endpoint before inference. */
+  requiresEndpointBinding?: true;
 };
 
 export type ProviderModelRouteCandidate = {
