@@ -10,7 +10,6 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import {
   create as createSessionRow,
   sort as sortSessionRows,
@@ -195,19 +194,7 @@ export function createSessionRowProjectionFixture(params: {
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
-    modelFacts: (query) => {
-      const row = describe(query)!;
-      return readSessionRowModelFacts({
-        cfg,
-        key: row.key,
-        agentId: row.agentId,
-        entry: row.entry,
-        preparedAcpMeta: row.materialized.source.thinkingProjection.acpMeta,
-        rowContext,
-        modelCatalog,
-        source: { entry: row.storedEntry, readSourceEntry: (key) => store[key] },
-      });
-    },
+    modelFacts: (query) => describe(query)!.materialized.source,
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
       return { kind: "complete", value: consume(projection) };
@@ -233,7 +220,6 @@ export function createSessionRowProjectionFixture(params: {
     prepareSelection: () => undefined,
     withSelectionPreparation: (consume) => consume(),
     needsSelectionPreparation: () => false,
-    isMaterialized: (query) => describe(query) !== undefined,
     prepareMembership: () => Promise.resolve(),
     needsMembershipPreparation: () => false,
     sessionGroupTargets: () => {

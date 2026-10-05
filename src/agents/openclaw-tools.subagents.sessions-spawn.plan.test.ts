@@ -44,7 +44,7 @@ describe("subagent initial model plan", () => {
       resolvedModel: "openrouter/meta-llama/llama-3.3-70b:free",
       modelApplied: true,
       initialSessionPatch: {
-        model: "openrouter/meta-llama/llama-3.3-70b:free",
+        model: "meta-llama/llama-3.3-70b:free",
         modelOverrideSource: "user",
       },
     });
@@ -80,7 +80,7 @@ describe("subagent initial model plan", () => {
       status: "ok",
       resolvedModel: "openai/gpt-5.4",
       initialSessionPatch: {
-        model: "openai/gpt-5.4",
+        model: "gpt-5.4",
         modelOverrideSource: "auto",
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "gpt-5.4",
@@ -135,7 +135,9 @@ describe("subagent initial model plan", () => {
         throw new Error(plan.error);
       }
       expect(plan.resolvedModel).toBe(expected);
-      expect(plan.initialSessionPatch.model).toBe(expected);
+      expect(`${plan.initialSessionPatch.modelProvider}/${plan.initialSessionPatch.model}`).toBe(
+        expected,
+      );
       expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
       expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(originProvider);
       expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(originModel);

@@ -2,6 +2,34 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   {
+    code: "session-upstream-links-sync-persistence",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-07-14",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await upsertSessionUpstreamLinkAsync and deleteSessionUpstreamLinkAsync from session-catalog. Official harnesses await the native initializer's linkAsync method. Retain the synchronous signatures and completion timing shipped in v2026.9.8 until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-upstream-links",
+    surfaces: [
+      "openclaw/plugin-sdk/session-catalog.upsertSessionUpstreamLink",
+      "openclaw/plugin-sdk/session-catalog.deleteSessionUpstreamLink",
+      "openclaw/plugin-sdk/agent-harness-session-runtime.createNativeSessionInitializationOwner().prepare().link",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-catalog-upstream-compat.test.ts",
+      "src/plugin-sdk/agent-harness-session-compat.test.ts",
+      "src/sessions/session-upstream-links.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Bundled session adoption and native initialization await upstream-link writes through the shared-state worker. Released synchronous SDK methods remain compatible until the next Plugin SDK major; schemas, stored data, retention, and update behavior are unchanged.",
+  },
+  {
     code: "session-observer-progress-sync-reads",
     status: "deprecated",
     owner: "sdk",

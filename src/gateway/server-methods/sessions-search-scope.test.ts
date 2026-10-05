@@ -9,6 +9,7 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -18,6 +19,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
@@ -145,17 +147,28 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
     const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
       updatedAt: 1,
     });
-    const result = await search(requestContext(cfg), identifiedClient(owner), {
-      query: "uniqueneedle",
-      limit: 1,
-      scope: paletteScope,
-    });
-    expect(result.ok, result.error?.message).toBe(true);
-    expect(result.payload).toMatchObject({ results: [{ sessionKey: key }], sessions: [{ key }] });
-    expect(result.payload?.results).toHaveLength(1);
-    expect(result.payload?.sessions).toHaveLength(1);
-    expect(result.payload).not.toHaveProperty("indexing");
-    expect(result.payload).not.toHaveProperty("truncated");
+    // Keep settled writers alive so idle-close checkpoints cannot invalidate the search snapshot.
+    const executions = agents.map((agentId) => captureOpenClawAgentDatabaseExecution({ agentId }));
+    try {
+      await Promise.all(
+        agents.map((agentId) =>
+          expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
+        ),
+      );
+      const result = await search(requestContext(cfg), identifiedClient(owner), {
+        query: "uniqueneedle",
+        limit: 1,
+        scope: paletteScope,
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(result.payload).toMatchObject({ results: [{ sessionKey: key }], sessions: [{ key }] });
+      expect(result.payload?.results).toHaveLength(1);
+      expect(result.payload?.sessions).toHaveLength(1);
+      expect(result.payload).not.toHaveProperty("indexing");
+      expect(result.payload).not.toHaveProperty("truncated");
+    } finally {
+      await Promise.all(executions.map((execution) => execution.release()));
+    }
   });
 });
 

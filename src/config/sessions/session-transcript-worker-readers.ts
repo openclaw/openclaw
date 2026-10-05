@@ -192,6 +192,12 @@ export function createSessionHistoryWorkerReaders(
       (params) => ({ kind: "transcript-search", params }),
       (value) => value.result,
     ),
+    isTranscriptSearchCurrent: reader(
+      "transcript-search-current",
+      "search snapshot currency",
+      (input) => ({ kind: "transcript-search-current", ...input }),
+      (value) => value.current,
+    ),
     readPreview: reader(
       "session-preview",
       "a preview",

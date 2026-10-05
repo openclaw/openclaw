@@ -109,7 +109,6 @@ interface LineSendOpts {
   previewImageUrl?: string;
   durationMs?: number;
   trackingId?: string;
-  replyToken?: string;
   quoteToken?: string;
   /** Revalidate immediately before every provider attempt, including retries. */
   authorize?: () => boolean | Promise<boolean>;
@@ -304,30 +303,17 @@ async function postLineProviderMessages(
   }
 }
 
-function isValidLineLocation(location: LineLocation): boolean {
-  // LINE rejects either blank required field atomically, so every delivery path
-  // must use this gate before adding a location to a provider request.
-  return location.title.trim().length > 0 && location.address.trim().length > 0;
-}
-
-// A pin LINE will not render still carries the values the sender wrote, and the
-// coordinates are always present, so the location degrades to the text it was
-// made of instead of vanishing from the reply.
-function locationTextFallback(location: LineLocation): TextMessage {
-  // The pin caps each label, and so must the fallback: an unbounded label would
-  // breach LINE's text limit and lose the location the same silent way.
-  const authored = [location.title, location.address]
-    .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
-    .filter(Boolean);
-  return {
-    type: "text",
-    text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
-  };
-}
-
 export function createLocationMessage(location: LineLocation): LocationMessage | TextMessage {
-  if (!isValidLineLocation(location)) {
-    return locationTextFallback(location);
+  // LINE rejects blank labels atomically. Keep the authored text and coordinates,
+  // bounded by the same label cap, when the location cannot render as a pin.
+  if (!location.title.trim() || !location.address.trim()) {
+    const authored = [location.title, location.address]
+      .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
+      .filter(Boolean);
+    return {
+      type: "text",
+      text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
+    };
   }
   return {
     type: "location",
@@ -454,29 +440,7 @@ async function pushLineMessages(
   return result;
 }
 
-async function replyLineMessages(
-  replyToken: string,
-  messages: Message[],
-  opts: LinePushOpts,
-): Promise<{ messageId: string; messageIds: string[]; accountId: string }> {
-  const { account, token } = resolveLineMessagingAccount(opts);
-  const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
-    normalizeLineMessage,
-  );
-
-  const response = await sendLineProviderMessages(
-    "reply",
-    token,
-    { replyToken, messages: normalizedMessages },
-    undefined,
-    opts.authorize,
-    opts.assertDirectAdapterHandoff,
-  );
-  const result = resolveLineProviderMessageIds(response, "reply");
-  return { ...result, accountId: account.accountId };
-}
-
-export async function sendMessageLine(
+export async function pushMessageLine(
   to: string,
   text: string,
   opts: LineSendOpts,
@@ -504,45 +468,9 @@ export async function sendMessageLine(
     messages.push({ type: "text", text: text.trim() });
   }
 
-  if (messages.length === 0) {
-    throw new Error("Message must be non-empty for LINE sends");
-  }
-
-  if (opts.replyToken) {
-    const { messageId, messageIds, accountId } = await replyLineMessages(
-      opts.replyToken,
-      messages,
-      opts,
-    );
-    const result: LineSendResult = {
-      messageId,
-      chatId,
-      receipt: createLineSendReceipt({
-        messageId,
-        messageIds,
-        chatId,
-        kind: resolveLineReceiptKind(messages),
-        messageCount: messages.length,
-      }),
-    };
-    recordLineOutboundActivity(accountId, { messageIds, receipt: result.receipt });
-    if (opts.verbose) {
-      logVerbose(`line: replied to ${chatId}`);
-    }
-    return result;
-  }
-
   return pushLineMessages(chatId, messages, opts, {
     verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,
   });
-}
-
-export async function pushMessageLine(
-  to: string,
-  text: string,
-  opts: LineSendOpts,
-): Promise<LineSendResult> {
-  return sendMessageLine(to, text, { ...opts, replyToken: undefined });
 }
 
 export async function replyMessageLine(
@@ -550,8 +478,20 @@ export async function replyMessageLine(
   messages: Message[],
   opts: LinePushOpts,
 ): Promise<void> {
-  const { messageIds, accountId } = await replyLineMessages(replyToken, messages, opts);
-  recordLineOutboundActivity(accountId, { messageIds });
+  const { account, token } = resolveLineMessagingAccount(opts);
+  const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
+    normalizeLineMessage,
+  );
+  const response = await sendLineProviderMessages(
+    "reply",
+    token,
+    { replyToken, messages: normalizedMessages },
+    undefined,
+    opts.authorize,
+    opts.assertDirectAdapterHandoff,
+  );
+  const { messageIds } = resolveLineProviderMessageIds(response, "reply");
+  recordLineOutboundActivity(account.accountId, { messageIds });
   if (opts.verbose) {
     logVerbose(`line: replied with ${messages.length} messages`);
   }

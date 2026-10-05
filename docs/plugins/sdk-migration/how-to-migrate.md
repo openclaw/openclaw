@@ -95,6 +95,33 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await session upstream links
+
+Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from
+`openclaw/plugin-sdk/session-catalog`. Keep the existing arguments and await
+completion before binding a native session, publishing adoption, or depending on
+link cleanup. The upsert resolves to a boolean; deletion resolves to `"deleted"`,
+`"absent"`, `"changed"`, or `undefined`, preserving the existing result semantics.
+
+Pass the existing `assertCommitAllowed` callback when the write depends on live
+authority. It runs at worker transaction and commit admission, so it must remain
+synchronous and must not query the shared-state database. An uncertain write
+outcome does not authorize retrying the write or invoking its synchronous
+counterpart.
+
+Official harnesses using the production-private
+`agent-harness-session-runtime` initializer should replace
+`initialization.link(input)` with `await initialization.linkAsync(input)` before
+calling `initialization.bind(...)`. Await rollback cleanup before releasing the
+initializer's ownership.
+
+The synchronous upsert, delete, and initializer `link` contracts shipped in
+`v2026.9.8` retain their arguments, immediate results, and completion timing until
+the next Plugin SDK major and explicit breaking-release approval. Their
+deprecation is recorded in TypeScript and the compatibility registry without
+runtime warnings. This migration changes no schema, stored data, retention, or
+update behavior.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from

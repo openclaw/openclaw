@@ -49,7 +49,6 @@ import {
   createNodeWorkerLaunchRecovery,
   type NodeWorkerRecovery,
 } from "./node-worker-supervisor-recovery.js";
-import { joinNodeWorkerTurnCancellation } from "./node-worker-turn-lifecycle.js";
 import { NodeWorkerTurnStore, type NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
@@ -470,12 +469,24 @@ class NodeWorkerSupervisor {
   async cancel(
     expected: NodeWorkerSupervisorIdentity,
   ): Promise<NodeWorkerLaunchReceipt | undefined> {
-    return await joinNodeWorkerTurnCancellation({
-      expected,
-      admissions: this.admissions,
-      cancelTurn: () => this.cancelTurn(expected),
-      readReceipt: () => this.turns.getMatching(expected),
-    });
+    const admission = [...this.admissions.values()].find((pending) =>
+      nodeWorkerTurnMatchesIdentity(pending.identity, expected),
+    );
+    const cancellation = this.cancelTurn(expected);
+    if (!admission) {
+      return cancellation;
+    }
+    const [cancelled, admitted] = await Promise.allSettled([cancellation, admission.done]);
+    if (cancelled.status === "rejected") {
+      throw cancelled.reason;
+    }
+    if (
+      admitted.status === "rejected" &&
+      (!admission.signal.aborted || admitted.reason !== admission.signal.reason)
+    ) {
+      throw admitted.reason;
+    }
+    return this.turns.getMatching(expected);
   }
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {

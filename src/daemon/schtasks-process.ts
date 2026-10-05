@@ -61,31 +61,6 @@ export function resolveScheduledTaskCommandPort(
   );
 }
 
-async function resolveScheduledTaskNodeHostProcess(
-  env: GatewayServiceEnv,
-  installedCommand?: GatewayServiceCommandConfig | null,
-): Promise<{ pid: number; port: number } | null> {
-  const command =
-    installedCommand === undefined
-      ? await readScheduledTaskCommand(env).catch(() => null)
-      : installedCommand;
-  const installedArguments = command?.programArguments;
-  if (!installedArguments?.length) {
-    return null;
-  }
-  const port = resolveScheduledTaskCommandPort(env, command);
-  if (!port) {
-    return null;
-  }
-  const snapshot = readWindowsProcessSnapshot();
-  if (!snapshot) {
-    return null;
-  }
-  // Match full persisted argv so a same-port OpenClaw process cannot impersonate this task.
-  const pid = findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv);
-  return pid ? { pid, port } : null;
-}
-
 export function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
   return normalizeLowercaseStringOrEmpty(env.OPENCLAW_SERVICE_KIND) !== NODE_SERVICE_KIND;
 }
@@ -458,16 +433,30 @@ export async function terminateScheduledTaskNodeHost(
   assertCurrent?: () => void,
   beforeMutation?: () => Promise<void>,
 ): Promise<number[]> {
-  const matched = await resolveScheduledTaskNodeHostProcess(env);
-  if (!matched) {
+  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const installedArguments = command?.programArguments;
+  if (!installedArguments?.length) {
+    return [];
+  }
+  const port = resolveScheduledTaskCommandPort(env, command);
+  if (!port) {
+    return [];
+  }
+  const snapshot = readWindowsProcessSnapshot();
+  if (!snapshot) {
+    return [];
+  }
+  // Match full persisted argv so a same-port OpenClaw process cannot impersonate this task.
+  const pid = findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv);
+  if (!pid) {
     return [];
   }
   if (beforeMutation) {
     await beforeMutation();
     assertCurrent?.();
   }
-  await terminateGatewayProcessTree(matched.pid, assertCurrent);
-  return [matched.pid];
+  await terminateGatewayProcessTree(pid, assertCurrent);
+  return [pid];
 }
 
 export async function terminateScheduledTaskGatewayListeners(

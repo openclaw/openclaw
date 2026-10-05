@@ -46,8 +46,9 @@ vi.mock("../../sessions/session-state-events.js", () => ({
   recordSessionStateEventAsync: hoisted.recordSessionStateEventAsync,
 }));
 
+// mock-isolation: Record catalog link requests without opening the persistence owner.
 vi.mock("../../sessions/session-upstream-links.js", () => ({
-  upsertSessionUpstreamLink: hoisted.upsertSessionUpstreamLink,
+  upsertSessionUpstreamLinkAsync: hoisted.upsertSessionUpstreamLink,
 }));
 vi.mock("../../plugins/session-conversation-binding.js", () => ({
   bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,

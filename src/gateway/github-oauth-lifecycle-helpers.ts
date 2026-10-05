@@ -6,7 +6,6 @@ import type {
   GitHubDeviceAuthorizationRecord,
   GitHubIdentityScope,
 } from "../agents/github-oauth-records.js";
-import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
@@ -20,11 +19,6 @@ export type ConfiguredOAuthIdentity = {
   agentId: string;
   identity: GitHubToolIdentityConfig & { kind: "oauth" };
 };
-
-export const defaultGitAuthor = (account: GitHubToolAccount) => ({
-  name: account.login,
-  email: `${account.accountId}+${account.login}@users.noreply.github.com`,
-});
 
 export function identityStillSelected(
   config: OpenClawConfig,
