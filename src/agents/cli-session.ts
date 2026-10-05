@@ -9,6 +9,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
 import { readErrorName } from "../infra/errors.js";
+import { readInterSessionPromptEnvelope } from "../sessions/input-provenance.js";
 import { isFailoverError } from "./failover-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 export {
@@ -197,17 +198,21 @@ export function buildCliSessionDriftNote(reasons: readonly CliSessionContentDrif
   return `${CLI_SESSION_DRIFT_NOTE_PREFIX} Follow the current turn's instructions; changed=${reasons.join(",")}.`;
 }
 
-const CLI_SESSION_DRIFT_NOTE_PREFIXES = [
+const CLI_SESSION_DRIFT_NOTES = [
   buildCliSessionDriftNote(["system-prompt"]),
   buildCliSessionDriftNote(["prompt-tools"]),
   buildCliSessionDriftNote(["system-prompt", "prompt-tools"]),
-].map((note) => `${note}\n\n`);
+];
 
 // Match only complete notes the producer emits; similar native user text is not context.
+// Inter-session prompts move their envelope above the note, joined by single newlines.
 export function stripCliSessionDriftNote(text: string): string {
-  for (const prefix of CLI_SESSION_DRIFT_NOTE_PREFIXES) {
-    if (text.startsWith(prefix)) {
-      return text.slice(prefix.length);
+  const envelopeLength = readInterSessionPromptEnvelope(text)?.length ?? 0;
+  const separator = envelopeLength > 0 ? "\n" : "\n\n";
+  for (const note of CLI_SESSION_DRIFT_NOTES) {
+    const prefix = `${note}${separator}`;
+    if (text.startsWith(prefix, envelopeLength)) {
+      return text.slice(0, envelopeLength) + text.slice(envelopeLength + prefix.length);
     }
   }
   return text;
