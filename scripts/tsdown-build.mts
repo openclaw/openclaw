@@ -1239,12 +1239,16 @@ export async function runTsdownBuildInvocation(
         }, timeoutMs).unref()
       : null;
 
+  function stopObserving() {
+    settled = true;
+    cleanupParentSignalHandlers();
+    clearInterval(heartbeat ?? undefined);
+    clearTimeout(timeout ?? undefined);
+  }
+
   return new Promise<TsdownBuildResult>((resolve) => {
     child.once("error", (error) => {
-      settled = true;
-      cleanupParentSignalHandlers();
-      clearInterval(heartbeat ?? undefined);
-      clearTimeout(timeout ?? undefined);
+      stopObserving();
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
       resolve({
         status: 1,
@@ -1274,10 +1278,7 @@ export async function runTsdownBuildInvocation(
         );
       };
       function finish() {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
         const finalStatus = parentSignal ? signalExitCode(parentSignal) : exitStatus;
         if (finalStatus !== 0 || timedOut) {
           reportFailure(finalStatus);
@@ -1309,10 +1310,7 @@ export async function runTsdownBuildInvocation(
         }
         finish();
       })().catch((error: unknown) => {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
         reportFailure(1);
         resolve({
           status: 1,

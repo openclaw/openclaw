@@ -34,7 +34,6 @@ type MutableExplanation = {
   operatorSources: OperatorSource[];
   risks: CommandRisk[];
   hasParseError: boolean;
-  nextCommandIndex: number;
   remainingNodes: number;
 };
 
@@ -899,7 +898,7 @@ async function visitNode(
         span: spanFromNode(nameNode, state.spanBase),
       });
     } else if (parsed) {
-      const commandId = `command-${output.nextCommandIndex}`;
+      const commandId = `command-${output.commands.length}`;
       const step: CommandStep = {
         id: commandId,
         context,
@@ -922,7 +921,6 @@ async function visitNode(
         step.parentCommandId = state.parentCommandId;
       }
       if (step.executable) {
-        output.nextCommandIndex += 1;
         output.commands.push(step);
         recordCommandRisks(parsed.argv, parsed.dynamicArguments, node.text, span, output);
         const wrapperPayload = shellWrapperPayloadForParsing(
@@ -1164,7 +1162,6 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
       operatorSources: [],
       risks: [],
       hasParseError: tree.rootNode.hasError,
-      nextCommandIndex: 0,
       remainingNodes: MAX_COMMAND_EXPLANATION_NODES,
     };
     await walk(tree.rootNode, output, "top-level", {

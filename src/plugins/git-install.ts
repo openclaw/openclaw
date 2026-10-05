@@ -435,8 +435,6 @@ export async function installPluginFromGitSpec(
       const install = await runCommandWithTimeout(
         resolveNpmCommand(
           createSafeNpmInstallArgs({
-            omitDev: true,
-            loglevel: "error",
             noAudit: true,
             noFund: true,
           }),
@@ -470,7 +468,6 @@ export async function installPluginFromGitSpec(
       expectedPluginId: params.expectedPluginId,
       logger: params.logger,
       mode: effectiveMode,
-      emitSuccessSecurityEvent: false,
       installPolicyRequest,
     });
     if (!result.ok) {

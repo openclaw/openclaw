@@ -2,6 +2,7 @@ import AppKit
 import ConcurrencyExtras
 import Foundation
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -148,6 +149,62 @@ struct StatusMenuSummariesTests {
             }
             #expect(fixture.requests.value.filter { $0.method == "sessions.preview" }.count ==
                 (transition.hasSuffix("replacement") ? 2 : 1))
+        }
+    }
+
+    @Test(arguments: ["unchanged", "reconnect", "before-action", "during-confirmation"], [false, true])
+    func `session actions retain the rendered Gateway through confirmation`(
+        transition: String,
+        nestedMenu: Bool) async throws
+    {
+        try await self.withFixture { fixture in
+            _ = try await fixture.control.request(method: "health")
+            await fixture.sessions.refresh()
+            let row = try #require(fixture.sessions.rows.first)
+            let item = NSMenuItem()
+            fixture.sessions.configureSessionItem(item, row: row)
+            func actionItem() throws -> NSMenuItem {
+                let menu = try #require(item.submenu)
+                if nestedMenu {
+                    let thinking = try #require(menu.items.first { $0.identifier?.rawValue == "session.thinking" })
+                    return try #require(thinking.submenu?.items.first)
+                }
+                return try #require(menu.items.first { $0.action == NSSelectorFromString("resetSession:") })
+            }
+            let request = nestedMenu
+                ? OpenClawChatGatewayRequests.patchSessionSettings(
+                    sessionKey: row.key, agentID: nil, thinkingLevel: .some("off"), verboseLevel: nil)
+                : OpenClawChatGatewayRequests.resetSession(sessionKey: row.key, agentID: nil)
+            if transition == "before-action" {
+                fixture.revision.setValue(2)
+                _ = try await fixture.control.request(method: "health")
+            } else if transition == "reconnect" {
+                try await fixture.reconnect()
+            }
+
+            var confirmations = 0
+            try await fixture.sessions.performSessionAction(
+                actionItem(), request: request, errorTitle: "Synthetic action failed")
+            {
+                confirmations += 1
+                if transition == "during-confirmation" {
+                    fixture.revision.setValue(2)
+                    _ = try? await fixture.control.request(method: "health")
+                }
+                return true
+            }
+
+            #expect(confirmations == (transition == "before-action" ? 0 : 1))
+            let replaced = transition == "before-action" || transition == "during-confirmation"
+            #expect(fixture.requests.value.filter { $0.method == request.method }.map(\.owner) ==
+                (replaced ? [] : ["A"]))
+            if replaced {
+                await fixture.sessions.refresh(force: true)
+                try fixture.sessions.configureSessionItem(item, row: #require(fixture.sessions.rows.first))
+                try await fixture.sessions.performSessionAction(
+                    actionItem(), request: request, errorTitle: "Synthetic action failed")
+                #expect(fixture.requests.value.filter { $0.method == request.method }.map(\.owner) == ["B"])
+            }
         }
     }
 

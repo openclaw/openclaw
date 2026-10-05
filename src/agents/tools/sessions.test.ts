@@ -5,7 +5,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
@@ -17,6 +16,10 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import {
+  resolveSessionConversationStub,
+  resolveSessionTargetStub,
+} from "./sessions-channel-fixture.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-exact-session-send-");
 
@@ -47,7 +50,9 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
     callGateway: (opts: unknown) => callGatewayMock(opts),
   };
 });
+// mock-isolation: Keep transport inside this fixture; real loopback and admission have Gateway integration coverage.
 vi.mock("./in-process-gateway.js", () => ({
+  bindAgentToolGatewayRequest: () => callGatewayMock,
   callAgentToolGatewayRequest: (opts: unknown) => callGatewayMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
@@ -143,17 +148,6 @@ const PEER_ONLY_ROUTING_CONFIG: Pick<OpenClawConfig, "agents" | "bindings"> = {
     },
   ],
 };
-const resolveSessionConversationStub: NonNullable<
-  ChannelMessagingAdapter["resolveSessionConversation"]
-> = ({ rawId }) => ({
-  id: rawId,
-});
-const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
-  kind,
-  id,
-  threadId,
-}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
-
 const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireDetails(result: { details?: unknown }, label = "result details") {

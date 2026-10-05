@@ -136,6 +136,13 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 
 Tool profiles do not narrow session-tool reach, and sandboxing only clamps the sandboxed caller to its spawn tree; an unsandboxed agent can still read a sandboxed agent's sessions. Session visibility is Gateway-wide and agent-to-agent messaging is on by default, so pair persona profiles with `tools.sessions.visibility` and `tools.agentToAgent` when agents on one Gateway should not see or message each other (see the last example below).
 
+To allow requests without cross-agent history access, keep visibility narrow and
+set the requester's `agents.entries.<agentId>.tools.agentToAgent.send` to selected
+target IDs or `*` patterns. This grants only `sessions_send` and the authorized
+turn's reply, not read, status, session-control, or otherwise hidden watch access.
+It does not override global agent-to-agent restrictions or sandbox spawned-only
+clamps. See the [send-only example and trust limits](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
+
 ### Full access (no sandbox)
 
 ```json5

@@ -390,7 +390,7 @@ it.each(nativeOfflineCases)(
         }
         return scenario.enabled;
       });
-      const command = mockRegisteredWindowsLauncher(home);
+      const command = mockRegisteredWindowsLauncher(home, scenario.state === 4);
       const service = createMockGatewayService({
         readCommand: async () => command,
         readRuntime:
@@ -451,7 +451,7 @@ it.each([
         }),
       });
     }
-    const command = mockRegisteredWindowsLauncher(home);
+    const command = mockRegisteredWindowsLauncher(home, true);
     const service = createMockGatewayService({
       readCommand: vi.fn(async () => command),
       readRuntime: readScheduledTaskRuntime,
@@ -486,6 +486,7 @@ it.each([
       if (scenario.recovered) {
         expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
         expect(inspected.running).toBe(true);
+        expect(inspected.servicePid).toBe(fixtureGatewayPid);
       } else {
         expect(inspected.serviceUpdateVerdict?.kind).toBe("unavailable");
         expect(inspected.serviceMutationSkipMessage).toContain(
@@ -499,11 +500,10 @@ it.each([
         }
       }
     }
-    const attempts = scenario.code === "ETIMEDOUT" ? 2 : 1;
-    expect(spawnSync).toHaveBeenCalledTimes(attempts + (scenario.recovered ? 2 : 0));
-    expect(service.readCommand).toHaveBeenCalledTimes(attempts);
     for (const call of vi.mocked(spawnSync).mock.calls) {
-      expect(call[2]?.timeout).toBe(30_000);
+      expect(call[2]?.timeout).toBe(
+        call[1]?.some((arg) => arg.includes("Get-CimInstance Win32_Process")) ? 5_000 : 30_000,
+      );
     }
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();

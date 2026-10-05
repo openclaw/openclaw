@@ -63,6 +63,7 @@ import { readMentionStoreSnapshot } from "./mention-inbox-store.js";
 import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
+import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
 it("settles an accepted incognito outbox write after the close prelude and before actor retirement", async ({
   signal,
@@ -266,12 +267,24 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   const fixture = await createGatewayMetadataCloseFixture("gateway-retained-deleted-agent-close");
   const stopEntered = createDeferredCore();
   const rootJoinEntered = createDeferredCore();
+  const lifecycleDrainEntered = createDeferredCore();
   const releaseRootWork = createDeferredCore();
   let closing: Promise<void> | undefined;
   let heldWriter: ReturnType<typeof patchSessionEntryCore> | undefined;
   let acceptedFinal: ReturnType<typeof settlePendingFinalDelivery> | undefined;
   let acceptedLifecycle: ReturnType<typeof applySessionEntryLifecycleMutation> | undefined;
+  let acceptedTerminal: Promise<void> | undefined;
   try {
+    let persistenceOwner:
+      | ReturnType<typeof lifecyclePersistence.createSessionLifecyclePersistenceOwner>
+      | undefined;
+    const createPersistenceOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner;
+    vi.spyOn(lifecyclePersistence, "createSessionLifecyclePersistenceOwner").mockImplementation(
+      (scheduler) => {
+        persistenceOwner = createPersistenceOwner(scheduler);
+        return persistenceOwner;
+      },
+    );
     const pluginId = fixture.pluginId;
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: pluginId });
@@ -286,6 +299,14 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
+    const terminalOwner = persistenceOwner;
+    assert(terminalOwner);
+    const drainTerminal = terminalOwner.drain.bind(terminalOwner);
+    vi.spyOn(terminalOwner, "drain").mockImplementation(() => {
+      const draining = drainTerminal();
+      lifecycleDrainEntered.resolve();
+      return draining;
+    });
     expect(fixture.kernels.get(port)?.pluginRuntime.registry.plugins).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
     );
@@ -330,6 +351,25 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
         skillsSnapshot: { prompt: "before close", skills: [] },
       },
     );
+    const terminalKey = "agent:main:terminal-close";
+    const terminalEvent = {
+      runId: "terminal-close-run",
+      sessionId: "terminal-close-session",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 2_000,
+      data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+    };
+    await replaceSessionEntry(
+      { agentId: "main", storePath: activeStore, sessionKey: terminalKey },
+      {
+        sessionId: terminalEvent.sessionId,
+        lifecycleRunId: terminalEvent.runId,
+        status: "running",
+        startedAt: 1_000,
+        updatedAt: 1_000,
+      },
+    );
     const retainedDatabase = path.join(fixture.state.agentDir("retired"), "openclaw-agent.sqlite");
     const operationId = randomUUID();
     beginAgentDeletionJournal(
@@ -349,6 +389,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       { env: fixture.state.env },
     );
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+    const agent = openOpenClawAgentDatabase({ agentId: "main", env: fixture.state.env }).db;
     const pluginWorkEntered = createDeferredCore();
     const rootWorkEntered = createDeferredCore();
     const writerEntered = createDeferredCore();
@@ -423,8 +464,13 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
             },
           ],
         });
+        acceptedTerminal = terminalOwner.observe({
+          sessionKey: terminalKey,
+          agentId: "main",
+          event: terminalEvent,
+        });
         rootWorkEntered.resolve();
-        await Promise.all([acceptedFinal, acceptedLifecycle]);
+        await Promise.all([acceptedFinal, acceptedLifecycle, acceptedTerminal]);
       },
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -436,22 +482,42 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       return stopScheduler();
     });
     closing = server.close({ reason: "gateway stopping" });
-    await withinTest(Promise.race([stopEntered.promise, rootJoinEntered.promise, closing]), signal);
+    await withinTest(
+      awaitGateBeforeSettlement(
+        lifecycleDrainEntered.promise,
+        closing,
+        "Gateway closed before joining its accepted terminal lifecycle write",
+      ),
+      signal,
+    );
     expect(stopService).toHaveBeenCalledOnce();
-    await withinTest(rootJoinEntered.promise, signal);
     expect(kernel.scheduler.signal.aborted).toBe(true);
+    await expect(
+      terminalOwner.observe({
+        sessionKey: terminalKey,
+        agentId: "main",
+        event: { ...terminalEvent, seq: 2 },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", code: "ERR_STALE_GATEWAY_LIFECYCLE" });
     const lateWork = vi.fn();
     await kernel.scheduler.schedule({ id: "after-close", delayMs: 0, run: lateWork }).stop();
     expect(lateWork).not.toHaveBeenCalled();
     expect(disposed).toBe(false);
     expect(shared.isOpen).toBe(true);
+    expect(agent.isOpen).toBe(true);
     releaseRootWork.resolve();
     await heldWriter;
     await expect(acceptedFinal).resolves.toEqual({ state: "delivered" });
     await expect(acceptedLifecycle).resolves.toMatchObject({ removedEntries: 0 });
+    await expect(acceptedTerminal).resolves.toBeUndefined();
+    await withinTest(rootJoinEntered.promise, signal);
     await expect(closing).resolves.toBeUndefined();
     expect(disposed).toBe(true);
     expect(shared.isOpen).toBe(false);
+    expect(agent.isOpen).toBe(false);
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: terminalKey }),
+    ).toMatchObject({ status: "done", startedAt: 1_000, endedAt: 2_000 });
     expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
     const lifecycleEntry = loadSessionEntry({
       agentId: "main",
@@ -478,7 +544,13 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   } finally {
     stopEntered.resolve();
     releaseRootWork.resolve();
-    await Promise.allSettled([heldWriter, acceptedFinal, acceptedLifecycle, closing]);
+    await Promise.allSettled([
+      heldWriter,
+      acceptedFinal,
+      acceptedLifecycle,
+      acceptedTerminal,
+      closing,
+    ]);
     vi.useRealTimers();
     vi.restoreAllMocks();
     await fixture.cleanup();

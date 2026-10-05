@@ -397,7 +397,7 @@ export async function accountFollowupTurn(params: {
     cfg: turn.config,
     defaultModel: defaults.defaultModel,
     followupRun: turn.queued,
-    isHeartbeat: defaults.opts?.isHeartbeat === true,
+    isHeartbeat: false,
     pendingToolTasks: execution.pendingToolTasks,
     replyOperation: turn.operation,
     preflightCompactionApplied: turn.preflightCompactionApplied,

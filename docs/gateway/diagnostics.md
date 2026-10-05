@@ -191,6 +191,8 @@ waits; `session.discussion.info` and `session.discussion.open` report `provider`
 time, including remote provider requests. Phase names use the method as their
 prefix and contain no session keys or response data. Membership evidence uses
 the existing projection worker lane so full transcript reads do not block it.
+The membership `projection` phase prepares creator selection metadata without
+waiting for unrelated session display rows or worker-placement details.
 
 With diagnostics and warning logs enabled, `sessions.create` calls lasting at
 least one second emit `slow session create`. Its `elapsedMs` and

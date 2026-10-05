@@ -55,7 +55,7 @@ function callerIdentity(request: Request): string {
 export function registerXAllowlistMethods(
   api: Pick<OpenClawPluginApi, "registerGatewayMethod" | "logger"> & {
     runtime: {
-      state: Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStore">;
+      state: Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStore" | "resolveStateDir">;
     };
   },
 ) {

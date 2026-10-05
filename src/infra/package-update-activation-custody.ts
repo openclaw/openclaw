@@ -193,7 +193,10 @@ export async function supersedePackageActivationCustody(
         "kind" | "detail"
       >
     | {
-        kind: "superseded-by-manual-install" | "recovery-lease-identity-changed";
+        kind:
+          | "superseded-by-manual-install"
+          | "recovery-lease-identity-changed"
+          | "recovery-lease-missing";
       },
 ) {
   let record = initial;
@@ -271,7 +274,8 @@ export async function supersedePackageActivationCustody(
   if (
     record.intent?.kind !== "superseded-by-manual-install" &&
     record.intent?.kind !== "recovery-lease-identity-changed" &&
-    record.intent?.kind !== "publication-settled-external-change"
+    record.intent?.kind !== "publication-settled-external-change" &&
+    record.intent?.kind !== "recovery-lease-missing"
   ) {
     throw new Error("Package supersession fact is missing.");
   }

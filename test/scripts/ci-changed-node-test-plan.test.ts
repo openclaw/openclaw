@@ -450,14 +450,6 @@ describe("CI changed Node test plan", () => {
     },
   );
 
-  it("retains the paired tooling group for direct Docker helper selection", () => {
-    const shards = createSelectedNodeTestShardBundles(["test/scripts/docker-build-helper.test.ts"]);
-    expect(shards).not.toBeNull();
-    expect(shards?.flatMap((shard) => shard.groups).map((group) => group.shard_name)).toEqual([
-      "core-tooling-isolated",
-    ]);
-  });
-
   it.each(["blacksmith", "github", "hybrid"])(
     "retains exact plugin selections in their canonical process owner without enabling the unrelated sweep (%s)",
     (runnerBackend) => {

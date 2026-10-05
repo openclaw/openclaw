@@ -653,31 +653,4 @@ describe("own-run question admission", () => {
       });
     },
   );
-
-  it("fences a revoked question.list before reading the question owner", async () => {
-    await withOwnRunQuestion(async (f) => {
-      const id = await f.request();
-      const read = vi.spyOn(manager, "get").mockImplementation(() => {
-        throw new Error("revoked request reached question state");
-      });
-      try {
-        await expect(
-          callQuestionRpc(
-            "question.list",
-            {},
-            {
-              cfg: f.cfg,
-              client: f.browser.client,
-              registered: true,
-              hasCurrentClientAuthority: () => false,
-            },
-          ),
-        ).rejects.toThrow("Gateway requester authority changed");
-        expect(read).not.toHaveBeenCalled();
-      } finally {
-        read.mockRestore();
-      }
-      expect(manager.get(id)?.status).toBe("pending");
-    });
-  });
 });

@@ -4,7 +4,8 @@ import {
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
-import type { BaseMessageInteractiveComponent, Modal } from "./components.js";
+import type { BaseMessageInteractiveComponent } from "./components.base.js";
+import type { Modal } from "./components.modal.js";
 import {
   AutocompleteInteraction,
   BaseComponentInteraction,

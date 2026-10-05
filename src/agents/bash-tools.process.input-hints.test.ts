@@ -113,7 +113,6 @@ it.each(["poll", "log"])(
     const tool = createProcessTool();
     const params = { action, sessionId: session.id };
     const state: SessionState = { lastActivity: Date.now(), state: "processing", queueDepth: 0 };
-    const config = { enabled: true };
     let sequence = 0;
     const observe = async () => {
       const toolCallId = `process-${sequence++}`;
@@ -128,7 +127,7 @@ it.each(["poll", "log"])(
       vi.setSystemTime(Date.now() + 1_000);
       await observe();
     }
-    expect(detectToolCallLoop(state, "process", params, config)).toMatchObject({
+    expect(detectToolCallLoop(state, "process", params)).toMatchObject({
       stuck: true,
       level: "critical",
       detector: "known_poll_no_progress",
@@ -142,7 +141,7 @@ it.each(["poll", "log"])(
       idleMs: 40_000,
       lastOutputAt: session.startedAt,
     });
-    expect(detectToolCallLoop(state, "process", params, config)).toEqual({ stuck: false });
+    expect(detectToolCallLoop(state, "process", params)).toEqual({ stuck: false });
   },
 );
 

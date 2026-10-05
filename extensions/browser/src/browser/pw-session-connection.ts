@@ -171,7 +171,7 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   if (!cur) {
     return null;
   }
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+  if (cur.onDisconnected) {
     cur.browser.off("disconnected", cur.onDisconnected);
   }
   return cur;

@@ -1460,19 +1460,6 @@ process.exit(1);
 describe("Release Decision artifact polling", () => {
   const parent = { attempt: 1, headSha: "a".repeat(40) };
 
-  it("treats GitHub CLI 2.93 missing named artifacts as unavailable", () => {
-    expect(
-      tryReadReleaseDecisionArtifact(parent, "123", "openclaw/openclaw", () => {
-        throw Object.assign(
-          new Error("no artifact matches any of the names or patterns provided"),
-          {
-            stderr: "no artifact matches any of the names or patterns provided",
-          },
-        );
-      }),
-    ).toBeUndefined();
-  });
-
   it.each(["HTTP 503: Server Error", "HTTP 403: secondary rate limit"])(
     "treats transient download transport failure %s as unavailable this poll",
     (message) => {

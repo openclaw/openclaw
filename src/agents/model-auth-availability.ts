@@ -222,7 +222,6 @@ type CreateModelAuthAvailabilityResolverParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-  allowPreparedRuntimeAuth?: boolean;
   preparedRuntimeAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
@@ -302,10 +301,7 @@ export function createModelAuthAvailabilityResolver(
       }
     : params.authStore;
   const runtimeStore =
-    params.preparedRuntimeAuthStore ??
-    (params.allowPreparedRuntimeAuth !== false
-      ? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)
-      : undefined);
+    params.preparedRuntimeAuthStore ?? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
     left: ReturnType<typeof parseSecretRef>,

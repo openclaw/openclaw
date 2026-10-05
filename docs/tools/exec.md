@@ -12,6 +12,8 @@ Supports foreground and background execution via `process`. If `process` is disa
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
+Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
+
 ## Parameters
 
 <ParamField path="command" type="string" required>

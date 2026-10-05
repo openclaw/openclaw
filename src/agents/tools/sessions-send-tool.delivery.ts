@@ -37,11 +37,17 @@ import {
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
 import {
+  bindAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steering.js";
+
+// Bind at dispatch: child followup custody installs its context after tool construction.
+export const callSessionsSendGateway: AgentToolGatewayRequestCaller = async <T>(
+  request: Parameters<AgentToolGatewayRequestCaller>[0],
+): Promise<T> => await bindAgentToolGatewayRequest({ revalidateOnCompletion: false })<T>(request);
 
 export async function notifySessionsSendSession(params: {
   message: string;
@@ -51,10 +57,12 @@ export async function notifySessionsSendSession(params: {
   idempotencyKey: string;
   runId: string;
   displayKey: string;
+  assertCurrent?: () => void;
 }): Promise<ReturnType<typeof jsonResult>> {
   const selection = resolveGatewayToolOperatorSelection();
   const enqueue = () => {
     selection.assertCurrent();
+    params.assertCurrent?.();
     return enqueueSystemEventEntry(
       annotateInterSessionPromptText(params.message, params.inputProvenance),
       withSystemEventOwner(
@@ -124,6 +132,8 @@ type SessionsSendDeliveryParams = {
   expectedSessionId?: string;
   retainAcceptance?: boolean;
   assertDispatchCurrent?: () => void;
+  // Destination policy fences input commit, not an already accepted acknowledgment.
+  assertSendCurrent?: () => void;
   sourceOrigin?: DeliveryContext;
   mode?: "steer" | "followup";
 };
@@ -176,18 +186,34 @@ export async function trySessionsSendActiveRunDelivery(
           "onQueueAccepted" | "onQueueSettled"
         > = {},
       ) => {
+        let accepted = false;
+        const assertInputCurrent = () => {
+          assertCurrent();
+          if (!accepted) {
+            params.assertSendCurrent?.();
+          }
+        };
         const queueOptions: EmbeddedAgentQueueMessageOptions = {
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
           ...lifecycle,
+          ...(params.assertSendCurrent
+            ? {
+                onQueueAccepted: (value: boolean) => {
+                  // The receiving queue owns accepted input, not the sender's later policy.
+                  accepted ||= value;
+                  lifecycle.onQueueAccepted?.(value);
+                },
+              }
+            : {}),
           // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
           ...(params.mode === "steer" || ownChild
             ? { waitForTranscriptCommit: false }
             : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-            assertOriginalInputCommit: assertCurrent,
+            assertOriginalInputCommit: assertInputCurrent,
             input: {
               text: messageText,
               provenance: inputProvenance,
@@ -206,13 +232,13 @@ export async function trySessionsSendActiveRunDelivery(
           }),
         };
         const dispatchQueue = (options: EmbeddedAgentQueueMessageOptions) =>
-          selection.operatorAuthority || assertCaller
+          selection.operatorAuthority || assertCaller || params.assertSendCurrent
             ? queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
                 activeRunSessionId,
                 messageText,
                 options,
                 () => {
-                  assertCurrent();
+                  assertInputCurrent();
                   if (!selection.operatorAuthority) {
                     assertCaller?.("agent");
                   }
@@ -220,7 +246,7 @@ export async function trySessionsSendActiveRunDelivery(
                 },
               )
             : queueEmbeddedAgentMessageWithOutcomeAsync(activeRunSessionId, messageText, options);
-        assertCurrent();
+        assertInputCurrent();
         let outcome = await dispatchQueue(queueOptions);
         if (!outcome.queued && outcome.reason === "transcript_commit_wait_unsupported") {
           const bestEffortQueueOptions = { ...queueOptions };
@@ -266,6 +292,27 @@ export async function trySessionsSendActiveRunDelivery(
   }
 }
 
+function resolveSendMutationGuards(
+  params: Pick<SessionsSendDeliveryParams, "assertDispatchCurrent" | "assertSendCurrent">,
+) {
+  if (!params.assertSendCurrent) {
+    return { assertDispatchCurrent: params.assertDispatchCurrent };
+  }
+  if (hasInProcessGatewayToolContext()) {
+    return {
+      assertDispatchCurrent: params.assertDispatchCurrent,
+      sessionMutationCommitGuard: params.assertSendCurrent,
+    };
+  }
+  // Standalone operator clients can fence wire submission, not attach a host-only commit callback.
+  return {
+    assertDispatchCurrent: () => {
+      params.assertDispatchCurrent?.();
+      params.assertSendCurrent?.();
+    },
+  };
+}
+
 export async function startSessionsSendAgentRun(
   params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
 ): Promise<SessionsSendStart> {
@@ -285,6 +332,7 @@ export async function startSessionsSendAgentRun(
     const accepted = params.retainAcceptance
       ? createDeferredCore<{ runId: string; admissionPending?: boolean }>()
       : undefined;
+    params.assertSendCurrent?.();
     const responsePromise = params.callGateway<{ runId: string; admissionPending?: boolean }>({
       method: "agent",
       params: fallbackSessionKey
@@ -295,7 +343,7 @@ export async function startSessionsSendAgentRun(
           }
         : sendParams,
       timeoutMs: 10_000,
-      assertDispatchCurrent: params.assertDispatchCurrent,
+      ...resolveSendMutationGuards(params),
       ...(accepted
         ? {
             expectFinal: true,
@@ -393,8 +441,10 @@ export async function createConfiguredAgentMainSession(params: {
   sessionKey: string;
   requesterSessionKey?: string;
   useTrustedInProcessCreation: boolean;
+  assertCurrent?: () => void;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
+    params.assertCurrent?.();
     const createParams = {
       key: params.sessionKey,
       agentId: params.agentId,
@@ -406,14 +456,20 @@ export async function createConfiguredAgentMainSession(params: {
     ) {
       // sessions.create serializes keyed creation and adopts an existing row,
       // so concurrent first sends can safely race after the missing resolution.
-      await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
-        via: "internal",
-        actor: { type: "agent", id: params.requesterSessionKey },
-      });
+      await callInProcessGatewayToolWithCreation(
+        "sessions.create",
+        createParams,
+        {
+          via: "internal",
+          actor: { type: "agent", id: params.requesterSessionKey },
+        },
+        { sessionMutationCommitGuard: params.assertCurrent },
+      );
     } else {
       await params.callGateway({
         method: "sessions.create",
         params: createParams,
+        ...resolveSendMutationGuards({ assertSendCurrent: params.assertCurrent }),
         timeoutMs: 10_000,
       });
     }

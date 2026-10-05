@@ -148,9 +148,7 @@ describe("persisted subagent requester wakes", () => {
         databaseOptions: { database },
       });
 
-      expect(
-        driver.controller.isCleanupAttemptCurrent(input.subagent.runId, input.subagent, generation),
-      ).toBe(delivered);
+      expect(driver.controller.isCleanupAttemptCurrent(input.subagent, generation)).toBe(delivered);
       expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
       expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.cleanupHandled).toBe(
         false,

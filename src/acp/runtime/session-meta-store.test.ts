@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  IncognitoSessionEndedError,
+  IncognitoSessionSyncAccessError,
+} from "../../state/incognito-session-error.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntryReadOnly: vi.fn(),
@@ -29,6 +33,21 @@ function explicitFleet(): OpenClawConfig {
 describe("ACP session metadata store ownership", () => {
   beforeEach(() => {
     mocks.loadSessionEntryReadOnly.mockReset();
+  });
+
+  it.each([
+    new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync"),
+    new AggregateError([new IncognitoSessionEndedError()], "Session read failed"),
+  ])("propagates incognito refusal instead of reporting an unreadable store: %s", (error) => {
+    mocks.loadSessionEntryReadOnly.mockImplementation(() => {
+      throw error;
+    });
+    expect(() =>
+      readSessionEntryFromStore({
+        cfg: explicitFleet(),
+        sessionKey: "agent:ops:dashboard:incognito-read",
+      }),
+    ).toThrow(error);
   });
 
   it("returns a typed selection error for an ownerless bare key", () => {

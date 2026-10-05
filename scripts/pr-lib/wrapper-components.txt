@@ -138,7 +138,10 @@ packages/worker-runtime/src/index.ts
 packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
 packages/worker-runtime/src/worker-task-capacity.ts
+packages/worker-runtime/src/worker-task-context.ts
+packages/worker-runtime/src/worker-task-host.ts
 packages/worker-runtime/src/worker-task-native-sections.ts
+packages/worker-runtime/src/worker-task-pool-bootstrap.ts
 packages/worker-runtime/src/worker-task-pool-completion.ts
 packages/worker-runtime/src/worker-task-pool-core.ts
 packages/worker-runtime/src/worker-task-pool-owned.ts
@@ -592,12 +595,16 @@ src/acp/runtime/session-control-owner.ts
 src/acp/runtime/session-meta-entry.kernel.ts
 src/acp/runtime/session-meta-keys.ts
 src/acp/runtime/session-meta-readonly.ts
+src/acp/runtime/session-meta-read.types.ts
 src/config/sessions/session-incognito-actor.ts
+src/config/sessions/session-collaboration-scope.ts
 src/config/sessions/session-incognito-compute-contract.ts
 src/config/sessions/session-incognito-compute.ts
+src/config/sessions/session-incognito-facts.types.ts
 src/config/sessions/session-incognito-lifecycle-contract.ts
 src/config/sessions/session-incognito-lifecycle.ts
 src/config/sessions/session-incognito-manager-contract.ts
+src/config/sessions/session-incognito-pending-input-contract.ts
 src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
@@ -605,7 +612,9 @@ src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
+src/config/sessions/session-pending-input-operations.types.ts
 src/config/sessions/session-transcript-writer-claim-error.ts
+src/config/sessions/session-source-authority.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
@@ -830,6 +839,7 @@ src/infra/format-time/format-duration-exact.ts
 src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-env.ts
+src/infra/fs-safe-file-copy.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
@@ -1105,11 +1115,13 @@ src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
+src/infra/worker-native-task-port.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts
 src/infra/worker-task-pool.ts
 src/infra/worker-task-server.ts
+src/infra/worker-task-transport.ts
 src/infra/worker-transfer-bytes.ts
 src/infra/wsl.ts
 src/infra/zstd-codec.ts
@@ -1648,6 +1660,7 @@ src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
 src/state/openclaw-state-db-initialization.ts
+src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
 src/state/openclaw-state-db-open.ts
@@ -1719,6 +1732,9 @@ src/state/session-watch-cursor-provenance.ts
 src/state/worker-operation-registry.ts
 src/system-agent/agent-id.ts
 src/test-utils/bun-process.ts
+src/trajectory/paths.ts
+src/trajectory/runtime-retention.sqlite.ts
+src/trajectory/runtime-retention.worker.ts
 src/utils.ts
 src/utils/absolute-deadline.ts
 src/utils/boolean.ts

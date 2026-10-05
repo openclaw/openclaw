@@ -6,7 +6,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
-import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
@@ -102,10 +101,9 @@ async function tryRunGatewayRunFastPath(
   }
   const [
     { Command },
-    { addGatewayRunCommand },
+    { addGatewayRunCommand, bootstrapGatewayRun },
     { VERSION },
     { emitCliBanner },
-    { ensureCliExecutionBootstrap },
     { defaultRuntime },
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
@@ -113,7 +111,6 @@ async function tryRunGatewayRunFastPath(
       import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
-      import("./command-execution-startup.js"),
       import("../runtime.js"),
     ]),
   );
@@ -134,37 +131,14 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
     throw err;
   });
-  const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
-    let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
-    const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
-      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
-        await import("./gateway-cli/pre-bootstrap.js");
-      const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
-      if (prepared) {
-        beforeStatePreparation = (snapshot) =>
-          recheckGatewayRunBootstrap({
-            opts,
-            runtime: defaultRuntime,
-            ...(snapshot ? { snapshot } : {}),
-          });
-      }
-      return prepared;
+  const beforeRun = (opts: { force?: boolean; reset?: boolean }) =>
+    bootstrapGatewayRun({
+      opts,
+      runtime: defaultRuntime,
+      commandPath,
+      startupPolicy,
+      startupTrace,
     });
-    if (!shouldBootstrap) {
-      return;
-    }
-    await startupTrace.measure("gateway-run-bootstrap", async () => {
-      await ensureCliExecutionBootstrap({
-        runtime: defaultRuntime,
-        commandPath,
-        startupPolicy,
-        loadPlugins: false,
-        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
-      });
-      const { reloadTrustedGatewayRunEnvironment } = await import("./gateway-cli/pre-bootstrap.js");
-      await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
-    });
-  };
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
     { beforeRun },

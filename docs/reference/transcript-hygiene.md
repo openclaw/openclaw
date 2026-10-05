@@ -125,6 +125,10 @@ Implementation:
 
 ## Global rule: tool result pairing
 
+The live runner rewrites a provider ID that repeats an earlier call, keeping IDs
+unique across responses within an embedded run attempt, including after compaction.
+Persisted older transcripts still use occurrence-based pairing.
+
 Tool results are paired to tool-call occurrences within each assistant turn before
 provider-specific call IDs are rewritten. Provider-generated IDs may repeat on later
 turns, so a result adjacent to a repeated call stays with that occurrence. A displaced

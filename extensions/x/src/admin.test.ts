@@ -69,7 +69,10 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
   };
   registerXAllowlistMethods({
     runtime: {
-      state: { openKeyedStore: () => memoryStore(beforeWrite) },
+      state: {
+        openKeyedStore: () => memoryStore(beforeWrite),
+        resolveStateDir: () => "synthetic-x-admin",
+      },
     },
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     registerGatewayMethod(method, handler, options) {

@@ -94,7 +94,11 @@ export const intentSchema = z
         .max(1024 * 1024),
     }),
     z.strictObject({
-      kind: z.enum(["superseded-by-manual-install", "recovery-lease-identity-changed"]),
+      kind: z.enum([
+        "superseded-by-manual-install",
+        "recovery-lease-identity-changed",
+        "recovery-lease-missing",
+      ]),
       replacementIdentity: packageActivationIdentitySchema,
       settled: z.boolean(),
     }),

@@ -7,7 +7,11 @@ import type {
   RuntimeSessionFactsResult,
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { resolveProjectedControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
+import {
+  resolveProjectedControlUiSessionPrTarget,
+  type ControlUiSessionPrTarget,
+} from "./control-ui-session-pr-read.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { withInProcessGatewayRead } from "./server-plugin-in-process-dispatch.js";
@@ -19,6 +23,7 @@ import { requireSessionRowProjection } from "./session-row-projection-access.js"
 import { resolveSessionVisibility } from "./session-sharing.js";
 
 const SESSION_FACTS_LIMIT = 40;
+const SESSION_FACTS_PR_LOAD_LIMIT = 8;
 
 function safeText(value: string | undefined, limit: number): string | undefined {
   return value ? truncateUtf16Safe(redactToolPayloadText(value), limit) : undefined;
@@ -77,6 +82,10 @@ export async function readTrustedPluginSessionFacts(
           );
           const sessions: RuntimeSessionFacts[] = [];
           let unavailable = false;
+          let prLoads = 0;
+          const admitPrLoad = () => prLoads++ < SESSION_FACTS_PR_LOAD_LIMIT;
+          const prOwner = resolved.context.controlUiSessionPullRequests;
+          const prRetries: ControlUiSessionPrTarget[] = [];
           for (const key of keys) {
             const requested = resolveRequestedSessionAgentId(read.state.cfg, key);
             if (!requested.ok) {
@@ -102,13 +111,20 @@ export async function readTrustedPluginSessionFacts(
             if (!row) {
               continue;
             }
-            const target = resolveProjectedControlUiSessionPrTarget(read.state.cfg, record);
-            const pullRequests = target
-              ? resolved.context.controlUiSessionPullRequests?.readPrepared(target)
+            const prEligible = Boolean(row.worktree?.id || row.repositoryWorkspaceId);
+            const target = prEligible
+              ? resolveProjectedControlUiSessionPrTarget(read.state.cfg, record)
               : undefined;
+            const cachedPrs = target ? prOwner?.readPrepared(target, () => false) : undefined;
+            const pullRequests =
+              cachedPrs ?? (target ? prOwner?.readPrepared(target, admitPrLoad) : undefined);
             const prUnavailable =
-              !pullRequests || pullRequests.status !== "ready" || pullRequests.rateLimited;
+              prEligible &&
+              (!pullRequests || pullRequests.status !== "ready" || pullRequests.rateLimited);
             unavailable ||= prUnavailable;
+            if (target && cachedPrs && prUnavailable) {
+              prRetries.push(target);
+            }
             const digest = row.observerDigest ? record.entry.observerDigest : undefined;
             sessions.push({
               key: record.key,
@@ -119,9 +135,16 @@ export async function readTrustedPluginSessionFacts(
               agentId: record.agentId,
               label: safeText(row.label ?? row.displayName, 240),
               derivedTitle: safeText(row.derivedTitle, 240),
-              lastMessagePreview: safeText(row.lastMessagePreview, 400),
+              lastMessagePreview: safeText(
+                row.lastMessagePreview
+                  ? stripMarkdown(row.lastMessagePreview, { linkStyle: "label", stripHtml: true })
+                      .replace(/\s+/gu, " ")
+                      .trim()
+                  : undefined,
+                400,
+              ),
               run:
-                row.hasActiveRun || row.status === "running" || row.status === "queued"
+                row.hasActiveRun || row.status === "queued"
                   ? "active"
                   : row.status === "failed" ||
                       row.status === "killed" ||
@@ -140,11 +163,23 @@ export async function readTrustedPluginSessionFacts(
                   }
                 : {}),
               pullRequests:
-                pullRequests?.pullRequests.map(({ number, state }) => ({ number, state })) ?? [],
+                pullRequests?.pullRequests.map(({ number, state, url, title }) => ({
+                  number,
+                  state,
+                  ...(url ? { url } : {}),
+                  ...(title ? { title: safeText(title, 120) } : {}),
+                })) ?? [],
               ...(prUnavailable ? { pullRequestsUnavailable: true } : {}),
+              ...(pullRequests?.rateLimited || pullRequests?.status === "rate-limited"
+                ? { pullRequestsRateLimited: true }
+                : {}),
               archived: row.archived === true,
               lastActivityAt: row.lastActivityAt ?? row.updatedAt ?? 0,
             });
+          }
+          // Admit cold keys before retries so one unavailable batch cannot starve later keys.
+          for (const target of prRetries) {
+            prOwner?.readPrepared(target, admitPrLoad);
           }
           return {
             sessions,

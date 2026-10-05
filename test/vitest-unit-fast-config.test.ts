@@ -602,9 +602,7 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
-      "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
-      "src/agents/tools/computer-tool.v2.test.ts",
       "src/infra/provider-usage.test.ts",
     ];
     for (const file of files) {

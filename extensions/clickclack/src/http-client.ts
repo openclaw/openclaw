@@ -1,4 +1,5 @@
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonResponse,
@@ -53,6 +54,7 @@ type ClientOptions = {
   token: string;
   correlationId?: string;
   fetch?: typeof fetch;
+  beforeRequest?: () => void;
 };
 
 type MessageCreateOptions = {
@@ -176,10 +178,13 @@ export function createClickClackClient(options: ClientOptions) {
       ? setTimeout(() => controller.abort(), requestOptions.timeoutMs)
       : undefined;
     try {
-      const response = await fetcher(`${baseUrl}${path}`, {
-        ...init,
-        ...(controller ? { signal: controller.signal } : {}),
-        headers: requestHeaders,
+      const response = await captureEffectAuthority().initiate(() => {
+        options.beforeRequest?.();
+        return fetcher(`${baseUrl}${path}`, {
+          ...init,
+          ...(controller ? { signal: controller.signal } : {}),
+          headers: requestHeaders,
+        });
       });
       if (!response.ok) {
         const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);

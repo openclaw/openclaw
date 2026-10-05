@@ -26,6 +26,30 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "Reply runtimes can pass prepared transcript boundaries without Gateway-thread reads. Released plugin callbacks keep their arguments and synchronous completion acknowledgment; stored data and update behavior are unchanged.",
   },
   {
+    code: "session-manager-sync-context-read",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-10-04",
+    deprecated: "2026-10-04",
+    warningStarts: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await SessionManager.readSessionContextAsync for full-fidelity context consumption. The synchronous reader retains its shipped result until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence",
+    surfaces: ["SessionManager.readSessionContext"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and one runtime DEP_SESSION_PERSISTENCE warning per method per process",
+    ],
+    tests: [
+      "src/plugin-sdk/agent-sessions.context-compat.test.ts",
+      "src/agents/sessions/session-manager-incognito.test.ts",
+      "src/agents/sessions/session-manager-model-context-snapshot.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Plugins can await full-fidelity SessionManager context reads and asynchronous consumers. Source validation follows consumption; the synchronous reader remains available until the next Plugin SDK major. Storage and update behavior are unchanged.",
+  },
+  {
     code: "agent-end-sync-side-effects",
     status: "deprecated",
     owner: "agent-runtime",

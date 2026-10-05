@@ -5,6 +5,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
 const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
 const withIMessageRemoteFileMock = vi.hoisted(() => vi.fn());
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 vi.mock("./cli-output.js", () => ({ runIMessageCliJsonCommand: runIMessageCliJsonCommandMock }));
 vi.mock("./client.js", () => ({ createIMessageRpcClient: createIMessageRpcClientMock }));
 vi.mock("./remote-file.js", () => ({ withIMessageRemoteFile: withIMessageRemoteFileMock }));
@@ -30,6 +50,7 @@ function resolve(target: ResolveTarget, cliPath: string, remoteHost?: string) {
   });
 }
 afterEach(() => {
+  effectGate.prepare = undefined;
   vi.restoreAllMocks();
   createIMessageRpcClientMock.mockReset();
   runIMessageCliJsonCommandMock.mockReset();
@@ -37,6 +58,35 @@ afterEach(() => {
 });
 
 describe("imessage actions runtime", () => {
+  it("does not start the local CLI when action authority ends during preparation", async () => {
+    const preparing = Promise.withResolvers<void>();
+    const prepared = Promise.withResolvers<void>();
+    const refusal = new Error("action authority ended");
+    effectGate.prepare = async () => {
+      preparing.resolve();
+      await prepared.promise;
+      throw refusal;
+    };
+    const result = runtime
+      .editMessage({
+        chatGuid: "chat-guid",
+        messageId: "message-guid",
+        text: "replacement",
+        options,
+      })
+      .catch((error: unknown) => error);
+    await Promise.race([
+      preparing.promise,
+      result.then(() => {
+        throw new Error("CLI action bypassed authority preparation");
+      }),
+    ]);
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    prepared.resolve();
+    expect(await result).toBe(refusal);
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+  });
+
   it("keeps remote edit text and metacharacters inside JSON-RPC params", async () => {
     const client = rpc({ ok: true });
     const text = "spaces ; $(touch /tmp/nope) `whoami` & | < >";

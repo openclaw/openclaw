@@ -651,7 +651,6 @@ async function runOperatorInstallPolicy(
     plugin?: Omit<PluginHookBeforeInstallPlugin, "contentType"> & {
       contentType: PluginHookBeforeInstallPlugin["contentType"] | "dependency-tree";
     };
-    trustedSourceLinkedOfficialInstall?: boolean;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
   const request = {
@@ -970,7 +969,6 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
         contentType: "dependency-tree",
         pluginId: params.pluginId,
       },
-      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     });
   const scanRoots = await collectInstalledPackageScanRoots({
     ...(params.additionalPackageDirs

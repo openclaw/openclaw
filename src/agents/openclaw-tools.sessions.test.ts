@@ -35,13 +35,10 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
-import {
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueMessageOptions,
-} from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { registerSessionsSendParticipantTests } from "./openclaw-tools.sessions-participants.test-support.js";
 import { registerSessionsSendResumeTests } from "./openclaw-tools.sessions-resume.test-support.js";
+import { activeRun } from "./openclaw-tools.sessions-steering.test-support.js";
 import {
   observeSessionSendContinuations,
   registerSessionsSendLateReplyTests,
@@ -165,35 +162,6 @@ type AgentCallParams = {
     sourceRole?: string;
   };
 };
-
-function activeRun(
-  sessionKey: string,
-  options: {
-    sessionId?: string;
-    streaming?: boolean;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    rejects?: boolean;
-  } = {},
-) {
-  const queueMessage = vi.fn(async (_text: string, _options?: EmbeddedAgentQueueMessageOptions) => {
-    if (options.rejects) {
-      throw new Error("active session ended before queued steering message was committed");
-    }
-  });
-  setActiveEmbeddedRun(
-    options.sessionId ?? "caller-active-session",
-    {
-      queueMessage,
-      isStreaming: () => options.streaming ?? true,
-      isCompacting: () => false,
-      supportsTranscriptCommitWait: true,
-      sourceReplyDeliveryMode: options.sourceReplyDeliveryMode ?? "message_tool_only",
-      abort: () => {},
-    },
-    sessionKey,
-  );
-  return queueMessage;
-}
 
 function agentParams(call: { params?: unknown }): AgentCallParams {
   return (call.params ?? {}) as AgentCallParams;
@@ -797,6 +765,7 @@ describe("sessions tools", () => {
           deliveryTimeoutMs: 30_000,
           waitForTranscriptCommit: true,
           sourceReplyDeliveryMode: "message_tool_only",
+          onQueueAccepted: expect.any(Function),
           userTurnTranscriptRecorder: expect.any(Object),
         });
       } else {

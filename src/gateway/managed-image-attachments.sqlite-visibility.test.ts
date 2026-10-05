@@ -47,6 +47,7 @@ import {
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import {
   readSessionMessageCountAsync,
+  readSessionMessagesAsync,
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
@@ -356,13 +357,13 @@ describe("managed attachment SQLite visibility", () => {
         message: { role: "assistant", content: "later duplicate without attachment" },
       },
     ]);
-    const full = await readSessionMessagesWithSourceAsync(f.scope, {
+    const full = await readSessionMessagesAsync(f.scope, {
       mode: "full",
-      reason: "archive membership parity",
+      reason: "retained archive duplicate and image recovery",
       allowResetArchiveFallback: true,
     });
-    expect(full.messages.length).toBe(2);
-    expect(await readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toEqual(full.messages);
+    expect(full).toHaveLength(2);
+    expect(await readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toEqual(full);
     expect(await f.download()).not.toBeNull();
   });
 
@@ -381,8 +382,7 @@ describe("managed attachment SQLite visibility", () => {
     for (const id of [f.messageId, "missing"]) {
       await runWithSessionTranscriptReadFence(receipt, async () => {
         const full = await readSessionMessagesWithSourceAsync(f.scope, {
-          mode: "full",
-          reason: "fenced membership parity",
+          mode: "page",
           allowResetArchiveFallback: true,
         });
         expect(await readSessionMessagesMatchingIdAsync(f.scope, id)).toEqual(
@@ -457,8 +457,7 @@ describe("managed attachment SQLite visibility", () => {
             ? await reader.readSessionMessagesMatchingIdAsync(f.scope, f.messageId)
             : (
                 await reader.readSessionMessagesWithSourceAsync(f.scope, {
-                  mode: "full",
-                  reason: "retained branch snapshot",
+                  mode: "page",
                   includeOffPathMessages: true,
                 })
               ).messages;
@@ -580,8 +579,7 @@ describe("managed attachment SQLite visibility", () => {
         );
       await expect(
         readSessionMessagesWithSourceAsync(f.scope, {
-          mode: "full",
-          reason: "corrupt managed attachment history",
+          mode: "page",
           allowResetArchiveFallback: true,
           includeOffPathMessages: true,
         }),
