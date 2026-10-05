@@ -19,6 +19,7 @@ import {
 import {
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
+  hasColdSessionTranscript,
   partitionUnchangedPlannedLifecycleArtifactEntries,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
@@ -159,6 +160,25 @@ export function prepareSessionMaintenanceInWorker(
   }
 }
 
+/** Cold storage can offload a disk-eviction victim after planning; keep it until a later pass. */
+function deferColdDiskEvictions(
+  database: OpenClawAgentDatabase,
+  partition: ReturnType<typeof partitionUnchangedPlannedLifecycleArtifactEntries>,
+): ReturnType<typeof partitionUnchangedPlannedLifecycleArtifactEntries> {
+  const changed = [...partition.changed];
+  const unchanged = partition.unchanged.filter((removal) => {
+    const cold =
+      removal.maintenanceReason === "disk-evicted" &&
+      removal.expectedEntry !== undefined &&
+      hasColdSessionTranscript(database, removal.expectedEntry);
+    if (cold) {
+      changed.push(removal);
+    }
+    return !cold;
+  });
+  return { changed, unchanged };
+}
+
 export function reclaimSessionMaintenanceInTransaction(
   plan: MaintenancePlan,
   callbacks: SqliteSessionReclamationCallbacks,
@@ -170,7 +190,10 @@ export function reclaimSessionMaintenanceInTransaction(
   return runSqliteSessionDeletionTransaction(
     (database) => {
       callbacks.beforeMutation?.();
-      const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
+      const partition = deferColdDiskEvictions(
+        database,
+        partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries),
+      );
       const archivedTranscripts = deleteMaterializedSessionStatePlans(
         database,
         plan.materializedPlans,

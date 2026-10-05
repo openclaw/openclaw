@@ -166,6 +166,12 @@ export function createSessionHistoryWorkerReaders(
         return value.batch;
       },
     ),
+    readLiveEvictionPlan: reader(
+      "live-eviction",
+      "a live eviction plan",
+      (input) => ({ kind: "live-eviction", ...input }),
+      (value) => value.live,
+    ),
     readArchivePruning: reader(
       "session-archive-pruning",
       "archive pruning",

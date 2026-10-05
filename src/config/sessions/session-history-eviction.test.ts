@@ -42,11 +42,13 @@ import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
   loadTranscriptEventsSync,
+  patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import * as sessionLifecycleState from "./session-accessor.sqlite-lifecycle-state.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
@@ -925,6 +927,101 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("warn-old")).toBe(true);
     expect(readArchiveNames("warn-old")).toHaveLength(0);
   });
+
+  it("does not live-evict a node when the admission identity is a prior generation", async () => {
+    const sessionKey = "agent:main:slack:channel:c8:thread:8";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "admitted-history", updatedAt: 1 },
+    );
+    await appendTranscriptMessage(
+      { sessionId: "admitted-history", sessionKey, storePath },
+      { message: { role: "user", content: "admitted " + "a".repeat(64 * 1024) } },
+    );
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 2 }),
+    });
+    await appendTranscriptMessage(
+      { sessionId: "live-history", sessionKey, storePath },
+      { message: { role: "user", content: "live keep" } },
+    );
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["admitted-history"],
+      assertAllowed: () => {},
+    });
+    try {
+      settlePhysicalUsage();
+      const before = await measureSessionPhysicalDiskUsage(storePath);
+      const result = await enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: {
+          maxDiskBytes: before.totalBytes - 1,
+          maxDiskBytesExplicit: true,
+          highWaterBytes: Math.max(1, before.totalBytes - 32 * 1024),
+        },
+      });
+      expect(result?.removedEntries ?? 0).toBe(0);
+      expect(sessionExists("admitted-history")).toBe(true);
+      expect(sessionExists("live-history")).toBe(true);
+      expect(sessionNodeExists(sessionKey)).toBe(true);
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("does not cap a live node when the admission identity is a prior generation", async () => {
+    const sessionKey = "agent:main:history-protection";
+    const fillerKey = "agent:main:history-filler";
+    await replaceSessionEntry(
+      { sessionKey: fillerKey, storePath },
+      { sessionId: "filler-live", updatedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "admitted-history", updatedAt: 2 },
+    );
+    await appendTranscriptMessage(
+      { sessionId: "admitted-history", sessionKey, storePath },
+      { message: { role: "user", content: "admitted" } },
+    );
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 3 }),
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["admitted-history"],
+      assertAllowed: () => {},
+    });
+    try {
+      await patchSessionEntryCore({ sessionKey: fillerKey, storePath }, () => ({ updatedAt: 4 }), {
+        maintenanceConfig: resolveMaintenanceConfigFromInput({
+          maxEntries: 1,
+          mode: "enforce",
+          pruneAfter: "365d",
+        }),
+      });
+      expect(sessionExists("admitted-history")).toBe(true);
+      expect(sessionExists("live-history")).toBe(true);
+      expect(sessionNodeExists(sessionKey)).toBe(true);
+    } finally {
+      admission.release();
+    }
+  });
+
+  function sessionNodeExists(sessionKey: string): boolean {
+    const db = getSessionKysely(database().db);
+    const query = db
+      .selectFrom("session_nodes")
+      .select("session_key")
+      .where("session_key", "=", sessionKey);
+    return sqliteQueries.executeSqliteQuerySync(database().db, query).rows.length === 1;
+  }
 });
 
 function createTrajectoryEvent(sessionId: string, sessionKey: string): TrajectoryEvent {

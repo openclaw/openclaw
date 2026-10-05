@@ -332,7 +332,11 @@ export function applySessionEntryMaintenance(
 export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   plans: readonly SessionEntryMaintenancePlan[],
-  options: { deletedEntriesBeforeMaintenance?: number; isCurrent?: () => boolean } = {},
+  options: {
+    deletedEntriesBeforeMaintenance?: number;
+    isCurrent?: () => boolean;
+    onEntryRemoved?: (sessionKey: string) => void;
+  } = {},
 ): Promise<SessionEntryMaintenanceResult> {
   const isCurrent = options.isCurrent ?? (() => true);
   const committedCounts = {
@@ -463,6 +467,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     deletedEntries +=
       batch.workItems - (batch.entryRemovals.length - committedEntryRemovals.length);
     for (const removal of committedEntryRemovals) {
+      options.onEntryRemoved?.(removal.sessionKey);
       if (removal.maintenanceReason === "model-run-pruned") {
         committedCounts.modelRunPruned += 1;
       } else if (removal.maintenanceReason === "pruned") {

@@ -165,6 +165,25 @@ serveOwnedWorkerTasks(
         }
         return { kind: "historical-eviction-candidates" as const, ...result.value };
       }
+      if (request.kind === "live-eviction") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { runSqliteDeferredTransactionSync } =
+          await import("../../infra/sqlite-transaction.js");
+        const { planLiveEvictionInDatabase } =
+          await import("./session-live-eviction-plan.worker.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            runSqliteDeferredTransactionSync(database.db, () =>
+              planLiveEvictionInDatabase(database, request.plan),
+            ),
+          { ...request.database, env: request.env },
+        );
+        if (!result.found) {
+          throw new Error(`SQLite live eviction cannot read its database: ${result.reason}`);
+        }
+        return { kind: "live-eviction" as const, live: result.value };
+      }
       if (request.kind === "session-pending-archives") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
