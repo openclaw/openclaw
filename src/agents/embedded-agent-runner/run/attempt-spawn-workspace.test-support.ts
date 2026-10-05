@@ -35,6 +35,7 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import { runPreparedTestPrompt } from "./attempt-prompt-admission.test-support.js";
 import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
 import {
   readMockSessionCacheTtlTimestamp,
@@ -1063,46 +1064,11 @@ export function createDefaultEmbeddedSession(params?: {
       // Cases can replace prompt with a real Agent bridge before runner setup.
       // Wrap the composed entrypoint so every fake model-start honors the host hook.
       const prompt = session.prompt;
-      session.prompt = async (...args) => {
-        const currentPreparation = promptPreparation;
-        if (!currentPreparation) {
-          return prompt(...args);
-        }
-        const admit = await currentPreparation();
-        const assertCurrent = () => {
-          if (currentPreparation !== promptPreparation) {
-            throw new Error("Session prompt preparation is stale after replacement or disposal.");
-          }
-        };
-        assertCurrent();
-        let running: Promise<PromiseSettledResult<void>> | undefined;
-        const start = (commit?: () => void) => {
-          assertCurrent();
-          commit?.();
-          assertCurrent();
-          running = prompt(...args).then(
-            (value) => ({ status: "fulfilled", value }),
-            (reason: unknown) => ({ status: "rejected", reason }),
-          );
-        };
-        try {
-          if (admit) {
-            await admit(start);
-          } else {
-            start();
-          }
-        } catch (error) {
-          await running;
-          throw error;
-        }
-        if (!running) {
-          throw new Error("Session prompt admission did not start the agent loop.");
-        }
-        const result = await running;
-        if (result.status === "rejected") {
-          throw result.reason;
-        }
-      };
+      session.prompt = (...args) =>
+        runPreparedTestPrompt(
+          () => promptPreparation,
+          () => prompt(...args),
+        );
     },
   };
 
