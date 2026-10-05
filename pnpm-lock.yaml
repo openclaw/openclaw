@@ -538,8 +538,8 @@ importers:
         specifier: 10.0.0
         version: 10.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.2)
       marked:
-        specifier: 18.0.13
-        version: 18.0.13
+        specifier: 18.0.14
+        version: 18.0.14
       minipass:
         specifier: 7.1.3
         version: 7.1.3
@@ -651,8 +651,8 @@ importers:
         specifier: 0.19.1
         version: 0.19.1
       smol-toml:
-        specifier: 1.8.0
-        version: 1.8.0
+        specifier: 1.9.0
+        version: 1.9.0
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -701,8 +701,8 @@ importers:
         specifier: 4.12.1
         version: 4.12.1
       '@smithy/types':
-        specifier: 4.18.0
-        version: 4.18.0
+        specifier: 4.19.0
+        version: 4.19.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -943,8 +943,8 @@ importers:
         specifier: 7.8.5
         version: 7.8.5
       smol-toml:
-        specifier: 1.8.0
-        version: 1.8.0
+        specifier: 1.9.0
+        version: 1.9.0
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -1532,8 +1532,8 @@ importers:
         specifier: 0.6.6
         version: 0.6.6(supports-color@10.2.2)
       '@matrix-org/matrix-sdk-crypto-wasm':
-        specifier: 18.8.0
-        version: 18.8.0
+        specifier: 18.9.0
+        version: 18.9.0
       '@openclaw/fs-safe':
         specifier: 0.23.0
         version: 0.23.0
@@ -4446,8 +4446,8 @@ packages:
     resolution: {integrity: sha512-JlYSjq9Sm/0QoUXfk6C7JppsOG0ESY8BHEIaQgjQ8iQ0GkhvJrhPZbMJmd77/Bgeahd1GENf8896nauf4ximzQ==}
     engines: {node: '>= 24'}
 
-  '@matrix-org/matrix-sdk-crypto-wasm@18.8.0':
-    resolution: {integrity: sha512-J+bYzUqtkYSrIUbDT8Razf9F1gzlpC94qeC5LQlr9QmjrzyaErwlV9v7S+gtSOeDvJCdfP8ebEDaANHiVLCYQg==}
+  '@matrix-org/matrix-sdk-crypto-wasm@18.9.0':
+    resolution: {integrity: sha512-NtLzNDTEfNASBjNCTGZHuk7N0jrQhS6Zx2CM857rCHZYYh/rpbKGQNrJ7azktm4S1P5Jy3WU3nwJTGohGw26qQ==}
     engines: {node: '>= 18'}
 
   '@mdx-js/mdx@3.1.1':
@@ -5640,6 +5640,10 @@ packages:
 
   '@smithy/types@4.18.0':
     resolution: {integrity: sha512-CgB6HHWer/vrKps24ulRIbpcpb7K4xAU7SkZ7YHzBPlwHsvsrCJFEXK421s+cJzX+ZrqtA/TuU5w1HzI7k9N8A==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/types@4.19.0':
+    resolution: {integrity: sha512-r7jh49VJxGerfAcTQA6gXcKc+98zOp/tqRwzYjgOE+iSQsP6cEU1hq2QzbuipmP68QtYdY9wKEhiCQZIzHgZ4Q==}
     engines: {node: '>=18.0.0'}
 
   '@snazzah/davey-android-arm-eabi@0.1.12':
@@ -8396,8 +8400,8 @@ packages:
     engines: {node: '>= 20'}
     hasBin: true
 
-  marked@18.0.13:
-    resolution: {integrity: sha512-xTxVzZsBFwunP6HDmtBkabUQEYArnP7/rMDGmPj9SlrKlQ4i8MdYVow+nJL0eOqwpUqhzBoTBRADGN6uYwPyOw==}
+  marked@18.0.14:
+    resolution: {integrity: sha512-mBHK6FBHuBAlhgRe88w9F0O1AbwwXJUcQibUbC/QcdTbVGAD7aWza+xt3N6oT/jCZx3/OMeS+8rnuiHZcQ9s7A==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -9533,8 +9537,8 @@ packages:
     resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
     engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
 
-  smol-toml@1.8.0:
-    resolution: {integrity: sha512-kCZr2V3ch9i00x8zXRhjUNVcjG9ijES5dDudkXvUVCT5QlJNQWElSJdZqyPemffHoLNUYwOcou0Fy+ojN0uHSQ==}
+  smol-toml@1.9.0:
+    resolution: {integrity: sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ==}
     engines: {node: '>= 18'}
 
   socks-proxy-agent@10.1.0:
@@ -10604,7 +10608,7 @@ snapshots:
       '@smithy/core': 3.34.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/client-bedrock@3.1136.0':
@@ -10616,7 +10620,7 @@ snapshots:
       '@smithy/core': 3.34.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/client-s3@3.1136.0':
@@ -10640,7 +10644,7 @@ snapshots:
       '@aws/lambda-invoke-store': 0.3.0
       '@smithy/core': 3.34.1
       '@smithy/signature-v4': 5.7.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       bowser: 2.14.1
       tslib: 2.8.1
 
@@ -10657,7 +10661,7 @@ snapshots:
       '@aws-sdk/core': 3.978.0
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-http@3.972.73':
@@ -10667,7 +10671,7 @@ snapshots:
       '@smithy/core': 3.34.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-ini@3.973.16':
@@ -10683,7 +10687,7 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
       '@smithy/credential-provider-imds': 4.5.2
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-login@3.972.78':
@@ -10692,7 +10696,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.45
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-node@3.972.83':
@@ -10706,7 +10710,7 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
       '@smithy/credential-provider-imds': 4.5.2
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-process@3.972.71':
@@ -10714,7 +10718,7 @@ snapshots:
       '@aws-sdk/core': 3.978.0
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-sso@3.973.15':
@@ -10724,7 +10728,7 @@ snapshots:
       '@aws-sdk/token-providers': 3.1129.0
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-web-identity@3.972.77':
@@ -10733,7 +10737,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.45
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-providers@3.1135.0':
@@ -10759,14 +10763,14 @@ snapshots:
     dependencies:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/middleware-eventstream@3.972.29':
     dependencies:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/middleware-sdk-s3@3.972.76':
@@ -10785,7 +10789,7 @@ snapshots:
       '@smithy/core': 3.34.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/signature-v4': 5.7.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/nested-clients@3.997.45':
@@ -10796,7 +10800,7 @@ snapshots:
       '@smithy/core': 3.34.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/s3-request-presigner@3.1136.0':
@@ -10821,7 +10825,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.45
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/token-providers@3.1136.0':
@@ -10830,12 +10834,12 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.45
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/types@3.974.5':
     dependencies:
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/util-format-url@3.972.47':
@@ -10845,7 +10849,7 @@ snapshots:
 
   '@aws-sdk/xml-builder@3.972.40':
     dependencies:
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws/bedrock-token-generator@1.1.0':
@@ -12109,7 +12113,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@matrix-org/matrix-sdk-crypto-wasm@18.8.0': {}
+  '@matrix-org/matrix-sdk-crypto-wasm@18.9.0': {}
 
   '@mdx-js/mdx@3.1.1(supports-color@10.2.2)':
     dependencies:
@@ -13200,19 +13204,19 @@ snapshots:
 
   '@smithy/core@3.34.1':
     dependencies:
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@smithy/credential-provider-imds@4.5.2':
     dependencies:
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@smithy/fetch-http-handler@5.8.0':
     dependencies:
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@smithy/hash-node@4.5.2':
@@ -13233,7 +13237,7 @@ snapshots:
   '@smithy/node-http-handler@4.12.1':
     dependencies:
       '@smithy/core': 3.34.1
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@smithy/protocol-http@5.6.2':
@@ -13248,6 +13252,10 @@ snapshots:
       tslib: 2.8.1
 
   '@smithy/types@4.18.0':
+    dependencies:
+      tslib: 2.8.1
+
+  '@smithy/types@4.19.0':
     dependencies:
       tslib: 2.8.1
 
@@ -16158,7 +16166,7 @@ snapshots:
 
   marked@18.0.11: {}
 
-  marked@18.0.13: {}
+  marked@18.0.14: {}
 
   matcher@4.0.0:
     dependencies:
@@ -16174,7 +16182,7 @@ snapshots:
   matrix-js-sdk@42.4.0(patch_hash=12d9bb9bdc53b7b96d8d887d0bea6b3072d1fef488b51102caec19fb651c8e92):
     dependencies:
       '@babel/runtime': 8.0.5
-      '@matrix-org/matrix-sdk-crypto-wasm': 18.8.0
+      '@matrix-org/matrix-sdk-crypto-wasm': 18.9.0
       another-json: 0.2.0
       bs58: 6.0.0
       content-type: 3.1.1
@@ -17499,7 +17507,7 @@ snapshots:
 
   smart-buffer@4.2.0: {}
 
-  smol-toml@1.8.0: {}
+  smol-toml@1.9.0: {}
 
   socks-proxy-agent@10.1.0(supports-color@10.2.2):
     dependencies:
