@@ -5,6 +5,7 @@ import type {
 } from "../service/notification-intents.js";
 import type { DeferredCronNotifications } from "../service/state.js";
 import type { CronJob, CronStoreFile } from "../types.js";
+import type { CronRunOverflowCursor } from "./run-history.types.js";
 import type { CronRunReceiptHandle, PreparedCronRunReceiptClaim } from "./run-receipt.types.js";
 import type { CronRunRecoveryOutcome, CronRunRecoveryPreparation } from "./run-recovery.types.js";
 import type { CronRuntimeMutationInputs } from "./runtime-worker.types.js";
@@ -97,7 +98,13 @@ export type CronRuntimeMutationContracts = {
     input: CronRuntimeMutationInputs["cron.maintainHistory"];
     facts: { jobIds: string[]; receipts: CronRunReceiptHandle[] };
     preparation: { nowMs: number; protectedJobIds: string[] };
-    outcome: { reconciled: number; pruned: number };
+    outcome: {
+      reconciled: string[];
+      pruned: number;
+      more: boolean;
+      settled: string[];
+      cursors: CronRunOverflowCursor[];
+    };
   };
   "cron.activateRun": {
     input: CronRuntimeMutationInputs["cron.activateRun"];

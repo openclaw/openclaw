@@ -24,6 +24,18 @@ export type CronRunRecord = {
   detail?: CronJsonValue;
 };
 
+/**
+ * One over-cap job ranked earlier in a maintenance sweep: the oldest retained row of each
+ * full retention partition, and how far the oldest-first overflow scan has read.
+ */
+export type CronRunOverflowCursor = {
+  jobId: string;
+  boundaries: Array<{ partition: string; row: CronRunRecord }>;
+  scan?:
+    | { dated: false; after?: { createdAt: number; id: string } }
+    | { dated: true; after?: { endedAt: number; createdAt: number; id: string } };
+};
+
 export type CronRunHistoryWrite = {
   storeKey: string;
   jobId: string;

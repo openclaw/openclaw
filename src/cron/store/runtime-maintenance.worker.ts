@@ -4,9 +4,9 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
+import { pruneCronRunHistoryBatchInDatabase } from "./run-history-maintenance.kernel.js";
 import {
-  pruneCronRunHistoryInDatabase,
-  readCronRunRecordsInDatabase,
+  readCronRunReconcileCandidatesInDatabase,
   reconcileCronRunHistoryInDatabase,
 } from "./run-history.kernel.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
@@ -31,7 +31,7 @@ export function maintainCronRunHistoryInWorker(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const schema = prepareCronRunReceiptWriteSchema(db);
-      const records = readCronRunRecordsInDatabase(db);
+      const records = input.reconcile ? readCronRunReconcileCandidatesInDatabase(db) : [];
       const jobIds = [
         ...new Set(
           records.flatMap((row) =>
@@ -59,15 +59,23 @@ export function maintainCronRunHistoryInWorker(
         new Set(preparation.protectedJobIds),
       );
       // Newly lost rows retain their first lost observation until the next sweep, as before.
-      const pruned = pruneCronRunHistoryInDatabase(
+      const { pruned, more, settled, cursors } = pruneCronRunHistoryBatchInDatabase(
         db,
         preparation.nowMs,
         schema,
-        records.filter((row) => !reconciled.has(row.id)),
+        {
+          limit: input.limit,
+          exclude: [...input.exclude, ...reconciled],
+          settled: input.settled,
+          cursors: input.cursors,
+        },
       );
       return retainCronRuntimeMutationOutcome("cron.maintainHistory", db, input.nonce, {
-        reconciled: reconciled.size,
+        reconciled: [...reconciled],
         pruned,
+        more,
+        settled,
+        cursors,
       });
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },

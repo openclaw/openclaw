@@ -1958,6 +1958,7 @@ const workerModules = new Set([
   "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
 
   "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.
+  "src/cron/store/run-history-maintenance.kernel.ts", // Cron runtime-maintenance worker only.
   "src/cron/store/job-name.kernel.ts", // Shared-state/history workers and Doctor transaction hooks only.
   "src/cron/store/run-receipt-delivery.ts", // Cron admission and recovery workers own delivery-attempt SQL.
   "src/cron/store/run-receipt-trigger-state.ts", // Cron mutation, admission and recovery workers own trigger retirement SQL.

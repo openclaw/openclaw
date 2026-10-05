@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sql, type ExpressionBuilder, type Selectable } from "kysely";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -14,11 +19,48 @@ import {
 import type { CronRunHistoryWrite, CronRunRecord } from "./run-history.types.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
-const query = (db: DatabaseSync) =>
-  getNodeSqliteKysely<Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings">>(db);
-const RETENTION_MS = 7 * 24 * 60 * 60_000;
-const LOST_RETENTION_MS = 24 * 60 * 60_000;
-const CRON_HISTORY_KEEP_PER_JOB = 2000;
+export type CronRunHistoryDatabase = Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings">;
+const query = (db: DatabaseSync) => getNodeSqliteKysely<CronRunHistoryDatabase>(db);
+export const RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const LOST_RETENTION_MS = 24 * 60 * 60_000;
+export const CRON_HISTORY_KEEP_PER_JOB = 2000;
+
+const SCOPE_KINDS = ["session", "system"];
+const TERMINAL_OUTCOMES = ["succeeded", "blocked"];
+export const TERMINAL_STATUSES = ["succeeded", "failed", "timed_out", "cancelled"];
+const STATUSES = ["queued", "running", ...TERMINAL_STATUSES, "lost"];
+const DELIVERY_STATUSES = [
+  "pending",
+  "delivered",
+  "session_queued",
+  "failed",
+  "dismissed",
+  "parent_missing",
+  "not_applicable",
+];
+const NOTIFY_POLICIES = ["done_only", "state_changes", "silent"];
+
+const CRON_RUN_COLUMNS = [
+  "task_id",
+  "source_id",
+  "run_id",
+  "agent_id",
+  "child_session_key",
+  "created_at",
+  "started_at",
+  "ended_at",
+  "last_event_at",
+  "cleanup_after",
+  "status",
+  "scope_kind",
+  "delivery_status",
+  "notify_policy",
+  "terminal_outcome",
+  "error",
+  "terminal_summary",
+  "detail_json",
+] as const;
+type CronRunRow = Pick<Selectable<DB["task_runs"]>, (typeof CRON_RUN_COLUMNS)[number]>;
 
 function validateRetainedEnum(value: string, allowed: readonly string[], label: string): void {
   if (!allowed.includes(value)) {
@@ -26,7 +68,25 @@ function validateRetainedEnum(value: string, allowed: readonly string[], label: 
   }
 }
 
-function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
+/** Maintenance selects only rows that row admission would accept; others stay for doctor. */
+export function admittedCronRow(eb: ExpressionBuilder<CronRunHistoryDatabase, "task_runs">) {
+  return eb.and([
+    eb("scope_kind", "in", SCOPE_KINDS),
+    eb("delivery_status", "in", DELIVERY_STATUSES),
+    eb("notify_policy", "in", NOTIFY_POLICIES),
+    eb.or([
+      eb("terminal_outcome", "is", null),
+      eb("terminal_outcome", "in", ["", ...TERMINAL_OUTCOMES]),
+    ]),
+  ]);
+}
+
+// Unary plus keeps SQLite on the cleanup_after or run_id index. Without statistics it
+// otherwise picks (runtime, status) and walks every Cron row for each batch.
+export const unindexedRuntime = /* kysely-allow-raw: query-plan pin */ sql<string>`+runtime`;
+export const unindexedStatus = /* kysely-allow-raw: query-plan pin */ sql<string>`+status`;
+
+export function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
   const originalCreatedAt = record.createdAt;
   let createdAt = originalCreatedAt;
   let startedAt = record.startedAt;
@@ -53,6 +113,34 @@ function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
   return { ...record, createdAt, startedAt, endedAt, lastEventAt };
 }
 
+function decodeCronRunRow(row: CronRunRow): CronRunRecord {
+  // These released columns remain part of row admission even when Cron does not expose them.
+  validateRetainedEnum(row.scope_kind, SCOPE_KINDS, "scope kind");
+  if (row.terminal_outcome !== null && row.terminal_outcome !== "") {
+    validateRetainedEnum(row.terminal_outcome, TERMINAL_OUTCOMES, "terminal outcome");
+  }
+  validateRetainedEnum(row.status, STATUSES, "status");
+  validateRetainedEnum(row.delivery_status, DELIVERY_STATUSES, "delivery status");
+  validateRetainedEnum(row.notify_policy, NOTIFY_POLICIES, "notify policy");
+
+  return normalizeCronRunTimestamps({
+    id: row.task_id,
+    jobId: row.source_id || null,
+    runId: row.run_id || undefined,
+    agentId: row.agent_id || undefined,
+    sessionKey: row.child_session_key || undefined,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+    startedAt: normalizeSqliteNumber(row.started_at),
+    endedAt: normalizeSqliteNumber(row.ended_at),
+    lastEventAt: normalizeSqliteNumber(row.last_event_at),
+    cleanupAfter: normalizeSqliteNumber(row.cleanup_after),
+    status: row.status,
+    error: row.error || undefined,
+    summary: row.terminal_summary ?? undefined,
+    detail: row.detail_json === null ? undefined : parseCronRunDetailJson(row.detail_json),
+  });
+}
+
 /** Reads only Cron facts from the admitted released table, without restoring Tasks. */
 export function readCronRunRecordsInDatabase(
   db: DatabaseSync,
@@ -61,26 +149,7 @@ export function readCronRunRecordsInDatabase(
 ): CronRunRecord[] {
   let select = query(db)
     .selectFrom("task_runs")
-    .select([
-      "task_id",
-      "source_id",
-      "run_id",
-      "agent_id",
-      "child_session_key",
-      "created_at",
-      "started_at",
-      "ended_at",
-      "last_event_at",
-      "cleanup_after",
-      "status",
-      "scope_kind",
-      "delivery_status",
-      "notify_policy",
-      "terminal_outcome",
-      "error",
-      "terminal_summary",
-      "detail_json",
-    ])
+    .select(CRON_RUN_COLUMNS)
     .where("runtime", "=", "cron")
     .orderBy("created_at", "asc")
     .orderBy("task_id", "asc");
@@ -90,53 +159,44 @@ export function readCronRunRecordsInDatabase(
   if (runId !== undefined) {
     select = select.where("run_id", "=", runId);
   }
-  return executeSqliteQuerySync(db, select).rows.map((row) => {
-    // These released columns remain part of row admission even when Cron does not expose them.
-    validateRetainedEnum(row.scope_kind, ["session", "system"], "scope kind");
-    if (row.terminal_outcome !== null && row.terminal_outcome !== "") {
-      validateRetainedEnum(row.terminal_outcome, ["succeeded", "blocked"], "terminal outcome");
-    }
-    validateRetainedEnum(
-      row.status,
-      ["queued", "running", "succeeded", "failed", "timed_out", "cancelled", "lost"],
-      "status",
-    );
-    validateRetainedEnum(
-      row.delivery_status,
-      [
-        "pending",
-        "delivered",
-        "session_queued",
-        "failed",
-        "dismissed",
-        "parent_missing",
-        "not_applicable",
-      ],
-      "delivery status",
-    );
-    validateRetainedEnum(
-      row.notify_policy,
-      ["done_only", "state_changes", "silent"],
-      "notify policy",
-    );
+  return executeSqliteQuerySync(db, select).rows.map(decodeCronRunRow);
+}
 
-    return normalizeCronRunTimestamps({
-      id: row.task_id,
-      jobId: row.source_id || null,
-      runId: row.run_id || undefined,
-      agentId: row.agent_id || undefined,
-      sessionKey: row.child_session_key || undefined,
-      createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
-      startedAt: normalizeSqliteNumber(row.started_at),
-      endedAt: normalizeSqliteNumber(row.ended_at),
-      lastEventAt: normalizeSqliteNumber(row.last_event_at),
-      cleanupAfter: normalizeSqliteNumber(row.cleanup_after),
-      status: row.status,
-      error: row.error || undefined,
-      summary: row.terminal_summary ?? undefined,
-      detail: row.detail_json === null ? undefined : parseCronRunDetailJson(row.detail_json),
-    });
-  });
+/**
+ * Reconciliation needs active and lost rows plus the rows sharing their run IDs, in the
+ * same creation/id order as a full read. Rows without a run ID never recover from others.
+ */
+export function readCronRunReconcileCandidatesInDatabase(db: DatabaseSync): CronRunRecord[] {
+  const candidates = executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("task_runs")
+      .select(CRON_RUN_COLUMNS)
+      .where("runtime", "=", "cron")
+      .where("status", "in", ["queued", "running", "lost"])
+      .where(admittedCronRow)
+      .orderBy("created_at", "asc")
+      .orderBy("task_id", "asc"),
+  ).rows;
+  const runIds = [
+    ...new Set(candidates.flatMap((row) => (row.run_id?.trim() ? [row.run_id] : []))),
+  ];
+  const shared =
+    runIds.length === 0
+      ? []
+      : executeSqliteQuerySync(
+          db,
+          query(db)
+            .selectFrom("task_runs")
+            .select(CRON_RUN_COLUMNS)
+            .where("run_id", "in", sqliteStringSet(runIds))
+            .where(unindexedRuntime, "=", "cron")
+            .where(unindexedStatus, "in", STATUSES)
+            .where(admittedCronRow)
+            .orderBy("created_at", "asc")
+            .orderBy("task_id", "asc"),
+        ).rows;
+  return [...shared, ...candidates.filter((row) => !row.run_id?.trim())].map(decodeCronRunRow);
 }
 
 /** Caller owns the exact transaction. History never authorizes execution or receipt adoption. */
@@ -203,10 +263,33 @@ export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryW
   }
 }
 
+/** Retention partitions keep job history, quiet evaluations, and store keys apart. */
+export function cronRunRetentionPartition(row: CronRunRecord): string {
+  return JSON.stringify([
+    cronRunRecordStoreKey(row),
+    row.jobId,
+    isRecord(row.detail) && row.detail.kind === "cron-run",
+  ]);
+}
+
+/** Rows over the per-partition count bound, newest kept; callers pass non-lost terminal rows. */
+function collectCronRunCapOverflow(records: readonly CronRunRecord[]): CronRunRecord[] {
+  const partitions = new Map<string, CronRunRecord[]>();
+  for (const row of records) {
+    const key = cronRunRetentionPartition(row);
+    const partition = partitions.get(key) ?? [];
+    partition.push(row);
+    partitions.set(key, partition);
+  }
+  return [...partitions.values()].flatMap((rows) =>
+    rows.toSorted(compareCronRunRecordsNewestFirst).slice(CRON_HISTORY_KEEP_PER_JOB),
+  );
+}
+
 /** Same seven-day/lost-day and separate history/quiet-count bounds as released cron rows. */
 function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number): Set<string> {
   const expired = new Set<string>();
-  const partitions = new Map<string, CronRunRecord[]>();
+  const capped: CronRunRecord[] = [];
   for (const row of records) {
     if (row.status === "queued" || row.status === "running") {
       continue;
@@ -223,34 +306,21 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
       expired.add(row.id);
     }
     // Released rows without a job identity retain only their time-based expiry.
-    if (row.status === "lost" || !row.jobId) {
-      continue;
+    if (row.status !== "lost" && row.jobId) {
+      capped.push(row);
     }
-    const key = JSON.stringify([
-      cronRunRecordStoreKey(row),
-      row.jobId,
-      isRecord(row.detail) && row.detail.kind === "cron-run",
-    ]);
-    const partition = partitions.get(key) ?? [];
-    partition.push(row);
-    partitions.set(key, partition);
   }
-  for (const rows of partitions.values()) {
-    rows.sort(compareCronRunRecordsNewestFirst);
-    for (const row of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
-      expired.add(row.id);
-    }
+  for (const row of collectCronRunCapOverflow(capped)) {
+    expired.add(row.id);
   }
   return expired;
 }
 
-export function pruneCronRunHistoryInDatabase(
+export function deleteCronRunRowsInDatabase(
   db: DatabaseSync,
-  now: number,
   schema: CronRunReceiptWriteSchema,
-  records = readCronRunRecordsInDatabase(db),
-): number {
-  const ids = [...collectExpiredCronRunIds(records, now)];
+  ids: readonly string[],
+): void {
   for (let offset = 0; offset < ids.length; offset += 500) {
     const batch = ids.slice(offset, offset + 500);
     executeSqliteQuerySync(
@@ -269,6 +339,17 @@ export function pruneCronRunHistoryInDatabase(
       );
     }
   }
+}
+
+/** Whole-table retention for doctor and explicit repairs; maintenance prunes in batches. */
+export function pruneCronRunHistoryInDatabase(
+  db: DatabaseSync,
+  now: number,
+  schema: CronRunReceiptWriteSchema,
+  records = readCronRunRecordsInDatabase(db),
+): number {
+  const ids = [...collectExpiredCronRunIds(records, now)];
+  deleteCronRunRowsInDatabase(db, schema, ids);
   return ids.length;
 }
 
@@ -298,9 +379,7 @@ export function reconcileCronRunHistoryInDatabase(
     // SQL supplies the former creation/id order. Unscoped rows match only other unscoped rows.
     const candidate = row.jobId?.trim() && row.runId?.trim() ? firstByRun.get(key(row)) : undefined;
     const recovery =
-      candidate && ["succeeded", "failed", "timed_out", "cancelled"].includes(candidate.status)
-        ? candidate
-        : undefined;
+      candidate && TERMINAL_STATUSES.includes(candidate.status) ? candidate : undefined;
     let next: CronRunRecord;
     if (recovery) {
       const endedAt = resolveCronRunRecordTimestamp(recovery);
