@@ -1,4 +1,3 @@
-// Discord plugin module implements outbound approval behavior.
 function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
   const channelData = payload.channelData;
   if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {

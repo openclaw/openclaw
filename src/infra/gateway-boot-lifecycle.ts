@@ -113,13 +113,19 @@ export function readGatewayLastShutdown(
   }
 }
 
+export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = process.env) {
+  const lastShutdown = readGatewayLastShutdown(env);
+  if (!lastShutdown?.reason?.startsWith("gateway.installation_replaced:")) {
+    return undefined;
+  }
+  return { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs };
+}
+
 function buildGatewayCrashLoopBreakerDecision(params: {
   uncleanBoots: number;
-  windowMs?: number;
   latestBreakerStartedAtMs?: number | null;
   latestRecoveryStartedAtMs?: number | null;
 }): GatewayCrashLoopBreakerDecision {
-  const windowMs = params.windowMs ?? GATEWAY_BOOT_LOOP_WINDOW_MS;
   const tripped = params.uncleanBoots >= GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD;
   const hasUnrecoveredBreakerMarker =
     typeof params.latestBreakerStartedAtMs === "number" &&
@@ -130,7 +136,7 @@ function buildGatewayCrashLoopBreakerDecision(params: {
   return {
     tripped,
     uncleanBoots: params.uncleanBoots,
-    windowMs,
+    windowMs: GATEWAY_BOOT_LOOP_WINDOW_MS,
     shouldWriteStabilityBundle: tripped && !hasUnrecoveredBreakerMarker,
     recovered: !tripped && hasUnrecoveredBreakerMarker,
   };

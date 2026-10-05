@@ -8,7 +8,7 @@ import {
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices } from "./services.test-support.js";
 
 const registries: ReturnType<typeof createTestPluginRegistry>["registry"][] = [];
 
@@ -21,16 +21,11 @@ afterEach(async () => {
 
 class ClassBackedLifecycleService {
   starts = 0;
-  advertisements = 0;
 
   constructor(readonly id: string) {}
 
   start() {
     this.starts += 1;
-  }
-
-  advertise() {
-    this.advertisements += 1;
   }
 }
 
@@ -52,7 +47,7 @@ function createRegistrationFixture() {
 }
 
 describe("plugin service registration identity", () => {
-  it("runs native-backed service methods in their registering instance's runtime scope", async () => {
+  it("preserves native service descriptors through canonical reload and cleanup", async () => {
     const { builder, createRecord } = createRegistrationFixture();
     const record = createRecord("native-service-owner");
     const instance = new PluginInstance(record.id, { record, registry: builder.registry });
@@ -69,14 +64,29 @@ describe("plugin service registration identity", () => {
       }
     }
     const service = new NativeService(37);
+    let reads = 0;
+    Object.defineProperty(service, "id", {
+      get() {
+        if (reads++ > 0) {
+          throw new Error("service id must only be read at admission");
+        }
+        return " native-service ";
+      },
+    });
     instance.run(() => {
       store.setRuntime(runtime);
       builder.createApi(record, { config: {} }).registerService(service);
     });
+    expect(builder.registry.services).toHaveLength(1);
+    expect(builder.registry.services[0]?.service).toBe(service);
+    expect(record.services).toEqual(["native-service"]);
     const services = await startPluginServices({ registry: builder.registry, config: {} });
     try {
+      await services.reload({}, new Set(["native-service"]));
       await services.stop();
       expect(calls).toEqual([
+        { phase: "start", value: 37, runtime },
+        { phase: "stop", value: 37, runtime },
         { phase: "start", value: 37, runtime },
         { phase: "stop", value: 37, runtime },
       ]);
@@ -86,136 +96,93 @@ describe("plugin service registration identity", () => {
     }
   });
 
-  it.each([
-    { surface: "service", id: "" },
-    { surface: "service", id: "   " },
-    { surface: "service", id: "\t\n" },
-    { surface: "discovery", id: "" },
-    { surface: "discovery", id: "   " },
-    { surface: "discovery", id: "\t\n" },
-  ] as const)("reports a blank $surface service id ($id)", async ({ surface, id }) => {
+  it("contains unreadable IDs without leaking accessor errors", () => {
     const { builder, createRecord } = createRegistrationFixture();
-    const record = createRecord("invalid-service-owner");
+    const record = createRecord("unreadable-owner");
     const api = builder.createApi(record, { config: {} });
-    const service = new ClassBackedLifecycleService(id);
-
-    if (surface === "service") {
-      api.registerService(service);
-    } else {
-      api.registerGatewayDiscoveryService(service);
-    }
-
-    const registrations =
-      surface === "service" ? builder.registry.services : builder.registry.gatewayDiscoveryServices;
-    const recordIds = surface === "service" ? record.services : record.gatewayDiscoveryServiceIds;
-    expect(registrations).toEqual([]);
-    expect(recordIds).toEqual([]);
-    expect(builder.registry.diagnostics).toEqual([
-      {
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message:
-          surface === "service"
-            ? "service registration missing id"
-            : "gateway discovery service registration missing id",
+    const service = {
+      get id(): string {
+        throw new Error("private accessor failure");
       },
+      start() {},
+      advertise() {},
+    };
+    expect(() => api.registerService(service)).not.toThrow();
+    expect(() => api.registerGatewayDiscoveryService(service)).not.toThrow();
+    expect(builder.registry.services).toEqual([]);
+    expect(builder.registry.gatewayDiscoveryServices).toEqual([]);
+    expect(builder.registry.diagnostics.map(({ message }) => message)).toEqual([
+      "service registration id cannot be normalized",
+      "gateway discovery service registration id cannot be normalized",
     ]);
-
-    if (surface === "service") {
-      const handle = await startPluginServices({ registry: builder.registry, config: {} });
-      expect(service.starts).toBe(0);
-      await handle.stop();
-    } else {
-      expect(service.advertisements).toBe(0);
-    }
   });
 
-  it.each([
-    { surface: "service", sameOwner: false, paddedFirst: true },
-    { surface: "service", sameOwner: false, paddedFirst: false },
-    { surface: "service", sameOwner: true, paddedFirst: true },
-    { surface: "service", sameOwner: true, paddedFirst: false },
-    { surface: "discovery", sameOwner: false, paddedFirst: true },
-    { surface: "discovery", sameOwner: false, paddedFirst: false },
-    { surface: "discovery", sameOwner: true, paddedFirst: true },
-    { surface: "discovery", sameOwner: true, paddedFirst: false },
-  ] as const)(
-    "deduplicates $surface registrations (same owner: $sameOwner, padded first: $paddedFirst)",
-    async ({ surface, sameOwner, paddedFirst }) => {
-      const { builder, createRecord } = createRegistrationFixture();
-      const firstRecord = createRecord("first-owner");
-      const secondRecord = sameOwner ? firstRecord : createRecord("second-owner");
-      const firstApi = builder.createApi(firstRecord, { config: {} });
-      const secondApi = builder.createApi(secondRecord, { config: {} });
-      const firstService = new ClassBackedLifecycleService(
-        paddedFirst ? " shared-service " : "shared-service",
-      );
-      const secondService = new ClassBackedLifecycleService(
-        paddedFirst ? "shared-service" : " shared-service ",
-      );
-
-      if (surface === "service") {
-        firstApi.registerService(firstService);
-        secondApi.registerService(secondService);
-      } else {
-        firstApi.registerGatewayDiscoveryService(firstService);
-        secondApi.registerGatewayDiscoveryService(secondService);
+  it("snapshots each namespace independently without writing plugin accessors", () => {
+    const { builder, createRecord } = createRegistrationFixture();
+    const record = createRecord("shared-owner");
+    const api = builder.createApi(record, { config: {} });
+    let rawId = " shared-service ";
+    class Service extends Date {
+      get id() {
+        return rawId;
       }
-
-      const registrations =
-        surface === "service"
-          ? builder.registry.services
-          : builder.registry.gatewayDiscoveryServices;
-      expect(registrations).toHaveLength(1);
-      expect(registrations[0]).toMatchObject({
-        pluginId: firstRecord.id,
-        source: firstRecord.source,
-        service: { id: firstService.id },
-      });
-      expect(registrations[0]?.service).toBeInstanceOf(ClassBackedLifecycleService);
-
-      const recordIds =
-        surface === "service" ? firstRecord.services : firstRecord.gatewayDiscoveryServiceIds;
-      expect(recordIds).toEqual(["shared-service"]);
-
-      if (sameOwner) {
-        expect(builder.registry.diagnostics).toEqual([]);
-      } else {
-        expect(builder.registry.diagnostics).toEqual([
-          expect.objectContaining({
-            pluginId: "second-owner",
-            message:
-              surface === "service"
-                ? "service already registered: shared-service (first-owner)"
-                : "gateway discovery service already registered: shared-service (first-owner)",
-          }),
-        ]);
-        expect(
-          surface === "service" ? secondRecord.services : secondRecord.gatewayDiscoveryServiceIds,
-        ).toEqual([]);
+      set id(_value: string) {
+        throw new Error("must not write plugin-owned IDs");
       }
+      start() {}
+      advertise() {}
+    }
+    const service = new Service();
+    api.registerService(service);
+    api.registerGatewayDiscoveryService(service);
+    rawId = "changed-after-registration";
+    api.registerService({ id: "shared-service", start() {} });
+    api.registerGatewayDiscoveryService({ id: "shared-service", advertise() {} });
+    expect(builder.registry.services).toHaveLength(1);
+    expect(builder.registry.gatewayDiscoveryServices).toHaveLength(1);
+    for (const entry of [
+      ...builder.registry.services,
+      ...builder.registry.gatewayDiscoveryServices,
+    ]) {
+      expect(entry.id).toBe("shared-service");
+      expect(entry.service).toBe(service);
+    }
+    expect(record.services).toEqual(["shared-service"]);
+    expect(record.gatewayDiscoveryServiceIds).toEqual(["shared-service"]);
+    expect(builder.registry.diagnostics).toEqual([]);
+  });
 
-      setActivePluginRegistry(builder.registry);
-      if (surface === "service") {
-        const handle = await startPluginServices({ registry: builder.registry, config: {} });
-        try {
-          expect(firstService.starts).toBe(1);
-          expect(secondService.starts).toBe(0);
-        } finally {
-          await handle.stop();
-        }
-      } else {
-        await builder.registry.gatewayDiscoveryServices[0]!.service.advertise({
-          machineDisplayName: "fixture",
-          gatewayPort: 18789,
-          gatewayTlsEnabled: false,
-          gatewayDirectReachable: true,
-          minimal: true,
-        });
-        expect(firstService.advertisements).toBe(1);
-        expect(secondService.advertisements).toBe(0);
-      }
-    },
-  );
+  it("retains the first service when a different owner claims its normalized ID", async () => {
+    const { builder, createRecord } = createRegistrationFixture();
+    const first = createRecord("first-owner");
+    const second = createRecord("second-owner");
+    const firstService = new ClassBackedLifecycleService(" shared-service ");
+    const secondService = new ClassBackedLifecycleService("shared-service");
+    builder.createApi(first, { config: {} }).registerService(firstService);
+    builder.createApi(second, { config: {} }).registerService(secondService);
+    expect(builder.registry.services).toEqual([
+      expect.objectContaining({
+        pluginId: first.id,
+        source: first.source,
+        id: "shared-service",
+        service: firstService,
+      }),
+    ]);
+    expect(first.services).toEqual(["shared-service"]);
+    expect(second.services).toEqual([]);
+    expect(builder.registry.diagnostics).toEqual([
+      expect.objectContaining({
+        pluginId: second.id,
+        message: "service already registered: shared-service (first-owner)",
+      }),
+    ]);
+    setActivePluginRegistry(builder.registry);
+    const handle = await startPluginServices({ registry: builder.registry, config: {} });
+    try {
+      expect(firstService.starts).toBe(1);
+      expect(secondService.starts).toBe(0);
+    } finally {
+      await handle.stop();
+    }
+  });
 });

@@ -1,8 +1,3 @@
-/**
- * Subagent announcement origin resolver.
- *
- * Merges requester and session delivery context while avoiding stale thread ids after retargeting.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -20,8 +15,8 @@ import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
@@ -35,7 +30,7 @@ import {
 } from "../../../utils/message-channel.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import {
-  createBoundDeliveryRouter,
+  resolveBoundDeliveryDestination,
   getGlobalHookRunner,
   resolveConversationIdFromTargets,
 } from "./subagent-announce-delivery.runtime.js";
@@ -119,7 +114,6 @@ function mergeAnnounceDeliveryContext(
   return mergeDeliveryContext(normalizedPrimary, normalizedFallback);
 }
 
-/** Resolve the delivery origin for a subagent completion announcement. */
 export function resolveAnnounceOrigin(
   entry?: Pick<SessionEntry, "delivery">,
   requesterOrigin?: DeliveryContext,
@@ -188,18 +182,15 @@ export async function resolveSubagentCompletionOrigin(params: {
     stringifyRouteThreadId(threadId) || resolveConversationIdFromTargets({ targets: [to] }) || "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
-  const router = createBoundDeliveryRouter();
   for (const targetSessionKey of [params.requesterSessionKey, params.childSessionKey]) {
-    const route = router.resolveDestination({
-      eventKind: "task_completion",
+    const binding = await resolveBoundDeliveryDestination({
       targetSessionKey,
       requester: requesterConversation,
-      failClosed: true,
     });
-    if (route.mode === "bound" && route.binding) {
+    if (binding) {
       return mergeAnnounceDeliveryContext(
         resolveBoundConversationOrigin({
-          bindingConversation: route.binding.conversation,
+          bindingConversation: binding.conversation,
           requesterConversation,
           requesterOrigin,
         }),
@@ -275,7 +266,6 @@ export function resolveCompletionDeliveryOrigins(params: {
   };
 }
 
-/** Infer whether a normalized delivery target addresses a direct, group, or channel chat. */
 export function inferDeliveryTargetChatType(target: {
   channel?: string;
   to?: string;

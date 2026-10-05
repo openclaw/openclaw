@@ -1,5 +1,5 @@
 // Resolves Homebrew Node binary paths to stable symlink targets.
-import fs from "node:fs/promises";
+import { pathExists } from "@openclaw/fs-safe/advanced";
 import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
 
 /**
@@ -11,11 +11,8 @@ import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/s
  */
 export async function resolveStableNodePath(nodePath: string): Promise<string> {
   for (const candidate of stableHomebrewNodePathCandidates(nodePath)) {
-    try {
-      await fs.access(candidate);
+    if (await pathExists(candidate)) {
       return candidate;
-    } catch {
-      // Try the next Homebrew-managed stable path.
     }
   }
   return nodePath;

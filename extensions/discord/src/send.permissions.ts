@@ -1,4 +1,3 @@
-// Discord plugin module implements send.permissions behavior.
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { isDiscordThreadChannelType } from "./channel-type.js";
@@ -59,9 +58,7 @@ function resolveMemberGuildPermissionBits(params: {
   guild: Pick<APIGuild, "id" | "roles">;
   member: Pick<APIGuildMember, "roles">;
 }) {
-  const rolesByIdLocal = new Map<string, APIRole>(
-    (params.guild.roles ?? []).map((role) => [role.id, role]),
-  );
+  const rolesByIdLocal = rolesById(params.guild);
   const everyoneRole = rolesByIdLocal.get(params.guild.id);
   let permissions = 0n;
   if (everyoneRole?.permissions) {
@@ -169,6 +166,37 @@ export async function fetchMemberGuildPermissionsDiscord(
   }
 }
 
+async function readMemberChannelPermissions(
+  rest: RequestClient,
+  guildId: string,
+  channelId: string,
+  userId: string,
+) {
+  const channel = await getChannel(rest, channelId);
+  const permissionChannel = await resolveChannelPermissionSubject(rest, channel);
+  if (!("guild_id" in permissionChannel) || permissionChannel.guild_id !== guildId) {
+    return null;
+  }
+  const [guild, member] = await Promise.all([
+    getGuild(rest, guildId),
+    getGuildMember(rest, guildId, userId),
+  ]);
+  const isOwner = guild.owner_id === userId;
+  return {
+    channel,
+    isOwner,
+    permissions: isOwner
+      ? ALL_PERMISSIONS
+      : resolveMemberChannelPermissionBits({
+          guildId,
+          userId,
+          guild,
+          member,
+          channel: permissionChannel,
+        }),
+  };
+}
+
 export async function canViewDiscordGuildChannel(
   guildId: string,
   channelId: string,
@@ -177,26 +205,14 @@ export async function canViewDiscordGuildChannel(
 ): Promise<boolean> {
   const rest = resolveDiscordRest(opts);
   try {
-    const channel = await getChannel(rest, channelId);
-    const permissionChannel = await resolveChannelPermissionSubject(rest, channel);
-    const channelGuildId = "guild_id" in permissionChannel ? permissionChannel.guild_id : undefined;
-    if (channelGuildId !== guildId) {
+    const access = await readMemberChannelPermissions(rest, guildId, channelId, userId);
+    if (!access) {
       return false;
     }
-    const [guild, member] = await Promise.all([
-      getGuild(rest, guildId),
-      getGuildMember(rest, guildId, userId),
-    ]);
-    if (guild.owner_id === userId) {
+    if (access.isOwner) {
       return true;
     }
-    const permissions = resolveMemberChannelPermissionBits({
-      guildId,
-      userId,
-      guild,
-      member,
-      channel: permissionChannel,
-    });
+    const { channel, permissions } = access;
     if (!hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel)) {
       return false;
     }
@@ -225,26 +241,14 @@ export async function hasAnyChannelPermissionDiscord(
 ): Promise<boolean> {
   const rest = resolveDiscordRest(opts);
   try {
-    const channel = await getChannel(rest, channelId);
-    const permissionChannel = await resolveChannelPermissionSubject(rest, channel);
-    const channelGuildId = "guild_id" in permissionChannel ? permissionChannel.guild_id : undefined;
-    if (channelGuildId !== guildId) {
+    const access = await readMemberChannelPermissions(rest, guildId, channelId, userId);
+    if (!access) {
       return false;
     }
-    const [guild, member] = await Promise.all([
-      getGuild(rest, guildId),
-      getGuildMember(rest, guildId, userId),
-    ]);
-    if (guild.owner_id === userId) {
+    if (access.isOwner) {
       return true;
     }
-    const permissions = resolveMemberChannelPermissionBits({
-      guildId,
-      userId,
-      guild,
-      member,
-      channel: permissionChannel,
-    });
+    const { permissions } = access;
     return requiredPermissions.some((permission) => hasPermissionBit(permissions, permission));
   } catch {
     return false;

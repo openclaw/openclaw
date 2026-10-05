@@ -23,6 +23,14 @@ export async function terminateCodexAppServerOrphan(
   expected: CodexAppServerProcessIdentity,
 ): Promise<boolean> {
   const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
+  // A retired root needs only identity evidence; unrelated processes cannot
+  // make its durable registration live again or restore its former ancestry.
+  const initial = (await readCodexAppServerProcessSnapshot(deadline, [expected.pid])).find(
+    (row) => row.pid === expected.pid,
+  );
+  if (!initial || !hasSameIdentity(initial, expected) || isDeadProcessState(initial.state)) {
+    return true;
+  }
   const result = await terminateCodexAppServerDescendants(
     { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
     expected,
@@ -42,7 +50,9 @@ export async function terminateCodexAppServerOrphan(
       }
     }
     while (Date.now() < deadline) {
-      const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
+      const snapshot = await readCodexAppServerProcessSnapshot(deadline, [expected.pid]).catch(
+        () => undefined,
+      );
       if (!snapshot?.some((row) => row.pid === process.pid)) {
         return false;
       }

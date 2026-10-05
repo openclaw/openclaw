@@ -18,7 +18,6 @@ export const createTelegramHandlers = (
   const authorization = createTelegramHandlerAuthorization(params);
   const inboundPipeline = createTelegramInboundPipeline({ params, message, authorization });
   return {
-    cancelPending: inboundPipeline.cancelPending,
     register(nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher) {
       const callbackRouter = createTelegramCallbackRouter({
         params: { ...params, nativeCommandCallbackDispatcher },
@@ -29,8 +28,6 @@ export const createTelegramHandlers = (
         params,
         message,
         authorization,
-        registerMessages: () =>
-          registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline }),
       });
       eventBindings.registerChatMembership();
       eventBindings.registerReaction();
@@ -39,7 +36,7 @@ export const createTelegramHandlers = (
         await callbackRouter.route(ctx);
       });
       eventBindings.registerMigration();
-      eventBindings.registerMessages();
+      registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline });
     },
   };
 };

@@ -91,38 +91,15 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
-  it("owns compaction continuation as an internal persisted prompt", async () => {
+  it("keeps a compound internal prompt across a missing-assistant retry", async () => {
     await using state = await createState();
-
-    state.activateCompactionContinuation("continue after compaction");
-
-    expect(state.activePrompt).toEqual({
-      override: "continue after compaction",
-      persisted: true,
-      internal: true,
-    });
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
-  });
-
-  it("preserves exact internal prompt bytes when composing compaction continuation", async () => {
-    await using state = await createState();
-
     state.activateInternalPrompt("  finish the reasoning exactly  ");
     state.activateCompactionContinuation("continue after compaction");
-
-    expect(state.activePrompt).toEqual({
+    const activePrompt = {
       override: "  finish the reasoning exactly  \n\ncontinue after compaction",
       persisted: true,
       internal: true,
-    });
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
-  });
-
-  it("keeps a compound internal prompt across a missing-assistant retry", async () => {
-    await using state = await createState();
-    state.activateInternalPrompt("finish the reasoning");
-    state.activateCompactionContinuation("continue after compaction");
-    const activePrompt = { ...state.activePrompt };
+    };
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [],
       lastAssistant: undefined,
@@ -130,18 +107,13 @@ describe("embedded run session prompt state", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
 
-    const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
+    const resolved = await resolveEmbeddedRunTerminal({
+      ...makeTerminalInput({
         attempt,
         attemptAssistant: undefined,
-        activePromptPersisted: state.activePrompt.persisted,
-        activateInternalPrompt: state.activateInternalPrompt,
-        activateCompactionContinuation: state.activateCompactionContinuation,
-        setSuppressNextUserMessagePersistence: (value) => {
-          state.suppressNextUserMessagePersistence = value;
-        },
       }),
-    );
+      sessionPromptState: state,
+    });
 
     expect(resolved).toEqual({ action: "retry" });
     expect(state.activePrompt).toEqual(activePrompt);
@@ -170,25 +142,15 @@ describe("embedded run session prompt state", () => {
       currentAttemptAssistant: compactionAssistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    const terminalInput = {
-      retryState,
-      activePromptPersisted: state.activePrompt.persisted,
-      activateInternalPrompt: state.activateInternalPrompt,
-      activateCompactionContinuation: state.activateCompactionContinuation,
-      clearCompactionContinuation: state.clearCompactionContinuation,
-      setSuppressNextUserMessagePersistence: (value: boolean) => {
-        state.suppressNextUserMessagePersistence = value;
-      },
-    };
-
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: compactionAttempt,
           attemptAssistant: compactionAssistant,
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const reasoningAssistant = buildEmbeddedRunnerAssistant({
@@ -207,22 +169,23 @@ describe("embedded run session prompt state", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: reasoningAttempt,
           attemptAssistant: reasoningAssistant,
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const emptyResponseAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "" }],
     });
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: makeEmbeddedRunnerAttempt({
             assistantTexts: [],
             lastAssistant: emptyResponseAssistant,
@@ -233,7 +196,8 @@ describe("embedded run session prompt state", () => {
             },
           }),
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const prompt = state.activePrompt.override ?? "";
@@ -242,37 +206,65 @@ describe("embedded run session prompt state", () => {
     expect(prompt.match(/Continue from the compacted transcript/gu)).toHaveLength(1);
   });
 
-  it("releases compaction continuation before a visible draft revision", async () => {
+  it("keeps a draft revision pending until its owned projection is ready", async () => {
+    const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
+    const projection = createDeferred();
+    const projectionStarted = createDeferred();
+    const waitForProjection = vi
+      .spyOn(reconcile, "waitForSessionTranscriptProjection")
+      .mockImplementation(async () => {
+        projectionStarted.resolve();
+        await projection.promise;
+      });
     await using state = await createState();
-    state.activateCompactionContinuation("continue after compaction");
-    const assistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "Visible draft." }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: ["Visible draft."],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
+    try {
+      state.activateCompactionContinuation("continue after compaction");
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "Visible draft." }],
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["Visible draft."],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
 
-    await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          attempt,
-          attemptAssistant: assistant,
-          payloadsWithToolMedia: [{ text: "Visible draft." }],
-          finalAssistantVisibleText: "Visible draft.",
-          activePromptPersisted: state.activePrompt.persisted,
-          activateInternalPrompt: state.activateInternalPrompt,
-          activateCompactionContinuation: state.activateCompactionContinuation,
-          clearCompactionContinuation: state.clearCompactionContinuation,
+      await expect(
+        resolveEmbeddedRunTerminal({
+          ...makeTerminalInput({
+            attempt,
+            attemptAssistant: assistant,
+            payloadsWithToolMedia: [{ text: "Visible draft." }],
+            finalAssistantVisibleText: "Visible draft.",
+          }),
+          sessionPromptState: state,
         }),
-      ),
-    ).resolves.toEqual({ action: "retry" });
+      ).resolves.toEqual({ action: "retry" });
 
-    expect(state.activePrompt.override).toContain("Tighten the final wording.");
-    expect(state.activePrompt.override).not.toContain("continue after compaction");
+      expect(state.activePrompt.override).toContain("Tighten the final wording.");
+      expect(state.activePrompt.override).not.toContain("continue after compaction");
+      let resumed = false;
+      const retryReady = state
+        .settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget)
+        .then(() => {
+          resumed = true;
+        });
+      await expect(
+        Promise.race([
+          projectionStarted.promise.then(() => "projection"),
+          retryReady.then(() => "retry"),
+        ]),
+      ).resolves.toBe("projection");
+      await Promise.resolve();
+      expect(resumed).toBe(false);
+      projection.resolve();
+      await retryReady;
+      expect(resumed).toBe(true);
+    } finally {
+      projection.resolve();
+      waitForProjection.mockRestore();
+    }
   });
 
   it("adds failed-tool guidance to current-transcript continuation", async () => {
@@ -287,54 +279,18 @@ describe("embedded run session prompt state", () => {
     });
   });
 
-  it("settles projection maintenance only for an owned transcript retry", async () => {
-    const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
-    const waitForProjection = vi
-      .spyOn(reconcile, "waitForSessionTranscriptProjection")
-      .mockResolvedValue();
-    await using state = await createState();
-    const abortSignal = new AbortController().signal;
+  it.each([{ modelRun: true }, { promptMode: "none" as const }])(
+    "keeps the original prompt for a raw model run retry (%o)",
+    async (rawRun) => {
+      await using state = await createState(rawRun);
 
-    try {
-      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
-      expect(waitForProjection).not.toHaveBeenCalled();
+      state.continueFromCurrentTranscript();
 
-      await state.prepareCompactedTranscriptRetry(assertActive);
-      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget, abortSignal);
-      expect(waitForProjection).toHaveBeenCalledWith(BASE_RUN_PARAMS.sessionTarget, abortSignal);
-
-      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
-      expect(waitForProjection).toHaveBeenCalledOnce();
-    } finally {
-      waitForProjection.mockRestore();
-    }
-  });
-
-  it("records canonical runtime persistence without mutating recorder lifecycle state", async () => {
-    const persistedMessage = makeUserMessage();
-    const persistApproved = vi.fn(async () => ({
-      admission: TEST_ADMISSION,
-      sessionFile: BASE_RUN_PARAMS.sessionFile,
-      sessionEntry: undefined,
-      messageId: "msg-user-1",
-      message: persistedMessage,
-    }));
-    const recorder = createRecorder({ persistApproved });
-    const onUserMessagePersisted = vi.fn();
-    await using state = await createState({
-      userTurnTranscriptRecorder: recorder,
-      onUserMessagePersisted,
-    });
-
-    state.onUserMessagePersisted(persistedMessage);
-    await state.waitForCurrentUserMessagePersistence();
-
-    expect(persistApproved).toHaveBeenCalledOnce();
-    expect(recorder.markRuntimePersistencePending).toHaveBeenCalledOnce();
-    expect(recorder.markRuntimePersisted).not.toHaveBeenCalled();
-    expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
-    expect(state.activePrompt.persisted).toBe(true);
-  });
+      // Raw runs load no transcript history, so a continuation prompt would drop the task.
+      expect(state.activePrompt.override).toBeUndefined();
+      expect(state.activePrompt.internal).toBe(false);
+    },
+  );
 
   it("continues from the transcript after compaction when the runtime persisted the user turn", async () => {
     const runtimeMessage = makeUserMessage();
@@ -469,18 +425,12 @@ describe("embedded run session prompt state", () => {
         expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
         expect(state.suppressNextUserMessagePersistence).toBe(true);
       }
+      expect(persistApproved).toHaveBeenCalledOnce();
+      expect(recorder.markRuntimePersistencePending).toHaveBeenCalledOnce();
+      expect(recorder.markRuntimePersisted).not.toHaveBeenCalled();
       expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
     },
   );
-
-  it("does not suppress an original prompt that precheck compaction never persisted", async () => {
-    await using state = await createState();
-
-    await state.prepareCompactedTranscriptRetry(assertActive);
-
-    expect(state.activePrompt).toEqual({ persisted: false, internal: false });
-    expect(state.suppressNextUserMessagePersistence).toBe(false);
-  });
 
   it("keeps an internal reasoning continuation hidden across precheck compaction", async () => {
     const reasoningContinuation =

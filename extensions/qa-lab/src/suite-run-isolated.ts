@@ -1,6 +1,7 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaLabLatestReport } from "./lab-server.types.js";
 import {
@@ -11,6 +12,7 @@ import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import { mapQaSuiteWithConcurrency, resolveQaSuiteWorkerStartStaggerMs } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { buildQaIsolatedScenarioWorkerParams } from "./suite-support.js";
 import type {
   QaSuiteResolvedRunContext,
@@ -71,6 +73,22 @@ export async function runQaFlowSuiteIsolated(
     transportId,
   });
   const transport = transportFactoryResult.adapter;
+  const artifactParams = {
+    outputDir,
+    startedAt,
+    transport,
+    providerMode,
+    primaryModel,
+    alternateModel,
+    fastMode,
+    concurrency,
+    channel: params?.channelId ?? transport.id,
+    channelDriver: transportFactoryResult.driver,
+    isolatedWorkers: true,
+    scenarioIds: params?.scenarioIds?.length
+      ? selectedScenarios.map((scenario) => scenario.id)
+      : undefined,
+  };
   const progress = createQaSuiteProgressController({
     lab,
     scenarios: selectedScenarios,
@@ -85,11 +103,6 @@ export async function runQaFlowSuiteIsolated(
     const partialScenarios = completedScenarioResults.filter(
       (scenario): scenario is QaSuiteScenarioResult => scenario !== undefined,
     );
-    const completedScenarioDefinitions = completedScenarioResults.flatMap((scenario, index) =>
-      scenario === undefined || selectedScenarios[index] === undefined
-        ? []
-        : [selectedScenarios[index]],
-    );
     if (partialScenarios.length === 0) {
       return;
     }
@@ -98,29 +111,12 @@ export async function runQaFlowSuiteIsolated(
       try {
         const partialFinishedAt = new Date();
         const { report, reportPath } = await writeQaSuiteArtifacts({
+          ...artifactParams,
           status: "running",
-          repoRoot,
-          outputDir,
-          startedAt,
           finishedAt: partialFinishedAt,
           scenarios: partialScenarios,
-          scenarioDefinitions: completedScenarioDefinitions,
-          evidenceMode: params?.evidenceMode,
           recordedEvidence: recording.snapshot(),
-          transport,
-          providerMode,
-          primaryModel,
-          alternateModel,
-          fastMode,
-          concurrency,
-          channel: params?.channelId ?? transport.id,
-          channelDriver: transportFactoryResult.driver,
-          isolatedWorkers: true,
           writeEvidenceFile: false,
-          scenarioIds:
-            params?.scenarioIds && params.scenarioIds.length > 0
-              ? selectedScenarios.map((scenario) => scenario.id)
-              : undefined,
         });
         lab.setLatestReport({
           outputPath: reportPath,
@@ -142,8 +138,8 @@ export async function runQaFlowSuiteIsolated(
   let isolatedRunFailed = false;
   let isolatedRunError: unknown;
   let parentTransportCleaned = false;
-  let completionProgress: string | undefined;
   let terminalScenarios: QaSuiteScenarioResult[] | undefined;
+  let transportArtifacts: QaRunnerTransportArtifacts | undefined;
   try {
     if (params?.channelDriver === "live") {
       // The parent only renders aggregate artifacts. Release its live credentials
@@ -184,6 +180,19 @@ export async function runQaFlowSuiteIsolated(
           imported = true;
           return selected;
         };
+        const completeScenario = (
+          scenarioResult: QaSuiteScenarioResult,
+          status = scenarioResult.status,
+        ) => {
+          progress.recordScenarioResult(index, scenarioResult);
+          writeQaSuiteProgress(
+            progressEnabled,
+            `scenario ${status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
+          );
+          completedScenarioResults[index] = scenarioResult;
+          writePartialArtifacts();
+          return scenarioResult;
+        };
         try {
           const workerParams = markQaSuiteNestedRun(
             buildQaIsolatedScenarioWorkerParams({
@@ -216,45 +225,24 @@ export async function runQaFlowSuiteIsolated(
           };
           startedScenarioIndexes.add(index);
           const childSuiteResult: QaSuiteResult = await runQaFlowSuite(workerParams);
-          if (childSuiteResult.evidence?.schemaVersion === 3) {
-            childEvidence = childSuiteResult.evidence;
-          }
+          childEvidence = childSuiteResult.evidence;
           const childSelectedId = importChild();
-          let scenarioResult = childSuiteResult.scenarios[0];
+          const scenarioResult = childSuiteResult.scenarios[0];
           if (!scenarioResult) {
             throw new Error("isolated scenario run returned no scenario result");
           }
-          if (childEvidence) {
-            if (!childSelectedId || scenarioResult.evidenceOccurrenceId !== childSelectedId) {
-              throw new Error("isolated result does not match its child's selected observation");
-            }
-            // The dispatch has no assertion claims. The child's actual result
-            // stays selected; a later parent failure gets a separate observation.
-            recordingStarted = true;
-            await recording.record(index, dispatchId, scenarioResult, {
-              importedEntries: [],
-              selectedId: childSelectedId,
-            });
-          } else {
-            // Only a result returned by this newly observed invocation is adapted.
-            // Historical v2 files cannot acquire guessed occurrence provenance.
-            const legacy = childSuiteResult.evidence
-              ? rebaseQaSuiteEvidence(childSuiteResult.evidence, scenarioOutputDir, outputDir)
-              : undefined;
-            recordingStarted = true;
-            scenarioResult = await recording.record(index, dispatchId, scenarioResult, {
-              importedEntries: legacy?.entries,
-            });
+          if (!childSelectedId || scenarioResult.evidenceOccurrenceId !== childSelectedId) {
+            throw new Error("isolated result does not match its child's selected observation");
           }
+          // The dispatch has no assertion claims. The child's actual result
+          // stays selected; a later parent failure gets a separate observation.
+          recordingStarted = true;
+          await recording.record(index, dispatchId, scenarioResult, {
+            importedEntries: [],
+            selectedId: childSelectedId,
+          });
           dispatchCompleted = true;
-          progress.recordScenarioResult(index, scenarioResult);
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
-          );
-          completedScenarioResults[index] = scenarioResult;
-          writePartialArtifacts();
-          return scenarioResult;
+          return completeScenario(scenarioResult);
         } catch (error) {
           // A failed evidence write is not a child failure and must not retry
           // the same exclusive artifact name or mask its original error.
@@ -283,14 +271,7 @@ export async function runQaFlowSuiteIsolated(
             failure,
             { diagnostic: true },
           );
-          progress.recordScenarioResult(index, scenarioResult);
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario fail (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
-          );
-          completedScenarioResults[index] = scenarioResult;
-          writePartialArtifacts();
-          return scenarioResult;
+          return completeScenario(scenarioResult, "fail");
         }
       },
       {
@@ -299,8 +280,9 @@ export async function runQaFlowSuiteIsolated(
           params?.failFast === true && scenarioResult.status === "fail",
       },
     );
+    await artifactWriteQueue;
+    transportArtifacts = await transport.captureArtifacts?.({ outputDir });
     terminalScenarios = scenarios;
-    completionProgress = "run complete";
   } catch (error) {
     isolatedRunFailed = true;
     isolatedRunError = error;
@@ -325,54 +307,25 @@ export async function runQaFlowSuiteIsolated(
       scenarios: terminalScenarios,
     });
   }
-  if (!terminalScenarios || !completionProgress) {
+  if (!terminalScenarios) {
     throw new Error("QA suite completed without terminal result metadata");
   }
   const terminalFinishedAt = new Date();
-  const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
-    repoRoot,
-    outputDir,
-    startedAt,
-    finishedAt: terminalFinishedAt,
-    scenarios: terminalScenarios,
-    scenarioDefinitions: selectedScenarios,
-    evidenceMode: params?.evidenceMode,
-    recordedEvidence: recording.snapshot(),
-    transport,
-    providerMode,
-    primaryModel,
-    alternateModel,
-    fastMode,
-    concurrency,
-    channel: params?.channelId ?? transport.id,
-    channelDriver: transportFactoryResult.driver,
-    publishTransportArtifacts: true,
-    isolatedWorkers: true,
-    writeEvidenceFile: params?.writeEvidenceFile,
-    scenarioIds:
-      params?.scenarioIds && params.scenarioIds.length > 0
-        ? selectedScenarios.map((scenario) => scenario.id)
-        : undefined,
-  });
-  lab.setLatestReport({
-    outputPath: reportPath,
-    markdown: report,
-    generatedAt: terminalFinishedAt.toISOString(),
-  } satisfies QaLabLatestReport);
-  progress.complete([], terminalFinishedAt.toISOString());
-  const result = {
-    outputDir,
-    evidence,
-    evidencePath,
-    reportPath,
-    summaryPath,
-    report,
-    scenarios: terminalScenarios,
-    startedScenarioIds: selectedScenarios
+  const result = await completeQaSuiteRun(
+    {
+      ...artifactParams,
+      finishedAt: terminalFinishedAt,
+      scenarios: terminalScenarios,
+      recordedEvidence: recording.snapshot(),
+      transportArtifacts,
+      writeEvidenceFile: params?.writeEvidenceFile,
+    },
+    lab,
+    progress,
+    selectedScenarios
       .filter((_scenario, index) => startedScenarioIndexes.has(index))
       .map((scenario) => scenario.id),
-    watchUrl: lab.baseUrl,
-  } satisfies QaSuiteResult;
-  writeQaSuiteProgress(progressEnabled, completionProgress);
+  );
+  writeQaSuiteProgress(progressEnabled, "run complete");
   return result;
 }

@@ -73,7 +73,7 @@ describe("Codex Computer Use periodic health", () => {
         threadId: "health-probe-thread-1",
         server: "cua_repl",
         tool: "js",
-        arguments: { code: "await cua.getState();" },
+        arguments: { code: "await cua.listApps();" },
       },
       { timeoutMs: 60_000 },
     );
@@ -224,7 +224,7 @@ function createClient(options: { liveTestFailures?: number } = {}) {
     if (method === "config/mcpServer/reload") {
       return undefined;
     }
-    if (method === "thread/unsubscribe" || method === "thread/archive") {
+    if (method === "thread/unsubscribe") {
       expect(params).toEqual({ threadId: `health-probe-thread-${threadStarts}` });
       return undefined;
     }

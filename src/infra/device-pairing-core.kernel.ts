@@ -1,0 +1,476 @@
+import { randomUUID } from "node:crypto";
+import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { revokeDeviceBootstrapTokensForDeviceInDatabase } from "./device-bootstrap.worker-kernel.js";
+import type {
+  RequestDevicePairingResult,
+  PairedDeviceMetadataPatch,
+  PrunedSupersededPairedDevice,
+} from "./device-pairing-core.types.js";
+// Manages device pairing requests, records, metadata, and node pairing state.
+import {
+  listApprovedPairedDeviceRoles,
+  resolveNodePairingGeneration,
+  type NodePairingGeneration,
+} from "./device-pairing-identity.js";
+import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import {
+  loadDevicePairingStateForMutation,
+  mergeDevicePairingRoles,
+  mergeDevicePairingScopes,
+  normalizeDevicePairingRole,
+  preserveDeviceRoleScopes,
+  resolvePairingRequestExpiry,
+  resolveRequestedDeviceRoles,
+  sameDevicePairingStringSet,
+} from "./device-pairing-state.kernel.js";
+import {
+  persistDevicePairingStoreState as persistState,
+  updatePairedDeviceInTransaction,
+} from "./device-pairing-store.js";
+import type {
+  DevicePairingPendingRecord,
+  DevicePairingPendingRequest,
+  PairedDevice,
+} from "./device-pairing.types.js";
+
+// True when the incoming request only asks for roles/scopes a single existing pending
+// request (same key + role) already covers. Such subset re-requests refresh in place so
+// the owner's listed requestId stays valid; escalations still supersede with a fresh id.
+function canRefreshPendingDevicePairingRequest(
+  existing: DevicePairingPendingRequest,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+): boolean {
+  if (existing.publicKey !== incoming.publicKey) {
+    return false;
+  }
+  if (existing.browserOrigin !== incoming.browserOrigin) {
+    return false;
+  }
+  if (normalizeDevicePairingRole(existing.role) !== normalizeDevicePairingRole(incoming.role)) {
+    return false;
+  }
+  const incomingRoles = resolveRequestedDeviceRoles(incoming);
+  const existingRoles = resolveRequestedDeviceRoles(existing);
+  const incomingScopes = normalizeDeviceAuthScopes(incoming.scopes);
+  const existingScopes = normalizeDeviceAuthScopes(existing.scopes);
+  if (
+    sameDevicePairingStringSet(existingRoles, incomingRoles) &&
+    sameDevicePairingStringSet(existingScopes, incomingScopes)
+  ) {
+    return true;
+  }
+  const existingRoleSet = new Set(existingRoles);
+  if (!incomingRoles.every((role) => existingRoleSet.has(role))) {
+    return false;
+  }
+  return incomingScopes.every((scope) =>
+    incomingRoles.some((role) =>
+      roleScopesAllow({
+        role,
+        requestedScopes: [scope],
+        allowedScopes: existingScopes,
+      }),
+    ),
+  );
+}
+
+function refreshPendingDevicePairingRequest(
+  existing: DevicePairingPendingRecord,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  isRepair: boolean,
+  nowMs: number,
+): DevicePairingPendingRecord {
+  return {
+    ...existing,
+    publicKey: incoming.publicKey,
+    displayName: incoming.displayName ?? existing.displayName,
+    platform: incoming.platform ?? existing.platform,
+    deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
+    clientId: incoming.clientId ?? existing.clientId,
+    clientMode: incoming.clientMode ?? existing.clientMode,
+    browserOrigin: existing.browserOrigin,
+    remoteIp: incoming.remoteIp ?? existing.remoteIp,
+    // If either request is interactive, keep the pending request visible for approval.
+    silent: Boolean(existing.silent && incoming.silent),
+    isRepair: existing.isRepair || isRepair,
+    // Preserve the original creation timestamp so that reconnects cannot bump this
+    // request's queue position. Using Date.now() here would let an attacker silently
+    // refresh recency and win the implicit --latest approval race.
+    ts: existing.ts,
+    // Keepalive for the pending TTL only (see pruneExpiredPending); never affects ordering.
+    refreshedAtMs: nowMs,
+  };
+}
+
+function toPublicPendingDevicePairingRequest(
+  pending: DevicePairingPendingRecord,
+): DevicePairingPendingRequest {
+  const { refreshedAtMs: _refreshedAtMs, ...request } = pending;
+  return request;
+}
+
+function buildPendingDevicePairingRequest(params: {
+  nowMs: number;
+  deviceId: string;
+  isRepair: boolean;
+  req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">;
+}): DevicePairingPendingRequest {
+  const role = normalizeDevicePairingRole(params.req.role) ?? undefined;
+  return {
+    requestId: randomUUID(),
+    deviceId: params.deviceId,
+    publicKey: params.req.publicKey,
+    displayName: params.req.displayName,
+    platform: params.req.platform,
+    deviceFamily: params.req.deviceFamily,
+    clientId: params.req.clientId,
+    clientMode: params.req.clientMode,
+    browserOrigin: params.req.browserOrigin,
+    role,
+    roles: mergeDevicePairingRoles(params.req.roles, role),
+    scopes: mergeDevicePairingScopes(params.req.scopes),
+    remoteIp: params.req.remoteIp,
+    silent: params.req.silent,
+    isRepair: params.isRepair,
+    ts: params.nowMs,
+  };
+}
+
+/** Create or refresh a pending device pairing request for owner approval. */
+export function requestDevicePairingInWorker(
+  req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  nowMs: number,
+): RequestDevicePairingResult {
+  const state = loadDevicePairingStateForMutation(nowMs);
+  const deviceId = req.deviceId.trim();
+  if (!deviceId) {
+    throw new Error("deviceId required");
+  }
+  const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
+  const pendingForDevice = Object.values(state.pendingById)
+    .filter((pending) => pending.deviceId === deviceId)
+    .toSorted((left, right) => right.ts - left.ts);
+  const latestPending = pendingForDevice[0];
+  let request: DevicePairingPendingRecord;
+  let created = false;
+  if (
+    pendingForDevice.length === 1 &&
+    latestPending &&
+    canRefreshPendingDevicePairingRequest(latestPending, req)
+  ) {
+    request = refreshPendingDevicePairingRequest(latestPending, req, isRepair, nowMs);
+  } else {
+    for (const pending of pendingForDevice) {
+      delete state.pendingById[pending.requestId];
+    }
+    request = buildPendingDevicePairingRequest({
+      nowMs,
+      deviceId,
+      isRepair,
+      req: {
+        ...req,
+        role: normalizeDevicePairingRole(req.role) ?? latestPending?.role,
+        roles: mergeDevicePairingRoles(
+          ...pendingForDevice.flatMap((pending) => [pending.roles, pending.role]),
+          req.roles,
+          req.role,
+        ),
+        scopes: mergeDevicePairingScopes(
+          ...pendingForDevice.map((pending) => pending.scopes),
+          req.scopes,
+        ),
+        // Preserve interactive visibility when any superseded request needed attention.
+        silent: Boolean(req.silent && pendingForDevice.every((pending) => pending.silent === true)),
+      },
+    });
+    created = true;
+  }
+  state.pendingById[request.requestId] = request;
+  persistState(state, undefined, "pending");
+  // Surface superseded requestIds so callers can broadcast their resolution;
+  // clients otherwise keep prompting for requests that can no longer be approved.
+  const superseded = created
+    ? pendingForDevice
+        .filter((pending) => pending.requestId !== request.requestId)
+        .map((pending) => ({ requestId: pending.requestId, deviceId: pending.deviceId }))
+    : [];
+  return {
+    status: "pending",
+    request: toPublicPendingDevicePairingRequest(request),
+    created,
+    expiresAtMs: resolvePairingRequestExpiry(request.refreshedAtMs ?? request.ts),
+    ...(superseded.length > 0 ? { superseded } : {}),
+  };
+}
+
+/** Reject a pending request and revoke matching bootstrap tokens for that device. */
+export function rejectDevicePairingInWorker(
+  database: OpenClawStateDatabase,
+  requestId: string,
+  nowMs: number,
+): { requestId: string; deviceId: string } | null {
+  const state = loadDevicePairingStateForMutation(nowMs);
+  const pending = state.pendingById[requestId];
+  if (!pending) {
+    return null;
+  }
+  delete state.pendingById[requestId];
+  persistState(state, undefined, "pending");
+  revokeDeviceBootstrapTokensForDeviceInDatabase(database, {
+    deviceId: pending.deviceId,
+    publicKey: pending.publicKey,
+    nowMs,
+  });
+  return { requestId, deviceId: pending.deviceId };
+}
+
+/** Remove a paired device and any pending repair requests for the same device id. */
+export function removePairedDeviceInWorker(
+  deviceId: string,
+  nowMs: number,
+): { deviceId: string } | null {
+  const state = loadDevicePairingStateForMutation(nowMs);
+  const normalized = deviceId.trim();
+  if (!normalized || !state.pairedByDeviceId[normalized]) {
+    return null;
+  }
+  delete state.pairedByDeviceId[normalized];
+  for (const [requestId, pending] of Object.entries(state.pendingById)) {
+    if (pending.deviceId === normalized) {
+      delete state.pendingById[requestId];
+    }
+  }
+  persistState(state, undefined, "both", { clearApnsNodeIds: [normalized] });
+  return { deviceId: normalized };
+}
+
+// Silent pairings from the same client software on the same host mint a fresh
+// deviceId whenever their state dir (and thus keypair) is ephemeral. The cluster
+// key groups those records so a replacement pairing can retire its predecessors.
+function silentPairingClusterKey(
+  device: Pick<PairedDevice, "clientId" | "clientMode" | "displayName">,
+): string | null {
+  const clientId = device.clientId?.trim().toLowerCase() ?? "";
+  const clientMode = device.clientMode?.trim().toLowerCase() ?? "";
+  const displayName = device.displayName?.trim().toLowerCase() ?? "";
+  if (!clientId && !clientMode && !displayName) {
+    return null;
+  }
+  return `${clientId}\0${clientMode}\0${displayName}`;
+}
+
+// A concurrently approved sibling may still be mid-handshake and not yet visible
+// to the connected-clients check; freshly approved records are never prune
+// candidates so parallel silent pairings cannot delete each other's rows.
+const PRUNE_RECENT_APPROVAL_GRACE_MS = 60_000;
+
+/**
+ * Remove silent-approved sibling records superseded by a newly approved silent
+ * pairing of the same client cluster. Only records whose latest approval was
+ * same-host local ("silent") are eligible, as anchor and as victim: local
+ * clients re-pair silently by construction and share the gateway host, so the
+ * metadata cluster key cannot match a different machine. Currently connected
+ * devices are skipped so concurrent sessions with distinct state dirs keep
+ * their tokens while live.
+ */
+export function pruneSupersededSilentPairedDevicesInWorker(params: {
+  deviceId: string;
+  protectedDeviceIds: readonly string[];
+  nowMs: number;
+}): PrunedSupersededPairedDevice[] {
+  const state = loadDevicePairingStateForMutation(params.nowMs);
+  const anchor = state.pairedByDeviceId[params.deviceId.trim()];
+  if (!anchor || anchor.approvedVia !== "silent") {
+    return [];
+  }
+  const anchorKey = silentPairingClusterKey(anchor);
+  if (!anchorKey) {
+    return [];
+  }
+  const nowMs = params.nowMs;
+  const protectedDeviceIds = new Set(params.protectedDeviceIds);
+  const removed: PrunedSupersededPairedDevice[] = [];
+  for (const device of Object.values(state.pairedByDeviceId)) {
+    if (device.deviceId === anchor.deviceId) {
+      continue;
+    }
+    // Legacy records without approvedVia stay untouched (fail-safe).
+    if (device.approvedVia !== "silent") {
+      continue;
+    }
+    if (silentPairingClusterKey(device) !== anchorKey) {
+      continue;
+    }
+    if (nowMs - device.approvedAtMs < PRUNE_RECENT_APPROVAL_GRACE_MS) {
+      continue;
+    }
+    if (protectedDeviceIds.has(device.deviceId)) {
+      continue;
+    }
+    delete state.pairedByDeviceId[device.deviceId];
+    for (const [requestId, pending] of Object.entries(state.pendingById)) {
+      if (pending.deviceId === device.deviceId) {
+        delete state.pendingById[requestId];
+      }
+    }
+    removed.push({
+      deviceId: device.deviceId,
+      roles: listApprovedPairedDeviceRoles(device),
+    });
+  }
+  if (removed.length === 0) {
+    return [];
+  }
+  requestDevicePairingMutationAdmission({
+    kind: "pairing-prune",
+    deviceIds: removed.map((entry) => entry.deviceId),
+  });
+  persistState(state, undefined, "both", {
+    clearApnsNodeIds: removed.map((entry) => entry.deviceId),
+  });
+  return removed;
+}
+
+/** Remove one approved paired-device role while preserving unrelated role tokens. */
+export function removePairedDeviceRoleInWorker(params: {
+  deviceId: string;
+  role: string;
+  nowMs: number;
+}): { deviceId: string; role: string; removedDevice: boolean } | null {
+  const state = loadDevicePairingStateForMutation(params.nowMs);
+  const normalizedDeviceId = params.deviceId.trim();
+  const role = normalizeDevicePairingRole(params.role);
+  const device = state.pairedByDeviceId[normalizedDeviceId];
+  if (!device || !role || !listApprovedPairedDeviceRoles(device).includes(role)) {
+    return null;
+  }
+
+  const tokens = { ...device.tokens };
+  delete tokens[role];
+  const remainingRoles = listApprovedPairedDeviceRoles(device).filter((entry) => entry !== role);
+  if (remainingRoles.length === 0) {
+    for (const [requestId, pending] of Object.entries(state.pendingById)) {
+      if (pending.deviceId === normalizedDeviceId) {
+        delete state.pendingById[requestId];
+      }
+    }
+    delete state.pairedByDeviceId[normalizedDeviceId];
+    persistState(state, undefined, "both", {
+      clearApnsNodeIds: [normalizedDeviceId],
+    });
+    return { deviceId: normalizedDeviceId, role, removedDevice: true };
+  }
+
+  for (const [requestId, pending] of Object.entries(state.pendingById)) {
+    if (pending.deviceId !== normalizedDeviceId) {
+      continue;
+    }
+    const pendingRoles = resolveRequestedDeviceRoles(pending);
+    if (!pendingRoles.includes(role)) {
+      continue;
+    }
+    const nextPendingRoles = pendingRoles.filter((entry) => entry !== role);
+    if (nextPendingRoles.length === 0) {
+      delete state.pendingById[requestId];
+      continue;
+    }
+    const pendingScopes = Array.isArray(pending.scopes)
+      ? mergeDevicePairingScopes(
+          ...nextPendingRoles.map((entry) => preserveDeviceRoleScopes(entry, pending.scopes)),
+        )
+      : undefined;
+    state.pendingById[requestId] = {
+      ...pending,
+      role: nextPendingRoles[0],
+      roles: nextPendingRoles,
+      scopes: pendingScopes,
+    };
+  }
+
+  const scopeBaseline = device.approvedScopes ?? device.scopes;
+  const preservedScopes = Array.isArray(scopeBaseline)
+    ? mergeDevicePairingScopes(
+        ...remainingRoles.map((entry) => preserveDeviceRoleScopes(entry, scopeBaseline)),
+      )
+    : undefined;
+  const next: PairedDevice = {
+    ...device,
+    role: remainingRoles[0],
+    roles: remainingRoles,
+    ...(preservedScopes !== undefined
+      ? { scopes: preservedScopes, approvedScopes: preservedScopes }
+      : {}),
+    tokens: Object.keys(tokens).length > 0 ? tokens : undefined,
+  };
+  if (role === "node") {
+    // The node capability surface is bound to the node role; revoking the
+    // role must revoke approved command exposure with it.
+    delete next.nodeSurface;
+    delete next.pendingNodeSurface;
+  }
+  state.pairedByDeviceId[normalizedDeviceId] = next;
+  persistState(state, undefined, "both");
+  return { deviceId: normalizedDeviceId, role, removedDevice: false };
+}
+
+/** Update non-auth metadata for a paired device presence/status refresh. */
+export function updatePairedDeviceMetadataInWorker(
+  deviceId: string,
+  patch: Partial<PairedDeviceMetadataPatch>,
+): boolean {
+  return updatePairedDeviceInTransaction(deviceId, (device) => {
+    if (!device) {
+      return { value: false };
+    }
+    const next: Partial<PairedDeviceMetadataPatch> = {};
+    if ("displayName" in patch) {
+      next.displayName = patch.displayName;
+    }
+    if ("operatorLabel" in patch) {
+      next.operatorLabel = patch.operatorLabel;
+    }
+    if ("platform" in patch) {
+      next.platform = patch.platform;
+    }
+    if ("clientId" in patch) {
+      next.clientId = patch.clientId;
+    }
+    if ("clientMode" in patch) {
+      next.clientMode = patch.clientMode;
+    }
+    if ("remoteIp" in patch) {
+      next.remoteIp = patch.remoteIp;
+    }
+    if ("lastSeenAtMs" in patch) {
+      next.lastSeenAtMs = patch.lastSeenAtMs;
+    }
+    if ("lastSeenReason" in patch) {
+      next.lastSeenReason = patch.lastSeenReason;
+    }
+    return { value: true, patch: next };
+  });
+}
+
+/** Update paired-device presence only while the authenticated node generation still owns it. */
+export function updatePairedDevicePresenceInWorker(
+  deviceId: string,
+  patch: { lastSeenAtMs: number; lastSeenReason: string },
+  expectedPairingGeneration: NodePairingGeneration,
+): boolean {
+  return updatePairedDeviceInTransaction(deviceId, (device) => {
+    const currentPairingGeneration = resolveNodePairingGeneration(device);
+    if (
+      !device ||
+      expectedPairingGeneration.nodeId !== device.deviceId ||
+      currentPairingGeneration?.key !== expectedPairingGeneration.key
+    ) {
+      return { value: false };
+    }
+    return {
+      value: true,
+      patch: { lastSeenAtMs: patch.lastSeenAtMs, lastSeenReason: patch.lastSeenReason },
+    };
+  });
+}

@@ -1,15 +1,23 @@
-/** Clears reset-related queues and system events for session keys. */
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
-import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
-import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  normalizeOptionalAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import { clearSessionLifecycleQueues } from "./queue/cleanup.js";
+import {
+  clearReplyRunForResetBySessionId,
+  resolveActiveReplyOperationForSessionId,
+} from "./reply-run-registry.js";
 
 export class SessionResetCleanupError extends Error {}
 
@@ -61,36 +69,73 @@ export async function stopSessionResetSubagents(
   }
 }
 
-/** Runtime cleanup result for reset-related queues and system events. */
-type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
-  systemEventsCleared: number;
-};
+export function clearCommittedSessionResetRuntimeState(params: {
+  previousSessionEntry: Pick<SessionEntry, "sessionId"> | undefined;
+  agentId: string;
+  sessionKey: string;
+  signal?: AbortSignal;
+  onError: (error: unknown) => void;
+}): void {
+  if (!params.previousSessionEntry) {
+    return;
+  }
+  try {
+    clearSessionResetRuntimeState([params.sessionKey, params.previousSessionEntry.sessionId], {
+      activeReplySessionId: params.previousSessionEntry.sessionId,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      assertCurrent: () => params.signal?.throwIfAborted(),
+    });
+  } catch (error) {
+    params.onError(error);
+  }
+}
 
 /** Clears queued follow-ups and pending system events visible to the resetting agent. */
 export function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
-  opts: { agentId: string; activeReplySessionId?: string },
-): ClearSessionResetRuntimeStateResult {
-  clearEmbeddedSessionPromptStates(keys);
-  const cleared = clearSessionQueues(keys);
-  let systemEventsCleared = 0;
-
+  opts: {
+    agentId: string;
+    sessionKey: string;
+    activeReplySessionId?: string;
+    assertCurrent: () => void;
+  },
+): void {
+  opts.assertCurrent();
+  clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
+  const cleared = clearSessionLifecycleQueues({
+    keys,
+    agentId: opts.agentId,
+    sessionKey: opts.sessionKey,
+    sessionId: opts.activeReplySessionId,
+    assertCurrent: opts.assertCurrent,
+  });
   for (const key of cleared.keys) {
-    // Global session rows may share one transient queue across agents. An
-    // agent-scoped reset must not discard another agent's pending work.
-    const removed = consumeSelectedSystemEventEntries(
-      key,
-      selectAgentSystemEvents(peekSystemEventEntries(key), opts.agentId),
-    );
-    systemEventsCleared += removed.length;
+    opts.assertCurrent();
+    const owner = parseAgentSessionKey(key)?.agentId;
+    if (owner && owner !== normalizeAgentId(opts.agentId)) {
+      continue;
+    }
+    const queueKey = resolveSystemEventQueueKey(key, opts.agentId);
+    consumeSelectedSystemEventEntries(queueKey, peekSystemEventEntries(queueKey));
   }
 
   if (opts.activeReplySessionId) {
-    clearReplyRunForResetBySessionId(opts.activeReplySessionId);
+    opts.assertCurrent();
+    const operation = resolveActiveReplyOperationForSessionId(opts.activeReplySessionId);
+    const ownerAgentId =
+      normalizeOptionalAgentId(operation?.agentId) ?? parseAgentSessionKey(operation?.key)?.agentId;
+    if (
+      operation &&
+      ownerAgentId === normalizeAgentId(opts.agentId) &&
+      operation.sessionId === opts.activeReplySessionId &&
+      cleared.keys.some(
+        (key) =>
+          key !== opts.activeReplySessionId &&
+          agentSessionKeysMatchByRequestKey(operation.key, key),
+      )
+    ) {
+      clearReplyRunForResetBySessionId(opts.activeReplySessionId);
+    }
   }
-
-  return {
-    ...cleared,
-    systemEventsCleared,
-  };
 }

@@ -3,12 +3,14 @@ import { getRuntimeConfig } from "../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import { resolveApprovalInitiatingSurfaceState } from "./exec-approval-surface.js";
+import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 /** Returns whether approval replies can route back to the turn's initiating surface. */
 export function hasApprovalTurnSourceRoute(params: {
   turnSourceChannel?: string | null;
   turnSourceAccountId?: string | null;
   approvalKind?: ChannelApprovalKind;
+  request?: PluginApprovalRequest;
 }): boolean {
   const channel = normalizeMessageChannel(params.turnSourceChannel);
   // INTERNAL_MESSAGE_CHANNEL is webchat; web and TUI routes exist only while
@@ -22,6 +24,7 @@ export function hasApprovalTurnSourceRoute(params: {
       accountId: params.turnSourceAccountId,
       cfg: getRuntimeConfig(),
       approvalKind: params.approvalKind ?? "exec",
+      ...(params.request ? { request: params.request } : {}),
     }).kind === "enabled"
   );
 }

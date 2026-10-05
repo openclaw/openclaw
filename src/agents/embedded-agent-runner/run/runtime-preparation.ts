@@ -1,6 +1,7 @@
 import { readSourceReplyDeliveryRuntime } from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
@@ -16,13 +17,9 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
-import {
-  createEmbeddedRunStageTracker,
-  formatEmbeddedRunStageSummary,
-} from "./attempt-stage-timing.js";
+import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import {
   createEmbeddedRunAuthController,
   resolveEmbeddedAuthCooldownProbePolicy,
@@ -41,6 +38,7 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveInitialThinkLevel } from "./runtime-resolution.js";
 
 export async function prepareEmbeddedRunRuntime(input: {
+  assertCurrent: () => void;
   runParams: RunEmbeddedAgentInternalParams;
   sessionAdmission?: Parameters<typeof resolveEmbeddedRunModelSetup>[0]["sessionAdmission"];
   provider: string;
@@ -59,13 +57,12 @@ export async function prepareEmbeddedRunRuntime(input: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const params = input.runParams;
-  let provider = input.provider;
-  let modelId = input.modelId;
   const modelSetup = await resolveEmbeddedRunModelSetup({
+    assertCurrent: input.assertCurrent,
     runParams: params,
     sessionAdmission: input.sessionAdmission,
-    provider,
-    modelId,
+    provider: input.provider,
+    modelId: input.modelId,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
     globalLane: input.globalLane,
@@ -74,10 +71,10 @@ export async function prepareEmbeddedRunRuntime(input: {
     onHooksResolved: () => input.markStartupStage("hooks"),
     preparedModelRuntime: input.preparedModelRuntime,
   });
-  provider = modelSetup.provider;
-  modelId = modelSetup.modelId;
   const pluginMetadataSnapshot = input.preparedModelRuntime?.metadataSnapshot;
   const {
+    provider,
+    modelId,
     requestedModelId,
     modelSelectionChangedByHook,
     requestStreamTransportOverrides,
@@ -141,23 +138,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     outerContextTokenMeta =
       contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
   };
-  const selectHarnessForModel = (
-    candidate: typeof model,
-    plan?: AgentRuntimeAuthPlan,
-    preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
-  ) =>
-    nativeSessionRuntime?.auth === "native"
-      ? nativeSessionRuntime.harness
-      : selectEmbeddedRunHarness({
-          runParams: params,
-          provider,
-          modelId,
-          model: candidate,
-          plan,
-          preparedAuthAttempt,
-          requestStreamTransportOverrides,
-          pinnedHarnessId,
-        });
   const selectHarnessForPreparedAttempts = (
     candidate: typeof model,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
@@ -176,10 +156,21 @@ export async function prepareEmbeddedRunRuntime(input: {
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
-  agentHarness = selectHarnessForModel(models.effective);
+  agentHarness =
+    nativeSessionRuntime?.auth === "native"
+      ? nativeSessionRuntime.harness
+      : selectEmbeddedRunHarness({
+          runParams: params,
+          provider,
+          modelId,
+          model: models.effective,
+          requestStreamTransportOverrides,
+          pinnedHarnessId,
+        });
   pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-  const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
+  const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
+    assertCurrent: input.assertCurrent,
     runParams: params,
     provider,
     modelId,
@@ -223,6 +214,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   const requestedThinkLevel = resolveInitialThinkLevel({
     requested: params.thinkLevel,
     config: params.config,
+    agentId: params.agentId,
     provider,
     modelId,
     model: models.effective,
@@ -569,7 +561,13 @@ export async function prepareEmbeddedRunRuntime(input: {
       authoredContextTokenCap,
       contextWindowInfo,
       outerContextTokenMeta,
-      activePreparedAuthPlan,
+      activePreparedAuthPlan: authState.apiKeyInfo
+        ? {
+            ...activePreparedAuthPlan,
+            selectedAuthMode: authState.apiKeyInfo.mode,
+            selectedAuthFlow: authState.apiKeyInfo.authFlow,
+          }
+        : activePreparedAuthPlan,
       thinkLevel: authState.thinkLevel,
       apiKeyInfo: authState.apiKeyInfo,
       lastProfileId: authState.lastProfileId,

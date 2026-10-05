@@ -13,6 +13,40 @@ const { closeAllMemorySearchManagers, getMemorySearchManager } = await import(".
 const fixture = createManagerIndexFixture({ getMemorySearchManager, closeAllMemorySearchManagers });
 const execFileAsync = promisify(execFile);
 
+it("cancels post-probe metadata reads and releases the generation for publication", async () => {
+  await fixture.seedSessionTranscript({
+    sessionId: "metadata-cancellation",
+    messages: [{ role: "user", timestamp: Date.now(), content: "Alpha cancellation proof." }],
+  });
+  const manager = await fixture.getFreshManager(
+    fixture.createConfig({
+      provider: "none",
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      vectorEnabled: false,
+    }),
+    "cli",
+  );
+  await manager.sync({ reason: "test", force: true });
+  const caller = new AbortController();
+  const reason = new Error("caller cancelled metadata enrichment");
+  const run = cpuRuntime.runMemoryRecallMetadata;
+  const read = vi.spyOn(cpuRuntime, "runMemoryRecallMetadata").mockImplementationOnce((...args) => {
+    const pending = run(...args);
+    caller.abort(reason);
+    return pending;
+  });
+  try {
+    await expect(manager.search("alpha", { signal: caller.signal })).rejects.toBe(reason);
+    expect(read).toHaveBeenCalledOnce();
+  } finally {
+    read.mockRestore();
+  }
+  await manager.sync({ reason: "after-cancellation", force: true });
+  const results = await manager.search("alpha");
+  expect(results.some((result) => result.snippet.includes("Alpha cancellation proof."))).toBe(true);
+});
+
 it("discards a worker hit forgotten before authoritative metadata enrichment", async ({
   signal,
 }) => {

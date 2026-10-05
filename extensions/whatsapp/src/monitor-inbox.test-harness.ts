@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -413,7 +414,7 @@ export function installWebMonitorInboxUnitTestHooks() {
     channelActivityMocks.recordChannelActivity.mockClear();
     pluginRuntimeMocks.reset();
     setWhatsAppRuntime({
-      channel: {},
+      channel: createPluginRuntimeMock().channel,
       state: {
         resolveStateDir: pluginRuntimeMocks.stateDir,
         openKeyedStore: pluginRuntimeMocks.openKeyedStore,

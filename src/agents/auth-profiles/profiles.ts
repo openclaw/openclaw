@@ -1,20 +1,26 @@
-/**
- * Auth profile mutation helpers.
- * Updates profile order, last-good state, usage stats, and provider profile
- * records through locked or immediate store writes.
- */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import {
+  listCandidateAuthProfileStores,
+  loadCandidateAuthProfileStore,
+} from "./candidate-stores.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLocks, type OAuthProfileLockKey } from "./oauth-profile-lock.js";
-import { removeOAuthRefreshGenerationPeers } from "./oauth-refresh-peers.js";
+import {
+  listOAuthRefreshGenerationPeers,
+  removeOAuthRefreshGenerationPeers,
+  type OAuthRefreshGenerationPeer,
+} from "./oauth-refresh-peers.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
@@ -23,15 +29,19 @@ import {
   ensureAuthProfileStoreForLocalUpdate,
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
+  saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import {
+  captureAuthProfileStorePersistenceSnapshot,
   isSharedMainAuthProfileAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   resolveRuntimeAuthProfileAgentDir,
+  restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
-import { resetAuthProfileFailureState } from "./usage-state.js";
+import { runAuthProfileUsage } from "./usage-lifecycle.js";
+import { withAuthProfileUsage } from "./usage-write.js";
 export {
   dedupeProfileIds,
   listProfilesForProvider,
@@ -95,14 +105,7 @@ export async function setAuthProfileOrder(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     sharedStoreWrite: params.sharedStoreWrite,
-    // Preserve requested IDs that the agent inherits (not owns) so the local
-    // save path does not prune them from the order. Without this, a secondary
-    // agent's `models auth order set --agent` accepts an inherited profile ID
-    // (validated against the merged store) but drops it while persisting, so
-    // `order get` falls back to the inherited main order — the CLI reports a
-    // switch that never happened (issue #119233). Mirrors the adjacent
-    // promoteAuthProfileInOrder preservation contract; the clear-order path
-    // (deduped.length === 0) must not preserve anything.
+    // Keep inherited IDs in local order; pruning them silently undoes the requested switch.
     ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
     updater: (store) => {
       if (deduped.length === 0) {
@@ -138,27 +141,19 @@ export async function promoteAuthProfileInOrder(params: {
       }
       const matchingOrderEntries = listProviderAuthStateEntries(store.order, providerKey);
       const existing = readProviderAuthState(store.order, providerKey);
-      if (!existing || existing.length === 0) {
-        if (!params.createIfMissing) {
-          return false;
-        }
-        const providerProfiles = dedupeProfileIds(
-          params.createFromOrder !== undefined
-            ? params.createFromOrder
-            : listProfilesForProvider(store, providerKey),
-        );
-        const next = dedupeProfileIds([
-          params.profileId,
-          ...providerProfiles.filter((profileId) => profileId !== params.profileId),
-        ]);
-        store.order = replaceProviderAuthState(store.order, providerKey, next);
-        return true;
+      if (!existing?.length && !params.createIfMissing) {
+        return false;
       }
       const next = dedupeProfileIds([
         params.profileId,
-        ...existing.filter((profileId) => profileId !== params.profileId),
+        ...(existing?.length
+          ? existing
+          : params.createFromOrder !== undefined
+            ? params.createFromOrder
+            : listProfilesForProvider(store, providerKey)),
       ]);
       if (
+        existing?.length &&
         next.length === existing.length &&
         next.every((profileId, idx) => profileId === existing[idx]) &&
         matchingOrderEntries.length === 1 &&
@@ -254,6 +249,7 @@ function removeProfileReferences(
 
 type AuthProfileRemovalTarget = {
   agentDir?: string;
+  databasePath: string;
   profileIds: ReadonlySet<string>;
   provider?: string;
   expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
@@ -273,6 +269,11 @@ function createAuthProfileRemovalTarget(params: {
     params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
   return {
     agentDir: params.agentDir,
+    databasePath: resolvePathViaExistingAncestorSync(
+      params.agentDir
+        ? resolveAuthProfileDatabasePath(params.agentDir)
+        : resolveSharedAuthStorePath(),
+    ),
     profileIds,
     ...(params.provider ? { provider: params.provider } : {}),
     expectedProfiles: new Map(
@@ -304,23 +305,94 @@ type AuthProfileRemovalResult =
   | { kind: "contention" }
   | { kind: "updated"; stores: AuthProfileStore[] };
 
-function readSurvivingRemovalProfiles(
+/** Physical credential owners affected by one explicit removal. No secret material. */
+export type AuthProfileRemovalScope = {
+  readonly agentDir?: string;
+  readonly databasePath: string;
+  readonly profileIds: readonly string[];
+};
+
+async function prepareAuthProfileRemovalPeers(
   targets: readonly AuthProfileRemovalTarget[],
-): ReadonlyMap<string, AuthProfileCredential> {
-  const surviving = new Map<string, AuthProfileCredential>();
+  cfg: OpenClawConfig,
+): Promise<OAuthRefreshGenerationPeer[]> {
+  const peers = new Map<string, OAuthRefreshGenerationPeer>();
   for (const target of targets) {
-    const store = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-      allowKeychainPrompt: false,
-      inheritedAuthDir: target.agentDir,
-    });
-    for (const profileId of target.profileIds) {
-      const credential = store.profiles[profileId];
-      if (credential) {
-        surviving.set(profileId, credential);
+    for (const [profileId, credential] of target.expectedProfiles) {
+      if (credential?.type !== "oauth") {
+        continue;
+      }
+      for (const peer of await listOAuthRefreshGenerationPeers({
+        cfg,
+        ownerDatabasePath: target.databasePath,
+        profileId,
+        generation: credential,
+      })) {
+        // Direct targets own their reference cleanup and generation check already.
+        if (
+          !targets.some(
+            (owner) =>
+              owner.databasePath === peer.candidate.databasePath && owner.profileIds.has(profileId),
+          )
+        ) {
+          peers.set(`${peer.candidate.databasePath}\0${profileId}`, peer);
+        }
       }
     }
   }
-  return surviving;
+  return [...peers.values()];
+}
+
+function readRemovalProfileState(
+  targets: readonly AuthProfileRemovalTarget[],
+  peers: readonly OAuthRefreshGenerationPeer[],
+  current = false,
+): { profiles: ReadonlyMap<string, AuthProfileCredential>; scopes: AuthProfileRemovalScope[] } {
+  const profiles = new Map<string, AuthProfileCredential>();
+  const scopes = new Map<
+    string,
+    { agentDir?: string; databasePath: string; profileIds: string[] }
+  >();
+  const add = (
+    owner: { agentDir?: string; databasePath: string },
+    profileId: string,
+    credential: AuthProfileCredential | undefined,
+  ) => {
+    if (!credential) {
+      return;
+    }
+    profiles.set(profileId, credential);
+    let scope = scopes.get(owner.databasePath);
+    if (!scope) {
+      scope = { agentDir: owner.agentDir, databasePath: owner.databasePath, profileIds: [] };
+      scopes.set(owner.databasePath, scope);
+    }
+    if (!scope.profileIds.includes(profileId)) {
+      scope.profileIds.push(profileId);
+    }
+  };
+  for (const target of targets) {
+    const store = current
+      ? loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+          allowKeychainPrompt: false,
+          inheritedAuthDir: target.agentDir,
+        })
+      : undefined;
+    for (const profileId of target.profileIds) {
+      add(
+        target,
+        profileId,
+        current ? store?.profiles[profileId] : target.expectedProfiles.get(profileId),
+      );
+    }
+  }
+  for (const peer of peers) {
+    const credential = current
+      ? loadCandidateAuthProfileStore(peer.candidate)?.profiles[peer.profileId]
+      : peer.credential;
+    add(peer.candidate, peer.profileId, credential);
+  }
+  return { profiles, scopes: [...scopes.values()] };
 }
 
 async function removeAuthProfileTargetsWithLocks(
@@ -332,6 +404,26 @@ async function removeAuthProfileTargetsWithLocks(
       credential?.type === "oauth" ? [{ profileId, provider: credential.provider }] : [],
     ),
   );
+  const credentials = new Set<string>();
+  for (const target of targets) {
+    for (const credential of target.expectedProfiles.values()) {
+      if (!credential) {
+        continue;
+      }
+      const values =
+        credential.type === "api_key"
+          ? [credential.key]
+          : credential.type === "token"
+            ? [credential.token]
+            : [credential.access, credential.refresh];
+      for (const value of values) {
+        if (value) {
+          credentials.add(value);
+        }
+      }
+    }
+  }
+  const catalogStores = credentials.size > 0 ? await listCandidateAuthProfileStores({ cfg }) : [];
   return await withOAuthProfileLocks(lockKeys, async () => {
     for (const target of targets) {
       const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
@@ -342,45 +434,91 @@ async function removeAuthProfileTargetsWithLocks(
         return { kind: "retry" };
       }
     }
-
-    for (const target of targets) {
-      for (const [profileId, credential] of target.expectedProfiles) {
-        if (credential?.type !== "oauth") {
-          continue;
-        }
-        await removeOAuthRefreshGenerationPeers({
-          cfg,
-          ownerDatabasePath: target.agentDir
-            ? resolveAuthProfileDatabasePath(target.agentDir)
-            : resolveSharedAuthStorePath(),
-          profileId,
-          generation: credential,
-        });
-      }
-    }
-
+    const restoreRemovedStores: Array<() => void> = [];
     const stores: AuthProfileStore[] = [];
-    for (const target of targets) {
-      let stale = false;
-      const updated = await updateAuthProfileStoreWithLock({
-        agentDir: target.agentDir,
-        updater: (store) => {
-          if (!authProfileRemovalTargetMatches(target, store)) {
-            stale = true;
+    let result: AuthProfileRemovalResult = { kind: "updated", stores };
+    let removalFailure: { error: unknown } | undefined;
+    try {
+      removeOAuthRefreshGenerationPeers(await prepareAuthProfileRemovalPeers(targets, cfg));
+
+      for (const target of targets) {
+        let stale = false;
+        let publishRemoval: (() => boolean) | undefined;
+        const updated = await updateAuthProfileStoreWithLock({
+          agentDir: target.agentDir,
+          updater: (store) => {
+            if (!authProfileRemovalTargetMatches(target, store)) {
+              stale = true;
+              return false;
+            }
+            const before = captureAuthProfileStorePersistenceSnapshot(target.agentDir);
+            if (!removeProfileReferences(store, target.profileIds, target.provider)) {
+              return false;
+            }
+            const saved = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+              store,
+              snapshot: before,
+              agentDir: target.agentDir,
+            });
+            restoreRemovedStores.push(() =>
+              restoreAuthProfileStorePersistenceSnapshot(before, saved.owned, target.agentDir),
+            );
+            publishRemoval = saved.publishRuntimeSnapshots;
+            // The guarded save supplies the exact compensation receipt.
             return false;
-          }
-          return removeProfileReferences(store, target.profileIds, target.provider);
-        },
-      });
-      if (updated === null) {
-        return { kind: "contention" };
+          },
+        });
+        if (updated === null) {
+          result = { kind: "contention" };
+          break;
+        }
+        if (stale) {
+          result = { kind: "retry" };
+          break;
+        }
+        publishRemoval?.();
+        stores.push(updated);
       }
-      if (stale) {
-        return { kind: "retry" };
-      }
-      stores.push(updated);
+    } catch (error) {
+      removalFailure = { error };
     }
-    return { kind: "updated", stores };
+    try {
+      // Publication rechecks captured auth, so one scrub after deletion also
+      // covers refreshes that were planned before logout. Failure restores auth.
+      await removePersistedPluginModelCatalogCredentials({
+        candidates: catalogStores,
+        credentials,
+      });
+    } catch (error) {
+      const failures: unknown[] = removalFailure ? [removalFailure.error, error] : [error];
+      for (let index = restoreRemovedStores.length - 1; index >= 0; index -= 1) {
+        try {
+          restoreRemovedStores[index]?.();
+        } catch (restoreError) {
+          failures.push(restoreError);
+        }
+      }
+      const restored = targets.every((target) =>
+        authProfileRemovalTargetMatches(
+          target,
+          loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+            allowKeychainPrompt: false,
+            inheritedAuthDir: target.agentDir,
+          }),
+        ),
+      );
+      throw new AggregateError(
+        failures,
+        restored
+          ? "Catalog cleanup failed; saved credentials were restored. Rerun the same `openclaw models auth logout` command to finish removing cached copies."
+          : "Catalog cleanup failed and concurrent auth changes prevented full restoration. Inspect the current auth profiles before retrying logout.",
+        { cause: error },
+      );
+    }
+    if (removalFailure) {
+      throw removalFailure.error;
+    }
+    return result;
   });
 }
 
@@ -394,8 +532,14 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
   provider?: string;
   agentDir?: string;
   profileIds: readonly string[];
-  beforeRemove?: (profileIds: readonly string[]) => Promise<void>;
-  onIncomplete?: (survivingProfiles: ReadonlyMap<string, AuthProfileCredential>) => Promise<void>;
+  beforeRemove?: (
+    profileIds: readonly string[],
+    scopes: readonly AuthProfileRemovalScope[],
+  ) => Promise<void>;
+  onIncomplete?: (
+    survivingProfiles: ReadonlyMap<string, AuthProfileCredential>,
+    scopes: readonly AuthProfileRemovalScope[],
+  ) => Promise<void>;
 }): Promise<boolean> {
   const profileIds = new Set(params.profileIds);
   if ([...profileIds].some(isUserModelAuthProfileId)) {
@@ -431,22 +575,41 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
           : { profileIds: ownerProfileIds }),
       }),
     );
+    const peers =
+      params.beforeRemove || params.onIncomplete
+        ? await prepareAuthProfileRemovalPeers(targets, params.cfg ?? {})
+        : [];
+    const reconcileSurvivors = async () => {
+      if (!params.onIncomplete) {
+        return;
+      }
+      const surviving = readRemovalProfileState(targets, peers, true);
+      await params.onIncomplete(surviving.profiles, surviving.scopes);
+    };
     // Config cleanup must not make a later credential generation eligible for this removal.
     let result: AuthProfileRemovalResult;
     try {
-      await params.beforeRemove?.([
-        ...new Set(targets.flatMap((target) => [...target.profileIds])),
-      ]);
+      await params.beforeRemove?.(
+        [...new Set(targets.flatMap((target) => [...target.profileIds]))],
+        readRemovalProfileState(targets, peers).scopes,
+      );
       result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
     } catch (error) {
-      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
+      await reconcileSurvivors();
       throw error;
     }
     if (result.kind === "updated") {
+      if (params.onIncomplete) {
+        const surviving = readRemovalProfileState(targets, peers, true);
+        // A captured peer may have reconnected while config cleanup was awaiting I/O.
+        if (surviving.profiles.size > 0) {
+          await params.onIncomplete(surviving.profiles, surviving.scopes);
+        }
+      }
       return true;
     }
     if (result.kind === "contention" || params.beforeRemove) {
-      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
+      await reconcileSurvivors();
       return false;
     }
   }
@@ -483,7 +646,7 @@ export async function markAuthProfileSuccess(params: {
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
   const providerKey = resolveProviderIdForAuth(provider);
-  const profile = store.profiles[profileId];
+  const profile = structuredClone(store.profiles[profileId]);
   if (
     !profile ||
     profile.setup?.replacement ||
@@ -491,49 +654,15 @@ export async function markAuthProfileSuccess(params: {
   ) {
     return;
   }
-  const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
-  const personal = isUserModelAuthProfileId(profileId);
-  const inherited =
-    !personal && ownerAgentDir === undefined && !isSharedMainAuthProfileAgentDir(agentDir);
-  const updatesSelection = !inherited && !personal;
-  const lastUsed = Date.now();
-  let applied = false;
-  const updated = await updateAuthProfileStoreWithLock({
-    agentDir: ownerAgentDir,
-    profileId,
-    updater: (freshStore) => {
-      const freshProfile = freshStore.profiles[profileId];
-      if (
-        !freshProfile ||
-        freshProfile.setup?.replacement ||
-        resolveProviderIdForAuth(freshProfile.provider) !== providerKey
-      ) {
-        return false;
-      }
-      // Inherited selection ownership is not defined. Clear shared health in
-      // the credential owner without changing its last-good or rotation state.
-      if (updatesSelection) {
-        freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
-      }
-      freshStore.usageStats ??= {};
-      freshStore.usageStats[profileId] = resetAuthProfileFailureState(
-        freshStore.usageStats[profileId] ?? {},
-        { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
-      );
-      applied = true;
-      return true;
-    },
+  const updated = await runAuthProfileUsage(async () => {
+    const reduction = { kind: "success" as const, expectedProfile: profile, lastUsed: Date.now() };
+    if (isUserModelAuthProfileId(profileId)) {
+      return preparePersonalAuthProfileUsage(store, profileId).record(reduction);
+    }
+    return withAuthProfileUsage(store, profileId, agentDir, (usage) =>
+      usage.record(reduction, providerKey),
+    );
   });
-  if (updated && applied) {
-    const usage = updated.usageStats?.[profileId];
-    if (usage) {
-      store.usageStats = { ...store.usageStats, [profileId]: usage };
-    }
-    if (updatesSelection) {
-      store.lastGood = replaceProviderAuthState(store.lastGood, providerKey, profileId);
-    }
-    return;
-  }
   if (updated === null) {
     authProfileProfilesLog.warn(
       "dropped auth profile bookkeeping after locked store update failed",

@@ -3,9 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
+import { preserveDeferredPluginSessionSource } from "./deferred-plugin-session-sources.js";
 import { isErrno } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPathInside } from "./path-guards.js";
@@ -16,10 +17,8 @@ import {
   recordCompletedLegacyAgentDirMigration,
 } from "./state-migrations.agent-dir-receipt.js";
 import {
-  ensureMigrationDir,
   migrationFileExists,
   readSessionStoreJson5,
-  safeReadDir,
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
 import {
@@ -27,16 +26,15 @@ import {
   canonicalizeSessionStore,
   distinctSessionStoreAliasWarning,
   isAmbiguousSharedStoreKey,
-  isLegacyDefaultMainAliasKey,
-  selectNewerSessionEntry,
   normalizeSessionEntry,
-  pickLatestLegacyDirectEntry,
   removeDirIfEmpty,
-  resolveStaleLegacySessionFile,
   saveSessionStoreStrict,
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
-import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
+import {
+  isLegacyDefaultMainAliasKey,
+  type PreparedLegacySessionSurfaces,
+} from "./state-migrations.session-surfaces.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
@@ -121,21 +119,16 @@ export function inspectLegacyAgentDir(
   }
 }
 
-function normalizeMergedSessionStore(
-  merged: Record<string, SessionEntryLike>,
-  protectedKeys: ReadonlySet<string>,
-): {
+function normalizeTargetSessionStore(target: Record<string, SessionEntryLike>): {
   store: Record<string, SessionEntry>;
   rejectedProtectedKeyCount: number;
 } {
   const store = Object.create(null) as Record<string, SessionEntry>;
   let rejectedProtectedKeyCount = 0;
-  for (const [key, entry] of Object.entries(merged)) {
+  for (const [key, entry] of Object.entries(target)) {
     const normalizedEntry = normalizeSessionEntry(entry, key);
     if (!normalizedEntry) {
-      if (protectedKeys.has(key)) {
-        rejectedProtectedKeyCount++;
-      }
+      rejectedProtectedKeyCount++;
       continue;
     }
     store[key] = normalizedEntry;
@@ -145,45 +138,48 @@ function normalizeMergedSessionStore(
 
 export async function migrateLegacySessions(
   detected: LegacyStateDetection,
-  now: () => number,
   options: {
-    recoverCorruptTargetStore?: boolean;
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
     legacySessionSurfaces: PreparedLegacySessionSurfaces;
   },
 ): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  const recoverableWarnings: string[] = [];
   if (!detected.sessions.hasLegacy) {
     return { changes, warnings };
   }
   if (options.legacySessionSurfaces.failures.length > 0) {
-    return {
-      changes,
-      warnings: [...options.legacySessionSurfaces.failures],
-    };
+    return { changes, warnings: [...options.legacySessionSurfaces.failures] };
   }
+  const env = { ...options.env, OPENCLAW_STATE_DIR: detected.stateDir };
   if (
-    readDeferredPluginMigrations({ env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir } })
-      .length > 0
+    preserveDeferredPluginSessionSource({
+      cfg: options.cfg,
+      env,
+      target: { agentId: detected.targetAgentId, storePath: detected.sessions.targetStorePath },
+      pending: readDeferredPluginMigrations({ env }),
+    })
   ) {
     return {
       changes,
       warnings,
       notices: [
-        "Preserved legacy session sources until pending plugin migrations complete; Doctor still imports and verifies canonical sessions.",
+        "Preserved legacy session sources for pending plugin migration or verified import archival; Doctor still imports and verifies canonical sessions.",
       ],
     };
   }
-  ensureMigrationDir(detected.sessions.targetDir);
-
-  const legacyParsed = migrationFileExists(detected.sessions.legacyStorePath)
-    ? readSessionStoreJson5(detected.sessions.legacyStorePath)
-    : { store: {}, ok: true };
   const targetParsed = migrationFileExists(detected.sessions.targetStorePath)
     ? readSessionStoreJson5(detected.sessions.targetStorePath)
     : { store: {}, ok: true };
-  const legacyStore = legacyParsed.store;
+  if (!targetParsed.ok) {
+    return {
+      changes,
+      warnings: [
+        `Target sessions store unreadable; left untouched at ${detected.sessions.targetStorePath}. Repair the index, then rerun openclaw doctor --fix.`,
+      ],
+    };
+  }
   const targetStore = targetParsed.store;
   if (detected.sessions.targetStoreAliases.hasUnresolvedIdentity) {
     warnings.push(
@@ -201,22 +197,18 @@ export async function migrateLegacySessions(
     return { changes, warnings };
   }
 
-  const ambiguousAliasedKeys = new Set(
-    [...Object.keys(targetStore), ...Object.keys(legacyStore)].filter(
-      (key) =>
-        isAmbiguousSharedStoreKey(key, detected.targetMainKey, detected.targetScope) ||
-        (detected.sessions.preserveForeignMainAliases &&
-          isLegacyDefaultMainAliasKey(key, detected.targetMainKey)),
-    ),
+  const ambiguousAliasedKeys = Object.keys(targetStore).filter(
+    (key) =>
+      isAmbiguousSharedStoreKey(key, detected.targetMainKey, detected.targetScope) ||
+      (detected.sessions.preserveForeignMainAliases &&
+        isLegacyDefaultMainAliasKey(key, detected.targetMainKey)),
   );
-  // Atomic replacement separates filesystem aliases. Defer the whole merge so
-  // a later startup cannot treat each pathname as a different session owner.
   if (detected.sessions.targetStoreAliases.hasDistinctAliases) {
     warnings.push(
-      ambiguousAliasedKeys.size > 0
+      ambiguousAliasedKeys.length > 0
         ? aliasedSessionStoreMigrationWarning({
             subject: "migration of",
-            count: ambiguousAliasedKeys.size,
+            count: ambiguousAliasedKeys.length,
             storePath: detected.sessions.targetStorePath,
           })
         : distinctSessionStoreAliasWarning(
@@ -227,183 +219,29 @@ export async function migrateLegacySessions(
     return { changes, warnings };
   }
 
-  const canonicalizedTarget = canonicalizeSessionStore({
+  const canonicalized = canonicalizeSessionStore({
     store: targetStore,
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
-    skipCrossAgentRemap: detected.sessions.preserveAmbiguousKeys,
-    preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
     legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
   });
-  const canonicalizedLegacy = canonicalizeSessionStore({
-    store: legacyStore,
-    agentId: detected.targetAgentId,
-    mainKey: detected.targetMainKey,
-    scope: detected.targetScope,
-    preserveCanonicalAgentOwner: true,
-    preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
-    legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
-  });
-  const targetKeys = new Set(Object.keys(canonicalizedTarget.store));
-  const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
-    ? Object.keys(legacyStore).filter((key) =>
-        isLegacyDefaultMainAliasKey(key, detected.targetMainKey),
-      ).length
-    : 0;
-
-  let repairedStaleSessionFiles = false;
-  for (const entry of Object.values(canonicalizedTarget.store)) {
-    const targetSessionFile = resolveStaleLegacySessionFile({
-      entry,
-      legacyDir: detected.sessions.legacyDir,
-      targetDir: detected.sessions.targetDir,
-    });
-    if (targetSessionFile) {
-      entry.sessionFile = targetSessionFile;
-      repairedStaleSessionFiles = true;
-    }
-  }
-
-  const merged = Object.create(null) as Record<string, SessionEntryLike>;
-  for (const [key, entry] of Object.entries(canonicalizedTarget.store)) {
-    merged[key] = entry;
-  }
-  for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
-    merged[key] = selectNewerSessionEntry({
-      existing: merged[key],
-      incoming: entry,
-      preferIncomingOnTie: false,
-    });
-  }
-
-  const mainKey = buildAgentMainSessionKey({
-    agentId: detected.targetAgentId,
-    mainKey: detected.targetMainKey,
-  });
-  let migratedDirectChatKey: string | undefined;
-  if (!merged[mainKey]) {
-    const latest = pickLatestLegacyDirectEntry(legacyStore, options.legacySessionSurfaces.surfaces);
-    if (latest?.sessionId) {
-      merged[mainKey] = latest;
-      migratedDirectChatKey = mainKey;
-    }
-  }
-
-  if (!legacyParsed.ok) {
+  const normalized = normalizeTargetSessionStore(canonicalized.store);
+  if (normalized.rejectedProtectedKeyCount > 0) {
     warnings.push(
-      `Legacy sessions store unreadable; left in place at ${detected.sessions.legacyStorePath}`,
+      `Refused legacy session migration because normalization rejected ${normalized.rejectedProtectedKeyCount} existing target session ${normalized.rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
     );
-  }
-
-  const targetExists = migrationFileExists(detected.sessions.targetStorePath);
-  let targetReadable = !targetExists || targetParsed.ok;
-  if (!targetReadable) {
-    if (options.recoverCorruptTargetStore) {
-      const archivedTargetPath = `${detected.sessions.targetStorePath}.corrupt-${now()}`;
-      try {
-        fs.renameSync(detected.sessions.targetStorePath, archivedTargetPath);
-        changes.push(`Archived corrupt target sessions store → ${archivedTargetPath}`);
-        targetReadable = true;
-      } catch (err) {
-        warnings.push(
-          `Target sessions store unreadable; failed to archive ${detected.sessions.targetStorePath}: ${String(err)}`,
-        );
-      }
-    } else {
-      warnings.push(
-        `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}. Run openclaw doctor --fix to archive it and retry the legacy merge.`,
-      );
-    }
-  }
-
-  if (
-    targetReadable &&
-    (legacyParsed.ok || targetParsed.ok) &&
-    (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
-  ) {
-    const normalized = normalizeMergedSessionStore(merged, targetKeys);
-    if (normalized.rejectedProtectedKeyCount > 0) {
-      warnings.push(
-        `Refused legacy session migration because normalization rejected ${normalized.rejectedProtectedKeyCount} existing target session ${normalized.rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} and ${detected.sessions.legacyStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
-      );
-      return { changes, warnings };
-    }
-    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
-    if (migratedDirectChatKey) {
-      changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
-    }
-    changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
-    if (preservedLegacyForeignMainAliasCount > 0) {
-      recoverableWarnings.push(
-        `Preserved ${preservedLegacyForeignMainAliasCount} ambiguous session key(s) while importing legacy sessions into ${detected.sessions.targetStorePath}`,
-      );
-    }
-    if (canonicalizedTarget.legacyKeys.length > 0) {
-      changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
-    }
-    if (repairedStaleSessionFiles) {
-      changes.push("Repaired migrated session transcript paths");
-    }
-  }
-
-  if (!targetReadable) {
     return { changes, warnings };
   }
-
-  const entries = safeReadDir(detected.sessions.legacyDir);
-  for (const entry of entries) {
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (entry.name === "sessions.json") {
-      continue;
-    }
-    const from = path.join(detected.sessions.legacyDir, entry.name);
-    let to = path.join(detected.sessions.targetDir, entry.name);
-    if (migrationFileExists(to)) {
-      const parsed = path.parse(entry.name);
-      to = path.join(detected.sessions.targetDir, `${parsed.name}.legacy-${now()}${parsed.ext}`);
-    }
-    try {
-      fs.renameSync(from, to);
-      changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
-    } catch (err) {
-      warnings.push(`Failed moving ${from}: ${String(err)}`);
+  if (Object.keys(targetStore).length > 0) {
+    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
+    if (canonicalized.legacyKeys.length > 0) {
+      changes.push(`Canonicalized ${canonicalized.legacyKeys.length} legacy session key(s)`);
     }
   }
-
-  if (legacyParsed.ok && targetReadable) {
-    try {
-      if (migrationFileExists(detected.sessions.legacyStorePath)) {
-        fs.rmSync(detected.sessions.legacyStorePath, { force: true });
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  removeDirIfEmpty(detected.sessions.legacyDir);
-  const legacyLeft = safeReadDir(detected.sessions.legacyDir).filter((e) => e.isFile());
-  if (legacyLeft.length > 0) {
-    const backupDir = `${detected.sessions.legacyDir}.legacy-${now()}`;
-    try {
-      fs.renameSync(detected.sessions.legacyDir, backupDir);
-      warnings.push(`Left legacy sessions at ${backupDir}`);
-    } catch {
-      // ignore
-    }
-  }
-
-  return {
-    changes,
-    warnings: [...warnings, ...recoverableWarnings],
-    ...(warnings.length === 0 && recoverableWarnings.length > 0 && changes.length > 0
-      ? { warningDisposition: "recoverable" as const }
-      : {}),
-  };
+  return { changes, warnings };
 }
 
 type SqliteFamilyPlan = {
@@ -507,7 +345,6 @@ export async function migrateLegacyAgentDir(
     const duplicates: string[] = [];
     const directories: string[] = [];
     const movedFiles: { sourcePath: string; destinationPath: string }[] = [];
-    let plan: ReturnType<typeof planLegacyAgentDir> | undefined;
     let sourceRoot = legacyDir;
     let targetRoot = targetDir;
     let retainedRoot = legacyDir;
@@ -601,7 +438,7 @@ export async function migrateLegacyAgentDir(
         );
       }
       // Ownership inspection can materialize a SQLite shared-memory sidecar; inventory afterward.
-      plan = planLegacyAgentDir(sourceRoot, targetDir);
+      const plan = planLegacyAgentDir(sourceRoot, targetDir);
       preserveSource = plan.families.length > 0;
       for (const family of plan.families) {
         const database = path.join(sourceRoot, family.relative);
@@ -622,7 +459,7 @@ export async function migrateLegacyAgentDir(
         continue;
       }
       const stateRoot = fs.realpathSync(detected.stateDir);
-      ensureMigrationDir(targetDir);
+      fs.mkdirSync(targetDir, { recursive: true });
       targetRoot = fs.realpathSync(targetDir);
       if (
         !fs.lstatSync(targetDir).isDirectory() ||

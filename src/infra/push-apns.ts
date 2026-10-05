@@ -1,4 +1,3 @@
-// Manages APNs registration state and direct/relay push sending.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -13,14 +12,7 @@ import {
   createApnsResponseBodyCapture,
   getApnsResponseBodyCaptureText,
 } from "./push-apns-http2.js";
-import {
-  createApnsAlertPayload,
-  createApnsApprovalAlertPayload,
-  createApnsApprovalResolvedPayload,
-  createApnsBackgroundPayload,
-  resolveExecApprovalAlertBody,
-  resolvePluginApprovalAlertBody,
-} from "./push-apns-payloads.js";
+import { apnsSendInvalidatedError, requireCurrentApnsSend } from "./push-apns-send-current.js";
 import {
   isLikelyApnsToken,
   isValidApnsTopic,
@@ -53,7 +45,6 @@ export type { ApnsAuthConfig } from "./push-apns-auth.js";
 
 type ApnsTransport = "direct" | "relay";
 
-/** Normalized APNs push result returned to gateway push/nodes methods. */
 type ApnsPushResult = {
   ok: boolean;
   status: number;
@@ -64,9 +55,6 @@ type ApnsPushResult = {
   environment: ApnsEnvironment;
   transport: ApnsTransport;
 };
-
-type ApnsPushAlertResult = ApnsPushResult;
-type ApnsPushWakeResult = ApnsPushResult;
 
 const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
 const PLUGIN_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.plugin-approval";
@@ -91,23 +79,91 @@ type ApnsRequestResponse = { status: number; apnsId?: string; body: string };
 type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestResponse>;
 
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
+const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
 
-function throwIfApnsSendAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
-  }
-  throw signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
+function createApnsAlertPayload(params: { nodeId: string; title: string; body: string }): object {
+  return {
+    aps: {
+      alert: {
+        title: params.title,
+        body: params.body,
+      },
+      sound: "default",
+    },
+    openclaw: {
+      kind: "push.test",
+      nodeId: params.nodeId,
+      ts: Date.now(),
+    },
+  };
 }
 
-async function requireCurrentApnsSend(params: {
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<void> {
-  throwIfApnsSendAborted(params.signal);
-  if (params.isCurrent && !(await params.isCurrent())) {
-    throw new Error("APNs send invalidated");
+function createApnsBackgroundPayload(params: { nodeId: string; wakeReason?: string }): object {
+  const reason = params.wakeReason ?? "node.invoke";
+  return {
+    aps: {
+      "content-available": 1,
+    },
+    openclaw: {
+      kind: "node.wake",
+      nodeId: params.nodeId,
+      ts: Date.now(),
+      ...(reason ? { reason } : {}),
+    },
+  };
+}
+
+function createApnsApprovalAlertPayload(params: {
+  kind: ChannelApprovalKind;
+  approvalId: string;
+  gatewayDeviceId: string;
+  title: string;
+  body: string;
+  category: string;
+}): object {
+  return {
+    aps: {
+      alert: {
+        title: params.title,
+        body: params.body,
+      },
+      sound: "default",
+      category: params.category,
+      "content-available": 1,
+    },
+    openclaw: {
+      kind: `${params.kind}.approval.requested`,
+      approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
+      ts: Date.now(),
+    },
+  };
+}
+
+function resolvePluginApprovalAlertBody(description: string): string {
+  const body = normalizeOptionalString(description) ?? "";
+  if (body.length <= PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH) {
+    return body;
   }
-  throwIfApnsSendAborted(params.signal);
+  return `${truncateUtf16Safe(body, PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+function createApnsApprovalResolvedPayload(params: {
+  kind: ChannelApprovalKind;
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
+  return {
+    aps: {
+      "content-available": 1,
+    },
+    openclaw: {
+      kind: `${params.kind}.approval.resolved`,
+      approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
+      ts: Date.now(),
+    },
+  };
 }
 
 function parseReason(body: string): string | undefined {
@@ -125,15 +181,6 @@ function parseReason(body: string): string | undefined {
   }
 }
 
-/** Returns true for APNs responses that mean the direct device token is no longer usable. */
-function shouldInvalidateApnsRegistration(result: { status: number; reason?: string }): boolean {
-  if (result.status === 410) {
-    return true;
-  }
-  return result.status === 400 && result.reason?.trim() === "BadDeviceToken";
-}
-
-/** Decides whether a failed direct push should clear the persisted registration. */
 export function shouldClearStoredApnsRegistration(params: {
   registration: ApnsRegistration;
   result: { status: number; reason?: string };
@@ -148,21 +195,11 @@ export function shouldClearStoredApnsRegistration(params: {
   ) {
     return false;
   }
-  return shouldInvalidateApnsRegistration(params.result);
+  const { status, reason } = params.result;
+  return status === 410 || (status === 400 && reason?.trim() === "BadDeviceToken");
 }
 
-async function sendApnsRequest(params: {
-  token: string;
-  topic: string;
-  environment: ApnsEnvironment;
-  bearerToken: string;
-  payload: object;
-  timeoutMs: number;
-  pushType: ApnsPushType;
-  priority: "10" | "5";
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsRequestResponse> {
+async function sendApnsRequest(params: ApnsRequestParams): Promise<ApnsRequestResponse> {
   const authority =
     params.environment === "production"
       ? "https://api.push.apple.com"
@@ -205,13 +242,7 @@ async function sendApnsRequest(params: {
       }
       reject(toErrorObject(err, "Non-Error rejection"));
     };
-    const onAbort = () =>
-      fail(
-        params.signal?.reason instanceof Error
-          ? params.signal.reason
-          : new Error("APNs send invalidated"),
-        { cancelRequest: true },
-      );
+    const onAbort = () => fail(apnsSendInvalidatedError(params.signal), { cancelRequest: true });
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
         return;
@@ -295,140 +326,31 @@ async function sendApnsRequest(params: {
   });
 }
 
-function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_APNS_TIMEOUT_MS, 1000);
-}
-
-function resolveDirectSendContext(params: {
-  auth: ApnsAuthConfig;
-  registration: DirectApnsRegistration;
-}): {
-  token: string;
-  topic: string;
-  environment: ApnsEnvironment;
-  bearerToken: string;
-} {
-  const token = normalizeApnsToken(params.registration.token);
-  if (!isLikelyApnsToken(token)) {
-    throw new Error("invalid APNs token");
-  }
-  const topic = normalizeApnsTopic(params.registration.topic);
-  if (!isValidApnsTopic(topic)) {
-    throw new Error("topic required");
-  }
-  return {
-    token,
-    topic,
-    environment: params.registration.environment,
-    bearerToken: getApnsBearerToken(params.auth),
-  };
-}
-
-function resolveRegistrationDebugSuffix(
-  registration: ApnsRegistration,
-  relayResult?: Pick<ApnsRelayPushResponse, "tokenSuffix">,
-): string {
-  if (registration.transport === "direct") {
-    return registration.token.slice(-8);
-  }
-  return (
-    relayResult?.tokenSuffix ?? registration.tokenDebugSuffix ?? registration.relayHandle.slice(-8)
-  );
-}
-
 function toPushResult(params: {
   registration: ApnsRegistration;
   response: ApnsRequestResponse | ApnsRelayPushResponse;
   tokenSuffix?: string;
 }): ApnsPushResult {
-  const response =
-    "body" in params.response
-      ? {
-          ok: params.response.status === 200,
-          status: params.response.status,
-          apnsId: params.response.apnsId,
-          reason: parseReason(params.response.body),
-          environment: params.registration.environment,
-          tokenSuffix: params.tokenSuffix,
-        }
-      : params.response;
+  const { registration, response } = params;
+  const direct = "body" in response;
   return {
-    ok: response.ok,
+    ok: direct ? response.status === 200 : response.ok,
     status: response.status,
     apnsId: response.apnsId,
-    reason: response.reason,
+    reason: direct ? parseReason(response.body) : response.reason,
     tokenSuffix:
       params.tokenSuffix ??
-      resolveRegistrationDebugSuffix(
-        params.registration,
-        "tokenSuffix" in response ? response : undefined,
-      ),
-    topic: params.registration.topic,
-    environment: response.environment ?? params.registration.environment,
-    transport: params.registration.transport,
+      (registration.transport === "direct"
+        ? registration.token.slice(-8)
+        : ((!direct ? response.tokenSuffix : undefined) ??
+          registration.tokenDebugSuffix ??
+          registration.relayHandle.slice(-8))),
+    topic: registration.topic,
+    environment: direct
+      ? registration.environment
+      : (response.environment ?? registration.environment),
+    transport: registration.transport,
   };
-}
-
-async function sendDirectApnsPush(params: {
-  auth: ApnsAuthConfig;
-  registration: DirectApnsRegistration;
-  payload: object;
-  timeoutMs?: number;
-  requestSender?: ApnsRequestSender;
-  pushType: ApnsPushType;
-  priority: "10" | "5";
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsPushResult> {
-  const { token, topic, environment, bearerToken } = resolveDirectSendContext({
-    auth: params.auth,
-    registration: params.registration,
-  });
-  await requireCurrentApnsSend(params);
-  const sender = params.requestSender ?? sendApnsRequest;
-  const response = await sender({
-    token,
-    topic,
-    environment,
-    bearerToken,
-    payload: params.payload,
-    timeoutMs: resolveApnsTimeoutMs(params.timeoutMs),
-    pushType: params.pushType,
-    priority: params.priority,
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
-  });
-  return toPushResult({
-    registration: params.registration,
-    response,
-    tokenSuffix: token.slice(-8),
-  });
-}
-
-async function sendRelayApnsPush(params: {
-  relayConfig: ApnsRelayConfig;
-  registration: RelayApnsRegistration;
-  payload: object;
-  pushType: ApnsPushType;
-  priority: "10" | "5";
-  gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-  requestSender?: ApnsRelayRequestSender;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsPushResult> {
-  const response = await sendApnsRelayPush({
-    relayConfig: params.relayConfig,
-    sendGrant: params.registration.sendGrant,
-    relayHandle: params.registration.relayHandle,
-    payload: params.payload,
-    pushType: params.pushType,
-    priority: params.priority,
-    gatewayIdentity: params.gatewayIdentity,
-    requestSender: params.requestSender,
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
-  });
-  return toPushResult({ registration: params.registration, response });
 }
 
 type ApnsTransportCommonParams = {
@@ -477,33 +399,25 @@ type ApnsPluginApprovalAlertParams = ApnsApprovalParams & {
   description: string;
 };
 
-/** Sends a visible APNs alert via direct APNs token or relay registration. */
-export async function sendApnsAlert(params: ApnsAlertParams): Promise<ApnsPushAlertResult> {
+export async function sendApnsAlert(params: ApnsAlertParams): Promise<ApnsPushResult> {
   const payload = createApnsAlertPayload({
     nodeId: params.nodeId,
     title: params.title,
     body: params.body,
   });
 
-  return await sendApnsPush(
-    { transport: params, payload, pushType: "alert", priority: "10" },
-    params,
-  );
+  return await sendApnsPush({ transport: params, payload, pushType: "alert" }, params);
 }
 
-/** Sends a silent background wake via direct APNs token or relay registration. */
 export async function sendApnsBackgroundWake(
   params: ApnsBackgroundWakeParams,
-): Promise<ApnsPushWakeResult> {
+): Promise<ApnsPushResult> {
   const payload = createApnsBackgroundPayload({
     nodeId: params.nodeId,
     wakeReason: params.wakeReason,
   });
 
-  return await sendApnsPush(
-    { transport: params, payload, pushType: "background", priority: "5" },
-    params,
-  );
+  return await sendApnsPush({ transport: params, payload, pushType: "background" }, params);
 }
 
 async function sendApnsPush(
@@ -511,44 +425,66 @@ async function sendApnsPush(
     transport: ApnsTransportParams;
     payload: object;
     pushType: ApnsPushType;
-    priority: "10" | "5";
   },
   // Approval notifications have no lifecycle controls, including extra JS input fields.
   controls?: ApnsLifecycleControls,
 ): Promise<ApnsPushResult> {
   const transport = params.transport;
-  if (transport.registration.transport === "relay") {
-    const relayParams = transport as RelayApnsTransportParams;
-    return await sendRelayApnsPush({
-      relayConfig: relayParams.relayConfig,
-      registration: relayParams.registration,
-      payload: params.payload,
-      pushType: params.pushType,
-      priority: params.priority,
-      gatewayIdentity: relayParams.relayGatewayIdentity,
-      requestSender: relayParams.relayRequestSender,
-      ...(controls?.signal ? { signal: controls.signal } : {}),
-      ...(controls?.isCurrent ? { isCurrent: controls.isCurrent } : {}),
-    });
-  }
-  const directParams = transport as DirectApnsTransportParams;
-  return await sendDirectApnsPush({
-    auth: directParams.auth,
-    registration: directParams.registration,
-    payload: params.payload,
-    timeoutMs: directParams.timeoutMs,
-    requestSender: directParams.requestSender,
-    pushType: params.pushType,
-    priority: params.priority,
+  const priority = params.pushType === "alert" ? "10" : "5";
+  const lifecycleControls = {
     ...(controls?.signal ? { signal: controls.signal } : {}),
     ...(controls?.isCurrent ? { isCurrent: controls.isCurrent } : {}),
+  };
+  if (transport.registration.transport === "relay") {
+    const relayParams = transport as RelayApnsTransportParams;
+    const registration = relayParams.registration;
+    const response = await sendApnsRelayPush({
+      relayConfig: relayParams.relayConfig,
+      sendGrant: registration.sendGrant,
+      relayHandle: registration.relayHandle,
+      payload: params.payload,
+      pushType: params.pushType,
+      priority,
+      gatewayIdentity: relayParams.relayGatewayIdentity,
+      requestSender: relayParams.relayRequestSender,
+      ...lifecycleControls,
+    });
+    return toPushResult({ registration, response });
+  }
+  const { auth, registration, timeoutMs, requestSender } = transport as DirectApnsTransportParams;
+  const token = normalizeApnsToken(registration.token);
+  if (!isLikelyApnsToken(token)) {
+    throw new Error("invalid APNs token");
+  }
+  const topic = normalizeApnsTopic(registration.topic);
+  if (!isValidApnsTopic(topic)) {
+    throw new Error("topic required");
+  }
+  const environment = registration.environment;
+  const bearerToken = getApnsBearerToken(auth);
+  await requireCurrentApnsSend(lifecycleControls);
+  const sender = requestSender ?? sendApnsRequest;
+  const response = await sender({
+    token,
+    topic,
+    environment,
+    bearerToken,
+    payload: params.payload,
+    timeoutMs: resolveTimerTimeoutMs(timeoutMs, DEFAULT_APNS_TIMEOUT_MS, 1000),
+    pushType: params.pushType,
+    priority,
+    ...lifecycleControls,
+  });
+  return toPushResult({
+    registration,
+    response,
+    tokenSuffix: token.slice(-8),
   });
 }
 
-/** Sends an exec-approval alert notification via direct APNs or relay. */
 export async function sendApnsExecApprovalAlert(
   params: ApnsApprovalParams,
-): Promise<ApnsPushAlertResult> {
+): Promise<ApnsPushResult> {
   return await sendApnsPush({
     transport: params,
     payload: createApnsApprovalAlertPayload({
@@ -556,18 +492,16 @@ export async function sendApnsExecApprovalAlert(
       approvalId: params.approvalId,
       gatewayDeviceId: params.gatewayDeviceId,
       title: "Exec approval required",
-      body: resolveExecApprovalAlertBody(),
+      body: "Open OpenClaw to review this request.",
       category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
     }),
     pushType: "alert",
-    priority: "10",
   });
 }
 
-/** Sends a plugin-approval alert notification via direct APNs or relay. */
 export async function sendApnsPluginApprovalAlert(
   params: ApnsPluginApprovalAlertParams,
-): Promise<ApnsPushAlertResult> {
+): Promise<ApnsPushResult> {
   return await sendApnsPush({
     transport: params,
     payload: createApnsApprovalAlertPayload({
@@ -579,14 +513,13 @@ export async function sendApnsPluginApprovalAlert(
       category: PLUGIN_APPROVAL_NOTIFICATION_CATEGORY,
     }),
     pushType: "alert",
-    priority: "10",
   });
 }
 
 async function sendApnsApprovalResolvedWake(params: {
   transport: ApnsApprovalParams;
   kind: ChannelApprovalKind;
-}): Promise<ApnsPushWakeResult> {
+}): Promise<ApnsPushResult> {
   return await sendApnsPush({
     transport: params.transport,
     payload: createApnsApprovalResolvedPayload({
@@ -595,21 +528,18 @@ async function sendApnsApprovalResolvedWake(params: {
       gatewayDeviceId: params.transport.gatewayDeviceId,
     }),
     pushType: "background",
-    priority: "5",
   });
 }
 
-/** Sends a silent wake telling the app an exec approval changed state. */
 export async function sendApnsExecApprovalResolvedWake(
   params: ApnsApprovalParams,
-): Promise<ApnsPushWakeResult> {
+): Promise<ApnsPushResult> {
   return await sendApnsApprovalResolvedWake({ transport: params, kind: "exec" });
 }
 
-/** Sends a silent wake telling the app a plugin approval changed state. */
 export async function sendApnsPluginApprovalResolvedWake(
   params: ApnsApprovalParams,
-): Promise<ApnsPushWakeResult> {
+): Promise<ApnsPushResult> {
   return await sendApnsApprovalResolvedWake({ transport: params, kind: "plugin" });
 }
 

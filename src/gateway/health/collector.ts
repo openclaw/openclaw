@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { listAgentEntries } from "../../agents/agent-scope.js";
+import { listAgentEntries } from "../../agents/agent-roster.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshotFromInspection,
@@ -11,7 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
@@ -43,6 +44,7 @@ import {
 } from "../channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
 import { buildContextEngineHealthSummary } from "./context-engine.js";
 import {
@@ -83,14 +85,11 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const ordered: Array<{ id: string; name?: string }> = [];
 
   for (const entry of entries) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
     if (typeof entry.id !== "string" || !entry.id.trim()) {
       continue;
     }
     const id = normalizeAgentId(entry.id);
-    if (!id || seen.has(id)) {
+    if (seen.has(id)) {
       continue;
     }
     seen.add(id);
@@ -104,21 +103,21 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   return { defaultAgentId, ordered };
 }
 
-async function createHealthSessionStoreReader(agentIds: readonly string[]) {
+async function createHealthSessionStoreReader(
+  agentIds: readonly string[],
+  projection?: SessionRowProjection,
+) {
   const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
-  const { readSessionStoreSummaryReadOnly } =
-    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
-  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, (scope, options) => {
-    try {
-      return readSessionStoreSummaryReadOnly(scope, options);
-    } catch (error) {
+  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, {
+    projection,
+    recoverReadError(error) {
       if (!isTransientSqliteError(error)) {
         throw error;
       }
       // Health is best-effort: one empty snapshot beats repeated transient lock failures.
       return { count: 0, recent: [], byAgent: new Map() };
-    }
+    },
   });
 }
 
@@ -138,9 +137,13 @@ function projectHealthSessions(
   } satisfies HealthSummary["sessions"];
 }
 
-async function buildHealthSessionSummary(storePath: string, agentId?: string) {
-  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : []);
-  const store = reader.read(storePath, agentId);
+async function buildHealthSessionSummary(
+  storePath: string,
+  agentId?: string,
+  projection?: SessionRowProjection,
+) {
+  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : [], projection);
+  const store = await reader.read(storePath, agentId);
   return projectHealthSessions(store.path, store);
 }
 
@@ -148,25 +151,28 @@ async function buildHealthSessionSummary(storePath: string, agentId?: string) {
 export async function buildHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
+  projection?: SessionRowProjection,
 ): Promise<AgentHealthSummary[]> {
   const agentIds = ordered.map((entry) => entry.id);
-  const reader = await createHealthSessionStoreReader(agentIds);
+  const reader = await createHealthSessionStoreReader(agentIds, projection);
   // One roster pass for every agent: per-agent resolution re-walks the roster
   // and froze large fleets for tens of seconds each refresh (#137570).
   const heartbeats = resolveHeartbeatSummariesForAgents(cfg, agentIds);
-  return ordered.map((entry, index) => {
-    const store = reader.read(
+  const agents: AgentHealthSummary[] = [];
+  for (const [index, entry] of ordered.entries()) {
+    const store = await reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
       entry.id,
     );
-    return {
+    agents.push({
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
       heartbeat: expectDefined(heartbeats[index], "heartbeat summary"),
       sessions: projectHealthSessions(store.path, store),
-    };
-  });
+    });
+  }
+  return agents;
 }
 
 function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | undefined {
@@ -348,22 +354,16 @@ async function buildHealthAccountRecord(params: {
         timeoutMs: resolveHealthProbeTimeoutMs(params.deadlineAtMs),
         cfg: params.cfg,
       });
-      lastProbeAt = Date.now();
     } catch (error) {
       probe = { ok: false, error: formatErrorMessage(error) };
-      lastProbeAt = Date.now();
     }
+    lastProbeAt = Date.now();
   }
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
 
-  const probeRecord =
-    probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
-  const bot =
-    probeRecord && typeof probeRecord.bot === "object"
-      ? (probeRecord.bot as { username?: string | null })
-      : null;
+  const bot = asNullableObjectRecord(asNullableObjectRecord(probe)?.bot);
   if (bot?.username) {
     debugHealth(params.cfg, "probe.bot", {
       channel: params.plugin.id,
@@ -480,6 +480,7 @@ export async function collectGatewayHealthSnapshot(params: {
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
+  sessionRowProjection?: SessionRowProjection;
 }): Promise<HealthSummary> {
   const stateContext = captureDeliveryQueueHealthContext();
   const start = Date.now();
@@ -491,7 +492,11 @@ export async function collectGatewayHealthSnapshot(params: {
   const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveHealthAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
-  const agents = await buildHealthAgentSummaries(cfg, { defaultAgentId, ordered });
+  const agents = await buildHealthAgentSummaries(
+    cfg,
+    { defaultAgentId, ordered },
+    params.sessionRowProjection,
+  );
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
   const configuredHeartbeatAgentId = normalizeOptionalString(
     cfg.agents?.defaults?.heartbeat?.agentId,
@@ -514,6 +519,7 @@ export async function collectGatewayHealthSnapshot(params: {
     (await buildHealthSessionSummary(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: summaryAgent?.agentId }),
       summaryAgent?.agentId,
+      params.sessionRowProjection,
     ));
 
   const includeSensitive = params.audience === "admin";
@@ -538,7 +544,6 @@ export async function collectGatewayHealthSnapshot(params: {
       ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
       : [];
     const preferredAccountId = resolvePreferredAccountId({
-      accountIds,
       defaultAccountId,
       boundAccounts,
     });
@@ -626,7 +631,7 @@ export async function collectGatewayHealthSnapshot(params: {
   }
 
   const pluginHealth = buildPluginHealthSummary(cfg);
-  const contextEngineHealth = buildContextEngineHealthSummary();
+  const contextEngineHealth = await buildContextEngineHealthSummary();
   const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
   return {
     ok: true,

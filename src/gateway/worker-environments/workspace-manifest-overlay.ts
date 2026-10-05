@@ -1,9 +1,9 @@
-import path from "node:path";
-import { changedPaths, manifestNodes } from "./workspace-manifest-comparison.js";
+import { changedPaths, hasPathAncestor, manifestNodes } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 export function applyWorkspaceSourceOverlay(
   source: WorkerWorkspaceManifest,
@@ -22,15 +22,7 @@ export function applyWorkspaceSourceOverlay(
     ),
   );
   for (const entryPath of nodes.keys()) {
-    let remove = changed.has(entryPath);
-    for (
-      let parent = path.posix.dirname(entryPath);
-      !remove && parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      remove = replaced.has(parent);
-    }
-    if (remove) {
+    if (changed.has(entryPath) || hasPathAncestor(replaced, entryPath)) {
       nodes.delete(entryPath);
     }
   }
@@ -40,25 +32,11 @@ export function applyWorkspaceSourceOverlay(
       continue;
     }
     nodes.set(entryPath, entry);
-    // A caller child replaces a setup-created file at any required directory ancestor.
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      nodes.set(parent, { path: parent, type: "directory" });
-    }
   }
-  // Removing the last pristine child does not remove setup-only siblings or their parents.
+  // Retained children preserve their parents; incoming children replace setup-only ancestor files.
   for (const entryPath of nodes.keys()) {
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      if (!nodes.has(parent)) {
-        nodes.set(parent, { path: parent, type: "directory" });
-      }
+    for (const parent of [...workspacePathAncestors(entryPath)].toReversed()) {
+      nodes.set(parent, { path: parent, type: "directory" });
     }
   }
   return {
@@ -66,10 +44,10 @@ export function applyWorkspaceSourceOverlay(
     baseCommit: incoming.baseCommit,
     entries: [...nodes.values()].filter(
       (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry?.type === "file" || entry?.type === "symlink",
+        entry.type === "file" || entry.type === "symlink",
     ),
     directories: [...nodes.values()].flatMap((entry) =>
-      entry?.type === "directory" ? [entry.path] : [],
+      entry.type === "directory" ? [entry.path] : [],
     ),
   };
 }

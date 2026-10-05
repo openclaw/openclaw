@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import {
   getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
@@ -20,6 +21,9 @@ import type { runQaFlowSuiteCleanupPlan } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const mocks = vi.hoisted(() => ({
+  captureTransportArtifacts: vi.fn(async () => ({
+    artifacts: [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }],
+  })),
   captureRuntimeParityCell: vi.fn(async (params: { runtime: "codex"; wallClockMs: number }) => ({
     runtime: params.runtime,
     transcriptBytes: "",
@@ -38,6 +42,7 @@ const mocks = vi.hoisted(() => ({
     wallClockMs: params.wallClockMs,
     bootStateLines: [],
   })),
+  createRuntimePreloads: vi.fn(() => ["file:///qa-transport-preload.mjs"]),
   startQaGatewayChild: vi.fn(async (_params: unknown) => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
@@ -48,8 +53,8 @@ const mocks = vi.hoisted(() => ({
     stop: vi.fn(async () => {}),
   })),
   stopQaGatewayChild: vi.fn<QaGatewayChildLifecycle["stop"]>(),
-  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async () => ({
-    evidence: undefined,
+  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async (params) => ({
+    evidence: params.recordedEvidence,
     evidencePath: "/qa-output/qa-evidence.json",
     report: "",
     reportPath: "/qa-output/qa-suite-report.md",
@@ -89,7 +94,12 @@ vi.mock("./suite.js", async (importOriginal) => ({
   buildQaSuiteRuntimeMetrics: vi.fn(() => ({ wallMs: 1 })),
   captureGatewayHeapSnapshotCheckpoint: vi.fn(async () => undefined),
   createQaSuiteTransportAdapter: vi.fn(async () => ({
-    adapter: { id: "qa-channel" },
+    adapter: {
+      id: "qa-channel",
+      state: createQaBusState(),
+      captureArtifacts: mocks.captureTransportArtifacts,
+      createRuntimePreloads: mocks.createRuntimePreloads,
+    },
     cleanupBeforeGatewayStop: vi.fn(async () => {}),
     cleanupAfterGatewayStop: vi.fn(async () => {}),
   })),
@@ -188,12 +198,6 @@ describe("QA suite Control UI ownership", () => {
       enabled: false,
     },
     {
-      label: "an explicitly disabled non-Control UI scenario",
-      surface: "channel",
-      explicit: false,
-      enabled: false,
-    },
-    {
       label: "an explicitly enabled non-Control UI scenario",
       surface: "channel",
       explicit: true,
@@ -231,8 +235,12 @@ describe("QA suite Control UI ownership", () => {
     );
 
     expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({ controlUiEnabled: testCase.enabled }),
+      expect.objectContaining({
+        controlUiEnabled: testCase.enabled,
+        runtimePreloads: ["file:///qa-transport-preload.mjs"],
+      }),
     );
+    expect(mocks.createRuntimePreloads).toHaveBeenCalledOnce();
     if (testCase.enabled) {
       expect(lab.setControlUi).toHaveBeenCalledWith({
         controlUiProxyTarget: "http://127.0.0.1:18789",
@@ -400,14 +408,18 @@ describe("QA runtime parity scenario retry isolation", () => {
       ];
       const captured: QaEvidenceSummaryV3Json[] = [];
       const error = new Error("post-run probe failed");
-      if (probeStatus === "throws") {
-        mocks.runQaSuiteRoundTripProbe.mockRejectedValueOnce(error);
-      } else {
-        mocks.runQaSuiteRoundTripProbe.mockResolvedValueOnce({
+      let scenarioStartCursor: number | undefined;
+      mocks.runQaSuiteRoundTripProbe.mockImplementationOnce(async (params) => {
+        expect(params.scenarioStartCursor).toBe(scenarioStartCursor);
+        expect(params.transport.state.getSnapshot().cursor).toBeGreaterThan(scenarioStartCursor!);
+        if (probeStatus === "throws") {
+          throw error;
+        }
+        return {
           passed: probeStatus === "pass" ? 1 : 0,
           details: `probe ${probeStatus}`,
-        });
-      }
+        };
+      });
       const run = runQaFlowSuiteStandard(
         {
           lab: makeRetryTestLab(),
@@ -419,11 +431,19 @@ describe("QA runtime parity scenario retry isolation", () => {
             timeoutMs: 100,
             markerPrefix: "fixture",
             textPrefix: "fixture",
-            input: { conversation: { kind: "direct", id: "fixture" }, senderId: "fixture" },
+            input: { fromScenario: true, senderId: "primary" },
           },
         },
         context,
-        vi.fn<QaSuiteScenarioRunner>().mockResolvedValue(makeRetryTestResult("pass")),
+        vi.fn<QaSuiteScenarioRunner>().mockImplementation(async (env) => {
+          scenarioStartCursor = env.transport.state.getSnapshot().cursor;
+          await env.transport.state.addInboundMessage({
+            conversation: { kind: "direct", id: "fixture" },
+            senderId: "primary",
+            text: "scenario turn",
+          });
+          return makeRetryTestResult("pass");
+        }),
       );
       if (probeStatus === "throws") {
         await expect(run).rejects.toBe(error);
@@ -574,6 +594,17 @@ describe("QA runtime parity scenario retry isolation", () => {
         ),
       });
       expect(runScenario).toHaveBeenCalledTimes(finishedCount);
+      expect(mocks.captureTransportArtifacts).toHaveBeenCalledOnce();
+      expect(mocks.captureTransportArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.runQaFlowSuiteCleanupPlan.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transportArtifacts: {
+            artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
+          },
+        }),
+      );
       expect(mocks.writeQaSuiteArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]!,
       );

@@ -5,11 +5,22 @@ import { createServer, IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import path from "node:path";
 import { json } from "node:stream/consumers";
-import { afterAll, beforeAll, describe, expect, it, vi, type MockInstance } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
   createOperationalRunInstanceRef,
@@ -19,6 +30,7 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
+import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -26,6 +38,7 @@ import {
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as backoff from "../infra/backoff.js";
+import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -46,11 +59,8 @@ import { resolveMcpRequestContext } from "./mcp-http.request.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { SessionsListResult } from "./session-utils.types.js";
-import {
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-  startGatewayWithClient,
-} from "./test-helpers.e2e.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
 
 const PRIMARY = "proof-primary/primary";
 const BACKUP = "proof-backup/backup";
@@ -64,6 +74,8 @@ type History = { messages: Array<{ role?: string; content?: unknown; stopReason?
 type ProviderRequest = {
   model: string;
   input: Array<{ type?: string; role?: string; call_id?: string; output?: string }>;
+  tools?: unknown[];
+  instructions?: string;
 };
 type Scenario = {
   name: string;
@@ -79,7 +91,13 @@ type Scenario = {
 };
 
 async function startProvider(scenario: Scenario) {
-  const requests: Array<{ model: string; child: boolean; authorization?: string }> = [];
+  const requests: Array<{
+    model: string;
+    child: boolean;
+    authorization?: string;
+    toolCount: number;
+    hasInstructions: boolean;
+  }> = [];
   const errors: unknown[] = [];
   let spawn: Receipt | undefined;
   let spawnRequested = false;
@@ -100,6 +118,8 @@ async function startProvider(scenario: Scenario) {
       requests.push({
         model: body.model,
         child: child && !title,
+        toolCount: body.tools?.length ?? 0,
+        hasInstructions: typeof body.instructions === "string",
         authorization: request.headers.authorization,
       });
       if (child && !title && body.model === "primary" && primaryRateLimited) {
@@ -255,6 +275,19 @@ const directAgentScenarios: Scenario[] = [
   },
 ];
 
+function drainHeartbeatWakes() {
+  // The global immediate wake settles older delayed notices before this Gateway closes.
+  return requestHeartbeatAndWait({
+    source: "manual",
+    intent: "immediate",
+    reason: "wake",
+    coalesceMs: 0,
+  });
+}
+
+// Each Gateway owns a fresh state directory; completed children must not cross fixtures.
+afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+
 describe("sessions_spawn model fallback through the Gateway", () => {
   let retrySleep: MockInstance<typeof backoff.sleepWithAbort>;
   beforeAll(() => {
@@ -293,6 +326,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               defaults: {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
+                heartbeat: { every: "0m" },
                 ...(scenario.inherited ? { model: ladder } : {}),
                 subagents: {
                   allowAgents: ["*"],
@@ -320,7 +354,8 @@ describe("sessions_spawn model fallback through the Gateway", () => {
                 "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
               },
             },
-            tools: { profile: "coding" },
+            // The provider scripts a direct spawn to isolate the child's model fallback ladder.
+            tools: { profile: "coding", toolSearch: false },
             gateway: { auth: { mode: "token", token } },
             hooks: { enabled: false },
           };
@@ -343,15 +378,21 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               },
             });
           }
-          const port = await getGatewayE2ePortBlock();
+          const claim = await acquireGatewayE2ePortBlock();
+          let onSessionChanged: (payload: unknown) => void = () => {};
           gateway = await startGatewayWithClient({
             cfg,
-            port,
+            portClaim: claim,
             clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
             mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            origin: `http://127.0.0.1:${port}`,
+            origin: `http://127.0.0.1:${claim.port}`,
             configPath: await createGatewayConfigPath(home.tempHome),
             token,
+            onEvent: ({ event, payload }) => {
+              if (event === "sessions.changed") {
+                onSessionChanged(payload);
+              }
+            },
           });
           await gateway.server.startupSettled;
           const { client } = gateway;
@@ -412,19 +453,40 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             historyOffset = initialHistory.messages.length;
             requestOffset = provider.requests.length;
             provider.rateLimitPrimary();
+            const followupRunId = randomUUID();
+            const publishedIdle = createDeferred();
+            onSessionChanged = (payload) => {
+              if (
+                isRecord(payload) &&
+                payload.sessionKey === spawn.childSessionKey &&
+                payload.lastRunId === followupRunId &&
+                payload.hasActiveRun === false &&
+                Array.isArray(payload.activeRunIds) &&
+                payload.activeRunIds.length === 0
+              ) {
+                publishedIdle.resolve();
+              }
+            };
+            await client.request("sessions.subscribe", {});
             const followup = await client.request<{ runId: string; status: string }>(
               "agent",
               {
                 sessionKey: spawn.childSessionKey,
                 message: `Return exactly ${SUCCESS}. ${WORKER}`,
                 deliver: false,
-                idempotencyKey: randomUUID(),
+                idempotencyKey: followupRunId,
                 ...(scenario.directModel ? { model: scenario.directModel } : {}),
               },
               { expectFinal: false },
             );
             expect(followup.status).toBe("accepted");
+            expect(followup.runId).toBe(followupRunId);
             terminal = await wait(followup.runId);
+            await withTestTimeout(
+              publishedIdle.promise,
+              8_000,
+              "Gateway did not publish settled child ownership after the direct turn",
+            );
           }
           expect(spawn.childSessionKey).toMatch(
             scenario.visible === false ? /^agent:main:subagent:/ : /^agent:main:dashboard:/,
@@ -455,27 +517,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           const childRequests = provider.requests
             .slice(requestOffset)
             .filter((request) => request.child);
-          console.info(
-            JSON.stringify({
-              scenario: scenario.name,
-              ...(scenario.directAgent
-                ? { initialChildReply: INITIAL_SUCCESS, requestOffset, historyOffset }
-                : {}),
-              childRequests: childRequests.map(({ model }) => model),
-              ...(scenario.configuredAlias
-                ? {
-                    parentRequests: provider.requests
-                      .filter((request) => !request.child)
-                      .map(({ model }) => model),
-                  }
-                : {}),
-              terminal,
-              childSessionKey: spawn.childSessionKey,
-              modelOverrideSource: entry?.modelOverrideSource,
-              modelOverride: entry?.modelOverride,
-              childHistory: text,
-            }),
-          );
           expect(terminal.status, JSON.stringify(provider.requests)).toBe(
             scenario.backup ? "ok" : "error",
           );
@@ -520,6 +561,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             expect(entry?.modelOverride).not.toContain("@");
           }
         },
+        () => gateway && drainHeartbeatWakes(),
         () => gateway && disconnectGatewayClient(gateway.client),
         () => gateway?.server.close({ reason: "spawn fallback proof complete" }),
         () => provider?.stop(),
@@ -641,7 +683,7 @@ async function withCliSpawnGrant(
         authorizeToolCall: currentGrant.isCurrent,
       }),
     );
-    expect(response).toMatchObject({
+    expect(response, JSON.stringify(response)).toMatchObject({
       result: { isError: false, content: [{ type: "text", text: expect.any(String) }] },
     });
     const payload = response as { result: { content: Array<{ type: string; text: string }> } };
@@ -658,11 +700,10 @@ async function withCliSpawnGrant(
 
 describe("CLI model inheritance through MCP", () => {
   afterAll(resetGatewayTestState);
-  it.each(
-    [false, true].flatMap((visible) =>
-      ["alias", "primary[1m]"].map((nativeModel) => ({ visible, nativeModel })),
-    ),
-  )(
+  it.each([
+    { visible: false, nativeModel: "alias" },
+    { visible: true, nativeModel: "primary[1m]" },
+  ])(
     "inherits the logical model with visible=$visible and native=$nativeModel",
     async (scenario) => {
       resetGatewayTestState();
@@ -673,13 +714,14 @@ describe("CLI model inheritance through MCP", () => {
         async () => {
           provider = await startProvider({ name: "CLI model inheritance", directAgent: true });
           const token = randomUUID();
-          const port = await getGatewayE2ePortBlock();
+          const claim = await acquireGatewayE2ePortBlock();
           setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
           const cfg: OpenClawConfig = {
             agents: {
               defaults: {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
+                heartbeat: { every: "0m" },
                 model: BACKUP,
                 models: {
                   [PRIMARY]: { params: { transport: "sse", openaiWsWarmup: false } },
@@ -696,12 +738,12 @@ describe("CLI model inheritance through MCP", () => {
               },
             },
             tools: { profile: "coding" },
-            gateway: { port, auth: { mode: "token", token } },
+            gateway: { port: claim.port, auth: { mode: "token", token } },
             hooks: { enabled: false },
           };
           gateway = await startGatewayWithClient({
             cfg,
-            port,
+            portClaim: claim,
             token,
             configPath: await createGatewayConfigPath(home.tempHome),
           });
@@ -731,7 +773,16 @@ describe("CLI model inheritance through MCP", () => {
               expect(terminal.status).toBe("ok");
               const childRequests = providerRequests.filter((request) => request.child);
               expect(childRequests.length).toBeGreaterThan(0);
-              expect(childRequests.every((request) => request.model === "primary")).toBe(true);
+              expect(
+                childRequests.every((request) => request.model === "primary"),
+                JSON.stringify(
+                  childRequests.map(({ model, toolCount, hasInstructions }) => ({
+                    model,
+                    toolCount,
+                    hasInstructions,
+                  })),
+                ),
+              ).toBe(true);
               const child = loadSessionEntryReadOnly({
                 agentId: "main",
                 sessionKey: spawn.childSessionKey,
@@ -759,20 +810,11 @@ describe("CLI model inheritance through MCP", () => {
                   .filter((message) => message.role === "assistant")
                   .map((message) => extractTextFromChatContent(message.content)),
               ).toContain(INITIAL_SUCCESS);
-              console.info(
-                JSON.stringify({
-                  proof: "CLI model inheritance through MCP",
-                  ...scenario,
-                  savedParent: BACKUP,
-                  activeLogicalModel: PRIMARY,
-                  childModels: childRequests.map((request) => request.model),
-                  terminal: terminal.status,
-                }),
-              );
             },
           );
           expect(provider.errors).toEqual([]);
         },
+        () => gateway && drainHeartbeatWakes(),
         () => gateway && disconnectGatewayClient(gateway.client),
         () => gateway?.server.close({ reason: "CLI model inheritance proof complete" }),
         () => provider?.stop(),

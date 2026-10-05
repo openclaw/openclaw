@@ -44,17 +44,6 @@ describe("resolveCopilotWorkspaceBootstrapContext", () => {
     expect(result.instructions).toBeUndefined();
   });
 
-  it("loads SOUL.md from the workspace and renders it into instructions", async () => {
-    await writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
-    const result = await resolveCopilotWorkspaceBootstrapContext({
-      attempt: makeAttempt({ workspaceDir }),
-      effectiveWorkspaceDir: workspaceDir,
-    });
-    expect(result.bootstrapFiles.length).toBeGreaterThan(0);
-    expect(result.instructions).toBeDefined();
-    expect(result.instructions).toContain("Soul voice goes here.");
-  });
-
   it("orders persona context and renders the SOUL hint through the workspace boundary", async () => {
     await writeFile(path.join(workspaceDir, "USER.md"), "USER body");
     await writeFile(path.join(workspaceDir, "SOUL.md"), "SOUL body");
@@ -87,18 +76,9 @@ describe("resolveCopilotWorkspaceBootstrapContext", () => {
       attempt: makeAttempt({ workspaceDir }),
       effectiveWorkspaceDir: workspaceDir,
     });
-    // The shared loader synthesizes `[MISSING] Expected at: <path>`
-    // entries for every known bootstrap file the workspace hasn't
-    // provided yet. This is intentional — PI and codex inject the
-    // same placeholders so the model can see what bootstrap files are
-    // expected and prompt the user / create them. See
-    // src/agents/pi-embedded-helpers/bootstrap.ts:293-296.
-    // We surface these in the rendered block exactly like codex does.
     expect(result.instructions).toBeDefined();
     expect(result.instructions).toContain("[MISSING] Expected at:");
     expect(result.instructions).toContain("SOUL.md");
-    // AGENTS.md content is still suppressed because the SDK auto-loads
-    // it natively from workingDirectory.
     expect(result.instructions).not.toContain("Follow AGENTS guidance.");
   });
 });
@@ -118,12 +98,6 @@ describe("resolveCopilotWorkspaceBootstrapContext sandbox remap (PR #86155 [P2] 
   });
 
   it("rewrites rendered context paths from host workspace to sandbox workspace when effective differs", async () => {
-    // Readonly sandbox: bootstrap files live on the host workspace
-    // (the canonical source of SOUL.md / .openclaw conventions), but
-    // the SDK session's workingDirectory and bridged tools see the
-    // sandbox copy. The rendered systemMessage must show the model
-    // sandbox paths, not host paths, so it matches what the native
-    // SDK loader and the wrapped tools report.
     await writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice from host.");
     const result = await resolveCopilotWorkspaceBootstrapContext({
       attempt: makeAttempt({ workspaceDir }),
@@ -131,17 +105,8 @@ describe("resolveCopilotWorkspaceBootstrapContext sandbox remap (PR #86155 [P2] 
     });
     expect(result.instructions).toBeDefined();
     expect(result.instructions).toContain("Soul voice from host.");
-    // Positive: every rendered `## ` file header is now under the
-    // sandbox root so the model sees a workspace it can actually
-    // dereference through the bridged tools.
     expect(result.instructions).toContain(`## ${path.join(sandboxDir, "SOUL.md")}`);
-    // Negative: no rendered file header may still point at the
-    // host workspace root (would otherwise let the model dereference
-    // a path its tools cannot reach in a readonly sandbox). We scope
-    // this check to `## ` headers because PI deliberately leaves the
-    // host path inside any `[MISSING] Expected at: <path>` body — it
-    // refers to the canonical source location the user should create
-    // the file at, not the runtime workspace.
+    // Missing-file bodies retain the canonical source path; only rendered headers remap.
     const headerLines = (result.instructions ?? "")
       .split("\n")
       .filter((line) => line.startsWith("## "));
@@ -149,9 +114,6 @@ describe("resolveCopilotWorkspaceBootstrapContext sandbox remap (PR #86155 [P2] 
     for (const line of headerLines) {
       expect(line).not.toContain(workspaceDir);
     }
-    // Returned contextFiles array reflects the remap too, so any
-    // future consumer that reads `contextFiles` directly stays in
-    // lock-step with `instructions`.
     expect(result.contextFiles.map((f) => f.path)).toContain(path.join(sandboxDir, "SOUL.md"));
     expect(result.contextFiles.every((f) => !f.path.startsWith(workspaceDir))).toBe(true);
   });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEmptyAgentDiscoveryStores } from "../agents/embedded-agent-runner/model.js";
+import { createPreparedConfiguredRuntimeModelLookup } from "../agents/embedded-agent-runner/model.static-id.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -90,6 +91,11 @@ describe("image model selection ownership", () => {
           baseUrl,
           models: rows,
         });
+        const configuredRuntimeModels = rows.map((model) => ({
+          provider,
+          modelId: model.id,
+          model,
+        }));
         const snapshot: PreparedModelRuntimeSnapshot = {
           catalogOwner: undefined,
           agentId: "main",
@@ -104,7 +110,11 @@ describe("image model selection ownership", () => {
           pluginRegistry,
           allowGatewaySubagentBinding: false,
           modelCatalog: { entries: [], routeVariants: [] },
-          configuredRuntimeModels: rows.map((model) => ({ provider, modelId: model.id, model })),
+          configuredRuntimeModels,
+          findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+            configuredRuntimeModels,
+            metadataSnapshot,
+          ),
           inlineProviderModels: [],
           createStores: () => stores,
         };

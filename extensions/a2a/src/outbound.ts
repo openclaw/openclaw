@@ -33,6 +33,7 @@ type A2aOutboundSendParams = {
   accountId?: string | null;
   to: string;
   text: string;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 export async function sendA2aChannelText(
@@ -84,6 +85,7 @@ export async function sendA2aChannelText(
       auditContext: "a2a.outbound_send",
       // A redirected A2A task could be delivered to an unintended agent.
       maxRedirects: 0,
+      beforeRequest: params.assertDirectAdapterHandoff,
       init: {
         method: "POST",
         headers,

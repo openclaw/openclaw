@@ -72,9 +72,7 @@ export type CodexPluginInstalledResponse = {
   marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
 };
 
-export type CodexPluginListResponse = {
-  marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
+export type CodexPluginListResponse = CodexPluginInstalledResponse & {
   featuredPluginIds: string[];
 };
 
@@ -187,11 +185,6 @@ export type CodexAppsReadResponse = {
   missingAppIds: string[];
 };
 
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
-};
-
 type CodexSkillScope = "user" | "repo" | "system" | "admin";
 
 type CodexSkillMetadata = {
@@ -218,10 +211,6 @@ type CodexSkillsListEntry = {
 
 export type CodexSkillsListResponse = {
   data: CodexSkillsListEntry[];
-};
-
-export type CodexHooksListParams = {
-  cwds: string[];
 };
 
 export type CodexHooksListResponse = {

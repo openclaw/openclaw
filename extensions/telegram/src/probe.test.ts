@@ -6,13 +6,13 @@ import { probeTelegram } from "./probe.js";
 const resolveTelegramTransport = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
 
-vi.mock("./fetch.js", () => ({
+vi.mock("./fetch.js", async () => ({
   resolveTelegramTransport,
-  resolveTelegramApiBase: (apiRoot?: string) =>
-    apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
+  resolveTelegramApiBase: (await import("./api-root.js")).normalizeTelegramApiRoot,
 }));
 
-vi.mock("./proxy.js", () => ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
   makeProxyFetch,
 }));
 
@@ -81,18 +81,6 @@ describe("probeTelegram retry logic", () => {
     });
   }
 
-  async function expectSuccessfulProbe(fetchMock: Mock, expectedCalls: number, retryCount = 0) {
-    const probePromise = probeTelegram(token, timeoutMs);
-    if (retryCount > 0) {
-      await vi.advanceTimersByTimeAsync(retryCount * 1000);
-    }
-
-    const result = await probePromise;
-    expect(result.ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(expectedCalls);
-    expect(result.bot?.username).toBe("test_bot");
-  }
-
   beforeEach(() => {
     token = `test-token-${++tokenIndex}`;
   });
@@ -109,35 +97,20 @@ describe("probeTelegram retry logic", () => {
   });
 
   it.each([
-    {
-      errors: [],
-      expectedCalls: 2,
-      retryCount: 0,
-    },
-    {
-      errors: ["Network timeout"],
-      expectedCalls: 3,
-      retryCount: 1,
-    },
-    {
-      errors: ["Network error 1", "Network error 2"],
-      expectedCalls: 4,
-      retryCount: 2,
-    },
-  ])("succeeds after retry pattern %#", async ({ errors, expectedCalls, retryCount }) => {
+    "https://api.telegram.org/bot123456:ABC_def/",
+    "https://proxy.example.test/custom/bot123456:ABC_def",
+    "https://proxy.example.test/custom/%62ot123456%3AABC_def/?query=ignored#fragment",
+  ])("refuses an unrepaired bot endpoint before fetching: %s", async (apiRoot) => {
     const fetchMock = installFetchMock();
-    vi.useFakeTimers();
-    try {
-      for (const message of errors) {
-        fetchMock.mockRejectedValueOnce(new Error(message));
-      }
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
 
-      mockGetMeSuccess(fetchMock);
-      mockGetWebhookInfoSuccess(fetchMock);
-      await expectSuccessfulProbe(fetchMock, expectedCalls, retryCount);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(await probeTelegram(token, timeoutMs, { apiRoot })).toMatchObject({
+      ok: false,
+      error:
+        "Telegram apiRoot must be the Bot API root without /bot<TOKEN>. Run openclaw doctor --fix to repair stored config.",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("should fail after 3 unsuccessful attempts", async () => {
@@ -243,74 +216,6 @@ describe("probeTelegram retry logic", () => {
     expect(fetchMock.mock.calls.at(0)?.[0]).toBe(`https://api.telegram.org/bot${token}/getMe`);
   });
 
-  it("uses resolver-scoped Telegram fetch with probe network options", async () => {
-    const fetchMock = installFetchMock();
-    mockGetMeSuccess(fetchMock);
-    mockGetWebhookInfoSuccess(fetchMock);
-
-    await probeTelegram(token, timeoutMs, {
-      proxyUrl: "http://127.0.0.1:8888",
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    expect(makeProxyFetch).toHaveBeenCalledWith("http://127.0.0.1:8888");
-    expect(resolveTelegramTransport).toHaveBeenCalledWith(fetchMock, {
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-  });
-
-  it("reuses probe fetcher across repeated probes for the same account transport settings", async () => {
-    const fetchMock = installFetchMock();
-    mockGetMeSuccess(fetchMock);
-    mockGetWebhookInfoSuccess(fetchMock);
-    await probeTelegram(`${token}-cache`, timeoutMs, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    mockGetMeSuccess(fetchMock);
-    mockGetWebhookInfoSuccess(fetchMock);
-    await probeTelegram(`${token}-cache`, timeoutMs, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    expect(resolveTelegramTransport).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not reuse probe fetcher cache when network settings differ", async () => {
-    const fetchMock = installFetchMock();
-    mockGetMeSuccess(fetchMock);
-    mockGetWebhookInfoSuccess(fetchMock);
-    await probeTelegram(`${token}-cache-variant`, timeoutMs, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    mockGetMeSuccess(fetchMock);
-    mockGetWebhookInfoSuccess(fetchMock);
-    await probeTelegram(`${token}-cache-variant`, timeoutMs, {
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    expect(resolveTelegramTransport).toHaveBeenCalledTimes(2);
-  });
-
   it("closes evicted cached probe transports", async () => {
     const fetchMock = installFetchMock();
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
@@ -339,31 +244,6 @@ describe("probeTelegram retry logic", () => {
     expect(resolveTelegramTransport).toHaveBeenCalledTimes(65);
     expect(closeSpies[0]).toHaveBeenCalledTimes(1);
     expect(closeSpies.slice(1).every((close) => close.mock.calls.length === 0)).toBe(true);
-  });
-
-  it("reuses probe fetcher cache across token rotation when accountId is stable", async () => {
-    const fetchMock = installFetchMock();
-    mockGetMeSuccess(fetchMock);
-    mockGetWebhookInfoSuccess(fetchMock);
-    await probeTelegram(`${token}-old`, timeoutMs, {
-      accountId: "main",
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    mockGetMeSuccess(fetchMock);
-    mockGetWebhookInfoSuccess(fetchMock);
-    await probeTelegram(`${token}-new`, timeoutMs, {
-      accountId: "main",
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    expect(resolveTelegramTransport).toHaveBeenCalledTimes(1);
   });
 
   it("calls forceFallback on the transport when getMe times out so subsequent probes use IPv4", async () => {

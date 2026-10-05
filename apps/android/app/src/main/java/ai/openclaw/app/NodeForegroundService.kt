@@ -10,7 +10,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -105,7 +104,8 @@ class NodeForegroundService : Service() {
       localeChanges = nativeLocaleChanges,
     ).collect { update ->
       ensureChannelForLocaleRevision(update.localeRevision)
-      val state = update.state
+      val state = update.state.base
+      val capture = update.state.capture
       voiceCaptureMode = state.mode
       val title =
         when {
@@ -126,10 +126,10 @@ class NodeForegroundService : Service() {
         (state.server?.let { nativeString("\$status · \$server", displayStatus, it) } ?: displayStatus) +
           voiceNotificationSuffix(
             mode = state.mode,
-            manualMicEnabled = state.capture.micEnabled,
-            manualMicListening = state.capture.micListening,
-            talkListening = state.capture.talkListening,
-            talkSpeaking = state.capture.talkSpeaking,
+            manualMicEnabled = capture.micEnabled,
+            manualMicListening = capture.micListening,
+            talkListening = capture.talkListening,
+            talkSpeaking = capture.talkSpeaking,
           )
 
       startForegroundWithTypes(
@@ -249,15 +249,9 @@ class NodeForegroundService : Service() {
   private fun isBackgroundLocationActive(): Boolean {
     if (!SensitiveFeatureConfig.backgroundLocationEnabled) return false
     if ((application as NodeApp).prefs.locationMode.value != LocationMode.Always) return false
-    val fineGranted =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-    val coarseGranted =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-    val backgroundGranted =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
+    val fineGranted = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+    val coarseGranted = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+    val backgroundGranted = hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
     return (fineGranted || coarseGranted) && backgroundGranted
   }
 
@@ -377,7 +371,6 @@ private fun String?.toVoiceCaptureMode(): VoiceCaptureMode =
     it.name == this
   } ?: VoiceCaptureMode.Off
 
-/** Connection fields that drive foreground notification title/body text. */
 private data class VoiceNotificationBase(
   val status: String,
   val server: String?,
@@ -385,7 +378,6 @@ private data class VoiceNotificationBase(
   val mode: VoiceCaptureMode,
 )
 
-/** Voice capture fields that affect foreground-service type and suffix. */
 private data class VoiceNotificationCapture(
   val micEnabled: Boolean,
   val micListening: Boolean,
@@ -393,20 +385,10 @@ private data class VoiceNotificationCapture(
   val talkSpeaking: Boolean,
 )
 
-/** Aggregated notification state from runtime flows. */
 private data class VoiceNotificationState(
   val base: VoiceNotificationBase,
   val capture: VoiceNotificationCapture,
-) {
-  val status: String
-    get() = base.status
-  val server: String?
-    get() = base.server
-  val connected: Boolean
-    get() = base.connected
-  val mode: VoiceCaptureMode
-    get() = base.mode
-}
+)
 
 /** Re-emits stable runtime state when app-owned notification copy changes locale. */
 internal data class LocaleAwareNotificationState<T>(

@@ -11,7 +11,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.doUnmock("../infra/file-store.js");
+  vi.doUnmock("@openclaw/fs-safe/store");
   vi.unstubAllEnvs();
   vi.resetModules();
 });
@@ -46,8 +46,8 @@ describe("media store filesystem faults", () => {
     const segment = `retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const injectedError = error();
     let writeAttempts = 0;
-    vi.doMock("../infra/file-store.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+    vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
       return {
         ...actual,
         fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {

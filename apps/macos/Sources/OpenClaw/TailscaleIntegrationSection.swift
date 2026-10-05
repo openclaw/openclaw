@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum GatewayTailscaleMode: String, CaseIterable, Identifiable {
+enum GatewayTailscaleMode: String, CaseIterable, Identifiable {
     case off
     case serve
     case funnel
@@ -29,7 +29,7 @@ private enum GatewayTailscaleMode: String, CaseIterable, Identifiable {
     }
 }
 
-private struct GatewayTailscaleSettingsSnapshot: Equatable {
+struct GatewayTailscaleSettingsSnapshot: Equatable {
     var mode: GatewayTailscaleMode
     var requireCredentialsForServe: Bool
     var password: String
@@ -41,29 +41,17 @@ private struct GatewayTailscaleSettingsSnapshot: Equatable {
     }
 }
 
-private struct GatewayTailscaleLoadedSettings {
+struct GatewayTailscaleLoadedSettings {
     var snapshot: GatewayTailscaleSettingsSnapshot
     var displayPassword: String
 }
 
-private struct GatewayTailscaleApplyResult {
-    var didApply: Bool
-    var success: Bool
-    var errorMessage: String?
-    var validationMessage: String?
+enum GatewayTailscaleApplyResult: Equatable {
+    case unchanged
+    case invalid(String)
+    case saved
+    case failed(String)
 }
-
-private struct GatewayTailscaleApplyMessages {
-    var statusMessage: String?
-    var validationMessage: String?
-    var shouldRecordSuccess: Bool
-    var shouldRestartGateway: Bool
-}
-
-private typealias GatewayTailscaleSettingsSaver = @MainActor @Sendable (
-    GatewayTailscaleSettingsSnapshot,
-    AppState.ConnectionMode,
-    Bool) async -> (Bool, String?)
 
 struct TailscaleIntegrationSection: View {
     let connectionMode: AppState.ConnectionMode
@@ -210,6 +198,7 @@ struct TailscaleIntegrationSection: View {
                 if let url = Self.dashboardURL(host: host) {
                     Link(url.absoluteString, destination: url)
                         .font(.callout.monospaced())
+                        .environment(\.openURL, AppActivation.shared.openURLAction)
                 } else {
                     Text(host)
                         .font(.callout.monospaced())
@@ -260,44 +249,27 @@ struct TailscaleIntegrationSection: View {
     private func applySettings() async {
         guard self.hasLoaded else { return }
         let currentSettings = self.currentSettingsSnapshot()
-        let result = await TailscaleIntegrationSection.applySettingsIfChanged(
+        let result = await Self.applySettingsIfChanged(
             currentSettings: currentSettings,
-            lastAppliedSettings: self.lastAppliedSettings,
-            connectionMode: self.connectionMode,
-            isPaused: self.isPaused,
-            saveSettings: TailscaleIntegrationSection.saveTailscaleSettings)
-        let messages = TailscaleIntegrationSection.messages(
-            for: result,
-            connectionMode: self.connectionMode,
-            isPaused: self.isPaused)
-        self.validationMessage = messages.validationMessage
-        self.statusMessage = messages.statusMessage
-        guard messages.shouldRecordSuccess else { return }
-
-        self.lastAppliedSettings = currentSettings
-        if messages.shouldRestartGateway {
-            self.restartGatewayIfNeeded()
+            lastAppliedSettings: self.lastAppliedSettings)
+        { settings in
+            await Self.saveTailscaleSettings(settings: settings, connectionMode: self.connectionMode)
         }
-    }
-
-    @MainActor
-    private static func buildAndSaveTailscaleConfig(
-        tailscaleMode: GatewayTailscaleMode,
-        requireCredentialsForServe: Bool,
-        password: String) async -> (Bool, String?)
-    {
-        let settings = GatewayTailscaleSettingsSnapshot(
-            mode: tailscaleMode,
-            requireCredentialsForServe: requireCredentialsForServe,
-            password: password)
-        var document = await ConfigStore.load()
-        document.root = self.buildTailscaleConfigRoot(root: document.root, settings: settings)
-
-        do {
-            try await ConfigStore.save(document, allowGatewayAuthMutation: true)
-            return (true, nil)
-        } catch {
-            return (false, error.localizedDescription)
+        self.validationMessage = nil
+        self.statusMessage = nil
+        switch result {
+        case .unchanged:
+            break
+        case let .invalid(message):
+            self.validationMessage = message
+        case let .failed(message):
+            self.statusMessage = message
+        case .saved:
+            self.statusMessage = self.connectionMode == .local && !self.isPaused
+                ? "Saved to ~/.openclaw/openclaw.json. Restarting gateway…"
+                : "Saved to ~/.openclaw/openclaw.json. Restart the gateway to apply."
+            self.lastAppliedSettings = currentSettings
+            self.restartGatewayIfNeeded()
         }
     }
 
@@ -329,18 +301,10 @@ struct TailscaleIntegrationSection: View {
                 auth["password"] = settings.password
             }
 
-            if auth.isEmpty {
-                gateway.removeValue(forKey: "auth")
-            } else {
-                gateway["auth"] = auth
-            }
+            gateway["auth"] = auth
         }
 
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
+        root["gateway"] = gateway
 
         return root
     }
@@ -354,10 +318,10 @@ struct TailscaleIntegrationSection: View {
         GatewayTailscaleSettingsSnapshot(
             mode: self.tailscaleMode,
             requireCredentialsForServe: self.requireCredentialsForServe,
-            password: self.password.trimmingCharacters(in: .whitespacesAndNewlines))
+            password: self.password)
     }
 
-    private static func loadedSettings(from root: [String: Any]) -> GatewayTailscaleLoadedSettings {
+    static func loadedSettings(from root: [String: Any]) -> GatewayTailscaleLoadedSettings {
         let gateway = root["gateway"] as? [String: Any] ?? [:]
         let tailscale = gateway["tailscale"] as? [String: Any] ?? [:]
         let modeRaw = (tailscale["mode"] as? String) ?? "serve"
@@ -367,18 +331,7 @@ struct TailscaleIntegrationSection: View {
         let authModeRaw = auth["mode"] as? String
         let allowTailscale = auth["allowTailscale"] as? Bool
         let password = auth["password"] as? String ?? ""
-        let requireCredentialsForServe: Bool
-
-        if mode == .serve {
-            let usesExplicitAuth = authModeRaw == "password"
-            if let allowTailscale, allowTailscale == false {
-                requireCredentialsForServe = true
-            } else {
-                requireCredentialsForServe = usesExplicitAuth
-            }
-        } else {
-            requireCredentialsForServe = false
-        }
+        let requireCredentialsForServe = mode == .serve && (allowTailscale == false || authModeRaw == "password")
 
         return GatewayTailscaleLoadedSettings(
             snapshot: GatewayTailscaleSettingsSnapshot(
@@ -388,142 +341,36 @@ struct TailscaleIntegrationSection: View {
             displayPassword: password)
     }
 
-    private static func applySettingsIfChanged(
+    static func applySettingsIfChanged(
         currentSettings: GatewayTailscaleSettingsSnapshot,
         lastAppliedSettings: GatewayTailscaleSettingsSnapshot?,
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool,
-        saveSettings: GatewayTailscaleSettingsSaver) async -> GatewayTailscaleApplyResult
+        saveSettings: @MainActor (GatewayTailscaleSettingsSnapshot) async -> GatewayTailscaleApplyResult)
+        async -> GatewayTailscaleApplyResult
     {
-        guard currentSettings != lastAppliedSettings else {
-            return GatewayTailscaleApplyResult(
-                didApply: false,
-                success: true,
-                errorMessage: nil,
-                validationMessage: nil)
-        }
-
+        guard currentSettings != lastAppliedSettings else { return .unchanged }
         let requiresPassword = currentSettings.mode == .funnel
             || (currentSettings.mode == .serve && currentSettings.requireCredentialsForServe)
         if requiresPassword, currentSettings.password.isEmpty {
-            return GatewayTailscaleApplyResult(
-                didApply: true,
-                success: false,
-                errorMessage: nil,
-                validationMessage: "Password required for this mode.")
+            return .invalid("Password required for this mode.")
         }
-
-        let (success, errorMessage) = await saveSettings(currentSettings, connectionMode, isPaused)
-        return GatewayTailscaleApplyResult(
-            didApply: true,
-            success: success,
-            errorMessage: errorMessage,
-            validationMessage: nil)
-    }
-
-    private static func messages(
-        for result: GatewayTailscaleApplyResult,
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool) -> GatewayTailscaleApplyMessages
-    {
-        guard result.didApply else {
-            return GatewayTailscaleApplyMessages(
-                statusMessage: nil,
-                validationMessage: nil,
-                shouldRecordSuccess: false,
-                shouldRestartGateway: false)
-        }
-
-        if let validationMessage = result.validationMessage {
-            return GatewayTailscaleApplyMessages(
-                statusMessage: nil,
-                validationMessage: validationMessage,
-                shouldRecordSuccess: false,
-                shouldRestartGateway: false)
-        }
-
-        if !result.success, let errorMessage = result.errorMessage {
-            return GatewayTailscaleApplyMessages(
-                statusMessage: errorMessage,
-                validationMessage: nil,
-                shouldRecordSuccess: false,
-                shouldRestartGateway: false)
-        }
-
-        let statusMessage = if connectionMode == .local, !isPaused {
-            "Saved to ~/.openclaw/openclaw.json. Restarting gateway…"
-        } else {
-            "Saved to ~/.openclaw/openclaw.json. Restart the gateway to apply."
-        }
-        return GatewayTailscaleApplyMessages(
-            statusMessage: statusMessage,
-            validationMessage: nil,
-            shouldRecordSuccess: true,
-            shouldRestartGateway: true)
+        return await saveSettings(currentSettings)
     }
 
     @MainActor
     private static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
-        connectionMode: AppState.ConnectionMode,
-        isPaused _: Bool) async -> (Bool, String?)
+        connectionMode: AppState.ConnectionMode) async -> GatewayTailscaleApplyResult
     {
         guard connectionMode == .local, AppStateStore.shared.connectionMode == .local else {
-            return (false, "Local mode required. Update settings on the gateway host.")
+            return .failed("Local mode required. Update settings on the gateway host.")
         }
-        return await self.buildAndSaveTailscaleConfig(
-            tailscaleMode: settings.mode,
-            requireCredentialsForServe: settings.requireCredentialsForServe,
-            password: settings.password)
+        var document = await ConfigStore.load()
+        document.root = self.buildTailscaleConfigRoot(root: document.root, settings: settings)
+        do {
+            try await ConfigStore.save(document, allowGatewayAuthMutation: true)
+            return .saved
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 }
-
-#if DEBUG
-extension TailscaleIntegrationSection {
-    static func simulateHydrationApplyForTesting(
-        root: [String: Any],
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool,
-        saveRoot: @MainActor @Sendable @escaping ([String: Any]) -> Void) async
-    {
-        let loaded = self.loadedSettings(from: root)
-        _ = await self.applySettingsIfChanged(
-            currentSettings: loaded.snapshot,
-            lastAppliedSettings: loaded.snapshot,
-            connectionMode: connectionMode,
-            isPaused: isPaused,
-            saveSettings: { settings, _, _ in
-                let nextRoot = self.buildTailscaleConfigRoot(root: root, settings: settings)
-                saveRoot(nextRoot)
-                return (true, nil)
-            })
-    }
-
-    static func messagesForTesting(
-        didApply: Bool,
-        success: Bool,
-        errorMessage: String? = nil,
-        validationMessage: String? = nil,
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool) -> (
-        statusMessage: String?,
-        validationMessage: String?,
-        shouldRecordSuccess: Bool,
-        shouldRestartGateway: Bool)
-    {
-        let messages = self.messages(
-            for: GatewayTailscaleApplyResult(
-                didApply: didApply,
-                success: success,
-                errorMessage: errorMessage,
-                validationMessage: validationMessage),
-            connectionMode: connectionMode,
-            isPaused: isPaused)
-        return (
-            statusMessage: messages.statusMessage,
-            validationMessage: messages.validationMessage,
-            shouldRecordSuccess: messages.shouldRecordSuccess,
-            shouldRestartGateway: messages.shouldRestartGateway)
-    }
-}
-#endif

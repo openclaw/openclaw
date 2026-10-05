@@ -25,7 +25,7 @@ it("reports unsupported workspace and conflicting exec policy without recommendi
   mocks.outro.mockClear();
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
     };
     mocks.config.mockReturnValue(cfg);
     const identity = resolveWorkspaceStateIdentity(state.workspaceDir);

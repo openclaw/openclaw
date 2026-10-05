@@ -26,6 +26,12 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .new-session-page__incognito-rail {
+    top: calc((var(--rail-header-height) - 40px) / 2);
+  }
+}
+
 .new-session-page__draft-toggle {
   display: none;
 }
@@ -144,6 +150,11 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   text-align: left;
 }
 
+.new-session-page__scroll > .new-session-page__draft {
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin-inline: auto;
+}
+
 .new-session-page__incognito-notice {
   display: flex;
   align-items: center;
@@ -192,8 +203,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 .new-session-page__incognito-notice-icon svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
 }
 
@@ -288,8 +297,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   display: block;
   width: var(--chat-composer-chip-icon, 14px);
   height: var(--chat-composer-chip-icon, 14px);
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.7px;
 }
 
@@ -379,9 +386,27 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   white-space: nowrap;
 }
 
+.new-session-page__select--where,
+.new-session-page__select--where > .new-session-page__trigger {
+  max-width: 100%;
+}
+
+.new-session-page__trigger-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .new-session-page__trigger-chevron {
   display: inline-flex;
-  color: inherit;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-inline-start: 2px;
+  color: var(--muted);
+  opacity: 0.8;
 }
 
 .new-session-page__trigger-chevron--mobile {
@@ -403,8 +428,34 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__trigger-chevron svg {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon {
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon svg {
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger .cloud-profile-icon {
+  align-items: center;
+  justify-content: center;
+}
+
+/* The wide AWS wordmark has generous vertical whitespace in its source art.
+   Scale its paint, not the shared leading column or the compact menu icons. */
+.new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
 }
 
 .session-group-defaults .exec-approval-header {
@@ -430,13 +481,15 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 @media (hover: hover) {
-  .session-group-defaults__folder:hover:not(:disabled) {
+  .session-group-defaults__folder:hover:not(:disabled),
+  .session-group-defaults__mode-trigger:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
     background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
   }
 }
 
-.session-group-defaults__folder:focus-visible {
+.session-group-defaults__folder:focus-visible,
+.session-group-defaults__mode-trigger:focus-visible {
   outline: none;
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
@@ -523,19 +576,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   text-align: left;
   cursor: var(--cursor-action);
   box-shadow: inset 0 1px 0 var(--card-highlight);
-}
-
-@media (hover: hover) {
-  .session-group-defaults__mode-trigger:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
-    background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
-  }
-}
-
-.session-group-defaults__mode-trigger:focus-visible {
-  outline: none;
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
 }
 
 .session-group-defaults__mode-trigger:disabled {
@@ -661,6 +701,33 @@ wa-popover.new-session-page__picker-popover
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+.new-session-page__branch-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.new-session-page__branch-field > input {
+  width: 100%;
+}
+
+.new-session-page__branch-popup::part(popup) {
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.new-session-page__branch-suggestions {
+  display: grid;
+  gap: 2px;
+}
+
+.new-session-page__branch-suggestions [aria-selected="true"] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
 /* Context line inside a picker menu, e.g. which repo syncs to a cloud worker. */
 .new-session-page__menu-note {
   padding: 4px 8px 6px;
@@ -753,10 +820,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   border-radius: var(--menu-item-radius);
 }
 
-.new-session-page__environment-search:focus-within {
-  background: var(--bg-hover);
-}
-
 .new-session-page__environment-search svg {
   display: block;
   width: 14px;
@@ -839,11 +902,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__menu-chevron svg {
   width: 13px;
   height: 13px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .connect-machine-dialog {
@@ -896,14 +955,8 @@ wa-popover.new-session-page__where-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
-.new-session-page__start-submit[aria-busy="true"] svg {
-  animation: new-session-start-spin 2.25s linear infinite;
-}
-
-@keyframes new-session-start-spin {
-  to {
-    transform: rotate(1turn);
-  }
+.new-session-page__start-submit.new-session-page__start-submit--busy svg {
+  animation: btn-spinner-spin 2.25s linear infinite;
 }
 
 .new-session-page__start-submit--blocked {
@@ -952,7 +1005,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .new-session-page__start-submit[aria-busy="true"] svg {
+  .new-session-page__start-submit.new-session-page__start-submit--busy svg {
     animation: none;
   }
 
@@ -1047,10 +1100,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-entry:hover {
-  background: var(--bg-hover);
-}
-
+.new-session-page__browser-entry:hover,
 .new-session-page__browser-entry--active {
   background: var(--bg-hover);
 }
@@ -1117,11 +1167,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__alert-icon svg {
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .new-session-page__alert-message {
@@ -1131,36 +1177,31 @@ wa-popover.new-session-page__where-popover::part(body) {
   overflow-wrap: anywhere;
 }
 
-.new-session-page__browser-use {
+.new-session-page__browser-use,
+.new-session-page__browser-register {
   padding: 6px 14px;
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--primary);
-  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-use:disabled {
+.new-session-page__browser-use {
+  border: 1px solid transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.new-session-page__browser-use:disabled,
+.new-session-page__browser-register:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 .new-session-page__browser-register {
-  padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-register:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* Phones (and short landscape): match the chat thread's mobile inset, and
@@ -1169,7 +1210,41 @@ wa-popover.new-session-page__where-popover::part(body) {
    the right edge. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .new-session-page__scroll {
-    padding: 52px 8px 12px;
+    /* The shared composer owns the chat edge and bottom insets. */
+    padding: 52px 0 0;
+  }
+
+  .new-session-page .agent-chat__welcome {
+    min-height: 100%;
+    padding: 0;
+  }
+
+  .new-session-page__scroll > .new-session-page__draft {
+    max-width: none;
+  }
+
+  .new-session-page .agent-chat__welcome-identity {
+    margin-block: auto;
+    padding-inline: var(--chat-mobile-edge-inset);
+  }
+
+  .new-session-page .agent-chat__welcome-secondary {
+    display: none;
+  }
+
+  .new-session-page__draft {
+    flex: 0 0 auto;
+    min-height: 0;
+    margin-top: 8px;
+  }
+
+  .new-session-page__composer {
+    /* Keep privacy context above the writing surface, never below it. */
+    order: 1;
+  }
+
+  .new-session-page__incognito-notice:not(.new-session-page__incognito-notice--visible) {
+    display: none;
   }
 
   .new-session-page__triggers {
@@ -1179,6 +1254,18 @@ wa-popover.new-session-page__where-popover::part(body) {
 
   .new-session-page__select {
     position: static;
+  }
+}
+
+/* Narrow phones need the same compact hero as landscape to leave room for setup. */
+@media (max-width: 400px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page .agent-chat__welcome-identity {
+    flex-direction: row;
+    text-align: start;
+  }
+
+  .new-session-page .agent-chat__welcome-identity-copy {
+    justify-items: start;
   }
 }
 
@@ -1196,10 +1283,6 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 @media (max-width: 560px) {
-  .new-session-page .agent-chat__welcome-secondary:has(.agent-chat__suggestions) {
-    display: none;
-  }
-
   .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
     width: var(--chat-composer-send-size);
     min-width: var(--chat-composer-send-size);
@@ -1213,31 +1296,22 @@ wa-popover.new-session-page__where-popover::part(body) {
     color: var(--primary-foreground);
   }
 
-  .new-session-page .agent-chat__welcome {
-    min-height: 100%;
-  }
-
   .new-session-page .agent-chat__welcome-identity {
     gap: 6px;
-    margin-block: auto;
   }
 
   .new-session-page .agent-chat__welcome-clawd {
     margin-bottom: 0;
   }
 
-  .new-session-page__draft {
-    flex: 0 0 auto;
-    justify-content: flex-end;
-    min-height: 0;
-  }
-
   .new-session-page__triggers {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
-    width: calc(100% - 8px);
-    margin-inline: 4px;
+    display: grid;
+    /* Keep placement controls stacked while leaving breathing room on phones. */
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 4px;
+    width: calc(100% - 2 * var(--chat-mobile-edge-inset));
+    margin-inline: auto;
     margin-block-end: 8px;
     padding: 0 calc(var(--chat-composer-editor-inset-inline, 12px) - 6px);
     border: 0;
@@ -1250,7 +1324,8 @@ wa-popover.new-session-page__where-popover::part(body) {
     .new-session-page__select--agent
     .agent-select--compact
     .agent-select__trigger {
-    height: 32px;
+    height: 44px;
+    max-width: 100%;
     padding-inline: 6px;
     color: var(--text);
     font-size: 14px;
@@ -1259,41 +1334,102 @@ wa-popover.new-session-page__where-popover::part(body) {
   }
 
   .new-session-page__triggers > span.new-session-page__select {
+    min-width: 0;
     width: 100%;
+  }
+
+  .new-session-page__select--agent openclaw-agent-select {
+    max-width: 100%;
   }
 
   .new-session-page__triggers > span.new-session-page__select > .new-session-page__trigger {
     width: fit-content;
-    max-width: 100%;
+    max-width: 90%;
   }
 
-  .new-session-page__triggers > span.new-session-page__select ~ span.new-session-page__select {
-    margin-block-start: 6px;
+  .new-session-page__catalog-unavailable,
+  .new-session-page__runtime,
+  .new-session-page__triggers > .new-session-page__menu-field {
+    grid-column: 1 / -1;
+  }
+
+  .new-session-page__triggers > .new-session-page__menu-field {
+    min-width: 0;
+    flex-wrap: wrap;
   }
 
   .new-session-page__trigger-label {
     flex: 0 1 auto;
     min-width: 0;
+    max-width: 100%;
+  }
+
+  .new-session-page__trigger-label,
+  .new-session-page__trigger-summary {
+    /* Padding keeps fitting text out of the fade; only overflow reaches the tail. */
+    padding-inline-end: 8px;
+    white-space: nowrap;
+    text-overflow: clip;
+    mask-image: linear-gradient(to right, black calc(100% - 8px), transparent);
+  }
+
+  .new-session-page__trigger-label:dir(rtl),
+  .new-session-page__trigger-summary:dir(rtl) {
+    mask-image: linear-gradient(to left, black calc(100% - 8px), transparent);
   }
 
   .new-session-page__trigger {
     gap: 0;
+    min-height: 44px;
+    height: auto;
+    padding-block: 8px;
+    text-align: start;
+  }
+
+  .new-session-page__select--where
+    > .new-session-page__trigger:has(.new-session-page__trigger-summary) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .new-session-page__trigger-summary {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .new-session-page__select--where .new-session-page__target-icon {
+    grid-column: 1;
+    grid-row: 1 / 3;
+  }
+
+  .new-session-page__select--where .new-session-page__trigger-chevron {
+    grid-column: 3;
+    grid-row: 1 / 3;
   }
 
   .new-session-page__trigger > .new-session-page__target-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
     margin-inline-end: 8px;
   }
 
-  .new-session-page__triggers
-    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron) {
-    color: var(--muted);
-  }
-
-  .new-session-page__triggers
-    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron)
-    svg {
+  .new-session-page__trigger > .new-session-page__target-icon svg {
+    flex: 0 0 16px;
     width: 16px;
     height: 16px;
+  }
+
+  .new-session-page__trigger .cloud-profile-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
+  }
+
+  .new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+    flex-basis: 22px;
+    width: 22px;
+    height: 22px;
   }
 
   .new-session-page__trigger-chevron--desktop {
@@ -1310,16 +1446,12 @@ wa-popover.new-session-page__where-popover::part(body) {
     height: 14px;
   }
 
-  .new-session-page__composer.agent-chat__composer-shell {
-    margin-top: 0;
-  }
-
   .new-session-page__incognito-notice {
     align-items: flex-start;
-    width: calc(100% - 8px);
+    width: calc(100% - 2 * var(--chat-mobile-edge-inset));
     max-height: 0;
     max-width: var(--chat-thread-max-width, 48rem);
-    margin-inline: 4px;
+    margin-inline: auto;
     padding-inline: 0;
     white-space: normal;
     text-align: left;
@@ -1404,10 +1536,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   gap: 2px;
 }
 
-.new-session-page__cloud-choice-list .session-menu__text {
-  flex: 0 1 auto;
-}
-
+.new-session-page__cloud-choice-list .session-menu__text,
 .new-session-page__cloud-choice-list .session-menu__sub {
   flex: 0 1 auto;
 }

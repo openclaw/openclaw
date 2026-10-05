@@ -1,25 +1,21 @@
-import { createRequire } from "node:module";
+import { once } from "node:events";
 import net from "node:net";
-import path from "node:path";
 import type { Duplex } from "node:stream";
-import { pathToFileURL } from "node:url";
 import type { ClientOptions, RawData, WebSocket } from "ws";
 import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createLoopbackConnectOptions } from "../infra/loopback-connect.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 
-const require = createRequire(import.meta.url);
-let webSocketConstructor: Promise<typeof WebSocket> | undefined;
-function loadWebSocketConstructor(): Promise<typeof WebSocket> {
-  // Pin validation needs ws's real ClientRequest/TLSSocket, not Bun's built-in adapter.
-  return (webSocketConstructor ??= import(
-    pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href
-  ).then((module: typeof import("ws")) => module.default));
-}
+const loadWebSocketConstructor = createLazyRuntimeNamedExport(
+  () => import("../../packages/gateway-client/src/websocket.js"),
+  "WebSocket",
+);
 
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
@@ -82,20 +78,6 @@ function websocketOptions(
     applyGatewayWebSocketTlsPin(options, tlsFingerprint);
   }
   return options;
-}
-
-async function waitForSocketConnect(socket: net.Socket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    socket.once("connect", resolve);
-    socket.once("error", reject);
-  });
-}
-
-async function waitForWebSocketOpen(ws: WebSocket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
 }
 
 async function sendAttachMetadata(
@@ -225,28 +207,24 @@ export async function runNodeStreamTransport(params: {
   socket.pause();
   const diagnostics: NodeStreamDiagnostics = {};
   let ws: WebSocket | undefined;
-  let aborted: boolean = params.signal.aborted;
-  let resolveAbort!: () => void;
-  const abort = new Promise<void>((resolve) => {
-    resolveAbort = resolve;
-  });
   const onAbort = () => {
     diagnostics.trigger ??= "owner-abort";
-    aborted = true;
     socket.destroy();
     ws?.terminate();
-    resolveAbort();
   };
   params.signal.addEventListener("abort", onAbort, { once: true });
-  if (aborted) {
+  if (params.signal.aborted) {
     onAbort();
   }
   try {
-    if (aborted) {
+    if (params.signal.aborted) {
       return;
     }
-    const NpmWebSocket = await Promise.race([loadWebSocketConstructor(), abort]);
-    if (aborted || !NpmWebSocket) {
+    const NpmWebSocket = await racePromiseWithAbortSignal(
+      loadWebSocketConstructor(),
+      params.signal,
+    );
+    if (params.signal.aborted) {
       return;
     }
     ws = new NpmWebSocket(
@@ -264,16 +242,16 @@ export async function runNodeStreamTransport(params: {
         closeCode,
       });
     });
-    await Promise.race([waitForWebSocketOpen(ws), abort]);
-    if (aborted) {
+    await racePromiseWithAbortSignal(once(ws, "open"), params.signal);
+    if (params.signal.aborted) {
       return;
     }
     if ("port" in params.target && socket instanceof net.Socket) {
       // Portals attach first so a refused target closes the claimed ticket.
       socket.connect(createLoopbackConnectOptions(params.target.port));
-      await Promise.race([waitForSocketConnect(socket), abort]);
+      await racePromiseWithAbortSignal(once(socket, "connect"), params.signal);
     }
-    if (aborted) {
+    if (params.signal.aborted) {
       return;
     }
     if (socket.destroyed) {
@@ -292,7 +270,7 @@ export async function runNodeStreamTransport(params: {
     await splice.done;
   } catch (error) {
     diagnostics.trigger ??= "startup-error";
-    if (!aborted) {
+    if (!params.signal.aborted) {
       throw error;
     }
   } finally {

@@ -16,6 +16,15 @@ function fail(message = "Unsupported survivor manager request or generated unit 
   throw new Error(message);
 }
 
+function expandSpecifiers(value) {
+  return value.replace(/%%|%h|%/g, (specifier) => {
+    if (specifier === "%") {
+      fail();
+    }
+    return specifier === "%h" ? process.env.HOME : "%";
+  });
+}
+
 // buildSystemdUnit quotes whole words and escapes only quotes/backslashes.
 function words(value) {
   const result = [];
@@ -31,14 +40,7 @@ function words(value) {
     result.push(word.startsWith('"') ? word.slice(1, -1).replace(/\\(["\\])/g, "$1") : word);
     offset = pattern.lastIndex;
   }
-  return result.map((word) =>
-    word.replace(/%%|%h|%/g, (specifier) => {
-      if (specifier === "%") {
-        fail();
-      }
-      return specifier === "%h" ? process.env.HOME : "%";
-    }),
-  );
+  return result.map(expandSpecifiers);
 }
 
 function assignments(values) {
@@ -88,10 +90,12 @@ function parseUnit(content) {
   if (!programArguments.length || !path.isAbsolute(programArguments[0])) {
     fail();
   }
-  const workingDirectories = words(single("WorkingDirectory"));
-  if (workingDirectories.length > 1) {
+  const expanded = expandSpecifiers(single("WorkingDirectory"));
+  if (expanded && !path.isAbsolute(expanded)) {
     fail();
   }
+  // Remove only the renderer's trailing /. shield; normalizing .. would change symlink traversal.
+  const workingDirectory = expanded.endsWith("/.") ? expanded.slice(0, -2) || "/" : expanded;
   const environment = assignments(
     (directives.get("Environment") || []).flatMap((value) => {
       if (!value) {
@@ -102,11 +106,17 @@ function parseUnit(content) {
   );
   const environmentFiles = (directives.get("EnvironmentFile") || []).map((value) => {
     const optional = value.startsWith("-");
-    const filenames = words(optional ? value.slice(1) : value);
-    if (filenames.length !== 1 || !path.isAbsolute(filenames[0])) {
+    const pattern = expandSpecifiers(optional ? value.slice(1) : value);
+    if (!path.isAbsolute(pattern)) {
       fail();
     }
-    return [filenames[0], optional];
+    // This copied, dependency-free shim accepts only the renderer's literal glob escapes.
+    // Keep the expanded pattern for manager properties; reject unsupported wildcards at load.
+    const filename = pattern.replace(
+      /\\([?*()[\]\\])|[?*[\]\\]/g,
+      (_match, literal) => literal ?? fail(),
+    );
+    return { pattern, filename, optional };
   });
   const supported = new Set([
     "ExecStart",
@@ -125,9 +135,26 @@ function parseUnit(content) {
   if ([...directives.keys()].some((key) => !supported.has(key))) {
     fail();
   }
+  // Generated units use whole seconds. Missing policy follows systemd's 90s
+  // default; zero/infinity disable the deadline. Reject unsupported spans and
+  // timer overflow instead of silently scheduling Node's 1ms overflow timer.
+  const stopSeconds = single("TimeoutStopSec") || "90";
+  const unlimitedStop = stopSeconds === "infinity" || stopSeconds === "0";
+  const stopTimeoutMs = unlimitedStop
+    ? Infinity
+    : /^\d+$/.test(stopSeconds)
+      ? Number(stopSeconds) * 1_000
+      : Number.NaN;
+  if (
+    !unlimitedStop &&
+    (!Number.isSafeInteger(stopTimeoutMs) || stopTimeoutMs <= 0 || stopTimeoutMs > 2_147_483_647)
+  ) {
+    fail("Unsupported generated TimeoutStopSec policy.");
+  }
   return {
+    stopTimeoutMs,
     programArguments,
-    workingDirectory: workingDirectories[0] || "",
+    workingDirectory,
     environment,
     environmentFiles,
     killMode: single("KillMode") || "control-group",
@@ -147,8 +174,11 @@ function readUnit(reload = false, requireLoaded = false) {
     if (error.code !== "ENOENT") {
       throw error;
     }
-    if (!requireLoaded) {
+    if (reload) {
       fs.rmSync(loadedPath, { force: true });
+    } else if (fs.existsSync(loadedPath)) {
+      // Ordinary status/command inspection cannot unload an admitted definition.
+      return { ...parseUnit(fs.readFileSync(loadedPath, "utf8")), reloadPending: true };
     }
     return null;
   }
@@ -170,33 +200,32 @@ function runtimePaths() {
   return { ...JSON.parse(fs.readFileSync(file, "utf8")), uid: stat.uid, owner: `:1.${stat.ino}` };
 }
 
-function nativeRuntime() {
-  const paths = runtimePaths();
-  let pid;
-  let generation = 0;
+function livePid(value, processGroup = false) {
+  if (value === 0) {
+    return 0;
+  }
+  if (!Number.isSafeInteger(value) || value < 1 || value > 0xffffffff) {
+    fail();
+  }
   try {
-    const raw = fs.readFileSync(paths.pidFile, "utf8").trim();
-    if (!/^[1-9][0-9]*$/.test(raw)) {
-      fail();
-    }
-    pid = Number(raw);
-    if (!Number.isSafeInteger(pid) || pid > 0xffffffff) {
-      fail();
-    }
-    process.kill(pid, 0);
-    generation = Math.trunc(fs.statSync(paths.pidFile).mtimeMs * 1000);
-    if (process.platform === "linux") {
-      const state = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1);
+    process.kill(processGroup ? -value : value, 0);
+    if (!processGroup && process.platform === "linux") {
+      const state = fs.readFileSync(`/proc/${value}/stat`, "utf8").split(") ").at(-1);
       if (state.startsWith("Z ")) {
-        pid = 0;
+        return 0;
       }
     }
+    return value;
   } catch (error) {
     if (!["ENOENT", "ESRCH"].includes(error.code)) {
       throw error;
     }
-    pid = 0;
+    return 0;
   }
+}
+
+function nativeRuntime() {
+  const paths = runtimePaths();
   const readOptional = (file) => {
     try {
       return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -209,12 +238,26 @@ function nativeRuntime() {
   };
   const last = readOptional(`${paths.daemonLog}.exit.json`)?.last;
   const counts = readOptional(`${paths.daemonLog}.runtime.json`);
-  const successful = !last || last.code === 0;
+  const pid = livePid(counts?.pid ?? 0);
+  const supervisorPid = livePid(counts?.supervisorPid ?? 0);
+  const groupPid = livePid(counts?.groupPid ?? 0, true);
+  const populated = paths.controlGroup
+    ? /^populated 1$/m.test(
+        fs.readFileSync(`/sys/fs/cgroup${paths.controlGroup}/cgroup.events`, "utf8"),
+      )
+    : false;
+  const unsettled = counts?.starting || supervisorPid || groupPid || populated;
+  const stopFailed = counts?.stopFailed === true;
+  const successful = !stopFailed && (!last || last.code === 0);
   return {
     pid,
-    active: pid ? "active" : "inactive",
-    sub: pid ? "running" : "dead",
-    generation,
+    // A manager draining descendants or awaiting restart is not a settled service.
+    active: pid ? "active" : unsettled ? "activating" : "inactive",
+    sub: pid ? "running" : unsettled ? "auto-restart" : "dead",
+    generation: counts?.entered ?? 0,
+    settled: !pid && !unsettled,
+    stopFailed,
+    controlGroup: pid || unsettled ? paths.controlGroup || "" : "",
     restarts: counts?.restarts ?? 0,
     result: successful ? "success" : "exit-code",
     exitStatus: Number.isInteger(last?.code) ? last.code : (osConstants.signals[last?.signal] ?? 0),
@@ -263,9 +306,6 @@ function inspectLoadedRuntime(args) {
     fail("Fixture unit is not already loaded.");
   }
   const unit = parseUnit(fs.readFileSync(loadedPath, "utf8"));
-  if (!unit) {
-    fail();
-  }
   if (matches(["call", paths.owner, root, `${manager}.Manager`, "GetUnit", "s", unitName])) {
     writeProperties([["o", [object]]]);
     return true;
@@ -311,22 +351,22 @@ function inspectLoadedRuntime(args) {
     ]);
     return true;
   }
-  if (
-    matches([
-      "get-property",
-      paths.owner,
-      object,
-      `${manager}.Service`,
-      "Result",
-      "NRestarts",
-      "MainPID",
-      "ExecMainStatus",
-      "ExecMainCode",
-      "KillMode",
-      "TasksCurrent",
-      "MemoryCurrent",
-    ])
-  ) {
+  const runtimeQuery = [
+    "get-property",
+    paths.owner,
+    object,
+    `${manager}.Service`,
+    "Result",
+    "NRestarts",
+    "MainPID",
+    "ExecMainStatus",
+    "ExecMainCode",
+    "KillMode",
+    "TasksCurrent",
+    "MemoryCurrent",
+  ];
+  const includeControlGroup = matches([...runtimeQuery, "ControlGroup"]);
+  if (matches(runtimeQuery) || includeControlGroup) {
     // systemd's unavailable uint64 sentinel stays unknown to the native reader.
     const unknown = Number(0xffff_ffff_ffff_ffffn);
     writeProperties([
@@ -336,8 +376,9 @@ function inspectLoadedRuntime(args) {
       ["i", runtime.exitStatus],
       ["i", runtime.exitCode],
       ["s", unit.killMode],
-      ["t", runtime.pid ? unknown : 0],
+      ["t", runtime.settled ? 0 : unknown],
       ["t", unknown],
+      ...(includeControlGroup ? [["s", runtime.controlGroup]] : []),
     ]);
     return true;
   }
@@ -375,14 +416,106 @@ function writeCommandProperties(unit, scope) {
           ],
           ["s", unit.workingDirectory],
           ["as", Object.entries(unit.environment).map(([key, value]) => `${key}=${value}`)],
-          ["a(sb)", unit.environmentFiles],
+          ["a(sb)", unit.environmentFiles.map(({ pattern, optional }) => [pattern, optional])],
           ["as", []],
         ],
   );
 }
 
+function recordCaller(file, parentPid, action) {
+  const roles = [];
+  let pid = Number(parentPid);
+  for (let depth = 0; depth < 64 && Number.isSafeInteger(pid) && pid > 1; depth++) {
+    try {
+      // Commander replaces argv[0] with these titles before executing the action.
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+      const title = argv[0];
+      if (title === "openclaw-doctor" || title === "openclaw-update") {
+        roles.push(title.slice("openclaw-".length));
+      } else if (
+        path.basename(argv[1] ?? "") === "update-migrated-finalize.worker.js" &&
+        argv[2] === "--post-core"
+      ) {
+        try {
+          if (
+            fs
+              .readFileSync(`/proc/${pid}/environ`, "utf8")
+              .split("\0")
+              .includes("OPENCLAW_UPDATE_POST_CORE=1")
+          ) {
+            roles.push("update");
+          }
+        } catch (error) {
+          // An unreadable environment is unknown evidence; keep scanning ancestors.
+          if (!["ENOENT", "ESRCH", "EACCES", "EPERM"].includes(error.code)) {
+            throw error;
+          }
+        }
+      }
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      pid = Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]);
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ESRCH") {
+        throw error;
+      }
+      break;
+    }
+  }
+  // Caller evidence contains roles only; never retain process arguments or environment values.
+  fs.appendFileSync(file, `${JSON.stringify({ action, roles })}\n`);
+}
+
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "begin-start" && !args.length) {
+    const file = `${runtimePaths().daemonLog}.runtime.json`;
+    const claim = `${file}.start`;
+    const descriptor = fs.openSync(claim, "wx");
+    try {
+      // Serialize the settled check and publication across concurrent start callers.
+      if (!nativeRuntime().settled) {
+        fail("Previous survivor service generation is not settled.");
+      }
+      // Keep launch custody visible before the detached supervisor publishes its child.
+      // A failed launch remains unknown instead of authorizing offline restoration.
+      fs.writeFileSync(`${file}.pending`, JSON.stringify({ starting: true }));
+      fs.renameSync(`${file}.pending`, file);
+    } finally {
+      fs.closeSync(descriptor);
+      fs.rmSync(claim);
+    }
+    return;
+  }
+  if (operation === "check-stopped" && !args.length) {
+    const runtime = nativeRuntime();
+    if (!runtime.settled) {
+      fail("Survivor service processes have not settled.");
+    }
+    if (runtime.stopFailed) {
+      fail("Survivor stop policy read failed; process cleanup completed.");
+    }
+    return;
+  }
+  if (operation === "is-active" && !args.length) {
+    const runtime = nativeRuntime();
+    process.exitCode = runtime.pid ? 0 : runtime.settled ? 3 : 1;
+    return;
+  }
+  if (operation === "runtime" && !args.length) {
+    const runtime = nativeRuntime();
+    console.log(`ActiveState=${runtime.active}\nSubState=${runtime.sub}\nMainPID=${runtime.pid}`);
+    console.log(`ControlGroup=${runtime.controlGroup}`);
+    if (runtime.exitCode) {
+      console.log(
+        `ExecMainStatus=${runtime.exitStatus}\nExecMainCode=${runtime.exitCode === 1 ? "exited" : "killed"}`,
+      );
+    }
+    return;
+  }
+  if (operation === "record-caller" && args.length === 3) {
+    recordCaller(...args);
+    return;
+  }
   if (
     operation === "busctl" &&
     args.length === 7 &&
@@ -399,6 +532,37 @@ function run() {
     readUnit(true);
     return;
   }
+  if (["stop-policy", "stop-timeout-ms", "stop-context"].includes(operation) && !args.length) {
+    // A running generation keeps its loaded policy even if an on-disk edit is
+    // invalid or removed. Only a successful reload replaces that snapshot.
+    const unit = fs.existsSync(loadedPath)
+      ? parseUnit(fs.readFileSync(loadedPath, "utf8"))
+      : readUnit();
+    if (operation === "stop-policy") {
+      console.log(`LoadState=${unit ? "loaded" : "not-found"}`);
+      if (unit) {
+        console.log(
+          `TimeoutStopUSec=${unit.stopTimeoutMs === Infinity ? "infinity" : `${unit.stopTimeoutMs / 1_000}s`}`,
+        );
+      }
+    } else {
+      if (!unit) {
+        fail("Cannot stop an absent fixture unit.");
+      }
+      if (operation === "stop-context") {
+        console.log(
+          JSON.stringify({
+            stopTimeoutMs: unit.stopTimeoutMs === Infinity ? "Infinity" : unit.stopTimeoutMs,
+            killMode: unit.killMode,
+            controlGroup: runtimePaths().controlGroup || "",
+          }),
+        );
+      } else {
+        console.log(unit.stopTimeoutMs);
+      }
+    }
+    return;
+  }
   if (operation === "load-state" && !args.length) {
     console.log(readUnit() ? "loaded" : "not-found");
     return;
@@ -409,7 +573,7 @@ function run() {
       fail("Cannot launch an absent fixture unit.");
     }
     const environment = { ...unit.environment };
-    for (const [filename, optional] of unit.environmentFiles) {
+    for (const { filename, optional } of unit.environmentFiles) {
       let content;
       try {
         content = fs.readFileSync(filename, "utf8");
@@ -442,8 +606,14 @@ function run() {
       ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
       ...unit.programArguments,
     ];
+    const { controlGroup } = runtimePaths();
+    // Move the ExecStart shell before exec so every Gateway descendant inherits membership.
+    const placement = controlGroup
+      ? `printf '0\\n' > ${quote(`/sys/fs/cgroup${controlGroup}/cgroup.procs`)} && `
+      : "";
+    // Physical traversal matches chdir: shell-logical .. can select a different directory.
     console.log(
-      `cd ${quote(unit.workingDirectory || process.env.HOME)} && exec ${command.map(quote).join(" ")}`,
+      `cd -P ${quote(unit.workingDirectory || process.env.HOME)} && ${placement}exec ${command.map(quote).join(" ")}`,
     );
     return;
   }
@@ -483,23 +653,17 @@ function run() {
     "s",
     unitName,
   ]);
-  const unitQuery = matches([
-    ...prefix,
-    "get-property",
-    manager,
-    object,
-    `${manager}.Unit`,
-    ...commandPropertyNames("Unit"),
-  ]);
-  const serviceQuery = matches([
-    ...prefix,
-    "get-property",
-    manager,
-    object,
-    `${manager}.Service`,
-    ...commandPropertyNames("Service"),
-  ]);
-  if (!load && !unitQuery && !serviceQuery) {
+  const commandScope = ["Unit", "Service"].find((scope) =>
+    matches([
+      ...prefix,
+      "get-property",
+      manager,
+      object,
+      `${manager}.${scope}`,
+      ...commandPropertyNames(scope),
+    ]),
+  );
+  if (!load && !commandScope) {
     fail();
   }
   const unit = readUnit(false, requireLoaded);
@@ -512,7 +676,7 @@ function run() {
   if (load) {
     writeProperties([["o", [object]]]);
   } else {
-    writeCommandProperties(unit, unitQuery ? "Unit" : "Service");
+    writeCommandProperties(unit, commandScope);
   }
 }
 

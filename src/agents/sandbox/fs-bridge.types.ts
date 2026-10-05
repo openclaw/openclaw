@@ -31,6 +31,15 @@ export type SandboxFsBridge = {
   readonly pathMappings?: readonly { readonly hostRoot: string; readonly containerRoot: string }[];
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
   /**
+   * Resolves a host-backed file into the caller-facing path policy namespace.
+   * Implementations must bind matching expectedPolicyPath inputs to final I/O.
+   */
+  resolveReadPolicyPath?(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): string | Promise<string>;
+  /**
    * Resolves the canonical mutation destination before caller authorization.
    *
    * Returns two views of the same destination:
@@ -70,7 +79,21 @@ export type SandboxFsBridge = {
     cwd?: string;
     signal?: AbortSignal;
     maxBytes?: number;
+    /** Policy path authorized by the caller before this read. */
+    expectedPolicyPath?: string;
   }): Promise<Buffer>;
+  /**
+   * Returns the canonical runtime path pinned by the successful read itself.
+   * This identifies directory aliases, not inode equivalence across renames.
+   * Consumers that filter protected sources must require this capability;
+   * a separate path lookup cannot establish the source of the returned bytes.
+   */
+  readFileWithSource?(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<{
+    data: Buffer;
+    canonicalPath: string;
+    /** Canonical POSIX path within the workspace mount; absent for other mounts. */
+    workspaceRelativePath?: string;
+  }>;
   /** Streams a regular file within the sandbox when the backend supports native copying. */
   copyFile?(params: {
     sourcePath: string;
@@ -96,16 +119,9 @@ export type SandboxFsBridge = {
    * Backends without this capability must omit it rather than emulate it with
    * a check followed by writeFile.
    */
-  createFileExclusive?(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
-    pinnedPath?: string;
-    signal?: AbortSignal;
-  }): Promise<"created" | "exists">;
+  createFileExclusive?(
+    params: Parameters<SandboxFsBridge["writeFile"]>[0],
+  ): Promise<"created" | "exists">;
   mkdirp(params: {
     filePath: string;
     cwd?: string;
@@ -126,6 +142,8 @@ export type SandboxFsBridge = {
   stat(params: {
     filePath: string;
     cwd?: string;
+    /** Policy path authorized by the caller before this read. */
+    expectedPolicyPath?: string;
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null>;
 };

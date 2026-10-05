@@ -1,4 +1,3 @@
-/** ACP session creation, loading, listing, resuming, closing, and configuration. */
 import { randomUUID } from "node:crypto";
 import type {
   AuthenticateRequest,
@@ -27,6 +26,7 @@ import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
 import type { AcpEventLedgerReplay } from "./event-ledger.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveAcpSessionKey } from "./session-mapper.js";
+import type { SessionSnapshot } from "./translator.presentation.js";
 import { extractReplayChunks, type GatewayTranscriptMessage } from "./translator.replay.js";
 import {
   ACP_LIST_SESSIONS_MAX_FETCH_LIMIT,
@@ -84,17 +84,8 @@ export class AcpTranslatorSessionLifecycle {
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.sessionState.getSnapshot(session.sessionKey);
-    await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: true,
-    });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: true });
-    const { configOptions, modes } = sessionSnapshot;
-    return {
-      sessionId: session.sessionId,
-      configOptions,
-      modes,
-    };
+    const presentation = await this.publishSessionSnapshot(session, sessionSnapshot, true);
+    return { sessionId: session.sessionId, ...presentation };
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
@@ -149,13 +140,7 @@ export class AcpTranslatorSessionLifecycle {
     } else {
       await this.replaySessionTranscript(session.sessionId, transcript);
     }
-    await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: false,
-    });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
-    const { configOptions, modes } = sessionSnapshot;
-    return { configOptions, modes };
+    return await this.publishSessionSnapshot(session, sessionSnapshot, false);
   }
 
   async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
@@ -244,20 +229,11 @@ export class AcpTranslatorSessionLifecycle {
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
-    await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: false,
-    });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
-    const { configOptions, modes } = sessionSnapshot;
-    return { configOptions, modes };
+    return await this.publishSessionSnapshot(session, sessionSnapshot, false);
   }
 
   async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
-    const session = this.sessionStore.getSession(params.sessionId);
-    if (!session) {
-      throw new Error(`Session ${params.sessionId} not found`);
-    }
+    const session = this.requireSession(params.sessionId);
     await this.cancelSessionWork(session);
     this.sessionStore.deleteSession(params.sessionId);
     this.log(`closeSession: ${params.sessionId}`);
@@ -269,10 +245,7 @@ export class AcpTranslatorSessionLifecycle {
   }
 
   async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
-    const session = this.sessionStore.getSession(params.sessionId);
-    if (!session) {
-      throw new Error(`Session ${params.sessionId} not found`);
-    }
+    const session = this.requireSession(params.sessionId);
     if (!params.modeId) {
       return {};
     }
@@ -299,10 +272,7 @@ export class AcpTranslatorSessionLifecycle {
   async setSessionConfigOption(
     params: SetSessionConfigOptionRequest,
   ): Promise<SetSessionConfigOptionResponse> {
-    const session = this.sessionStore.getSession(params.sessionId);
-    if (!session) {
-      throw new Error(`Session ${params.sessionId} not found`);
-    }
+    const session = this.requireSession(params.sessionId);
     const sessionPatch = this.sessionState.resolveConfigPatch(params.configId, params.value);
 
     try {
@@ -330,6 +300,28 @@ export class AcpTranslatorSessionLifecycle {
       this.log(`setSessionConfigOption error: ${String(err)}`);
       throw err instanceof Error ? err : new Error(String(err));
     }
+  }
+
+  private async publishSessionSnapshot(
+    session: Parameters<AcpTranslatorSessionState["sendSnapshotUpdate"]>[0],
+    snapshot: SessionSnapshot,
+    record: boolean,
+  ): Promise<LoadSessionResponse> {
+    await this.sessionState.sendSnapshotUpdate(session, snapshot, {
+      includeControls: false,
+      record,
+    });
+    await this.sessionUpdates.sendAvailableCommands(session, { record });
+    const { configOptions, modes } = snapshot;
+    return { configOptions, modes };
+  }
+
+  private requireSession(sessionId: string) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+    return session;
   }
 
   private async resolveSessionKeyFromMeta(params: {

@@ -1,11 +1,12 @@
 import { formatErrorMessage as formatSharedErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
-// Qa Lab plugin module implements app behavior.
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
-import { getJson, getJsonNoStore, postJson, QaLabHttpError } from "./http.js";
+import { getJson, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
+import { captureEventKey } from "./ui-render-capture-events.js";
 import { redactSensitiveText } from "./ui-render-capture-redaction.js";
+import { captureRenderState, restoreRenderState } from "./ui-render-state.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
@@ -13,7 +14,6 @@ import {
   type ReportEnvelope,
   type RunnerResolvedPlan,
   type RunnerSelection,
-  type TabId,
   type CaptureEventsEnvelope,
   type CaptureCoverageEnvelope,
   type CaptureQueryEnvelope,
@@ -23,6 +23,8 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
+import { stateFingerprint } from "./ui-state-fingerprint.js";
+import { bindTabNavigation } from "./ui-tab-navigation.js";
 
 function formatErrorMessage(error: unknown): string {
   return redactSensitiveText(formatSharedErrorMessage(error));
@@ -71,18 +73,10 @@ function defaultModelsForProviderMode(
   mode: RunnerSelection["providerMode"],
   bootstrap?: Bootstrap | null,
 ): Pick<RunnerSelection, "primaryModel" | "alternateModel" | "fastMode"> {
-  const preferredLiveModel = bootstrap?.runnerCatalog.real[0]?.key;
-  if (mode === "live-frontier") {
-    const primaryModel = defaultQaModelForMode(mode, { preferredLiveModel });
-    const alternateModel = defaultQaModelForMode(mode, { alternate: true, preferredLiveModel });
-    return {
-      primaryModel,
-      alternateModel,
-      fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
-    };
-  }
-  const primaryModel = defaultQaModelForMode(mode);
-  const alternateModel = defaultQaModelForMode(mode, { alternate: true });
+  const preferredLiveModel =
+    mode === "live-frontier" ? bootstrap?.runnerCatalog.real[0]?.key : undefined;
+  const primaryModel = defaultQaModelForMode(mode, { preferredLiveModel });
+  const alternateModel = defaultQaModelForMode(mode, { alternate: true, preferredLiveModel });
   return {
     primaryModel,
     alternateModel,
@@ -148,22 +142,8 @@ function isEditableElement(target: EventTarget | null): boolean {
   );
 }
 
-export async function createQaLabApp(root: HTMLDivElement) {
-  const initialUrl = new URL(window.location.href);
-  const initialEvidencePath =
-    initialUrl.searchParams.get("evidencePath")?.trim() ||
-    initialUrl.searchParams.get("path")?.trim() ||
-    "";
-  const state: UiState = {
-    theme: detectTheme(),
-    bootstrap: null,
-    snapshot: null,
-    latestReport: null,
-    scenarioRun: null,
-    captureSessions: [],
-    captureEvents: [],
-    captureQueryPreset: "none",
-    captureQueryRows: [],
+function createCaptureFilters() {
+  return {
     captureKindFilter: [],
     captureProviderFilter: [],
     captureHostFilter: [],
@@ -184,6 +164,30 @@ export async function createQaLabApp(root: HTMLDivElement) {
     captureTimelineFocusSelectedFlow: false,
     captureTimelineFocusedLaneMode: "all",
     captureTimelineFocusedLaneThreshold: "any",
+    captureErrorsOnly: false,
+    captureCollapsedLaneIds: [],
+    capturePinnedLaneIds: [],
+    selectedCaptureEventKey: null,
+  } satisfies Partial<UiState>;
+}
+
+export async function createQaLabApp(root: HTMLDivElement) {
+  const initialUrl = new URL(window.location.href);
+  const initialEvidencePath =
+    initialUrl.searchParams.get("evidencePath")?.trim() ||
+    initialUrl.searchParams.get("path")?.trim() ||
+    "";
+  const state: UiState = {
+    ...createCaptureFilters(),
+    theme: detectTheme(),
+    bootstrap: null,
+    snapshot: null,
+    latestReport: null,
+    scenarioRun: null,
+    captureSessions: [],
+    captureEvents: [],
+    captureQueryPreset: "none",
+    captureQueryRows: [],
     captureDetailPlacement: "right",
     captureDetailSplitPct: 34,
     captureDetailSplitDragging: false,
@@ -194,7 +198,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     capturePayloadExtent: "preview",
     capturePayloadEventSort: "stream",
     capturePayloadEventFilter: "",
-    captureErrorsOnly: false,
     captureCoverage: null,
     captureStartupStatus: null,
     evidence: null,
@@ -210,10 +213,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     captureSelectedSessionsExpanded: false,
     sidebarCollapsed: detectSidebarCollapsed(),
     sidebarPanel: detectSidebarPanel(),
-    captureCollapsedLaneIds: [],
-    capturePinnedLaneIds: [],
     selectedCaptureSessionIds: [],
-    selectedCaptureEventKey: null,
     selectedEvidenceEntryKey: null,
     selectedConversationKey: null,
     selectedThreadId: null,
@@ -237,111 +237,21 @@ export async function createQaLabApp(root: HTMLDivElement) {
   let chatScrollLocked = true;
   let previousMessageCount = 0;
 
-  /* ---------- Render guards (avoid DOM churn during polling) ---------- */
-
   let lastFingerprint = "";
   let renderDeferred = false;
   let previousRunnerStatus: string | null = null;
   let currentUiVersion: string | null = null;
   let syncingCaptureTimelineScroll = false;
-  let sparklineSweepActive = false;
-  let sparklineSweepAnchorStartPct: number | null = null;
-  let sparklineSweepAnchorEndPct: number | null = null;
-  let sparklineSweepCurrentStartPct: number | null = null;
-  let sparklineSweepCurrentEndPct: number | null = null;
+  let sparklineSweep: {
+    anchor: { start: number; end: number };
+    current: { start: number; end: number };
+  } | null = null;
   let captureGlobalListenersBound = false;
-
-  function stateFingerprint(): string {
-    const msgs = state.snapshot?.messages;
-    const ev = state.snapshot?.events;
-    return JSON.stringify({
-      mc: msgs?.length ?? 0,
-      lm: msgs?.at(-1)?.id ?? null,
-      cc: state.snapshot?.conversations.length ?? 0,
-      tc: state.snapshot?.threads.length ?? 0,
-      ec: ev?.length ?? 0,
-      lc: ev?.at(-1)?.cursor ?? -1,
-      rs: state.bootstrap?.runner.status,
-      ra: state.bootstrap?.runner.startedAt,
-      rf: state.bootstrap?.runner.finishedAt,
-      re: state.bootstrap?.runner.error,
-      rpo: state.runnerPlanOverride
-        ? `${state.runnerPlanOverride.status}:${state.runnerPlanOverride.selectedScenarios.length}:${state.runnerPlanOverride.exclusions.length}:${state.runnerPlanOverride.errors.join("|")}`
-        : null,
-      ss: state.scenarioRun?.status,
-      sc: state.scenarioRun?.counts,
-      so: state.scenarioRun?.scenarios.map((o) => o.status).join(","),
-      rp: state.latestReport?.generatedAt,
-      cs: state.bootstrap?.runnerCatalog.status,
-      cl: state.bootstrap?.runnerCatalog.real.length ?? 0,
-      cps: state.captureSessions.length,
-      cse: state.captureSessions[0]?.eventCount ?? 0,
-      cei: state.selectedCaptureSessionIds.join(","),
-      cec: state.captureEvents.length,
-      ceh: state.captureEvents[0]?.host ?? null,
-      ccp: state.captureQueryPreset,
-      ccq: state.captureQueryRows.length,
-      ccv: state.captureCoverage?.totalEvents ?? 0,
-      ccpv: state.captureCoverage?.providers[0]?.value ?? null,
-      ccss: state.captureStartupStatus?.proxy.ok ?? null,
-      ccsg: state.captureStartupStatus?.gateway.ok ?? null,
-      ccce: state.captureControlsExpanded,
-      ccse: state.captureSummaryExpanded,
-      ccsx: state.captureSelectedSessionsExpanded,
-      ccsv: state.captureSavedViews.map((view) => `${view.id}:${view.name}`).join("|"),
-      scc: state.sidebarCollapsed,
-      scp: state.sidebarPanel,
-      cck: state.captureKindFilter.join(","),
-      ccpf: state.captureProviderFilter.join(","),
-      cchf: state.captureHostFilter.join(","),
-      cchm: state.captureHeaderMode,
-      ccgm: state.captureGroupMode,
-      cctl: state.captureTimelineLaneMode,
-      ccts: state.captureTimelineLaneSort,
-      cctps: state.captureTimelinePreviousLaneSort,
-      cctq: state.captureTimelineLaneSearch,
-      cctz: state.captureTimelineZoom,
-      cctsm: state.captureTimelineSparklineMode,
-      cctws: state.captureTimelineWindowStartPct,
-      cctwe: state.captureTimelineWindowEndPct,
-      cctba: state.captureTimelineBrushAnchorPct,
-      cctbc: state.captureTimelineBrushCurrentPct,
-      cctff: state.captureTimelineFocusSelectedFlow,
-      cctfm: state.captureTimelineFocusedLaneMode,
-      cctft: state.captureTimelineFocusedLaneThreshold,
-      ccdp: state.captureDetailPlacement,
-      ccds: state.captureDetailSplitPct,
-      ccdsd: state.captureDetailSplitDragging,
-      ccdv: state.captureDetailView,
-      ccpdv: state.capturePreferredDetailView,
-      ccdfl: state.captureFlowDetailLayout,
-      ccdpl: state.capturePayloadDetailLayout,
-      ccdpe: state.capturePayloadExtent,
-      ccpes: state.capturePayloadEventSort,
-      ccpef: state.capturePayloadEventFilter,
-      ccli: state.captureCollapsedLaneIds.join(","),
-      ccpi: state.capturePinnedLaneIds.join(","),
-      er: state.error,
-      el: state.evidenceLoading,
-      ee: state.evidenceError,
-      ep: state.evidence?.evidencePath ?? null,
-      eg: state.evidence?.generatedAt ?? null,
-      ecnt: state.evidence?.entries.length ?? 0,
-      eac: state.evidence?.entries.reduce((sum, entry) => sum + entry.artifacts.length, 0) ?? 0,
-      epr: state.evidence?.producerContext?.rootPath ?? null,
-      esf: state.evidenceStatusFilter,
-      eaf: state.evidenceArtifactFilter,
-      esq: state.evidenceSearchText,
-      ese: state.selectedEvidenceEntryKey,
-    });
-  }
 
   function isSelectOpen(): boolean {
     const active = document.activeElement;
     return active !== null && root.contains(active) && active.tagName === "SELECT";
   }
-
-  /* ---------- Data fetching ---------- */
 
   async function refresh() {
     try {
@@ -398,9 +308,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (state.selectedCaptureSessionIds.length === 0) {
         state.selectedCaptureSessionIds = sessions.sessions[0]?.id ? [sessions.sessions[0].id] : [];
       }
-      const startupStatusResult = await Promise.allSettled([startupStatusPromise]);
-      state.captureStartupStatus =
-        startupStatusResult[0]?.status === "fulfilled" ? startupStatusResult[0].value.status : null;
+      state.captureStartupStatus = (
+        await startupStatusPromise.catch(() => ({ status: null }))
+      ).status;
       if (state.selectedCaptureSessionIds.length > 0) {
         const eventsPromises = state.selectedCaptureSessionIds.map((sessionId) =>
           getJson<CaptureEventsEnvelope>(
@@ -449,15 +359,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         if (
           !state.selectedCaptureEventKey ||
           !state.captureEvents.some(
-            (event) =>
-              `${event.id ?? "no-id"}:${event.flowId}:${event.ts}:${event.kind}` ===
-              state.selectedCaptureEventKey,
+            (event) => captureEventKey(event) === state.selectedCaptureEventKey,
           )
         ) {
           const first = state.captureEvents[0];
-          state.selectedCaptureEventKey = first
-            ? `${first.id ?? "no-id"}:${first.flowId}:${first.ts}:${first.kind}`
-            : null;
+          state.selectedCaptureEventKey = first ? captureEventKey(first) : null;
         }
       } else {
         state.captureEvents = [];
@@ -478,7 +384,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     previousRunnerStatus = currentRunnerStatus;
 
     /* Only re-render when data actually changed; defer if a <select> is open */
-    const fp = stateFingerprint();
+    const fp = stateFingerprint(state);
     if (fp !== lastFingerprint) {
       lastFingerprint = fp;
       renderDeferred = true;
@@ -494,7 +400,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       return;
     }
     try {
-      const payload = await getJsonNoStore<{ version: string | null }>("/api/ui-version");
+      const payload = await getJson<{ version: string | null }>("/api/ui-version", "no-store");
       if (!currentUiVersion) {
         currentUiVersion = payload.version;
         return;
@@ -506,8 +412,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
       // Ignore transient rebuild windows while the dist dir is being rewritten.
     }
   }
-
-  /* ---------- Draft mutations ---------- */
 
   function updateRunnerDraft(mutator: (draft: RunnerSelection) => RunnerSelection) {
     const fallback = state.bootstrap?.runner.selection;
@@ -523,13 +427,24 @@ export async function createQaLabApp(root: HTMLDivElement) {
     render();
   }
 
-  /* ---------- Actions ---------- */
-
-  async function runSelfCheck() {
+  async function runBusyAction(action: () => Promise<void>, onError?: (error: unknown) => void) {
     state.busy = true;
-    state.error = null;
     render();
     try {
+      await action();
+    } catch (error) {
+      onError?.(error);
+      state.error = formatErrorMessage(error);
+      render();
+    } finally {
+      state.busy = false;
+      render();
+    }
+  }
+
+  async function runSelfCheck() {
+    state.error = null;
+    await runBusyAction(async () => {
       const result = await postJson<{ report: string; outputPath: string }>(
         "/api/scenario/self-check",
         {},
@@ -541,30 +456,16 @@ export async function createQaLabApp(root: HTMLDivElement) {
       };
       state.activeTab = "report";
       await refresh();
-    } catch (error) {
-      state.error = formatErrorMessage(error);
-      render();
-    } finally {
-      state.busy = false;
-      render();
-    }
+    });
   }
 
   async function resetState() {
-    state.busy = true;
-    render();
-    try {
+    await runBusyAction(async () => {
       await postJson("/api/reset", {});
       state.latestReport = null;
       state.selectedThreadId = null;
       await refresh();
-    } catch (error) {
-      state.error = formatErrorMessage(error);
-      render();
-    } finally {
-      state.busy = false;
-      render();
-    }
+    });
   }
 
   async function sendInbound() {
@@ -575,10 +476,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
       render();
       return;
     }
-    state.busy = true;
     state.error = null;
-    render();
-    try {
+    await runBusyAction(async () => {
       const selectedConversation = findConversationBySelectionKey(
         state.snapshot?.conversations ?? [],
         state.selectedConversationKey,
@@ -610,60 +509,51 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.composer.text = "";
       chatScrollLocked = true;
       await refresh();
-    } catch (error) {
-      state.error = formatErrorMessage(error);
-      render();
-    } finally {
-      state.busy = false;
-      render();
-    }
+    });
   }
 
   async function runSuite() {
-    if (!state.runnerDraft) {
+    const selection = state.runnerDraft;
+    if (!selection) {
       state.error = "Runner selection not ready yet.";
       render();
       return;
     }
-    state.busy = true;
     state.error = null;
-    render();
-    try {
-      const result = await postJson<{ runner: { selection: RunnerSelection } }>(
-        "/api/scenario/suite",
-        {
-          profile: state.runnerDraft.profile,
-          channel: state.runnerDraft.channel,
-          channelDriver: state.runnerDraft.channelDriver,
-          evidenceMode: state.runnerDraft.evidenceMode,
-          providerMode: state.runnerDraft.providerMode,
-          primaryModel: state.runnerDraft.primaryModel,
-          alternateModel: state.runnerDraft.alternateModel,
-          fastMode: state.runnerDraft.fastMode,
-          runtimePair: state.runnerDraft.runtimePair,
-          runtimePairLane: state.runnerDraft.runtimePairLane,
-          scenarioIds: state.runnerDraft.scenarioIds,
-        },
-      );
-      state.runnerDraft = cloneRunnerSelection(result.runner.selection);
-      state.runnerDraftDirty = false;
-      state.runnerPlanOverride = null;
-      state.activeTab = "chat";
-      await refresh();
-    } catch (error) {
-      if (error instanceof QaLabHttpError) {
-        const plan = (error.payload as { plan?: RunnerResolvedPlan } | null)?.plan;
-        if (plan) {
-          state.runnerPlanOverride = plan;
-          state.sidebarPanel = "run";
+    await runBusyAction(
+      async () => {
+        const result = await postJson<{ runner: { selection: RunnerSelection } }>(
+          "/api/scenario/suite",
+          {
+            profile: selection.profile,
+            channel: selection.channel,
+            channelDriver: selection.channelDriver,
+            evidenceMode: selection.evidenceMode,
+            providerMode: selection.providerMode,
+            primaryModel: selection.primaryModel,
+            alternateModel: selection.alternateModel,
+            fastMode: selection.fastMode,
+            runtimePair: selection.runtimePair,
+            runtimePairLane: selection.runtimePairLane,
+            scenarioIds: selection.scenarioIds,
+          },
+        );
+        state.runnerDraft = cloneRunnerSelection(result.runner.selection);
+        state.runnerDraftDirty = false;
+        state.runnerPlanOverride = null;
+        state.activeTab = "chat";
+        await refresh();
+      },
+      (error) => {
+        if (error instanceof QaLabHttpError) {
+          const plan = (error.payload as { plan?: RunnerResolvedPlan } | null)?.plan;
+          if (plan) {
+            state.runnerPlanOverride = plan;
+            state.sidebarPanel = "run";
+          }
         }
-      }
-      state.error = formatErrorMessage(error);
-      render();
-    } finally {
-      state.busy = false;
-      render();
-    }
+      },
+    );
   }
 
   async function loadEvidence(pathOverride?: string) {
@@ -698,21 +588,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   async function sendKickoff() {
-    state.busy = true;
     state.error = null;
-    render();
-    try {
+    await runBusyAction(async () => {
       await postJson("/api/kickoff", {});
       state.activeTab = "chat";
       chatScrollLocked = true;
       await refresh();
-    } catch (error) {
-      state.error = formatErrorMessage(error);
-      render();
-    } finally {
-      state.busy = false;
-      render();
-    }
+    });
   }
 
   function downloadReport() {
@@ -797,8 +679,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     };
   }
 
-  /* ---------- Chat scroll tracking ---------- */
-
   function trackChatScroll() {
     const el = root.querySelector<HTMLElement>("#chat-messages");
     if (!el) {
@@ -810,33 +690,42 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
   }
 
-  function scrollChatToBottom(force?: boolean) {
+  function scrollChatToBottom() {
     const el = root.querySelector<HTMLElement>("#chat-messages");
     if (!el) {
       return;
     }
     const newCount = state.snapshot?.messages.length ?? 0;
-    if (force || (chatScrollLocked && newCount !== previousMessageCount)) {
+    if (chatScrollLocked && newCount !== previousMessageCount) {
       el.scrollTop = el.scrollHeight;
     }
     previousMessageCount = newCount;
   }
 
-  /* ---------- Event binding ---------- */
+  function clearCaptureTimelineWindow() {
+    state.captureTimelineWindowStartPct = null;
+    state.captureTimelineWindowEndPct = null;
+    state.captureTimelineBrushAnchorPct = null;
+    state.captureTimelineBrushCurrentPct = null;
+    state.selectedCaptureEventKey = null;
+    render();
+  }
 
   function bindEvents() {
-    /* Tabs */
-    root.querySelectorAll<HTMLElement>("[data-tab]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const nextTab = node.dataset.tab as TabId | undefined;
-        if (nextTab) {
-          state.activeTab = nextTab;
-          render();
-        }
-      });
+    const bindValue = (
+      selector: string,
+      event: "input" | "change",
+      handleValue: (value: string) => void,
+    ) => {
+      const field = root.querySelector<HTMLInputElement | HTMLSelectElement>(selector);
+      field?.addEventListener(event, () => handleValue(field.value));
+    };
+
+    bindTabNavigation(root, (nextTab) => {
+      state.activeTab = nextTab;
+      render();
     });
 
-    /* Conversation chips */
     root.querySelectorAll<HTMLElement>("[data-conversation-key]").forEach((node) => {
       node.addEventListener("click", () => {
         state.selectedConversationKey = node.dataset.conversationKey ?? null;
@@ -848,7 +737,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
 
-    /* Thread chips */
     root.querySelectorAll<HTMLElement>("[data-thread-select]").forEach((node) => {
       node.addEventListener("click", () => {
         const val = node.dataset.threadSelect;
@@ -865,7 +753,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
 
-    /* Scenario selection (results tab + sidebar) */
     root.querySelectorAll<HTMLElement>("[data-scenario-id]").forEach((node) => {
       node.addEventListener("click", () => {
         state.selectedScenarioId = node.dataset.scenarioId ?? null;
@@ -876,19 +763,15 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
 
-    /* Header / sidebar buttons */
-    root
-      .querySelector<HTMLElement>("[data-action='refresh']")
-      ?.addEventListener("click", () => void refresh());
-    root
-      .querySelector<HTMLElement>("[data-action='reset']")
-      ?.addEventListener("click", () => void resetState());
-    root
-      .querySelector<HTMLElement>("[data-action='toggle-theme']")
-      ?.addEventListener("click", toggleTheme);
-    root
-      .querySelector<HTMLElement>("[data-action='toggle-sidebar']")
-      ?.addEventListener("click", toggleSidebar);
+    const bindAction = (action: string, handler: () => void) => {
+      root
+        .querySelector<HTMLElement>(`[data-action='${action}']`)
+        ?.addEventListener("click", handler);
+    };
+    bindAction("refresh", () => void refresh());
+    bindAction("reset", () => void resetState());
+    bindAction("toggle-theme", toggleTheme);
+    bindAction("toggle-sidebar", toggleSidebar);
     root.querySelectorAll<HTMLElement>("[data-sidebar-panel]").forEach((node) => {
       node.addEventListener("click", () => {
         const panel = node.dataset.sidebarPanel;
@@ -897,51 +780,31 @@ export async function createQaLabApp(root: HTMLDivElement) {
         }
       });
     });
-    root
-      .querySelector<HTMLElement>("[data-action='self-check']")
-      ?.addEventListener("click", () => void runSelfCheck());
-    root
-      .querySelector<HTMLElement>("[data-action='run-suite']")
-      ?.addEventListener("click", () => void runSuite());
-    root
-      .querySelector<HTMLElement>("[data-action='kickoff']")
-      ?.addEventListener("click", () => void sendKickoff());
-    root
-      .querySelector<HTMLElement>("[data-action='send']")
-      ?.addEventListener("click", () => void sendInbound());
-    root
-      .querySelector<HTMLElement>("[data-action='download-report']")
-      ?.addEventListener("click", downloadReport);
-    root
-      .querySelector<HTMLElement>("[data-action='load-evidence']")
-      ?.addEventListener("click", () => void loadEvidence());
-    root
-      .querySelector<HTMLElement>("[data-action='open-run-evidence']")
-      ?.addEventListener("click", () => {
-        const evidencePath = state.bootstrap?.runner.artifacts?.evidencePath;
-        if (!evidencePath) {
-          return;
-        }
-        state.activeTab = "evidence";
-        void loadEvidence(evidencePath);
-      });
+    bindAction("self-check", () => void runSelfCheck());
+    bindAction("run-suite", () => void runSuite());
+    bindAction("kickoff", () => void sendKickoff());
+    bindAction("send", () => void sendInbound());
+    bindAction("download-report", downloadReport);
+    bindAction("load-evidence", () => void loadEvidence());
+    bindAction("open-run-evidence", () => {
+      const evidencePath = state.bootstrap?.runner.artifacts?.evidencePath;
+      if (!evidencePath) {
+        return;
+      }
+      state.activeTab = "evidence";
+      void loadEvidence(evidencePath);
+    });
 
-    /* Scenario All/None */
-    root
-      .querySelector<HTMLElement>("[data-action='select-all-scenarios']")
-      ?.addEventListener("click", () => {
-        updateRunnerDraft((d) => ({
-          ...d,
-          scenarioIds: state.bootstrap?.scenarios.map((s) => s.id) ?? d.scenarioIds,
-        }));
-      });
-    root
-      .querySelector<HTMLElement>("[data-action='clear-scenarios']")
-      ?.addEventListener("click", () => {
-        updateRunnerDraft((d) => ({ ...d, scenarioIds: null }));
-      });
+    bindAction("select-all-scenarios", () => {
+      updateRunnerDraft((d) => ({
+        ...d,
+        scenarioIds: state.bootstrap?.scenarios.map((s) => s.id) ?? d.scenarioIds,
+      }));
+    });
+    bindAction("clear-scenarios", () => {
+      updateRunnerDraft((d) => ({ ...d, scenarioIds: null }));
+    });
 
-    /* Scenario toggles */
     root.querySelectorAll<HTMLInputElement>("[data-scenario-toggle-id]").forEach((node) => {
       node.addEventListener("change", () => {
         const scenarioId = node.dataset.scenarioToggleId;
@@ -969,9 +832,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
 
-    /* Config form */
-    root.querySelector<HTMLSelectElement>("#run-profile")?.addEventListener("change", (e) => {
-      const profile = (e.currentTarget as HTMLSelectElement).value;
+    bindValue("#run-profile", "change", (profile) => {
       const profileDefaults = state.bootstrap?.runnerCatalog.profiles.find(
         (entry) => entry.id === profile,
       );
@@ -983,63 +844,50 @@ export async function createQaLabApp(root: HTMLDivElement) {
         scenarioIds: null,
       }));
     });
-    root.querySelector<HTMLSelectElement>("#provider-mode")?.addEventListener("change", (e) => {
-      const mode =
-        (e.currentTarget as HTMLSelectElement).value === "live-frontier"
-          ? "live-frontier"
-          : "mock-openai";
+    bindValue("#provider-mode", "change", (value) => {
+      const mode = value === "live-frontier" ? "live-frontier" : "mock-openai";
       updateRunnerDraft((d) => ({
         ...d,
         providerMode: mode,
         ...defaultModelsForProviderMode(mode, state.bootstrap),
       }));
     });
-    root.querySelector<HTMLSelectElement>("#channel-driver")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
+    bindValue("#channel-driver", "change", (value) => {
       const channelDriver = value === "crabline" || value === "live" ? value : "qa-channel";
       updateRunnerDraft((draft) => ({ ...draft, channelDriver }));
     });
-    root.querySelector<HTMLSelectElement>("#execution-channel")?.addEventListener("change", (e) => {
-      const channel = (e.currentTarget as HTMLSelectElement).value.trim() || null;
+    bindValue("#execution-channel", "change", (value) => {
+      const channel = value.trim() || null;
       updateRunnerDraft((draft) => ({ ...draft, channel }));
     });
-    root.querySelector<HTMLSelectElement>("#evidence-mode")?.addEventListener("change", (e) => {
-      const evidenceMode =
-        (e.currentTarget as HTMLSelectElement).value === "slim" ? "slim" : "full";
+    bindValue("#evidence-mode", "change", (value) => {
+      const evidenceMode = value === "slim" ? "slim" : "full";
       updateRunnerDraft((draft) => ({ ...draft, evidenceMode }));
     });
-    root.querySelector<HTMLSelectElement>("#runtime-pair")?.addEventListener("change", (e) => {
+    bindValue("#runtime-pair", "change", (value) => {
       const runtimePair: RunnerSelection["runtimePair"] =
-        (e.currentTarget as HTMLSelectElement).value === "openclaw,codex"
-          ? ["openclaw", "codex"]
-          : null;
+        value === "openclaw,codex" ? ["openclaw", "codex"] : null;
       updateRunnerDraft((draft) => ({ ...draft, runtimePair }));
     });
-    root.querySelector<HTMLSelectElement>("#runtime-pair-lane")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
+    bindValue("#runtime-pair-lane", "change", (value) => {
       const runtimePairLane =
         value === "core" || value === "extended" || value === "soak" ? value : null;
       updateRunnerDraft((draft) => ({ ...draft, runtimePairLane }));
     });
-    root.querySelector<HTMLSelectElement>("#primary-model")?.addEventListener("change", (e) => {
-      const primaryModel = (e.currentTarget as HTMLSelectElement).value;
-      updateRunnerDraft((d) => ({
-        ...d,
-        primaryModel,
-        fastMode: isQaFastModeEnabled({ primaryModel, alternateModel: d.alternateModel }),
-      }));
-    });
-    root.querySelector<HTMLSelectElement>("#alternate-model")?.addEventListener("change", (e) => {
-      const alternateModel = (e.currentTarget as HTMLSelectElement).value;
-      updateRunnerDraft((d) => ({
-        ...d,
-        alternateModel,
-        fastMode: isQaFastModeEnabled({ primaryModel: d.primaryModel, alternateModel }),
-      }));
-    });
+    for (const [selector, field] of [
+      ["#primary-model", "primaryModel"],
+      ["#alternate-model", "alternateModel"],
+    ] as const) {
+      bindValue(selector, "change", (value) => {
+        updateRunnerDraft((draft) => {
+          const models = { ...draft, [field]: value };
+          return { ...models, fastMode: isQaFastModeEnabled(models) };
+        });
+      });
+    }
 
-    root.querySelector<HTMLInputElement>("#evidence-path")?.addEventListener("input", (e) => {
-      state.evidencePathDraft = (e.currentTarget as HTMLInputElement).value;
+    bindValue("#evidence-path", "input", (value) => {
+      state.evidencePathDraft = value;
     });
     root.querySelector<HTMLInputElement>("#evidence-path")?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -1047,34 +895,28 @@ export async function createQaLabApp(root: HTMLDivElement) {
         void loadEvidence();
       }
     });
-    root
-      .querySelector<HTMLSelectElement>("#evidence-status-filter")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        state.evidenceStatusFilter =
-          value === "pass" || value === "fail" || value === "blocked" || value === "skipped"
-            ? value
-            : "all";
-        state.selectedEvidenceEntryKey = null;
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#evidence-artifact-filter")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        state.evidenceArtifactFilter =
-          value === "image" ||
-          value === "video" ||
-          value === "json" ||
-          value === "text" ||
-          value === "file"
-            ? value
-            : "all";
-        state.selectedEvidenceEntryKey = null;
-        render();
-      });
-    root.querySelector<HTMLInputElement>("#evidence-search")?.addEventListener("input", (e) => {
-      state.evidenceSearchText = (e.currentTarget as HTMLInputElement).value;
+    bindValue("#evidence-status-filter", "change", (value) => {
+      state.evidenceStatusFilter =
+        value === "pass" || value === "fail" || value === "blocked" || value === "skipped"
+          ? value
+          : "all";
+      state.selectedEvidenceEntryKey = null;
+      render();
+    });
+    bindValue("#evidence-artifact-filter", "change", (value) => {
+      state.evidenceArtifactFilter =
+        value === "image" ||
+        value === "video" ||
+        value === "json" ||
+        value === "text" ||
+        value === "file"
+          ? value
+          : "all";
+      state.selectedEvidenceEntryKey = null;
+      render();
+    });
+    bindValue("#evidence-search", "input", (value) => {
+      state.evidenceSearchText = value;
       state.selectedEvidenceEntryKey = null;
       render();
     });
@@ -1103,17 +945,14 @@ export async function createQaLabApp(root: HTMLDivElement) {
       persistCaptureSavedViews(state.captureSavedViews);
       render();
     });
-    root
-      .querySelector<HTMLSelectElement>("#capture-saved-view")
-      ?.addEventListener("change", (e) => {
-        const id = (e.currentTarget as HTMLSelectElement).value;
-        const view = state.captureSavedViews.find((candidate) => candidate.id === id);
-        if (!view) {
-          return;
-        }
-        applyCaptureSavedView(view);
-        void refresh();
-      });
+    bindValue("#capture-saved-view", "change", (id) => {
+      const view = state.captureSavedViews.find((candidate) => candidate.id === id);
+      if (!view) {
+        return;
+      }
+      applyCaptureSavedView(view);
+      void refresh();
+    });
     root.querySelector<HTMLButtonElement>("#capture-delete-view")?.addEventListener("click", () => {
       const select = root.querySelector<HTMLSelectElement>("#capture-saved-view");
       const id = select?.value?.trim();
@@ -1137,12 +976,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
         void refresh();
       });
     });
-    root
-      .querySelector<HTMLButtonElement>("#capture-toggle-selected-sessions")
-      ?.addEventListener("click", () => {
-        state.captureSelectedSessionsExpanded = !state.captureSelectedSessionsExpanded;
-        render();
-      });
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
       ?.addEventListener("click", () => {
@@ -1178,120 +1011,76 @@ export async function createQaLabApp(root: HTMLDivElement) {
         await refresh();
       })();
     });
-    root.querySelector<HTMLSelectElement>("#capture-preset")?.addEventListener("change", (e) => {
-      state.captureQueryPreset = (e.currentTarget as HTMLSelectElement)
-        .value as UiState["captureQueryPreset"];
+    bindValue("#capture-preset", "change", (value) => {
+      state.captureQueryPreset = value as UiState["captureQueryPreset"];
       void refresh();
     });
     const readMultiSelect = (select: HTMLSelectElement) =>
       [...select.selectedOptions].map((option) => option.value).filter(Boolean);
-    root
-      .querySelector<HTMLSelectElement>("#capture-kind-filter")
-      ?.addEventListener("change", (e) => {
-        state.captureKindFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
+    for (const [selector, field] of [
+      ["#capture-kind-filter", "captureKindFilter"],
+      ["#capture-provider-filter", "captureProviderFilter"],
+      ["#capture-host-filter", "captureHostFilter"],
+    ] as const) {
+      root.querySelector<HTMLSelectElement>(selector)?.addEventListener("change", (e) => {
+        state[field] = readMultiSelect(e.currentTarget as HTMLSelectElement);
         state.selectedCaptureEventKey = null;
         render();
       });
-    root
-      .querySelector<HTMLSelectElement>("#capture-provider-filter")
-      ?.addEventListener("change", (e) => {
-        state.captureProviderFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
-        state.selectedCaptureEventKey = null;
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-host-filter")
-      ?.addEventListener("change", (e) => {
-        state.captureHostFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
-        state.selectedCaptureEventKey = null;
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-header-mode")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        state.captureHeaderMode = value === "all" || value === "hidden" ? value : "key";
-        render();
-      });
-    root.querySelector<HTMLSelectElement>("#capture-view-mode")?.addEventListener("change", (e) => {
-      state.captureViewMode =
-        (e.currentTarget as HTMLSelectElement).value === "timeline" ? "timeline" : "list";
+    }
+    bindValue("#capture-header-mode", "change", (value) => {
+      state.captureHeaderMode = value === "all" || value === "hidden" ? value : "key";
+      render();
+    });
+    bindValue("#capture-view-mode", "change", (value) => {
+      state.captureViewMode = value === "timeline" ? "timeline" : "list";
       state.captureCollapsedLaneIds = [];
       state.capturePinnedLaneIds = [];
-      state.captureTimelineWindowStartPct = null;
-      state.captureTimelineWindowEndPct = null;
-      state.captureTimelineBrushAnchorPct = null;
-      state.captureTimelineBrushCurrentPct = null;
+      clearCaptureTimelineWindow();
+    });
+    bindValue("#capture-group-mode", "change", (value) => {
+      state.captureGroupMode =
+        value === "flow" || value === "host-path" || value === "burst" ? value : "none";
       state.selectedCaptureEventKey = null;
       render();
     });
-    root
-      .querySelector<HTMLSelectElement>("#capture-group-mode")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        state.captureGroupMode =
-          value === "flow" || value === "host-path" || value === "burst" ? value : "none";
-        state.selectedCaptureEventKey = null;
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-timeline-lane-mode")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        state.captureTimelineLaneMode = value === "provider" || value === "flow" ? value : "domain";
-        state.captureTimelinePreviousLaneSort = null;
-        state.captureCollapsedLaneIds = [];
-        state.capturePinnedLaneIds = [];
-        state.selectedCaptureEventKey = null;
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-timeline-lane-sort")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        const nextSort =
-          value === "most-errors" || value === "severity" || value === "alphabetical"
-            ? value
-            : "most-events";
-        if (nextSort !== state.captureTimelineLaneSort) {
-          state.captureTimelinePreviousLaneSort = state.captureTimelineLaneSort;
-        }
-        state.captureTimelineLaneSort = nextSort;
-        render();
-      });
-    root
-      .querySelector<HTMLInputElement>("#capture-timeline-lane-search")
-      ?.addEventListener("input", (e) => {
-        state.captureTimelineLaneSearch = (e.currentTarget as HTMLInputElement).value ?? "";
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-timeline-zoom")
-      ?.addEventListener("change", (e) => {
-        const value = Number((e.currentTarget as HTMLSelectElement).value);
-        state.captureTimelineZoom =
-          value === 75 || value === 150 || value === 200 || value === 300 ? value : 100;
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-timeline-sparkline-mode")
-      ?.addEventListener("change", (e) => {
-        state.captureTimelineSparklineMode =
-          (e.currentTarget as HTMLSelectElement).value === "lane-relative"
-            ? "lane-relative"
-            : "session-relative";
-        render();
-      });
+    bindValue("#capture-timeline-lane-mode", "change", (value) => {
+      state.captureTimelineLaneMode = value === "provider" || value === "flow" ? value : "domain";
+      state.captureTimelinePreviousLaneSort = null;
+      state.captureCollapsedLaneIds = [];
+      state.capturePinnedLaneIds = [];
+      state.selectedCaptureEventKey = null;
+      render();
+    });
+    bindValue("#capture-timeline-lane-sort", "change", (value) => {
+      const nextSort =
+        value === "most-errors" || value === "severity" || value === "alphabetical"
+          ? value
+          : "most-events";
+      if (nextSort !== state.captureTimelineLaneSort) {
+        state.captureTimelinePreviousLaneSort = state.captureTimelineLaneSort;
+      }
+      state.captureTimelineLaneSort = nextSort;
+      render();
+    });
+    bindValue("#capture-timeline-lane-search", "input", (value) => {
+      state.captureTimelineLaneSearch = value;
+      render();
+    });
+    bindValue("#capture-timeline-zoom", "change", (value) => {
+      const zoom = Number(value);
+      state.captureTimelineZoom =
+        zoom === 75 || zoom === 150 || zoom === 200 || zoom === 300 ? zoom : 100;
+      render();
+    });
+    bindValue("#capture-timeline-sparkline-mode", "change", (value) => {
+      state.captureTimelineSparklineMode =
+        value === "lane-relative" ? "lane-relative" : "session-relative";
+      render();
+    });
     root
       .querySelector<HTMLButtonElement>("#capture-timeline-clear-window")
-      ?.addEventListener("click", () => {
-        state.captureTimelineWindowStartPct = null;
-        state.captureTimelineWindowEndPct = null;
-        state.captureTimelineBrushAnchorPct = null;
-        state.captureTimelineBrushCurrentPct = null;
-        state.selectedCaptureEventKey = null;
-        render();
-      });
+      ?.addEventListener("click", clearCaptureTimelineWindow);
     root
       .querySelector<HTMLInputElement>("#capture-timeline-focus-flow")
       ?.addEventListener("change", (e) => {
@@ -1302,29 +1091,20 @@ export async function createQaLabApp(root: HTMLDivElement) {
         }
         render();
       });
-    root
-      .querySelector<HTMLSelectElement>("#capture-timeline-focused-lane-mode")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        state.captureTimelineFocusedLaneMode =
-          value === "only-matching" || value === "collapse-background" ? value : "all";
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-timeline-focused-lane-threshold")
-      ?.addEventListener("change", (e) => {
-        const value = (e.currentTarget as HTMLSelectElement).value;
-        state.captureTimelineFocusedLaneThreshold =
-          value === "events-2" || value === "percent-10" || value === "percent-25" ? value : "any";
-        render();
-      });
-    root
-      .querySelector<HTMLSelectElement>("#capture-detail-placement")
-      ?.addEventListener("change", (e) => {
-        state.captureDetailPlacement =
-          (e.currentTarget as HTMLSelectElement).value === "bottom" ? "bottom" : "right";
-        render();
-      });
+    bindValue("#capture-timeline-focused-lane-mode", "change", (value) => {
+      state.captureTimelineFocusedLaneMode =
+        value === "only-matching" || value === "collapse-background" ? value : "all";
+      render();
+    });
+    bindValue("#capture-timeline-focused-lane-threshold", "change", (value) => {
+      state.captureTimelineFocusedLaneThreshold =
+        value === "events-2" || value === "percent-10" || value === "percent-25" ? value : "any";
+      render();
+    });
+    bindValue("#capture-detail-placement", "change", (value) => {
+      state.captureDetailPlacement = value === "bottom" ? "bottom" : "right";
+      render();
+    });
     root
       .querySelector<HTMLElement>("[data-capture-detail-splitter]")
       ?.addEventListener("mousedown", (event) => {
@@ -1361,74 +1141,42 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.captureDetailSplitDragging = false;
         render();
       });
-    root.querySelectorAll<HTMLInputElement>('input[name="capture-detail-view"]').forEach((node) => {
-      node.addEventListener("change", () => {
-        if (!node.checked) {
-          return;
-        }
-        const value = node.value;
-        state.captureDetailView =
-          value === "flow" || value === "payload" || value === "headers" ? value : "overview";
-        state.capturePreferredDetailView = state.captureDetailView;
-        render();
+    const bindCaptureRadio = (name: string, select: (value: string) => void) => {
+      root.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`).forEach((node) => {
+        node.addEventListener("change", () => {
+          if (node.checked) {
+            select(node.value);
+            render();
+          }
+        });
       });
+    };
+    bindCaptureRadio("capture-detail-view", (value) => {
+      state.captureDetailView =
+        value === "flow" || value === "payload" || value === "headers" ? value : "overview";
+      state.capturePreferredDetailView = state.captureDetailView;
     });
-    root.querySelectorAll<HTMLInputElement>('input[name="capture-flow-layout"]').forEach((node) => {
-      node.addEventListener("change", () => {
-        if (!node.checked) {
-          return;
-        }
-        state.captureFlowDetailLayout = node.value === "pair-first" ? "pair-first" : "nav-first";
-        render();
-      });
+    bindCaptureRadio("capture-flow-layout", (value) => {
+      state.captureFlowDetailLayout = value === "pair-first" ? "pair-first" : "nav-first";
     });
-    root
-      .querySelectorAll<HTMLInputElement>('input[name="capture-payload-layout"]')
-      .forEach((node) => {
-        node.addEventListener("change", () => {
-          if (!node.checked) {
-            return;
-          }
-          state.capturePayloadDetailLayout = node.value === "raw" ? "raw" : "formatted";
-          render();
-        });
-      });
-    root
-      .querySelectorAll<HTMLInputElement>('input[name="capture-payload-extent"]')
-      .forEach((node) => {
-        node.addEventListener("change", () => {
-          if (!node.checked) {
-            return;
-          }
-          state.capturePayloadExtent = node.value === "full" ? "full" : "preview";
-          render();
-        });
-      });
-    root
-      .querySelectorAll<HTMLInputElement>('input[name="capture-payload-event-sort"]')
-      .forEach((node) => {
-        node.addEventListener("change", () => {
-          if (!node.checked) {
-            return;
-          }
-          state.capturePayloadEventSort =
-            node.value === "name" || node.value === "size" ? node.value : "stream";
-          render();
-        });
-      });
-    root
-      .querySelector<HTMLInputElement>("#capture-payload-event-filter")
-      ?.addEventListener("input", (e) => {
-        state.capturePayloadEventFilter = (e.currentTarget as HTMLInputElement).value ?? "";
-        render();
-      });
-    root
-      .querySelector<HTMLInputElement>("#capture-search-filter")
-      ?.addEventListener("input", (e) => {
-        state.captureSearchText = (e.currentTarget as HTMLInputElement).value ?? "";
-        state.selectedCaptureEventKey = null;
-        render();
-      });
+    bindCaptureRadio("capture-payload-layout", (value) => {
+      state.capturePayloadDetailLayout = value === "raw" ? "raw" : "formatted";
+    });
+    bindCaptureRadio("capture-payload-extent", (value) => {
+      state.capturePayloadExtent = value === "full" ? "full" : "preview";
+    });
+    bindCaptureRadio("capture-payload-event-sort", (value) => {
+      state.capturePayloadEventSort = value === "name" || value === "size" ? value : "stream";
+    });
+    bindValue("#capture-payload-event-filter", "input", (value) => {
+      state.capturePayloadEventFilter = value;
+      render();
+    });
+    bindValue("#capture-search-filter", "input", (value) => {
+      state.captureSearchText = value;
+      state.selectedCaptureEventKey = null;
+      render();
+    });
     root
       .querySelector<HTMLInputElement>("#capture-errors-only")
       ?.addEventListener("change", (e) => {
@@ -1436,79 +1184,43 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.selectedCaptureEventKey = null;
         render();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-summary-toggle")
-      ?.addEventListener("click", () => {
-        state.captureSummaryExpanded = !state.captureSummaryExpanded;
+    for (const [selector, field] of [
+      ["#capture-toggle-selected-sessions", "captureSelectedSessionsExpanded"],
+      ["#capture-summary-toggle", "captureSummaryExpanded"],
+      ["#capture-controls-toggle", "captureControlsExpanded"],
+    ] as const) {
+      root.querySelector<HTMLButtonElement>(selector)?.addEventListener("click", () => {
+        state[field] = !state[field];
         render();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-controls-toggle")
-      ?.addEventListener("click", () => {
-        state.captureControlsExpanded = !state.captureControlsExpanded;
-        render();
-      });
+    }
     root
       .querySelector<HTMLButtonElement>("#capture-clear-filters")
       ?.addEventListener("click", () => {
-        state.captureKindFilter = [];
-        state.captureProviderFilter = [];
-        state.captureHostFilter = [];
-        state.captureSearchText = "";
-        state.captureHeaderMode = "key";
-        state.captureViewMode = "list";
-        state.captureGroupMode = "none";
-        state.captureTimelineLaneMode = "domain";
-        state.captureTimelineLaneSort = "most-events";
-        state.captureTimelinePreviousLaneSort = null;
-        state.captureTimelineLaneSearch = "";
-        state.captureTimelineZoom = 100;
-        state.captureTimelineSparklineMode = "session-relative";
-        state.captureTimelineWindowStartPct = null;
-        state.captureTimelineWindowEndPct = null;
-        state.captureTimelineBrushAnchorPct = null;
-        state.captureTimelineBrushCurrentPct = null;
-        state.captureTimelineFocusSelectedFlow = false;
-        state.captureTimelineFocusedLaneMode = "all";
-        state.captureTimelineFocusedLaneThreshold = "any";
-        state.captureErrorsOnly = false;
-        state.captureCollapsedLaneIds = [];
-        state.capturePinnedLaneIds = [];
-        state.selectedCaptureEventKey = null;
+        Object.assign(state, createCaptureFilters());
         render();
       });
-    root.querySelectorAll<HTMLElement>("[data-capture-lane-toggle]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const laneId = node.dataset.captureLaneToggle;
-        if (!laneId) {
-          return;
-        }
-        const collapsed = new Set(state.captureCollapsedLaneIds);
-        if (collapsed.has(laneId)) {
-          collapsed.delete(laneId);
-        } else {
-          collapsed.add(laneId);
-        }
-        state.captureCollapsedLaneIds = [...collapsed];
-        render();
+    for (const [attribute, field] of [
+      ["data-capture-lane-toggle", "captureCollapsedLaneIds"],
+      ["data-capture-lane-pin", "capturePinnedLaneIds"],
+    ] as const) {
+      root.querySelectorAll<HTMLElement>(`[${attribute}]`).forEach((node) => {
+        node.addEventListener("click", () => {
+          const laneId = node.getAttribute(attribute);
+          if (!laneId) {
+            return;
+          }
+          const selected = new Set(state[field]);
+          if (selected.has(laneId)) {
+            selected.delete(laneId);
+          } else {
+            selected.add(laneId);
+          }
+          state[field] = [...selected];
+          render();
+        });
       });
-    });
-    root.querySelectorAll<HTMLElement>("[data-capture-lane-pin]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const laneId = node.dataset.captureLanePin;
-        if (!laneId) {
-          return;
-        }
-        const pinned = new Set(state.capturePinnedLaneIds);
-        if (pinned.has(laneId)) {
-          pinned.delete(laneId);
-        } else {
-          pinned.add(laneId);
-        }
-        state.capturePinnedLaneIds = [...pinned];
-        render();
-      });
-    });
+    }
     root.querySelectorAll<HTMLElement>("[data-capture-event]").forEach((node) => {
       node.addEventListener("click", () => {
         state.selectedCaptureEventKey = node.dataset.captureEvent ?? null;
@@ -1538,30 +1250,22 @@ export async function createQaLabApp(root: HTMLDivElement) {
         if (!windowRange) {
           return;
         }
-        sparklineSweepActive = true;
-        sparklineSweepAnchorStartPct = windowRange.start;
-        sparklineSweepAnchorEndPct = windowRange.end;
-        sparklineSweepCurrentStartPct = windowRange.start;
-        sparklineSweepCurrentEndPct = windowRange.end;
+        sparklineSweep = { anchor: windowRange, current: windowRange };
         state.captureTimelineBrushAnchorPct = windowRange.start;
         state.captureTimelineBrushCurrentPct = windowRange.end;
         render();
       });
       node.addEventListener("mouseenter", () => {
-        if (!sparklineSweepActive) {
+        if (!sparklineSweep) {
           return;
         }
         const windowRange = readWindow();
         if (!windowRange) {
           return;
         }
-        sparklineSweepCurrentStartPct = windowRange.start;
-        sparklineSweepCurrentEndPct = windowRange.end;
-        const previewStart = Math.min(
-          sparklineSweepAnchorStartPct ?? windowRange.start,
-          windowRange.start,
-        );
-        const previewEnd = Math.max(sparklineSweepAnchorEndPct ?? windowRange.end, windowRange.end);
+        sparklineSweep.current = windowRange;
+        const previewStart = Math.min(sparklineSweep.anchor.start, windowRange.start);
+        const previewEnd = Math.max(sparklineSweep.anchor.end, windowRange.end);
         state.captureTimelineBrushAnchorPct = previewStart;
         state.captureTimelineBrushCurrentPct = previewEnd;
         render();
@@ -1631,31 +1335,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     if (!captureGlobalListenersBound) {
       captureGlobalListenersBound = true;
       window.addEventListener("mouseup", (event) => {
-        if (!sparklineSweepActive) {
+        if (!sparklineSweep) {
           return;
         }
-        const anchorStart = sparklineSweepAnchorStartPct;
-        const anchorEnd = sparklineSweepAnchorEndPct;
-        const currentStart = sparklineSweepCurrentStartPct;
-        const currentEnd = sparklineSweepCurrentEndPct;
-        sparklineSweepActive = false;
-        sparklineSweepAnchorStartPct = null;
-        sparklineSweepAnchorEndPct = null;
-        sparklineSweepCurrentStartPct = null;
-        sparklineSweepCurrentEndPct = null;
-        if (
-          anchorStart == null ||
-          anchorEnd == null ||
-          currentStart == null ||
-          currentEnd == null
-        ) {
-          state.captureTimelineBrushAnchorPct = null;
-          state.captureTimelineBrushCurrentPct = null;
-          render();
-          return;
-        }
-        const start = Math.min(anchorStart, currentStart);
-        const end = Math.max(anchorEnd, currentEnd);
+        const { anchor, current } = sparklineSweep;
+        sparklineSweep = null;
+        const start = Math.min(anchor.start, current.start);
+        const end = Math.max(anchor.end, current.end);
         const width = Math.max(0.01, end - start);
         const expand = event.shiftKey ? width : 0;
         state.captureTimelineWindowStartPct = Math.max(0, Math.min(100, start - expand));
@@ -1708,12 +1394,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
             state.captureTimelineBrushAnchorPct != null
           ) {
             event.preventDefault();
-            state.captureTimelineWindowStartPct = null;
-            state.captureTimelineWindowEndPct = null;
-            state.captureTimelineBrushAnchorPct = null;
-            state.captureTimelineBrushCurrentPct = null;
-            state.selectedCaptureEventKey = null;
-            render();
+            clearCaptureTimelineWindow();
           }
           return;
         }
@@ -1746,28 +1427,25 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     }
 
-    /* Composer form */
-    root.querySelector<HTMLSelectElement>("#conversation-kind")?.addEventListener("change", (e) => {
-      const selectedKind = (e.currentTarget as HTMLSelectElement).value;
+    bindValue("#conversation-kind", "change", (selectedKind) => {
       state.composer.conversationKind =
         selectedKind === "channel" || selectedKind === "group" ? selectedKind : "direct";
     });
-    root.querySelector<HTMLInputElement>("#conversation-id")?.addEventListener("input", (e) => {
-      state.composer.conversationId = (e.currentTarget as HTMLInputElement).value;
-    });
-    root.querySelector<HTMLInputElement>("#sender-id")?.addEventListener("input", (e) => {
-      state.composer.senderId = (e.currentTarget as HTMLInputElement).value;
-    });
-    root.querySelector<HTMLInputElement>("#sender-name")?.addEventListener("input", (e) => {
-      state.composer.senderName = (e.currentTarget as HTMLInputElement).value;
-    });
+    for (const [selector, field] of [
+      ["#conversation-id", "conversationId"],
+      ["#sender-id", "senderId"],
+      ["#sender-name", "senderName"],
+    ] as const) {
+      bindValue(selector, "input", (value) => {
+        state.composer[field] = value;
+      });
+    }
 
-    /* Composer textarea: capture input + Enter-to-send */
     const textarea = root.querySelector<HTMLTextAreaElement>("#composer-text");
     if (textarea) {
       textarea.addEventListener("input", (e) => {
         state.composer.text = (e.currentTarget as HTMLTextAreaElement).value;
-        /* Auto-grow */
+
         textarea.style.height = "auto";
         textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
       });
@@ -1779,21 +1457,16 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     }
 
-    /* Chat scroll tracking */
     trackChatScroll();
   }
 
-  /* ---------- Render ---------- */
-
   function render() {
-    /* Preserve focused element id so we can restore focus after re-render */
-    const focusedId = (document.activeElement as HTMLElement)?.id || null;
+    const renderState = captureRenderState(root);
     const composerText = state.composer.text;
 
     root.innerHTML = renderQaLabUi(state);
     bindEvents();
 
-    /* Restore composer text (since we re-rendered) */
     const textEl = root.querySelector<HTMLTextAreaElement>("#composer-text");
     if (textEl && composerText) {
       textEl.value = composerText;
@@ -1801,13 +1474,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       textEl.style.height = `${Math.min(textEl.scrollHeight, 120)}px`;
     }
 
-    /* Restore focus */
-    if (focusedId) {
-      const el = root.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`);
-      if (el && "focus" in el) {
-        el.focus();
-      }
-    }
+    restoreRenderState(root, renderState);
 
     if (
       state.activeTab === "capture" &&
@@ -1822,11 +1489,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
       }
     }
 
-    /* Auto-scroll chat */
     requestAnimationFrame(() => scrollChatToBottom());
   }
-
-  /* ---------- Bootstrap ---------- */
 
   render();
   await refresh();

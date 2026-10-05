@@ -1,8 +1,6 @@
 import type {
   AuditMessageConversationKind,
-  AuditMessageDeliveryKind,
   AuditMessageFailureStage,
-  AuditOutboundMessageSuppressedReasonCode,
 } from "../../audit/audit-event-types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
@@ -22,6 +20,8 @@ import {
 } from "./channel-target-prefix.js";
 import {
   countPhysicalOutboundSends,
+  type OutboundAuditTerminal,
+  type IndexedOutboundAuditTerminal,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -42,36 +42,6 @@ type OutboundAuditDeliveryContext = {
   };
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
-};
-
-type OutboundAuditTerminal =
-  | {
-      outcome: "sent";
-      results: readonly OutboundDeliveryResult[];
-      deliveryKind?: AuditMessageDeliveryKind;
-    }
-  | {
-      outcome: "suppressed";
-      reasonCode: AuditOutboundMessageSuppressedReasonCode;
-      results?: readonly OutboundDeliveryResult[];
-    }
-  | {
-      outcome: "failed";
-      failureStage: AuditMessageFailureStage;
-      results?: readonly OutboundDeliveryResult[];
-      sentBeforeError?: boolean;
-      deliveryKind?: AuditMessageDeliveryKind;
-    }
-  | {
-      outcome: "unknown";
-      failureStage: AuditMessageFailureStage;
-      results?: readonly OutboundDeliveryResult[];
-      sentBeforeError?: boolean;
-    };
-
-export type IndexedOutboundAuditTerminal = {
-  payloadIndex: number;
-  terminal: OutboundAuditTerminal;
 };
 
 function outboundQueueAuditSourceId(
@@ -95,16 +65,6 @@ function outcomesByPayload(
   return indexed;
 }
 
-function sentResults(
-  history: readonly OutboundPayloadDeliveryOutcome[],
-): readonly OutboundDeliveryResult[] {
-  const sent = history.findLast(
-    (outcome): outcome is Extract<OutboundPayloadDeliveryOutcome, { status: "sent" }> =>
-      outcome.status === "sent",
-  );
-  return sent?.results ?? [];
-}
-
 function projectRecordedOutboundAuditTerminal(
   history: readonly OutboundPayloadDeliveryOutcome[],
 ): OutboundAuditTerminal | undefined {
@@ -126,10 +86,7 @@ function projectRecordedOutboundAuditTerminal(
       ...(latest.deliveryKind ? { deliveryKind: latest.deliveryKind } : {}),
     };
   }
-  if (latest?.status === "suppressed") {
-    if (latest.reason === "adapter_returned_no_identity") {
-      return { outcome: "unknown", failureStage: "platform_send" };
-    }
+  if (latest?.status === "suppressed" && latest.reason !== "adapter_returned_no_identity") {
     return {
       outcome: "suppressed",
       reasonCode:
@@ -178,7 +135,10 @@ export function failedOutboundAuditTerminals(params: {
     }
     const latest = history.at(-1);
     const failedResults = latest?.status === "failed" ? (latest.results ?? []) : [];
-    const payloadResults = failedResults.length > 0 ? failedResults : sentResults(history);
+    const payloadResults =
+      failedResults.length > 0
+        ? failedResults
+        : (history.findLast((outcome) => outcome.status === "sent")?.results ?? []);
     const fallbackResults = params.payloadCount === 1 ? params.results : [];
     const results = payloadResults.length > 0 ? payloadResults : fallbackResults;
     return {
@@ -334,6 +294,23 @@ function resolveResultIdentifiers(
   };
 }
 
+function outboundAuditContext(context: OutboundAuditDeliveryContext) {
+  const agentId = context.session?.agentId ?? context.mirror?.agentId;
+  return {
+    actorType: agentId ? ("agent" as const) : ("system" as const),
+    actorId: agentId ?? "gateway",
+    ...(agentId ? { agentId } : {}),
+    ...(context.preparedBatch?.executionIdentityToken
+      ? { executionIdentityToken: context.preparedBatch.executionIdentityToken }
+      : {}),
+    direction: "outbound" as const,
+    channel: context.channel,
+    conversationKind: resolveConversationKind(context),
+    ...(context.accountId ? { accountId: context.accountId } : {}),
+    targetId: context.to,
+  };
+}
+
 /**
  * Emits only after the owning lifecycle has made the delivery terminal.
  * Queue retries share one source id, so recovery cannot duplicate the final row.
@@ -343,12 +320,10 @@ function emitOutboundAuditTerminal(params: {
   terminal: OutboundAuditTerminal;
   startedAt: number;
   sourceId?: string;
-  payloadIndex: number;
 }): void {
   try {
     const { context, terminal } = params;
     const results = terminal.results ?? [];
-    const agentId = context.session?.agentId ?? context.mirror?.agentId;
     const identifiers = resolveResultIdentifiers(context, results);
     const sentBeforeError =
       (terminal.outcome === "failed" || terminal.outcome === "unknown") &&
@@ -388,9 +363,7 @@ function emitOutboundAuditTerminal(params: {
       action: "message.outbound.finished",
       occurredAt: Date.now(),
       ...terminalFields,
-      actorType: agentId ? "agent" : "system",
-      actorId: agentId ?? "gateway",
-      ...(agentId ? { agentId } : {}),
+      ...outboundAuditContext(context),
       ...((context.runId ?? context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId)
         ? {
             runId:
@@ -399,16 +372,8 @@ function emitOutboundAuditTerminal(params: {
               context.replyPayloadSendingHook?.runId,
           }
         : {}),
-      ...(context.preparedBatch?.executionIdentityToken
-        ? { executionIdentityToken: context.preparedBatch.executionIdentityToken }
-        : {}),
-      direction: "outbound",
-      channel: context.channel,
-      conversationKind: resolveConversationKind(context),
       durationMs: Math.max(0, Date.now() - params.startedAt),
       resultCount: countPhysicalOutboundSends(results),
-      ...(context.accountId ? { accountId: context.accountId } : {}),
-      targetId: context.to,
       ...identifiers,
     });
   } catch {
@@ -434,43 +399,24 @@ export function emitOutboundAuditLifecycle(params: {
       if (!Number.isSafeInteger(payloadIndex) || payloadIndex < 0 || payloadIndex >= payloadCount) {
         continue;
       }
-      const agentId = params.context.session?.agentId ?? params.context.mirror?.agentId;
-      const common = {
+      emitTrustedMessageAuditEvent({
         sourceId: outboundQueueAuditSourceId(params.queueId, payloadIndex, params.outcome),
         occurredAt: Date.now(),
         status: "started" as const,
-        actorType: agentId ? ("agent" as const) : ("system" as const),
-        actorId: agentId ?? "gateway",
-        ...(agentId ? { agentId } : {}),
+        ...outboundAuditContext(params.context),
         ...((params.context.runId ?? params.context.preparedBatch?.runId)
           ? { runId: params.context.runId ?? params.context.preparedBatch?.runId }
           : {}),
-        ...(params.context.preparedBatch?.executionIdentityToken
-          ? { executionIdentityToken: params.context.preparedBatch.executionIdentityToken }
-          : {}),
-        direction: "outbound" as const,
-        channel: params.context.channel,
-        conversationKind: resolveConversationKind(params.context),
         durationMs: Math.max(0, Date.now() - params.startedAt),
         resultCount: 0,
-        ...(params.context.accountId ? { accountId: params.context.accountId } : {}),
-        targetId: params.context.to,
-      };
-      if (params.outcome === "queued") {
-        emitTrustedMessageAuditEvent({
-          ...common,
-          kind: "message",
-          action: "message.outbound.queued",
-          outcome: "queued",
-        });
-      } else {
-        emitTrustedMessageAuditEvent({
-          ...common,
-          kind: "message",
-          action: "message.outbound.platform-started",
-          outcome: "platform_started",
-        });
-      }
+        kind: "message",
+        ...(params.outcome === "queued"
+          ? { action: "message.outbound.queued" as const, outcome: "queued" as const }
+          : {
+              action: "message.outbound.platform-started" as const,
+              outcome: "platform_started" as const,
+            }),
+      });
     }
   } catch {
     // Audit observers cannot alter delivery or queue semantics.
@@ -500,7 +446,6 @@ export function emitOutboundAuditTerminals(params: {
       context: params.context,
       terminal: indexed.terminal,
       startedAt: params.startedAt,
-      payloadIndex: indexed.payloadIndex,
       ...(params.queueId
         ? { sourceId: outboundQueueAuditSourceId(params.queueId, indexed.payloadIndex) }
         : {}),

@@ -4,6 +4,7 @@
 import type {
   BlockReplyContext,
   PartialReplyPayload,
+  ReasoningStreamPayload,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
@@ -29,13 +30,6 @@ import type { AgentSession } from "./sessions/index.js";
 import type { NormalizedUsage } from "./usage.js";
 export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
-type ReasoningStreamPayload = Pick<
-  ReplyPayload,
-  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
-> & {
-  requiresReasoningProgressOptIn?: boolean;
-};
-
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
@@ -44,6 +38,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   /** Originating message channel used for subsystem log attribution. */
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
+  assistantErrorTranscript?: EmbeddedRunAttemptParams["assistantErrorTranscript"];
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
@@ -91,6 +86,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   isTerminalAborted?: () => boolean | undefined;
   /** Override the terminal stop reason from the current abort owner. */
   resolveTerminalStopReason?: () => string | undefined;
+  /** Same-prompt checks can retain ordinary streaming instead of buffering a draft. */
+  deferTerminalDelivery?: boolean;
   /** Gate final block delivery/lifecycle after the natural answer is known. */
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];
@@ -102,7 +99,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
     isError: boolean;
     incompleteTerminalAssistant: boolean;
     hadDeterministicSideEffect: boolean;
-  }) => void | Promise<void | { suppressTerminalDelivery?: boolean }>;
+    hasPendingContinuation: boolean;
+  }) => void | Promise<void | {
+    suppressTerminalDelivery?: boolean;
+    continueCurrentTurn?: boolean;
+  }>;
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
@@ -148,6 +149,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   replaySafeToolNames?: ReadonlySet<string>;
   /** Exact names of the marked Code Mode `exec` control tool(s) registered for this run. */
   codeModeExecToolNames?: ReadonlySet<string>;
+  /** Exact names of tools whose author declared `canDeliverSourceReply`. */
+  sourceReplyCapableToolNames?: ReadonlySet<string>;
   /** Canonical owner keys for unique plugin tools that can change durable state. */
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   /**

@@ -1,11 +1,16 @@
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 // OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
-import { listAgentEntries, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import {
   OPENCLAW_DOCS_URL,
   OPENCLAW_SOURCE_URL,
   resolveOpenClawReferencePaths,
 } from "../agents/docs-path.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
+import {
+  resolveConfiguredPrimaryModelForAgent,
+  resolveConfiguredSetupModelForAgent,
+} from "../agents/utility-model.js";
 import {
   readConfigFileSnapshot,
   resolveConfigPath,
@@ -14,8 +19,8 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createSetupTranslator, type SetupTranslator } from "../wizard/i18n/index.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
 type SystemAgentSummary = {
@@ -23,6 +28,7 @@ type SystemAgentSummary = {
   name?: string;
   isDefault: boolean;
   model?: string;
+  utilityModel?: string;
   workspace?: string;
 };
 
@@ -37,6 +43,9 @@ export type SystemAgentOverview = {
   agents: SystemAgentSummary[];
   defaultAgentId: string;
   defaultModel?: string;
+  /** Explicit utility route available to setup while the regular model is unconfigured. */
+  setupModel?: string;
+  utilityModel?: string;
   tools: {
     codex: LocalCommandProbe;
     claude: LocalCommandProbe;
@@ -60,27 +69,6 @@ export type SystemAgentOverview = {
   };
 };
 
-type OpenClawReferencePaths = Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
-
-type GatewayConnectionDetails = {
-  url: string;
-  urlSource: string;
-  remoteFallbackNote?: string;
-};
-
-type SystemAgentOverviewDependencies = {
-  readConfigFileSnapshot?: typeof readConfigFileSnapshot;
-  resolveConfigPath?: typeof resolveConfigPath;
-  resolveGatewayPort?: typeof resolveGatewayPort;
-  buildGatewayConnectionDetails?: (input: {
-    config: OpenClawConfig;
-    configPath: string;
-  }) => GatewayConnectionDetails;
-  probeLocalCommand?: typeof probeLocalCommand;
-  probeGatewayUrl?: typeof probeGatewayUrl;
-  resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
-};
-
 function issueMessages(snapshot: ConfigFileSnapshot): string[] {
   return snapshot.issues.map((issue) => {
     const path = issue.path ? `${issue.path}: ` : "";
@@ -91,11 +79,13 @@ function issueMessages(snapshot: ConfigFileSnapshot): string[] {
 function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): SystemAgentSummary[] {
   const entries = listAgentEntries(cfg);
   if (entries.length === 0) {
+    const utility = readUtilityModelSetting(cfg, defaultAgentId);
     return [
       {
         id: defaultAgentId,
         isDefault: true,
-        model: resolveAgentEffectiveModelPrimary(cfg, defaultAgentId),
+        model: resolveConfiguredPrimaryModelForAgent({ cfg, agentId: defaultAgentId }),
+        ...(utility.kind === "explicit" ? { utilityModel: utility.modelRef } : {}),
       },
     ];
   }
@@ -115,9 +105,13 @@ function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): Syste
     if (typeof entry.name === "string") {
       summary.name = entry.name;
     }
-    const model = resolveAgentEffectiveModelPrimary(cfg, id);
+    const model = resolveConfiguredPrimaryModelForAgent({ cfg, agentId: id });
     if (model) {
       summary.model = model;
+    }
+    const utility = readUtilityModelSetting(cfg, id);
+    if (utility.kind === "explicit") {
+      summary.utilityModel = utility.modelRef;
     }
     if (typeof entry.workspace === "string") {
       summary.workspace = entry.workspace;
@@ -127,37 +121,24 @@ function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): Syste
   return summaries;
 }
 
-function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePaths | undefined {
-  if (!isFastTestRuntimeEnv(env)) {
-    return undefined;
-  }
-  const sourcePath = process.cwd();
-  return {
-    sourcePath,
-    docsPath: `${sourcePath}/docs`,
-  };
-}
-
 export async function loadSystemAgentOverview(
-  opts: { agentId?: string; env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
+  opts: { agentId?: string } = {},
 ): Promise<SystemAgentOverview> {
-  const env = opts.env ?? process.env;
-  const deps = opts.deps ?? {};
-  const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
+  const env = process.env;
+  const snapshot = await readConfigFileSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
   const defaultAgentId = resolveAmbientOwnerAgentId(cfg, opts.agentId);
   const defaultModel =
-    resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
+    resolveConfiguredPrimaryModelForAgent({ cfg, agentId: defaultAgentId }) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
-  const configPath = snapshot.path || (deps.resolveConfigPath ?? resolveConfigPath)(env);
-  let gatewayUrl = `ws://127.0.0.1:${(deps.resolveGatewayPort ?? resolveGatewayPort)(cfg, env)}`;
+  const setupSelection = resolveConfiguredSetupModelForAgent({ cfg, agentId: defaultAgentId });
+  const utility = readUtilityModelSetting(cfg, defaultAgentId);
+  const configPath = snapshot.path || resolveConfigPath(env);
+  let gatewayUrl = `ws://127.0.0.1:${resolveGatewayPort(cfg, env)}`;
   let gatewaySource = "local loopback";
   let gatewayError: string | undefined;
   try {
-    const buildGatewayConnectionDetails =
-      deps.buildGatewayConnectionDetails ??
-      (await import("../gateway/call.js")).buildGatewayConnectionDetails;
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: cfg, configPath });
     gatewayUrl = details.url;
     gatewaySource = details.urlSource;
@@ -165,20 +146,17 @@ export async function loadSystemAgentOverview(
   } catch (err) {
     gatewayError = err instanceof Error ? err.message : String(err);
   }
-  const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
-  const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
   const [codex, claude, gemini, gateway, references] = await Promise.all([
     // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
-    commandProbe("codex"),
-    commandProbe("claude"),
-    commandProbe("gemini"),
-    (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
-    resolveFastTestReferences(env) ??
-      resolveReferences({
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-        moduleUrl: import.meta.url,
-      }),
+    probeLocalCommand("codex"),
+    probeLocalCommand("claude"),
+    probeLocalCommand("gemini"),
+    probeGatewayUrl(gatewayUrl),
+    resolveOpenClawReferencePaths({
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+    }),
   ]);
   return {
     config: {
@@ -191,6 +169,8 @@ export async function loadSystemAgentOverview(
     agents: buildAgentSummaries(cfg, defaultAgentId),
     defaultAgentId,
     defaultModel,
+    ...(setupSelection?.modelTarget === "utility" ? { setupModel: setupSelection.modelRef } : {}),
+    ...(utility.kind === "explicit" ? { utilityModel: utility.modelRef } : {}),
     tools: {
       codex,
       claude,
@@ -232,6 +212,7 @@ export function formatSystemAgentOverview(overview: SystemAgentOverview): string
       agent.isDefault ? "default" : undefined,
       agent.name ? `name=${agent.name}` : undefined,
       agent.model ? `model=${agent.model}` : undefined,
+      agent.utilityModel ? `utility=${agent.utilityModel}` : undefined,
       agent.workspace ? `workspace=${agent.workspace}` : undefined,
     ].filter(Boolean);
     return `  - ${bits.join(" | ")}`;
@@ -252,6 +233,8 @@ export function formatSystemAgentOverview(overview: SystemAgentOverview): string
     `Path: ${overview.config.path}`,
     `Default agent: ${overview.defaultAgentId}`,
     `Default model: ${overview.defaultModel ?? "not configured"}`,
+    ...(overview.setupModel ? [`Setup model: ${overview.setupModel}`] : []),
+    ...(overview.utilityModel ? [`Utility model: ${overview.utilityModel}`] : []),
     "Agents:",
     ...agentLines,
     `Codex: ${formatCommandProbe(overview.tools.codex)}`,
@@ -261,8 +244,8 @@ export function formatSystemAgentOverview(overview: SystemAgentOverview): string
       overview.tools.apiKeys.anthropic ? "found" : "not found"
     }`,
     `AI: ${
-      overview.defaultModel
-        ? `conversation runs on ${overview.defaultModel}`
+      overview.defaultModel || overview.setupModel
+        ? `conversation runs on ${overview.defaultModel ?? overview.setupModel}`
         : "inference unavailable; run openclaw onboard before starting OpenClaw"
     }`,
     `Docs: ${overview.references.docsPath ?? overview.references.docsUrl}`,
@@ -286,7 +269,9 @@ function recommendSystemAgentNextStep(overview: SystemAgentOverview): string {
     return 'run "validate config" or "doctor" to inspect the config';
   }
   if (!overview.defaultModel) {
-    return 'run "openclaw onboard" to establish inference';
+    return overview.setupModel
+      ? 'continue setup here; run "openclaw onboard" to choose your regular agent model'
+      : 'run "openclaw onboard" to establish inference';
   }
   if (!overview.gateway.reachable) {
     return 'run "gateway status" or "restart gateway"';
@@ -294,26 +279,15 @@ function recommendSystemAgentNextStep(overview: SystemAgentOverview): string {
   return 'run "talk to agent" to enter your default agent';
 }
 
-function formatStartupConfigStatus(overview: SystemAgentOverview): string {
-  if (!overview.config.exists) {
-    return "missing";
-  }
-  return overview.config.valid ? "valid" : "invalid";
-}
-
-function formatStartupGatewayStatus(overview: SystemAgentOverview): string {
-  if (overview.gateway.reachable) {
-    return `Gateway: reachable at ${overview.gateway.url}.`;
-  }
-  return `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`;
-}
-
 function formatStartupAction(overview: SystemAgentOverview): string | undefined {
   if (!overview.config.valid) {
     return "Config needs attention. Run `doctor` to inspect it.";
   }
-  if (!overview.defaultModel) {
+  if (!overview.defaultModel && !overview.setupModel) {
     return "Inference is unavailable. Run `openclaw onboard` and complete a live model check.";
+  }
+  if (!overview.defaultModel) {
+    return "Setup and utility inference are ready. Choose a regular agent model in Model Setup or run `openclaw onboard`.";
   }
   return undefined;
 }
@@ -322,16 +296,21 @@ function formatStartupAction(overview: SystemAgentOverview): string | undefined 
  * Welcome shown right after inference activation. OpenClaw owns the
  * remaining workspace, Gateway, channel, and agent setup.
  */
-export function formatSystemAgentOnboardingWelcome(overview: SystemAgentOverview): string {
+export function formatSystemAgentOnboardingWelcome(
+  overview: SystemAgentOverview,
+  translate: SetupTranslator = createSetupTranslator({ keyPrefix: "wizard.onboardingWelcome" }),
+): string {
   return [
-    "## Inference is ready.",
+    `## ${translate("inferenceReady")}`,
     "",
-    `- Verified model: ${overview.defaultModel ?? "not configured"}.`,
-    `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not configured or reachable yet."}`,
-    "- I can now finish your workspace, Gateway, channels, agents, plugins, and other optional setup.",
-    "- Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
+    `- ${translate(overview.defaultModel ? "verifiedModel" : "verifiedSetupModel", {
+      model: overview.defaultModel ?? overview.setupModel ?? translate("notConfigured"),
+    })}`,
+    `- ${overview.gateway.reachable ? translate("gatewayRunning", { url: overview.gateway.url }) : translate("gatewayUnavailable")}`,
+    `- ${translate("optionalSetup")}`,
+    `- ${translate("channelCommands")}`,
     "",
-    "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",
+    translate(overview.defaultModel ? "readyNext" : "readySetupNext"),
   ].join("\n");
 }
 
@@ -340,13 +319,24 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
   const agentLabel = agent?.name
     ? `${overview.defaultAgentId} (${agent.name})`
     : overview.defaultAgentId;
+  const configStatus = !overview.config.exists
+    ? "missing"
+    : overview.config.valid
+      ? "valid"
+      : "invalid";
   return [
     "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
     // Inference status stays independent of the recovery action line: with an
     // invalid config AND no model, both problems must be visible.
-    overview.defaultModel ? `Model: ${overview.defaultModel}.` : "Inference is unavailable.",
-    `Config: ${formatStartupConfigStatus(overview)}. Default agent: ${agentLabel}.`,
-    formatStartupGatewayStatus(overview),
+    overview.defaultModel
+      ? `Model: ${overview.defaultModel}.`
+      : overview.setupModel
+        ? `Setup model: ${overview.setupModel}.`
+        : "Inference is unavailable.",
+    `Config: ${configStatus}. Default agent: ${agentLabel}.`,
+    overview.gateway.reachable
+      ? `Gateway: reachable at ${overview.gateway.url}.`
+      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`,
     formatStartupAction(overview),
   ]
     .filter((line): line is string => line !== undefined)

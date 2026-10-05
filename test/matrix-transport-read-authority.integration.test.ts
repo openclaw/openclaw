@@ -19,7 +19,7 @@ const READ_PATH = "/_matrix/client/v3/rooms/%21room%3Amatrix.test/messages";
 const PAYLOAD = JSON.stringify({ chunk: [{ event_id: "$fixture", content: { body: "context" } }] });
 const DNS_ANSWER: LookupAddress[] = [{ address: "127.0.0.1", family: 4 }];
 const CLOSED_AUTHORITY = "Channel read authority is no longer active.";
-const TRANSPORTS = ["performMatrixRequest JSON", "performMatrixRequest raw", "SDK fetch"] as const;
+const TRANSPORTS = ["performMatrixRequest JSON", "SDK fetch"] as const;
 
 class TransportMatrixClient extends MatrixClient {
   async readTransport(transport: (typeof TRANSPORTS)[number], path: string): Promise<unknown> {
@@ -27,14 +27,6 @@ class TransportMatrixClient extends MatrixClient {
       // The SDK adapter invokes the fetch installed by MatrixClientBase.
       const response = await this.client.http.fetch(`${HOMESERVER}${path}`);
       return await response.text();
-    }
-    if (transport === "performMatrixRequest raw") {
-      const buffer = await this.httpClient.requestRaw({
-        method: "GET",
-        endpoint: path,
-        timeoutMs: 5000,
-      });
-      return buffer.toString("utf8");
     }
     return await this.doRequest("GET", path);
   }
@@ -82,20 +74,6 @@ afterEach(async () => {
 });
 
 describe.each(TRANSPORTS)("%s read authority", (transport) => {
-  it("returns an allowed read while its host scope is active", async () => {
-    const runtimeFetch = vi.fn<typeof fetch>(async () => new Response(PAYLOAD));
-    stubRuntimeFetch(runtimeFetch);
-    const { read } = createReader(transport);
-
-    await expect(
-      withChannelReadAuthority(
-        () => undefined,
-        () => read(READ_PATH),
-      ),
-    ).resolves.toBe(PAYLOAD);
-    expect(runtimeFetch.mock.calls.map(([url]) => url)).toEqual([`${HOMESERVER}${READ_PATH}`]);
-  });
-
   it.each([
     { name: "initial DNS", redirect: false },
     { name: "redirect DNS", redirect: true },

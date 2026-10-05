@@ -7,7 +7,7 @@ import {
   type ProgressCardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
+import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-method-policy.js";
 import type { ProgressCardStore } from "../progress-card-store.js";
 import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -46,7 +46,7 @@ function createHarness() {
       respond,
       context: {
         broadcast,
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
+        getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
       } as unknown as GatewayRequestContext,
     } as never);
     return respond;

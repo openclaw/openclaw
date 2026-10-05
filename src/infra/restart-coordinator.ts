@@ -3,9 +3,9 @@ import {
   type GatewayActiveWorkBlocker,
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
-import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
+import { scheduleGatewayRestart, type ScheduledRestart } from "./restart.js";
 
-// Safe restart coordination checks active local work before scheduling SIGUSR1
+// Safe restart coordination checks active local work before scheduling SIGUSR2
 // restarts, while still allowing explicit deferral bypasses for operators.
 type SafeGatewayRestartCounts = {
   queueSize: number;
@@ -14,7 +14,9 @@ type SafeGatewayRestartCounts = {
   cronRuns: number;
   backgroundExecSessions: number;
   rootRequests: number;
-  activeTasks: number;
+  agentRuns: number;
+  acpRuns: number;
+  mediaRuns: number;
   totalActive: number;
 };
 type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
@@ -25,7 +27,9 @@ type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
     | "cron-run"
     | "background-exec"
     | "root-request"
-    | "task";
+    | "agent-run"
+    | "acp-run"
+    | "media-generation";
 };
 
 type SafeRestartInspectors = Pick<
@@ -36,8 +40,9 @@ type SafeRestartInspectors = Pick<
   | "getCronRuns"
   | "getBackgroundExecSessions"
   | "getRootRequests"
-  | "getActiveTasks"
-  | "getTaskBlockers"
+  | "getAgentRuns"
+  | "getAcpRuns"
+  | "getMediaRuns"
 >;
 
 type SafeGatewayRestartPreflight = {
@@ -66,23 +71,18 @@ export function createSafeGatewayRestartPreflight(
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
   });
-  const counts: SafeGatewayRestartCounts = {
+  const counts = {
     queueSize: snapshot.counts.queueSize,
     pendingReplies: snapshot.counts.pendingReplies,
     embeddedRuns: snapshot.counts.embeddedRuns,
     cronRuns: snapshot.counts.cronRuns,
     backgroundExecSessions: snapshot.counts.backgroundExecSessions,
     rootRequests: snapshot.counts.rootRequests,
-    activeTasks: snapshot.counts.activeTasks,
-    totalActive:
-      snapshot.counts.queueSize +
-      snapshot.counts.pendingReplies +
-      snapshot.counts.embeddedRuns +
-      snapshot.counts.cronRuns +
-      snapshot.counts.backgroundExecSessions +
-      snapshot.counts.rootRequests +
-      snapshot.counts.activeTasks,
+    agentRuns: snapshot.counts.agentRuns,
+    acpRuns: snapshot.counts.acpRuns,
+    mediaRuns: snapshot.counts.mediaRuns,
   };
+  const totalActive = Object.values(counts).reduce((total, count) => total + count, 0);
   const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
 
   const summary =
@@ -90,8 +90,8 @@ export function createSafeGatewayRestartPreflight(
       ? "safe to restart now"
       : `restart deferred: ${blockers.map((blocker) => blocker.message).join("; ")}`;
   return {
-    safe: counts.totalActive === 0,
-    counts,
+    safe: totalActive === 0,
+    counts: { ...counts, totalActive },
     blockers,
     summary,
   };
@@ -103,19 +103,15 @@ export function scheduleSafeGatewayRestart(
     reason?: string;
     delayMs?: number;
     skipDeferral?: boolean;
-    preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
   const skipDeferral = opts.skipDeferral === true;
-  const restart = scheduleGatewaySigusr1Restart({
+  const restart = scheduleGatewayRestart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
-    ...(opts.preservePendingEmitHooks === true || skipDeferral
-      ? { preservePendingEmitHooksOnDeferralBypass: true }
-      : {}),
-    ...(skipDeferral ? { skipDeferral: true } : {}),
+    ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });
   const status = restart.coalesced
     ? "coalesced"

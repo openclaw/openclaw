@@ -28,15 +28,28 @@ The running package's startup guard and Gateway runtime selection admit a Node 2
 
 Installers retain the numeric Node requirement and add the probe as a second gate. Package and Git update preflight also require the selected target's `engines.node` range numerically, including any fallback runtime. A passing probe cannot relax another package's requirements: an older release may still enforce its version table at startup.
 
+Update recovery recommends the lowest standard release satisfying both the
+candidate's engine range and this updater's supported range above. For example,
+an older candidate requiring `>=22.19.0` still needs a recommendation of 24.16.0
+so the updater can run. If the ranges have no common supported release, the
+message identifies both ranges and asks you to select a compatible target.
+After selecting the runtime, continue through the retained absolute launcher so
+the updater rechecks prefix and service ownership before installation; follow the complete
+[recovery sequence](/install/update-troubleshooting#node-and-global-install-permissions).
+
 ## Why the floors exist
 
 The **SQLite WAL-reset corruption bug** requires a safe loaded library: SQLite **3.51.3+**, **3.50.7+ within 3.50.x**, or **3.44.6+ within 3.44.x**. OpenClaw validates the library actually loaded because Node builds linked to shared system SQLite can use a different version from Node's own metadata.
 
 Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 silently truncates values at embedded NUL characters. The first fixed releases are Node 24.16.0 and 26.1.0; a WAL-safe SQLite library does not fix this decoder. Node 23 was excluded earlier for incompatible `node:sqlite` behavior.
 
+## V8 compiler settings
+
+On Node 24 and 26, `process.exit()` can hang forever after a command has printed its output: Node joins V8's background threads while a Maglev or concurrent Sparkplug compile job waits for a garbage collection the exiting main thread never runs ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). OpenClaw's CLI, Gateway, hook relay, and macOS node worker therefore start with Maglev and concurrent Sparkplug turned off, the tiering Node 22 used; TurboFan still optimizes hot code. Passing `--maglev` or `--concurrent-sparkplug` to `node` keeps that compiler enabled.
+
 ## Platform consequences
 
-Official Node 24+ binaries require **macOS 13.5+**, so macOS 11 through 13.4 no longer support the Node-based CLI or Gateway. The companion app has separate [macOS requirements](/platforms/macos).
+Official Node 24+ macOS binaries are built for **macOS 13.5+**, the oldest release Node supports. macOS does not block them on older releases, and the CLI and Gateway have been observed running on macOS 12 with official Node 24. OpenClaw does not test or support macOS 11 through 13.4, so features that ship their own native binaries can still fail there. The companion app has separate [macOS requirements](/platforms/macos).
 
 Supported Node lines have no official **Linux ARMv7** builds. Use a 64-bit operating system on compatible ARM hardware, or another supported host.
 
@@ -49,7 +62,7 @@ Recommended, supported, and provisioned are three different things.
 | Platform        | Installer path                              | Node provisioned                                                                           |
 | --------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Linux           | `install.sh`: apt/dnf/yum via NodeSource    | Node 24.x LTS.                                                                             |
-| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.19.0 by default; existing runtime reuse and explicit version selection can differ. |
+| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.21.0 by default; existing runtime reuse and explicit version selection can differ. |
 | macOS           | `install.sh`: Homebrew `node`               | Node 26; no exact patch pinned, and an existing supported Node can be retained.            |
 | Windows         | `install.ps1`: Chocolatey, Scoop, or winget | LTS package; no exact patch pinned, validated after installation.                          |
 | Windows         | `install.ps1`: portable fallback            | Latest 26.x Windows zip.                                                                   |

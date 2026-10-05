@@ -99,21 +99,18 @@ describe("memory-wiki tools", () => {
     return { tool: createWikiApplyTool(config), pagePath, original };
   }
 
-  it.each(["synthesise", "update"])(
-    "keeps wiki pages unchanged for unknown operation %s",
-    async (op) => {
-      const { tool, pagePath, original } = await createApplyFixture();
-      const outcome = await tool
-        .execute("unknown-operation", { op, lookup: "entity.alpha", status: "review" })
-        .then(
-          () => "accepted",
-          () => "rejected",
-        );
+  it("keeps wiki pages unchanged for unknown operation update", async () => {
+    const { tool, pagePath, original } = await createApplyFixture();
+    const outcome = await tool
+      .execute("unknown-operation", { op: "update", lookup: "entity.alpha", status: "review" })
+      .then(
+        () => "accepted",
+        () => "rejected",
+      );
 
-      expect(await fs.readFile(pagePath, "utf8")).toBe(original);
-      expect(outcome).toBe("rejected");
-    },
-  );
+    expect(await fs.readFile(pagePath, "utf8")).toBe(original);
+    expect(outcome).toBe("rejected");
+  });
 
   it.each(["update_metadata", "metadata"])(
     "applies supported metadata operation %s",

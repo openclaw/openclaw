@@ -1,10 +1,14 @@
-import { compareToolCallShape, stableHash } from "./parity-shared.js";
-// Qa Lab plugin module implements harness parity behavior.
+import { resolveNonNegativeIntegerOption as readCount } from "openclaw/plugin-sdk/number-runtime";
+import {
+  compareToolCallShape,
+  compareToolResultShape,
+  normalizeTextForParity,
+  stableHash,
+} from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityDrift,
-  RuntimeParityToolCall,
   RuntimeParityUsage,
 } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
@@ -13,10 +17,6 @@ type HarnessVariant = {
   id: string;
   label: string;
   runtime?: RuntimeId;
-  model?: string;
-  configPatch?: Record<string, unknown>;
-  systemPromptOverlay?: string;
-  toolDescriptionOverlay?: Record<string, string>;
 };
 
 export type HarnessParityDrift =
@@ -123,22 +123,15 @@ function countComparableTranscriptRecords(transcriptBytes: string) {
   return count;
 }
 
-function readPositiveNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
 function buildPromptStats(report: RuntimeParitySystemPromptReport | undefined) {
   const toolEntries = Array.isArray(report?.tools?.entries) ? report.tools.entries : [];
   return {
-    systemPromptChars: readPositiveNumber(report?.systemPrompt?.chars),
-    projectContextChars: readPositiveNumber(report?.systemPrompt?.projectContextChars),
-    nonProjectContextChars: readPositiveNumber(report?.systemPrompt?.nonProjectContextChars),
-    skillPromptChars: readPositiveNumber(report?.skills?.promptChars),
-    toolSummaryChars: toolEntries.reduce(
-      (sum, entry) => sum + readPositiveNumber(entry.summaryChars),
-      0,
-    ),
-    toolSchemaChars: readPositiveNumber(report?.tools?.schemaChars),
+    systemPromptChars: readCount(report?.systemPrompt?.chars, 0),
+    projectContextChars: readCount(report?.systemPrompt?.projectContextChars, 0),
+    nonProjectContextChars: readCount(report?.systemPrompt?.nonProjectContextChars, 0),
+    skillPromptChars: readCount(report?.skills?.promptChars, 0),
+    toolSummaryChars: toolEntries.reduce((sum, entry) => sum + readCount(entry.summaryChars, 0), 0),
+    toolSchemaChars: readCount(report?.tools?.schemaChars, 0),
     toolCount: toolEntries.length,
   };
 }
@@ -161,28 +154,6 @@ function estimateUsage(
     outputTokens,
     totalTokens: inputTokens + outputTokens,
   };
-}
-
-function normalizeTextForParity(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-function compareToolResultShape(left: RuntimeParityToolCall[], right: RuntimeParityToolCall[]) {
-  const total = Math.min(left.length, right.length);
-  for (let index = 0; index < total; index += 1) {
-    const leftCall = left[index];
-    const rightCall = right[index];
-    if (!leftCall || !rightCall) {
-      continue;
-    }
-    if (
-      leftCall.resultHash !== rightCall.resultHash ||
-      (leftCall.errorClass ?? "") !== (rightCall.errorClass ?? "")
-    ) {
-      return `tool result ${index + 1} differs (${leftCall.tool})`;
-    }
-  }
-  return undefined;
 }
 
 function firstDriftTurn(leftTranscript: string, rightTranscript: string): number | undefined {
@@ -212,34 +183,29 @@ export function buildHarnessParityCell(params: {
   return {
     ...params.cell,
     variant: params.variant,
-    ...(report ? { systemPromptReport: report } : {}),
     promptStats,
     systemPromptHash: stableHash({
       systemPrompt: report?.systemPrompt ?? null,
       skills: report?.skills ?? null,
     }),
     toolDescriptionHash: stableHash(
-      toolEntries.map((entry) => {
-        return {
-          name: entry.name,
-          summary: entry.summary,
-          summaryHash: entry.summaryHash,
-          summaryChars: entry.summaryChars,
-        };
-      }),
+      toolEntries.map((entry) => ({
+        name: entry.name,
+        summary: entry.summary,
+        summaryHash: entry.summaryHash,
+        summaryChars: entry.summaryChars,
+      })),
     ),
     toolSchemaHash: stableHash({
       listChars: report?.tools?.listChars,
       schemaChars: report?.tools?.schemaChars,
-      entries: toolEntries.map((entry) => {
-        return {
-          name: entry.name,
-          schema: entry.schema,
-          schemaHash: entry.schemaHash,
-          schemaChars: entry.schemaChars,
-          propertiesCount: entry.propertiesCount,
-        };
-      }),
+      entries: toolEntries.map((entry) => ({
+        name: entry.name,
+        schema: entry.schema,
+        schemaHash: entry.schemaHash,
+        schemaChars: entry.schemaChars,
+        propertiesCount: entry.propertiesCount,
+      })),
     }),
     tokenUsage,
     tokenUsageSource: params.tokenUsageSource,
@@ -304,12 +270,10 @@ export function buildHarnessParityResult(params: {
   if (params.left.toolSchemaHash !== params.right.toolSchemaHash) {
     return driftResult("tool-schema", "tool schema shape differs");
   }
-  const compareToolShapes =
-    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
-  const compareTranscriptStructure =
+  const compareStructure =
     params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
 
-  if (compareToolShapes) {
+  if (compareStructure) {
     const toolCallDrift = compareToolCallShape(params.left.toolCalls, params.right.toolCalls);
     if (toolCallDrift) {
       return driftResult("tool-call-shape", toolCallDrift);
@@ -322,7 +286,7 @@ export function buildHarnessParityResult(params: {
   const leftTranscriptRecords = countComparableTranscriptRecords(params.left.transcriptBytes);
   const rightTranscriptRecords = countComparableTranscriptRecords(params.right.transcriptBytes);
   if (
-    compareTranscriptStructure &&
+    compareStructure &&
     (leftTranscriptRecords !== rightTranscriptRecords ||
       (!params.left.finalText && Boolean(params.right.finalText)) ||
       (Boolean(params.left.finalText) && !params.right.finalText))

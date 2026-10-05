@@ -55,7 +55,11 @@ function hasEligibleSkillCollectionReviewRuntime(
     config: cfg,
     agentConfigOverride: agentConfig,
   });
-  const defaultRef = resolveDefaultModelForAgent({ cfg: cfgWithAgentDefaults, ...normalization });
+  const defaultRef = resolveDefaultModelForAgent({
+    cfg: cfgWithAgentDefaults,
+    agentId,
+    ...normalization,
+  });
   const selection = resolveSubagentModelConfigSelectionResult({
     cfg,
     agentId,

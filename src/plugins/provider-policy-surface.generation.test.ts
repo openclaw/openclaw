@@ -56,11 +56,11 @@ function preparePolicy(root: string, version: string) {
 const canonicalize = () => canonicalizeProviderModelId("policy-fixture", "authored-id");
 
 describe("provider policy generations", () => {
-  it("reuses published policies and resolves replacement and retained generations through their owners", () => {
+  it("reuses bundled policy libraries across registry selection and retirement", () => {
     const root = tempDirs.make("openclaw-policy-generation-");
     const firstCache = createPluginCache();
     const { registry: first, record: firstRecord } = withPluginCache(firstCache, () =>
-      preparePolicy(root, "first"),
+      preparePolicy(path.join(root, "first"), "first"),
     );
     stageActivePluginRegistry(first, "first", "default");
     const candidates = vi.spyOn(
@@ -74,7 +74,9 @@ describe("provider policy generations", () => {
     expect(candidates).toHaveBeenCalledTimes(1);
 
     const nextCache = createPluginCache();
-    const { registry: next } = withPluginCache(nextCache, () => preparePolicy(root, "replacement"));
+    const { registry: next } = withPluginCache(nextCache, () =>
+      preparePolicy(path.join(root, "replacement"), "replacement"),
+    );
     stageActivePluginRegistry(next, "replacement", "default");
     const readNext = () =>
       withPluginCache(nextCache, () => withPluginRuntimeRegistryScope(next, canonicalize));
@@ -97,13 +99,7 @@ describe("provider policy generations", () => {
     expect(candidates).toHaveBeenCalledTimes(6);
 
     getPluginInstance(firstRecord)!.quiesce();
-    expect(() =>
-      withPluginCache(firstCache, () =>
-        withPluginRuntimeRegistryScope(first, () =>
-          resolveDirectBundledProviderPolicySurface("policy-fixture"),
-        ),
-      ),
-    ).toThrow("Plugin policy-fixture was reloaded or disabled");
+    expect(readFirst()).toBe("first");
     expect(candidates).toHaveBeenCalledTimes(6);
   });
 
@@ -116,7 +112,7 @@ describe("provider policy generations", () => {
       withPluginRuntimeRegistryScope(registry, () => {
         expect(resolveDirectBundledProviderPolicySurface("policy-fixture")).toBeNull();
         const { registry: prepared } = preparePolicy(
-          path.join(root, "policy-fixture"),
+          path.join(root, "selected", "policy-fixture"),
           "new-owner",
         );
         registry.plugins.push(...prepared.plugins);

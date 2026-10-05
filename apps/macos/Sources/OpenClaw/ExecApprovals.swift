@@ -45,11 +45,6 @@ enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable 
     case empty
 }
 
-enum ExecAllowlistPatternValidation: Equatable {
-    case valid(String)
-    case invalid(ExecAllowlistPatternValidationReason)
-}
-
 struct ExecAllowlistUse: Sendable {
     let match: ExecAllowlistEntry
     let resolvedPath: String?
@@ -63,21 +58,6 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
         self.pattern = Data(pattern.utf8)
         self.argPattern = Data((argPattern ?? "").utf8)
     }
-}
-
-struct ExecApprovalsSnapshot: Codable, Sendable {
-    var path: String
-    var exists: Bool
-    var hash: String
-    var file: ExecApprovalsFile
-}
-
-enum ExecApprovalsConditionalSaveResult {
-    case saved(ExecApprovalsSnapshot)
-    case baseHashUnavailable
-    case baseHashRequired
-    case conflict
-    case unavailable
 }
 
 enum ExecApprovalsMutationError: Error, Equatable, Sendable {
@@ -108,18 +88,6 @@ struct ExecApprovalsResolvedDefaults: Codable, Sendable {
 }
 
 enum ExecApprovalHelpers {
-    static func validateAllowlistPattern(_ pattern: String?) -> ExecAllowlistPatternValidation {
-        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return .invalid(.empty) }
-        return .valid(trimmed)
-    }
-
-    static func parseDecision(_ raw: String?) -> ExecApprovalDecision? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return ExecApprovalDecision(rawValue: trimmed)
-    }
-
     static func requiresAsk(
         ask: ExecAsk,
         security: ExecSecurity,
@@ -242,9 +210,7 @@ actor SkillBinsCache {
                     continue
                 }
 
-                var paths = pathsByName[name] ?? Set<String>()
-                paths.insert(normalizedPath)
-                pathsByName[name] = paths
+                pathsByName[name, default: []].insert(normalizedPath)
             }
         }
 
@@ -257,13 +223,6 @@ actor SkillBinsCache {
             return FileManager().isExecutableFile(atPath: expanded) ? expanded : nil
         }
         return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
-    }
-
-    static func _testBuildTrustIndex(
-        report: SkillsStatusReport,
-        searchPaths: [String]) -> SkillBinTrustIndex
-    {
-        self.buildTrustIndex(report: report, searchPaths: searchPaths)
     }
 }
 

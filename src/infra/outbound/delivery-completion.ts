@@ -1,4 +1,4 @@
-import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
+import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   ConversationDeliveryMissingError,
@@ -9,11 +9,11 @@ import {
   markConversationDeliveryUnknown,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
-import {
-  runConversationDatabaseWrite,
-  type ConversationRegistryScope,
-  type PreparedConversationRegistryScope,
+import type {
+  ConversationRegistryScope,
+  PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
+import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -22,8 +22,10 @@ import {
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
@@ -32,6 +34,7 @@ import {
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -55,26 +58,6 @@ export function captureConversationDeliveryTarget(
     ...(isGatewayExternallySupervised(scope.env) ? { supervisorMode: "external" as const } : {}),
   };
 }
-
-/** Serializable owner callback for a durable queue entry. */
-export type DurableDeliveryCompletion =
-  | {
-      kind: "conversation";
-      agentId: string;
-      operationId: string;
-      storePath?: string;
-      /** Present on Gateway-owned conversation intents created with route authorization. */
-      routeFingerprint?: string;
-    }
-  | {
-      kind: "pending-final";
-      deliveryId: string;
-      intentId: string;
-      sessionId: string;
-      sessionKey: string;
-      storePath: string;
-      sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
-    };
 
 type DurableDeliveryCompletionResult = {
   state: "prepared" | "queued" | "delivered" | "suppressed" | "rejected" | "unknown" | "stale";
@@ -109,16 +92,15 @@ export function resolveConversationDeliveryScope(
 
 async function conversationResult(
   completion: Extract<DurableDeliveryCompletion, { kind: "conversation" }>,
-  update: (scope: PreparedConversationRegistryScope) => ConversationDeliveryRecord,
+  update: (scope: ConversationRegistryScope) => Promise<ConversationDeliveryRecord>,
   stateDir?: string,
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
   let record: ConversationDeliveryRecord;
   try {
-    record = await runConversationDatabaseWrite(
+    record = await update(
       resolveConversationDeliveryScope(completion, stateDir, stateContext, target),
-      update,
     );
   } catch (error) {
     // Full session deletion can retire the owner before its shared queue settles.
@@ -153,12 +135,14 @@ export async function settlePendingFinalDelivery(
     stateDir?: string;
     preserveActivity?: boolean;
     stateContext?: DeliveryQueueStateContext;
+    identifiedResult?: OutboundDeliveryResult;
   } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
   await patchSessionEntryCore(
     {
+      agentId: completion.agentId,
       sessionKey: completion.sessionKey,
       storePath: completion.storePath,
       env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
@@ -174,6 +158,34 @@ export async function settlePendingFinalDelivery(
       const deliveries = internalEntry.pendingFinalDelivery.deliveries;
       const index = deliveries?.findIndex(({ id }) => id === completion.deliveryId) ?? -1;
       if (!deliveries || index < 0) {
+        return null;
+      }
+      const authority = completion.sessionWriterDeliveryAuthority;
+      const claim = authority?.harnessCompletion;
+      if (
+        completion.agentId !== undefined &&
+        ((authority?.agentId !== undefined &&
+          normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)) ||
+          (claim &&
+            normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId)))
+      ) {
+        return null;
+      }
+      if (
+        claim &&
+        (!authority ||
+          authority.sessionKey !== completion.sessionKey ||
+          (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
+          claim.requesterSessionKey !== completion.sessionKey ||
+          claim.sessionId !== completion.sessionId ||
+          authority.expectedSessionId !== completion.sessionId ||
+          (authority.agentId !== undefined && authority.agentId !== claim.requesterAgentId) ||
+          (authority.expectedLifecycleRevision !== undefined &&
+            authority.expectedLifecycleRevision !== internalEntry.lifecycleRevision) ||
+          (authority.expectedWriterRunId !== undefined &&
+            authority.expectedWriterRunId !== internalEntry.activeWriterRunId) ||
+          !getOwedHarnessCompletionTask(claim, internalEntry))
+      ) {
         return null;
       }
       const current = deliveries[index]!.state;
@@ -207,6 +219,39 @@ export async function settlePendingFinalDelivery(
         id: completion.deliveryId,
         state: settled,
       });
+      const result = options.identifiedResult;
+      const platformMessageId = result ? readPlatformMessageId(result) : undefined;
+      const context = pending.context;
+      // Commit the receipt with pending-final completion before queue acknowledgement
+      // so recovery can recognize this exact claim without another announcement.
+      const terminalEvidence =
+        claim &&
+        result &&
+        platformMessageId &&
+        result.channel === context?.channel &&
+        context?.to &&
+        (!result.target || result.target.id === context.to) &&
+        settled === "delivered" &&
+        updatedDeliveries.every((delivery) => delivery.state === "delivered")
+          ? mergeRestartRecoveryTerminalDeliveryEvidence(
+              internalEntry.restartRecoveryTerminalDeliveryEvidence,
+              [
+                {
+                  runId: claim.sourceRunId,
+                  harnessCompletion: claim,
+                  deliveryContext: context,
+                  captured: true,
+                  payloads: [{ visible: true }],
+                  deliveryStatus: { status: "sent", resultCount: 1 },
+                  durableFinalReceipt: {
+                    intentId: completion.intentId,
+                    deliveryId: completion.deliveryId,
+                    platformMessageId,
+                  },
+                },
+              ],
+            )
+          : undefined;
       const clearsNotice =
         existingNotice?.state !== "acknowledged" &&
         !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
@@ -215,7 +260,7 @@ export async function settlePendingFinalDelivery(
         existingNotice?.intentId === pending.intentId;
       // One resolved sibling cannot erase another's ambiguity. Acknowledgment
       // remains an intent-level fact so delayed settlement cannot owe it again.
-      if (settled === current && !owedNotice && !clearsNotice) {
+      if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
         return null;
       }
       wakeRecovery =
@@ -236,14 +281,21 @@ export async function settlePendingFinalDelivery(
           deliveries: updatedDeliveries,
         },
         ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
+        ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
       };
     },
-    { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      preserveActivity: options.preserveActivity,
+      workerGuard: {},
+    },
   );
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
     scheduleMainSessionRecoveryPendingTarget({
+      ...(completion.agentId !== undefined ? { agentId: completion.agentId } : {}),
       sessionId: completion.sessionId,
       sessionKey: completion.sessionKey,
       ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
@@ -297,6 +349,7 @@ export async function completeDurableDelivery(
     ? await settlePendingFinalDelivery(completion, "delivered", undefined, {
         stateDir,
         stateContext,
+        identifiedResult: result,
       })
     : conversationResult(
         completion,

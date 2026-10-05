@@ -1,156 +1,240 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import type { Selectable, Updateable } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { ensureSessionRepositoryWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import type { DB, SessionRepositoryWorkspaces } from "./openclaw-state-db.generated.js";
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "./openclaw-state-worker-store.js";
+import {
+  prepareRepositoryWorkspaceRead,
+  stageRepositoryWorkspacePublication,
+} from "./session-repository-workspaces.publication.js";
+import type {
+  RepositoryWorkspaceBase,
+  RepositoryWorkspaceCheckpoint,
+  RepositoryWorkspaceCreate,
+  RepositoryWorkspaceMutationResult,
+  RepositoryWorkspaceOwner,
+  SessionRepositoryWorkspaceRecord,
+} from "./session-repository-workspaces.types.js";
+import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
 
-export type SessionRepositoryWorkspaceRecord = {
-  workspaceId: string;
-  agentId: string;
-  sessionKey: string;
-  url: string;
-  requestedRef: string | null;
-  runSetupScript: boolean;
-  baseCommit: string | null;
-  baseManifestHash: string | null;
-  branch: string;
-  checkpointRef: string | null;
-  manifestHash: string | null;
-  revision: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
+export type { PreparedRepositoryWorkspace } from "./session-repository-workspaces.publication.js";
 
-type WorkspaceOwner = { agentId: string; sessionKey: string };
-type WorkspaceMutation = {
-  workspaceId: string;
-  expectedRevision: number;
-  assertCurrent: () => void;
-};
-const table = "session_repository_workspaces";
-const ensured = new WeakSet<DatabaseSync>();
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
-const manifestPattern = /^sha256:[a-f0-9]{64}$/u;
-const resultRefPattern = /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u;
+type Guarded<T> = T & { assertCurrent: () => void };
+type Mutation = Exclude<
+  SqliteWorkerCommand<RepositoryWorkspaceWorkerOperations>,
+  { type: "repositoryWorkspaces.get" | "repositoryWorkspaces.find" }
+>;
 
-function bounded(value: string, field: string, limit: number): string {
-  const result = value.trim();
-  if (!result || result.length > limit || /\p{Cc}/u.test(result)) {
-    throw new Error(`Repository workspace ${field} is invalid`);
-  }
-  return result;
-}
-
-function project(row: Selectable<SessionRepositoryWorkspaces>): SessionRepositoryWorkspaceRecord {
-  return {
-    workspaceId: row.workspace_id,
-    agentId: row.agent_id,
-    sessionKey: row.session_key,
-    url: row.url,
-    requestedRef: row.requested_ref,
-    runSetupScript: row.run_setup_script === 1,
-    baseCommit: row.base_commit,
-    baseManifestHash: row.base_manifest_hash,
-    branch: row.branch,
-    checkpointRef: row.checkpoint_ref,
-    manifestHash: row.manifest_hash,
-    revision: row.revision,
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-  };
-}
-
-function readWorkspace(
-  db: DatabaseSync,
-  workspaceId: string,
-): SessionRepositoryWorkspaceRecord | undefined {
-  if (!tableExists(db, table)) {
-    return undefined;
-  }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db).selectFrom(table).selectAll().where("workspace_id", "=", workspaceId),
+function isWorkspace(value: unknown): value is SessionRepositoryWorkspaceRecord {
+  return (
+    isRecord(value) &&
+    ["workspaceId", "agentId", "sessionKey", "url", "branch"].every(
+      (key) => typeof value[key] === "string",
+    ) &&
+    ["requestedRef", "baseCommit", "baseManifestHash", "checkpointRef", "manifestHash"].every(
+      (key) => value[key] === null || typeof value[key] === "string",
+    ) &&
+    typeof value.runSetupScript === "boolean" &&
+    ["revision", "createdAtMs", "updatedAtMs"].every((key) => typeof value[key] === "number")
   );
-  return row ? project(row) : undefined;
 }
 
-function findWorkspace(
-  db: DatabaseSync,
-  owner: WorkspaceOwner,
-): SessionRepositoryWorkspaceRecord | undefined {
-  if (!tableExists(db, table)) {
-    return undefined;
-  }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom(table)
-      .selectAll()
-      .where("agent_id", "=", owner.agentId)
-      .where("session_key", "=", owner.sessionKey),
+function isMutationResult(value: unknown): value is RepositoryWorkspaceMutationResult {
+  return (
+    isRecord(value) &&
+    typeof value.workspaceId === "string" &&
+    typeof value.changed === "boolean" &&
+    (value.workspace === undefined || isWorkspace(value.workspace)) &&
+    (value.owner === undefined ||
+      (isRecord(value.owner) &&
+        typeof value.owner.agentId === "string" &&
+        typeof value.owner.sessionKey === "string"))
   );
-  return row ? project(row) : undefined;
+}
+
+/** Deletion preparation must not reopen the shared database on the caller thread. */
+export async function findSessionRepositoryWorkspaces(
+  owners: readonly RepositoryWorkspaceOwner[],
+  options: { path: string; env?: NodeJS.ProcessEnv },
+): Promise<SessionRepositoryWorkspaceRecord[]> {
+  const reply = await executeExistingOpenClawStateRead(options, {
+    type: "sessionRepositoryWorkspaces.find",
+    owners: owners.map(({ agentId, sessionKey }) => ({ agentId, sessionKey })),
+  });
+  if (!reply) {
+    return [];
+  }
+  if (!reply.ok || reply.type !== "sessionRepositoryWorkspaces.find") {
+    throw new Error("Unexpected session repository workspace lookup result");
+  }
+  return reply.workspaces;
 }
 
 export function createSessionRepositoryWorkspaceStore(
-  options: { database?: OpenClawStateDatabase; now?: () => number } = {},
+  options: {
+    path?: string;
+    now?: () => number;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ) {
-  const databasePath = options.database?.path ?? path.resolve(resolveOpenClawStateSqlitePath());
-  const now = options.now ?? Date.now;
-  const read = () => openOpenClawStateDatabase({ path: databasePath }).db;
-  const write = <T>(operation: (db: DatabaseSync) => T) =>
-    runOpenClawStateWriteTransaction(({ db }) => operation(db), { path: databasePath });
-  const ensure = () => {
-    const db = read();
-    if (!ensured.has(db)) {
-      write(ensureSessionRepositoryWorkspaceSchema);
-      // A surrounding session transaction may still roll back its first use.
-      // Cache only committed DDL, otherwise the next create loses its table.
-      if (!db.isTransaction) {
-        ensured.add(db);
-      }
-    }
-  };
-  const get = (workspaceId: string) => readWorkspace(read(), workspaceId);
-  const find = (owner: WorkspaceOwner) => findWorkspace(read(), owner);
-  const mutate = (
-    input: WorkspaceMutation,
-    values: (current: SessionRepositoryWorkspaceRecord) => Updateable<SessionRepositoryWorkspaces>,
-  ): SessionRepositoryWorkspaceRecord =>
-    write((db) => {
-      const current = readWorkspace(db, input.workspaceId);
-      if (!current || current.revision !== input.expectedRevision) {
-        throw new Error("Repository workspace revision changed");
-      }
-      if (!Number.isSafeInteger(current.revision + 1)) {
-        throw new Error("Repository workspace revision is exhausted");
-      }
-      const patch = values(current);
-      input.assertCurrent();
-      const updated = executeSqliteQueryTakeFirstSync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({ ...patch, revision: current.revision + 1, updated_at_ms: now() })
-          .where("workspace_id", "=", input.workspaceId)
-          .where("revision", "=", input.expectedRevision)
-          .returningAll(),
+  const env = options.env && cloneEnvWithPlatformSemantics(options.env);
+  const databasePath = resolveDatabasePath({ path: options.path, env });
+  const now = options.now;
+  const context = () => captureOpenClawStateWorkerContext({ path: databasePath, env });
+  async function mutate(
+    command: Mutation,
+    assertCurrent: () => void,
+    control: {
+      afterCommit?: () => Promise<void>;
+      sessionEntryCurrent?: SessionEntryCurrentCheck;
+    } = {},
+  ) {
+    const { afterCommit, sessionEntryCurrent } = control;
+    const captured = context();
+    let admission: SqliteWorkerOperationAdmission | undefined;
+    let prepared: RepositoryWorkspaceMutationResult | undefined;
+    let publication: ReturnType<typeof stageRepositoryWorkspacePublication> | undefined;
+    let publicationSettled: Promise<void> | undefined;
+    let granted = false;
+    let cleanupSourceIdentity: string | undefined;
+    let finalized = afterCommit === undefined;
+    const check = () => {
+      captured.admission.assertCurrent();
+      assertCurrent();
+    };
+    try {
+      return await runOpenClawStateWorkerOperation(
+        captured,
+        async (scope) => {
+          let result: RepositoryWorkspaceMutationResult;
+          try {
+            result = await scope.execute(command);
+          } catch (error) {
+            await publicationSettled;
+            if (
+              !prepared ||
+              !admission?.committed ||
+              !isDeepStrictEqual(admission.committed.facts, prepared)
+            ) {
+              throw error;
+            }
+            result = prepared;
+          }
+          await publicationSettled;
+          if (afterCommit) {
+            if (
+              !granted ||
+              !cleanupSourceIdentity ||
+              !prepared ||
+              !admission?.committed ||
+              !isDeepStrictEqual(admission.committed.facts, prepared)
+            ) {
+              throw new Error("Repository workspace cleanup has no committed source");
+            }
+            // The committed delete owns this retained tail; closing fresh reads must join it.
+            assertExistingDatabaseIdentity(databasePath, cleanupSourceIdentity);
+            await afterCommit();
+            finalized = true;
+          }
+          return result;
+        },
+        {
+          assertCurrent: check,
+          createAdmission: (operation) => {
+            let stage: "transaction" | "commit" | "complete" = "transaction";
+            admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              check();
+              const admitted = assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
+              if (admitted.stage === "transaction" && stage === "transaction") {
+                stage = "commit";
+                grant();
+                return;
+              }
+              if (
+                admitted.stage !== "commit" ||
+                stage !== "commit" ||
+                !isMutationResult(admitted.facts)
+              ) {
+                throw new Error("Repository workspace mutation has no admitted commit result");
+              }
+              stage = "complete";
+              prepared = admitted.facts;
+              if (afterCommit) {
+                const identity = captured.admission.identity;
+                assertExistingDatabaseIdentity(databasePath, identity.key);
+                cleanupSourceIdentity = identity.key;
+              }
+              publication = stageRepositoryWorkspacePublication(captured.admission, prepared);
+              granted = grant();
+            });
+            const acceptedAdmission = admission;
+            publicationSettled = operation.settled.then((settlement) => {
+              let committed = false;
+              let known = false;
+              try {
+                const receipt = acceptedAdmission.committed;
+                if (receipt) {
+                  if (!prepared || !isDeepStrictEqual(receipt.facts, prepared)) {
+                    throw new Error("Repository workspace commit result changed during settlement");
+                  }
+                  committed = true;
+                }
+                known = !granted || committed || settlement.kind === "completed";
+              } finally {
+                publication?.settle(committed, known);
+              }
+              if (committed && prepared?.changed && prepared.owner) {
+                try {
+                  captured.admission.assertCurrent();
+                } catch {
+                  // A retired source cannot publish into its replacement, or erase a committed result.
+                  return;
+                }
+                sessionChanges.emit(prepared.owner);
+              }
+            });
+            void publicationSettled.catch(() => undefined);
+            return { admission, nativeLocations: [databasePath] };
+          },
+        },
       );
-      if (!updated) {
-        throw new Error("Repository workspace revision changed");
+    } catch (error) {
+      // A settled native commit owns its result even if the ordinary reply was lost.
+      if (
+        finalized &&
+        prepared &&
+        admission?.committed &&
+        isDeepStrictEqual(admission.committed.facts, prepared)
+      ) {
+        return prepared;
       }
-      return project(updated);
-    });
+      throw error;
+    } finally {
+      await publicationSettled;
+    }
+  }
+  const requireWorkspace = (result: RepositoryWorkspaceMutationResult) => {
+    if (!result.workspace) {
+      throw new Error("Repository workspace mutation returned no workspace");
+    }
+    return result.workspace;
+  };
   const artifactPath = (workspaceId: string): string => {
     if (!/^[a-f0-9-]{36}$/u.test(workspaceId)) {
       throw new Error("Repository workspace id is invalid");
@@ -160,121 +244,99 @@ export function createSessionRepositoryWorkspaceStore(
   return {
     path: databasePath,
     artifactPath,
-    get,
-    find,
-    create(
-      input: WorkspaceOwner & {
-        url: string;
-        requestedRef?: string;
-        runSetupScript?: boolean;
-        branch?: string;
-        assertCurrent: () => void;
-      },
-    ): SessionRepositoryWorkspaceRecord {
-      const agentId = bounded(input.agentId, "agent id", 128);
-      const sessionKey = bounded(input.sessionKey, "session key", 1024);
-      const url = bounded(input.url, "URL", 4096);
-      const requestedRef =
-        input.requestedRef === undefined ? null : bounded(input.requestedRef, "ref", 1024);
-      const branch = input.branch === undefined ? undefined : bounded(input.branch, "branch", 256);
-      input.assertCurrent();
-      ensure();
-      return write((db) => {
-        input.assertCurrent();
-        const existing = findWorkspace(db, { agentId, sessionKey });
-        if (existing) {
-          if (
-            existing.url !== url ||
-            existing.requestedRef !== requestedRef ||
-            (branch !== undefined && existing.branch !== branch)
-          ) {
-            throw new Error("Session already owns a different repository workspace");
-          }
-          return existing;
-        }
-        const workspaceId = randomUUID();
-        const timestamp = now();
-        const inserted = executeSqliteQueryTakeFirstSync(
-          db,
-          query(db)
-            .insertInto(table)
-            .values({
-              workspace_id: workspaceId,
-              agent_id: agentId,
-              session_key: sessionKey,
-              url,
-              requested_ref: requestedRef,
-              run_setup_script: input.runSetupScript ? 1 : 0,
-              base_commit: null,
-              base_manifest_hash: null,
-              branch: branch ?? `openclaw/${workspaceId}`,
-              checkpoint_ref: null,
-              manifest_hash: null,
-              revision: 0,
-              created_at_ms: timestamp,
-              updated_at_ms: timestamp,
-            })
-            .returningAll(),
-        );
-        if (!inserted) {
-          throw new Error("Repository workspace creation failed");
-        }
-        return project(inserted);
+    get(workspaceId: string) {
+      return executeOpenClawStateWorker(context(), {
+        type: "repositoryWorkspaces.get",
+        input: { workspaceId },
       });
     },
-    bindBase(
-      input: WorkspaceMutation & { baseCommit: string; baseManifestHash?: string },
-    ): SessionRepositoryWorkspaceRecord {
-      if (
-        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(input.baseCommit) ||
-        (input.baseManifestHash !== undefined && !manifestPattern.test(input.baseManifestHash))
-      ) {
-        throw new Error("Repository workspace base is invalid");
-      }
-      return mutate(input, (current) => {
-        if (
-          (current.baseCommit !== null && current.baseCommit !== input.baseCommit) ||
-          (current.baseManifestHash !== null &&
-            input.baseManifestHash !== undefined &&
-            current.baseManifestHash !== input.baseManifestHash)
-        ) {
-          throw new Error("Repository workspace base changed");
-        }
-        return {
-          base_commit: input.baseCommit,
-          ...(input.baseManifestHash ? { base_manifest_hash: input.baseManifestHash } : {}),
-        };
+    find(owner: RepositoryWorkspaceOwner) {
+      return executeOpenClawStateWorker(context(), {
+        type: "repositoryWorkspaces.find",
+        input: { agentId: owner.agentId, sessionKey: owner.sessionKey },
       });
     },
-    acceptCheckpoint(
-      input: WorkspaceMutation & { checkpointRef: string; manifestHash: string },
-    ): SessionRepositoryWorkspaceRecord {
-      if (
-        !resultRefPattern.test(input.checkpointRef) ||
-        !manifestPattern.test(input.manifestHash)
-      ) {
-        throw new Error("Repository workspace checkpoint is invalid");
-      }
-      return mutate(input, (current) => {
-        if (!current.baseCommit || !current.baseManifestHash) {
-          throw new Error("Repository workspace base has not been captured");
-        }
-        return { checkpoint_ref: input.checkpointRef, manifest_hash: input.manifestHash };
-      });
+    prepare(workspaceId: string) {
+      const captured = context();
+      return prepareRepositoryWorkspaceRead(captured.admission, workspaceId, () =>
+        executeOpenClawStateWorker(captured, {
+          type: "repositoryWorkspaces.get",
+          input: { workspaceId },
+        }),
+      );
     },
-    async delete(input: { workspaceId: string; assertCurrent: () => void }): Promise<void> {
+    async create(input: Guarded<RepositoryWorkspaceCreate>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.create",
+            input: {
+              agentId: input.agentId,
+              sessionKey: input.sessionKey,
+              url: input.url,
+              requestedRef: input.requestedRef,
+              runSetupScript: input.runSetupScript,
+              branch: input.branch,
+              nowMs: now?.(),
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    async bindBase(input: Guarded<RepositoryWorkspaceBase>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.bindBase",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              baseCommit: input.baseCommit,
+              baseManifestHash: input.baseManifestHash,
+              nowMs: now?.(),
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    async acceptCheckpoint(input: Guarded<RepositoryWorkspaceCheckpoint>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.acceptCheckpoint",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              checkpointRef: input.checkpointRef,
+              manifestHash: input.manifestHash,
+              nowMs: now?.(),
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    async delete(
+      input: Guarded<{ workspaceId: string; sessionEntryCurrent?: SessionEntryCurrentCheck }>,
+    ): Promise<void> {
       const root = artifactPath(input.workspaceId);
-      write((db) => {
-        input.assertCurrent();
-        if (tableExists(db, table)) {
-          executeSqliteQueryTakeFirstSync(
-            db,
-            query(db).deleteFrom(table).where("workspace_id", "=", input.workspaceId),
-          );
-        }
-      });
-      // The row disappears first: an interrupted cleanup leaves only unowned artifacts.
-      await fs.rm(root, { recursive: true, force: true });
+      await mutate(
+        {
+          type: "repositoryWorkspaces.delete",
+          input: {
+            workspaceId: input.workspaceId,
+            sessionEntryCurrentSource: input.sessionEntryCurrent?.source,
+          },
+        },
+        input.assertCurrent,
+        {
+          sessionEntryCurrent: input.sessionEntryCurrent,
+          // The row disappears first: an interrupted cleanup leaves only unowned artifacts.
+          afterCommit: () => fs.rm(root, { recursive: true, force: true }),
+        },
+      );
     },
   };
 }

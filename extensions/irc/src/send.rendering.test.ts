@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
 import { sendFormattedIrcText } from "./message-adapter.js";
+import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 describe("IRC formatted text on the wire", () => {
@@ -33,6 +35,47 @@ describe("IRC formatted text on the wire", () => {
 
   afterEach(async () => {
     await server.close();
+  });
+
+  it.each([undefined, "parent-1"])(
+    "rejects sanitized-empty content without reporting delivery (reply %s)",
+    async (replyToId) => {
+      const core = createPluginRuntimeMock();
+      setIrcRuntime(core);
+      const onDeliveryResult = vi.fn();
+
+      await expect(
+        sendFormattedIrcText({
+          cfg,
+          to: "#room",
+          text: String.raw`\n`,
+          replyToId,
+          onDeliveryResult,
+        }),
+      ).rejects.toThrow("Message must be non-empty for IRC sends");
+      await disconnected;
+
+      expect(lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+      expect(onDeliveryResult).not.toHaveBeenCalled();
+      expect(core.channel.activity.record).not.toHaveBeenCalled();
+      expect(server.openSocketCount()).toBe(0);
+    },
+  );
+
+  it("decodes message content once when adding a reply reference", async () => {
+    const results = await sendFormattedIrcText({
+      cfg,
+      to: "#room",
+      text: String.raw`\x5cn`,
+      replyToId: "parent-1",
+    });
+    await disconnected;
+
+    expect(lines.filter((line) => line.startsWith("PRIVMSG "))).toEqual([
+      String.raw`PRIVMSG #room :\n  [reply:parent-1]`,
+    ]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.receipt?.replyToId).toBe("parent-1");
   });
 
   it.each([

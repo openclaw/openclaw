@@ -1,8 +1,3 @@
-/**
- * Configured channel binding types.
- *
- * Defines normalized conversation facts, binding records, and stateful target descriptors.
- */
 import type { AgentBinding } from "../../config/types.js";
 import type {
   ConversationRef,
@@ -14,21 +9,6 @@ import type {
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 import type { ChannelId } from "./types.public.js";
-
-/**
- * Normalized conversation facts used to match configured channel bindings.
- */
-type ConfiguredBindingConversation = ConversationRef;
-
-/**
- * Channel id used by configured binding rules.
- */
-export type ConfiguredBindingChannel = ChannelId;
-
-/**
- * Raw binding config entry from OpenClaw config.
- */
-export type ConfiguredBindingRuleConfig = AgentBinding;
 
 /**
  * Stateful target descriptor produced by a binding consumer.
@@ -49,36 +29,35 @@ export type ConfiguredBindingRecordResolution = {
   statefulTarget: StatefulBindingTargetDescriptor;
 };
 
-/**
- * Factory that materializes a configured binding for one account/conversation pair.
- */
-export type ConfiguredBindingTargetFactory = {
-  driverId: string;
-  materialize: (params: {
-    accountId: string;
-    conversation: ChannelConfiguredBindingConversationRef;
-  }) => ConfiguredBindingRecordResolution;
-};
+export type StatefulBindingTargetResetResult =
+  | { ok: true; sessionKey?: string; sessionId?: string; storePath?: string }
+  | { ok: false; skipped?: boolean; error?: string };
 
 /**
  * Compiled binding rule with provider matcher, target factory, and static target facts.
  */
 export type CompiledConfiguredBinding = {
-  channel: ConfiguredBindingChannel;
+  channel: ChannelId;
   accountPattern?: string;
-  binding: ConfiguredBindingRuleConfig;
+  binding: AgentBinding;
   bindingConversationId: string;
   target: ChannelConfiguredBindingConversationRef;
   agentId: string;
   provider: ChannelConfiguredBindingProvider;
-  targetFactory: ConfiguredBindingTargetFactory;
+  targetFactory: {
+    driverId: string;
+    materialize: (params: {
+      accountId: string;
+      conversation: ChannelConfiguredBindingConversationRef;
+    }) => ConfiguredBindingRecordResolution;
+  };
 };
 
 /**
  * Full configured binding resolution used to rewrite routes and prepare target sessions.
  */
 export type ConfiguredBindingResolution = ConfiguredBindingRecordResolution & {
-  conversation: ConfiguredBindingConversation;
+  conversation: ConversationRef;
   compiledBinding: CompiledConfiguredBinding;
   match: ChannelConfiguredBindingMatch;
 };

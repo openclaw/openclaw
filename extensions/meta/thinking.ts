@@ -1,9 +1,8 @@
-// Meta plugin module implements thinking behavior.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { META_MODEL_CATALOG } from "./models.js";
+import { META_MODEL_CATALOG } from "./provider-catalog.js";
 
 const META_REASONING_MODEL_IDS = new Set(
   META_MODEL_CATALOG.filter((model) => model.reasoning).map((model) => model.id.toLowerCase()),

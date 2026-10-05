@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   resolveInternalSessionKey,
@@ -9,10 +9,7 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  buildGatewaySessionSnapshot,
-  buildGatewaySessionEventFields,
-} from "./session-event-payload.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
@@ -75,7 +72,7 @@ describe("parent Swarm outcome projection", () => {
             otherActiveGroups: 0,
           },
         });
-        expect(buildGatewaySessionEventFields({ sessionRow: result.sessions[0]! })).toMatchObject({
+        expect(buildGatewaySessionSnapshot({ sessionRow: result.sessions[0]! })).toMatchObject({
           swarm: { groups: [{ done: 25, failed: 5 }] },
         });
         expect(JSON.stringify(result)).not.toContain("Private child");
@@ -118,7 +115,7 @@ describe("parent Swarm outcome projection", () => {
       status: "running",
     });
     expect(
-      buildGatewaySessionEventFields({
+      buildGatewaySessionSnapshot({
         sessionRow: { key: parent, kind: "direct", updatedAt: 0, swarm: detailed },
       }).swarm,
     ).toEqual(summary);
@@ -161,12 +158,8 @@ describe("parent Swarm outcome projection", () => {
         cfg: globalConfig,
         sessionKey: `agent:other:${suffix}`,
       });
-      const { alias, mainKey } = resolveMainSessionAlias(globalConfig);
-      const requesterKey = resolveInternalSessionKey({
-        key: admitted.canonicalKey,
-        alias,
-        mainKey,
-      });
+      const { alias } = resolveMainSessionAlias(globalConfig);
+      const requesterKey = resolveInternalSessionKey({ key: admitted.canonicalKey, alias });
       expect(requesterKey).toBe(suffix === "global" ? "agent:other:global" : "global");
       await withCollectors(
         [
@@ -230,23 +223,23 @@ describe("parent Swarm outcome projection", () => {
         includeChildren: true,
       });
       expect(
-        buildGatewaySessionEventFields({
+        buildGatewaySessionSnapshot({
           sessionRow: { key: parent, kind: "direct", updatedAt: 0 },
         }),
       ).not.toHaveProperty("swarm");
       expect(
-        buildGatewaySessionEventFields({
+        buildGatewaySessionSnapshot({
           sessionRow: { key: parent, kind: "direct", updatedAt: 0, swarm: undefined },
         }),
       ).toHaveProperty("swarm", null);
       expect(
-        buildGatewaySessionEventFields({
+        buildGatewaySessionSnapshot({
           sessionRow: { key, kind: "global", updatedAt: 0, swarm },
           agentId: "main",
         }),
       ).toMatchObject({ swarm: { groups: [{ done: 1, failed: 0 }] } });
       expect(
-        buildGatewaySessionEventFields({
+        buildGatewaySessionSnapshot({
           sessionRow: { key, kind: "global", updatedAt: 0, swarm },
         }),
       ).not.toHaveProperty("swarm");

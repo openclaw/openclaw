@@ -2,7 +2,7 @@ import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-d
 import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type LegacyMainSessionMigrationMode = "automatic" | "detect" | "doctor-fix";
+export type LegacyMainSessionMigrationMode = "detect" | "doctor-fix";
 
 type LegacyMainSessionMigrationOutcomeKind =
   | "not-armed"

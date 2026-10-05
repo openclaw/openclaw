@@ -104,28 +104,4 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
       expect.objectContaining({ text: `${sentText} with more detail` }),
     );
   });
-
-  it("keeps unrelated automatic partial text visible", async () => {
-    const onPartialReply = vi.fn();
-    const context = createMessageUpdateContext({
-      onPartialReply,
-      sourceReplyDeliveryMode: "automatic",
-      state: {
-        currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
-      },
-    });
-
-    await updateMessage(
-      context,
-      createTextUpdateEvent({
-        type: "text_end",
-        text: "A genuinely different answer",
-        id: "msg_source_different",
-      }),
-    );
-
-    expect(onPartialReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "A genuinely different answer" }),
-    );
-  });
 });

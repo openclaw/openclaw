@@ -15,6 +15,7 @@ type ApnsRegistrationDatabase = Pick<
 export function nextApnsRegistrationVersion(
   nodeId: string,
   previousVersions: readonly number[],
+  nowMs = Date.now(),
 ): number {
   let latest = -1;
   for (const version of previousVersions) {
@@ -26,13 +27,14 @@ export function nextApnsRegistrationVersion(
   if (latest === Number.MAX_SAFE_INTEGER) {
     throw new Error(`APNs registration version exhausted for node ${nodeId}`);
   }
-  return Math.max(Date.now(), latest + 1);
+  return Math.max(nowMs, latest + 1);
 }
 
 /** Tombstones and deletes one APNs owner inside the caller's shared-state transaction. */
 export function clearApnsRegistrationFromDatabase(
   db: OpenClawStateDatabase["db"],
   nodeId: string,
+  nowMs = Date.now(),
 ): boolean {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
@@ -56,7 +58,7 @@ export function clearApnsRegistrationFromDatabase(
   const previousVersions = [currentRow?.updated_at_ms, tombstone?.deleted_at_ms].filter(
     (version): version is number => version !== undefined,
   );
-  const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions);
+  const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions, nowMs);
   // Tombstone even an empty row so a retired source cannot restore ownership.
   executeSqliteQuerySync(
     db,

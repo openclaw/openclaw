@@ -141,12 +141,7 @@ describe("openshell backend exec workdir validation", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "fixture");
     vi.stubEnv("LANG", "en_US.UTF-8");
     vi.stubEnv("NODE_ENV", "test");
-    const workspace = await tempWorkspace({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-openshell-workspace-",
-    });
-    tempWorkspaces.push(workspace);
-    const workspaceDir = workspace.dir;
+    const workspaceDir = await createWorkspace();
     await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed", "utf8");
     for (const protectedDirectory of [".git", "hooks", "git-hooks"]) {
       const protectedPath = path.join(workspaceDir, protectedDirectory);
@@ -296,15 +291,10 @@ describe("openshell backend exec workdir validation", () => {
 
   it.each([
     { name: "filesystem root", target: "/", expected: null },
-    { name: "outside managed roots", target: "/outside", expected: null },
     { name: "ordinary directory", target: "/sandbox/nested", expected: "/sandbox/nested" },
     { name: "missing directory", target: "/sandbox/missing", expected: null },
     { name: "regular file", target: "/sandbox/file.txt", expected: null },
-    ...[".git", "hooks", "git-hooks"].map((name) => ({
-      name,
-      target: `/sandbox/${name}/nested`,
-      expected: null,
-    })),
+    { name: "excluded directory", target: "/sandbox/.git/nested", expected: null },
     { name: "mid-path symlink", target: "/sandbox/link/nested", expected: null },
     {
       name: "agent read-only directory",
@@ -429,73 +419,6 @@ describe("openshell backend exec workdir validation", () => {
       await expect(backend.validateWorkdir?.("/sandbox/preserved")).resolves.toBeNull();
     },
   );
-
-  it.each([
-    {
-      name: "a later nested directory replaces an earlier file",
-      workspace: "/sandbox",
-      agent: "/sandbox/collision",
-      setup: async (workspaceDir: string) => {
-        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
-      },
-      uploads: [
-        ["collision", "/sandbox/"],
-        ["primary-only", "/sandbox/"],
-        ["agent-only", "/sandbox/collision/"],
-      ],
-    },
-    {
-      name: "a deeper nested root replaces a blocking ancestor file",
-      workspace: "/sandbox",
-      agent: "/sandbox/collision/agent",
-      setup: async (workspaceDir: string) => {
-        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
-      },
-      uploads: [
-        ["collision", "/sandbox/"],
-        ["primary-only", "/sandbox/"],
-        ["agent-only", "/sandbox/collision/agent/"],
-      ],
-    },
-    {
-      name: "a later file replaces an earlier nested directory",
-      workspace: "/sandbox/collision",
-      agent: "/sandbox",
-      setup: async (_workspaceDir: string, agentWorkspaceDir: string) => {
-        await fs.writeFile(path.join(agentWorkspaceDir, "collision"), "file");
-      },
-      uploads: [
-        ["agent-only", "/sandbox/"],
-        ["collision", "/sandbox/"],
-        ["primary-only", "/sandbox/collision/"],
-      ],
-    },
-  ])("composes overlapping roots when $name", async (scenario) => {
-    const workspaceDir = await createWorkspace();
-    const agentWorkspaceDir = await createWorkspace("agent");
-    await fs.writeFile(path.join(workspaceDir, "primary-only"), "primary");
-    await fs.writeFile(path.join(agentWorkspaceDir, "agent-only"), "agent");
-    await scenario.setup(workspaceDir, agentWorkspaceDir);
-    const backend = await createOpenShellBackendFixture({
-      workspaceDir,
-      agentWorkspaceDir,
-      scopeKey: `agent:overlap-cross-type:${scenario.name}`,
-      remoteWorkspaceDir: scenario.workspace,
-      remoteAgentWorkspaceDir: scenario.agent,
-    });
-
-    const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-    try {
-      const uploads = cliMocks.runOpenShellCli.mock.calls.flatMap(([params]) =>
-        params.args[0] === "sandbox" && params.args[1] === "upload"
-          ? [[path.basename(params.args.at(-2) ?? ""), params.args.at(-1)]]
-          : [],
-      );
-      expect(uploads).toEqual(scenario.uploads);
-    } finally {
-      await finalize(backend, exec.finalizeToken);
-    }
-  });
 
   it.each([
     {

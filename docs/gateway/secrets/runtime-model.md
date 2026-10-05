@@ -22,6 +22,15 @@ This keeps secret-provider outages off hot request paths.
 
 Gateway ingress protection, structurally invalid config or resolved values, policy violations, and unknown ownership still fail closed. Isolated owners never fall through to a lower-precedence credential source.
 
+When startup database admission marks an agent unavailable, secrets preparation
+omits that exact database's auth store without substituting an empty credential
+store. Pending background inspection is not a secret failure: the admission owner
+resolves and publishes the agent's credentials and prepares its models before
+admitting the agent. No manual secrets reload is needed after successful
+preparation. Failed inspections and ownership refusals remain cold store owners
+with repair guidance. Unreadable stores without a matching admission refusal still
+fail preparation; a secrets reload alone cannot readmit the agent.
+
 ## Egress-time injection (sentinels)
 
 For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v2.<authenticated-ciphertext>.end`, not the provider credential. The guarded model fetch and managed local-provider health probes replace known sentinels in URL and header values immediately before each request leaves the process.

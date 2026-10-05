@@ -1,12 +1,5 @@
-/**
- * Twitch message monitor - processes incoming messages and routes to agents.
- *
- * This monitor connects to the Twitch client manager, processes incoming messages,
- * resolves agent routes, and handles replies.
- */
-
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
@@ -28,31 +21,20 @@ type TwitchMonitorOptions = {
   account: TwitchAccountConfig;
   accountId: string;
   channelRuntime: ReturnType<typeof getTwitchRuntime>["channel"];
-  config: unknown; // OpenClawConfig
+  config: OpenClawConfig;
   runtime: TwitchRuntimeEnv;
   abortSignal: AbortSignal;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
-type TwitchMonitorResult = {
-  stop: () => Promise<void>;
-};
-
 type TwitchIngressLifecycle = Parameters<Parameters<typeof createTwitchIngress>[0]["deliver"]>[1];
 
-/**
- * Process an incoming Twitch message and dispatch to agent.
- */
-async function processTwitchMessage(params: {
-  message: TwitchChatMessage;
-  account: TwitchAccountConfig;
-  accountId: string;
-  config: unknown;
-  runtime: TwitchRuntimeEnv;
-  channelRuntime: TwitchMonitorOptions["channelRuntime"];
-  turnAdoptionLifecycle: TwitchIngressLifecycle;
-  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-}): Promise<void> {
+async function processTwitchMessage(
+  params: Omit<TwitchMonitorOptions, "abortSignal"> & {
+    message: TwitchChatMessage;
+    turnAdoptionLifecycle: TwitchIngressLifecycle;
+  },
+): Promise<void> {
   const {
     message,
     account,
@@ -63,7 +45,7 @@ async function processTwitchMessage(params: {
     turnAdoptionLifecycle,
     statusSink,
   } = params;
-  const cfg = config as OpenClawConfig;
+  const cfg = config;
   const route = channelRuntime.routing.resolveAgentRoute({
     cfg,
     channel: "twitch",
@@ -106,7 +88,7 @@ async function processTwitchMessage(params: {
       resolveTurn: async (input) => {
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
-        const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
+        const body = (await createChannelInboundEnvelopeBuilderAsync({ cfg, route }))({
           channel: "Twitch",
           from: fromLabel,
           timestamp: input.timestamp,
@@ -186,15 +168,12 @@ async function processTwitchMessage(params: {
   });
 }
 
-/**
- * Deliver a reply to Twitch chat.
- */
 async function deliverTwitchReply(params: {
   payload: ReplyPayload;
   channel: string;
   account: TwitchAccountConfig;
   accountId: string;
-  config: unknown;
+  config: OpenClawConfig;
   runtime: TwitchRuntimeEnv;
 }): Promise<{ visibleReplySent: boolean }> {
   const { payload, channel, account, accountId, config, runtime } = params;
@@ -210,7 +189,7 @@ async function deliverTwitchReply(params: {
     const result = await sendMessageTwitchInternal({
       channel,
       text: [payload.text, ...resolveOutboundMediaUrls(payload)].filter(Boolean).join(" "),
-      cfg: config as OpenClawConfig,
+      cfg: config,
       account,
       accountId,
       clientManager,
@@ -226,14 +205,7 @@ async function deliverTwitchReply(params: {
   }
 }
 
-/**
- * Main monitor provider for Twitch.
- *
- * Sets up message handlers and processes incoming messages.
- */
-export async function monitorTwitchProvider(
-  options: TwitchMonitorOptions,
-): Promise<TwitchMonitorResult> {
+export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
   const { account, accountId, channelRuntime, config, runtime, abortSignal, statusSink } = options;
 
   const core = getTwitchRuntime();
@@ -257,11 +229,7 @@ export async function monitorTwitchProvider(
   const clientManager = getOrCreateClientManager(accountId, logger, statusSink);
 
   try {
-    await clientManager.getClient(
-      account,
-      config as Parameters<typeof clientManager.getClient>[1],
-      accountId,
-    );
+    await clientManager.getClient(account, config, accountId);
   } catch (error) {
     const errorMsg = formatErrorMessage(error);
     runtime.error?.(`Failed to connect: ${errorMsg}`);

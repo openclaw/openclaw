@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -19,6 +20,19 @@ type DiagnosticEventRow = Pick<
 export type PreparedSqliteAuditRecord = Omit<DiagnosticEventRow, "sequence">;
 
 const LEGACY_AUDIT_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
+
+export const diagnosticReadOperations = {
+  "diagnostic.latest": (
+    input: { scope: string; limit: number; beforeSequence?: number },
+    db: DatabaseSync,
+  ) => ({
+    type: "diagnostic.latest" as const,
+    entries: createSqliteAuditRecordKernel<unknown>(db, {
+      scope: input.scope,
+      maxEntries: 1,
+    }).latest(input),
+  }),
+};
 
 export type SqliteAuditRecordEntry<T> = {
   key: string;
@@ -134,7 +148,7 @@ function createAuditRecordInsert(database: DatabaseSync) {
   );
 }
 
-const auditRecordInserts = new WeakMap<DatabaseSync, ReturnType<typeof createAuditRecordInsert>>();
+const auditRecordInsert = createSqliteQueryCache(createAuditRecordInsert);
 
 /** Connection-bound operations; mutation callers retain the complete transaction. */
 export function createSqliteAuditRecordKernel<T>(
@@ -144,12 +158,7 @@ export function createSqliteAuditRecordKernel<T>(
   const scope = options.scope;
   const maxEntries = options.maxEntries;
   function insertRecord(record: DiagnosticEventRow): void {
-    let insert = auditRecordInserts.get(database);
-    if (!insert) {
-      insert = createAuditRecordInsert(database);
-      auditRecordInserts.set(database, insert);
-    }
-    insert({ ...record, scope });
+    auditRecordInsert(database)({ ...record, scope });
   }
 
   function upsertPreparedRecord(record: PreparedSqliteAuditRecord): void {
@@ -194,12 +203,8 @@ export function createSqliteAuditRecordKernel<T>(
       // Keep the just-addressed key while pruning the oldest rows in this scope.
       pruneAuditRecords({ database, scope, maxEntries, protectedKey: record.event_key });
     },
-    upsert(record: PreparedSqliteAuditRecord): void {
-      upsertPreparedRecord(record);
-    },
-    delete(key: string): void {
-      deleteRecord(key);
-    },
+    upsert: upsertPreparedRecord,
+    delete: deleteRecord,
     compareAndSet(
       key: string,
       expectedPayloadJson: string | null | undefined,
@@ -230,9 +235,6 @@ export function createSqliteAuditRecordKernel<T>(
         sequence += 1;
       }
       pruneAuditRecords({ database, scope, maxEntries });
-    },
-    size(): number {
-      return countAuditRecords(database, scope);
     },
     entries(): SqliteAuditRecordEntry<T>[] {
       return executeSqliteQuerySync(

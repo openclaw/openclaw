@@ -1,13 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { BoardOp, BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../infra/kysely-sync.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-agent-board-schema.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
 import {
   cloneBoardSnapshot,
@@ -27,6 +33,7 @@ import {
   rowToTab,
   rowToHtmlViewMetadata,
   rowToWidget,
+  rowToBoardWidgetDocument,
   serializeManifest,
   updateManifestHeightMode,
   type SelectedBoardTabRow,
@@ -48,27 +55,16 @@ type StoredBoard = {
 };
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
-const presentBoardDatabases = new WeakSet<DatabaseSync>();
 const BOARD_WRITE_BATCH_SIZE = 64;
 
 // Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
 // no board tables until the first write. Reads must treat that as "no boards",
 // not "no such table".
 function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
-  if (ensuredBoardDatabases.has(database.db) || presentBoardDatabases.has(database.db)) {
-    return true;
-  }
-  const row = database.db // sqlite-allow-raw: catalog probe before Kysely table access.
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'board_widgets'")
-    .get();
-  if (!row) {
-    return false;
-  }
-  presentBoardDatabases.add(database.db);
-  return true;
+  return tableExists(database.db, "board_widgets");
 }
 
-export function ensureBoardSchema(database: OpenClawAgentDatabase): void {
+export function ensureBoardSchema(database: BoardDatabaseHandle): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
   }
@@ -85,7 +81,6 @@ export function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   );
   // Additive-surface rule: fold this into the next natural schema bump, then delete this lazy ensure.
   ensuredBoardDatabases.add(database.db);
-  presentBoardDatabases.add(database.db);
 }
 
 function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): StoredBoard {
@@ -170,6 +165,10 @@ function upsertTabs(
         ),
     );
   }
+  sessionChanges.emit(
+    { sessionKey: next.sessionKey, storePath: database.path, facts: { kind: "unchanged" } },
+    database.db,
+  );
 }
 
 function updateWidgetLayouts(
@@ -287,16 +286,22 @@ export function hasBoardSession(database: BoardDatabaseHandle, sessionKey: strin
   }
 }
 
-export function readBoardSessionKeys(database: BoardDatabaseHandle): string[] {
-  if (!boardTablesPresent(database)) {
-    return [];
+export function readBoardSessionKeys(
+  database: BoardDatabaseHandle,
+  sessionKeys: readonly string[],
+): Set<string> {
+  if (sessionKeys.length === 0 || !boardTablesPresent(database)) {
+    return new Set();
   }
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  // Every persisted widget belongs to a tab, so tab owners cover the board inventory.
-  return executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("board_tabs").select("session_key").distinct(),
-  ).rows.map((row) => row.session_key);
+  const query = db.selectFrom("board_tabs").select("session_key").distinct();
+  // Every persisted widget belongs to a tab.
+  return new Set(
+    executeSqliteQuerySync(
+      database.db,
+      query.where("session_key", "in", sqliteStringSet(sessionKeys)),
+    ).rows.map((row) => row.session_key),
+  );
 }
 
 export function readBoardSnapshotWithHtmlViewMetadata(
@@ -310,10 +315,11 @@ export function readBoardSnapshotWithHtmlViewMetadata(
   return { snapshot: stored.snapshot, htmlViewMetadata: stored.htmlViewMetadata };
 }
 
-export function readBoardWidgetRow(
+export function readBoardWidgetDocument(
   database: BoardDatabaseHandle,
   sessionKey: string,
   name: string,
+  contentKind?: "mcp-app",
 ) {
   if (!hasBoardSession(database, sessionKey) || !boardTablesPresent(database)) {
     return undefined;
@@ -338,7 +344,9 @@ export function readBoardWidgetRow(
       .where("name", "=", name)
       .limit(1),
   ).rows[0];
-  return row;
+  return row && (!contentKind || row.content_kind === contentKind)
+    ? rowToBoardWidgetDocument(row)
+    : undefined;
 }
 
 export function applyBoardOpsToDatabase(

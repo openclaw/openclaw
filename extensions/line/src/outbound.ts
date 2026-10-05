@@ -3,8 +3,8 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-// Line plugin module implements outbound behavior.
 import {
+  createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   listMessageReceiptPlatformIds,
   type ChannelMessageSendResult,
@@ -51,7 +51,15 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation, sourcePresentation, ctx }) =>
     renderLinePresentation(payload, presentation, ctx.to, sourcePresentation),
-  sendPayload: async ({ to, payload, accountId, cfg, replyToId, onDeliveryResult }) => {
+  sendPayload: async ({
+    to,
+    payload,
+    accountId,
+    cfg,
+    replyToId,
+    onDeliveryResult,
+    assertDirectAdapterHandoff,
+  }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();
     const rawLineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
@@ -59,23 +67,32 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       rawLineData.card && !rawLineData.flexMessage
         ? { ...rawLineData, flexMessage: renderLineCard(rawLineData.card) }
         : rawLineData;
-    const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
-    const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
-    const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
-    const sendTemplate = lineRuntime?.pushTemplateMessage ?? outboundRuntime.pushTemplateMessage;
-    const sendLocation = lineRuntime?.pushLocationMessage ?? outboundRuntime.pushLocationMessage;
-    const sendQuickReplies =
-      lineRuntime?.pushTextMessageWithQuickReplies ??
-      outboundRuntime.pushTextMessageWithQuickReplies;
-    const buildTemplate =
-      lineRuntime?.buildTemplateMessageFromPayload ??
-      outboundRuntime.buildTemplateMessageFromPayload;
-    const sendOptions = { verbose: false, cfg, accountId: accountId ?? undefined };
+    const {
+      pushMessageLine: sendText,
+      pushMessagesLine: sendBatch,
+      pushFlexMessage: sendFlex,
+      pushTemplateMessage: sendTemplate,
+      pushLocationMessage: sendLocation,
+      pushTextMessageWithQuickReplies: sendQuickReplies,
+      buildTemplateMessageFromPayload: buildTemplate,
+    } = outboundRuntime;
+    const authorize = assertDirectAdapterHandoff
+      ? () => {
+          assertDirectAdapterHandoff();
+          return true;
+        }
+      : undefined;
+    const sendOptions = {
+      verbose: false,
+      cfg,
+      accountId: accountId ?? undefined,
+      authorize,
+      assertDirectAdapterHandoff,
+    };
 
-    let lastResult: LineSendResult | null = null;
+    const acceptedResults: LineSendResult[] = [];
     const recordResult = async (
       resultPromise: Promise<LineSendResult>,
     ): Promise<LineSendResult> => {
@@ -83,11 +100,27 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       try {
         result = await resultPromise;
       } catch (error) {
+        if (acceptedResults.length > 0) {
+          const partial = isChannelPartialDeliveryError(error) ? error : undefined;
+          const receipt = createMessageReceiptFromOutboundResults({
+            results: [
+              ...acceptedResults,
+              ...(partial?.deliveryResult.receipt
+                ? [{ receipt: partial.deliveryResult.receipt }]
+                : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({ messageId }))),
+            ],
+          });
+          throw createChannelPartialDeliveryError(partial?.cause ?? error, {
+            ...partial?.deliveryResult,
+            messageIds: listMessageReceiptPlatformIds(receipt),
+            receipt,
+            visibleReplySent: true,
+          });
+        }
         // Accepted payload parts keep their receipt and must not wait for quota diagnosis.
-        const refusal =
-          lastResult !== null || isChannelPartialDeliveryError(error)
-            ? undefined
-            : await explainLineRefusal({ error, cfg, accountId });
+        const refusal = isChannelPartialDeliveryError(error)
+          ? undefined
+          : await explainLineRefusal({ error, cfg, accountId });
         throw refusal?.retryable !== undefined
           ? new PlatformMessageNotDispatchedError(refusal.reason, {
               cause: error,
@@ -95,14 +128,15 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
             })
           : error;
       }
-      lastResult = result;
+      acceptedResults.push(result);
       try {
         await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));
       } catch (error) {
         // Observers run after provider acceptance; losing this receipt invites duplicate delivery.
+        const receipt = createMessageReceiptFromOutboundResults({ results: acceptedResults });
         throw createChannelPartialDeliveryError(error, {
-          messageIds: listMessageReceiptPlatformIds(result.receipt),
-          receipt: result.receipt,
+          messageIds: listMessageReceiptPlatformIds(receipt),
+          receipt,
           visibleReplySent: true,
         });
       }
@@ -114,21 +148,18 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const quickReply = quickReplyItems.length
       ? createLineQuickReply(quickReplyItems)
       : quickReplies.length
-        ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(
-            quickReplies,
-          )
+        ? outboundRuntime.createQuickReplyItems(quickReplies)
         : undefined;
     const quickReplyLabels = quickReplyItems.length
       ? quickReplyItems.map((item) => item.label)
       : quickReplies;
 
-    // LINE SDK expects Message[] but we build dynamically.
-    const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
+    const sendMessageBatch = async (messages: messagingApi.Message[]) => {
       if (messages.length === 0) {
         return;
       }
       for (let i = 0; i < messages.length; i += 5) {
-        const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
+        const batch = messages.slice(i, i + 5);
         await recordResult(sendBatch(to, batch, sendOptions));
       }
     };
@@ -151,29 +182,22 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       );
     };
 
-    const processed = payload.text
-      ? outboundRuntime.processLineMessage(payload.text)
-      : { text: "", flexMessages: [] };
+    const processed = payload.text ? outboundRuntime.processLineMessage(payload.text) : [];
 
     const chunkLimit =
       runtime.channel.text.resolveTextChunkLimit?.(cfg, "line", accountId ?? undefined, {
         fallbackLimit: 5000,
       }) ?? 5000;
 
-    const orderedMessages = processed.segments?.flatMap<
-      messagingApi.FlexMessage | messagingApi.TextMessage
-    >((segment) =>
-      segment.type === "flex"
-        ? [segment.message]
-        : runtime.channel.text
-            .chunkMarkdownText(segment.text, chunkLimit)
-            .map((text) => ({ type: "text" as const, text })),
+    const orderedMessages = processed.flatMap<messagingApi.FlexMessage | messagingApi.TextMessage>(
+      (segment) =>
+        segment.type === "flex"
+          ? [segment.message]
+          : runtime.channel.text
+              .chunkMarkdownText(segment.text, chunkLimit)
+              .map((text) => ({ type: "text" as const, text })),
     );
-    const chunks = orderedMessages
-      ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
-      : processed.text
-        ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
-        : [];
+    const hasText = orderedMessages.some((message) => message.type === "text");
     const mediaUrls = resolveOutboundMediaUrls(payload);
     const mediaOptions = {
       mediaKind: lineData.mediaKind,
@@ -181,7 +205,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       durationMs: lineData.durationMs,
       trackingId: lineData.trackingId,
     };
-    const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
+    const shouldSendQuickRepliesInline = !hasText && hasQuickReplies;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
         const trimmed = url?.trim();
@@ -189,7 +213,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         await recordResult(
-          (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
+          outboundRuntime.sendMessageLine(to, "", {
             ...sendOptions,
             ...mediaOptions,
             mediaUrl: trimmed,
@@ -219,22 +243,16 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       if (location) {
         await recordResult(sendLocation(to, location, sendOptions));
       }
-
-      if (!orderedMessages) {
-        for (const flexMsg of processed.flexMessages) {
-          await recordResult(sendFlex(to, flexMsg.altText, flexMsg.contents, sendOptions));
-        }
-      }
     }
 
-    const sendMediaAfterText = !(hasQuickReplies && chunks.length > 0);
+    const sendMediaAfterText = !(hasQuickReplies && hasText);
     if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && !sendMediaAfterText) {
       await sendMediaMessages();
     }
 
-    if (orderedMessages && !shouldSendQuickRepliesInline) {
+    if (!shouldSendQuickRepliesInline) {
       const quotedIndex = orderedMessages.findIndex(canCarryLineQuoteToken);
-      if (replyQuoteToken && quotedIndex < 0) {
+      if (replyQuoteToken && orderedMessages.length > 0 && quotedIndex < 0) {
         reportLineQuoteCarrierMissing(to);
       }
       for (const [index, message] of orderedMessages.entries()) {
@@ -254,18 +272,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           );
         }
       }
-    } else if (chunks.length > 0) {
-      for (const [i, chunk] of chunks.entries()) {
-        const isLast = i === chunks.length - 1;
-        const quoteToken = i === 0 ? replyQuoteToken : undefined;
-        if (isLast && hasQuickReplies) {
-          await sendTextWithQuickReply(chunk, quoteToken);
-        } else {
-          await recordResult(sendText(to, chunk, { ...sendOptions, ...quotedOption(quoteToken) }));
-        }
-      }
-    } else if (shouldSendQuickRepliesInline) {
-      const quickReplyMessages: Array<Record<string, unknown>> = [];
+    } else {
+      const quickReplyMessages: messagingApi.Message[] = [];
       if (lineData.flexMessage) {
         quickReplyMessages.push(
           outboundRuntime.createFlexMessage(
@@ -287,11 +295,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       if (locationMessage) {
         quickReplyMessages.push(locationMessage);
       }
-      for (const flexMsg of processed.flexMessages) {
-        quickReplyMessages.push(
-          outboundRuntime.createFlexMessage(flexMsg.altText, flexMsg.contents),
-        );
-      }
+      quickReplyMessages.push(...orderedMessages);
       for (const url of mediaUrls) {
         const trimmed = url?.trim();
         if (!trimmed) {
@@ -299,10 +303,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
         quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
       }
-      if (quickReplyMessages.length > 0 && quickReply) {
+      const lastMessage = quickReplyMessages.at(-1);
+      if (lastMessage && quickReply) {
         const lastIndex = quickReplyMessages.length - 1;
         quickReplyMessages[lastIndex] = {
-          ...quickReplyMessages[lastIndex],
+          ...lastMessage,
           quickReply,
         };
         await sendMessageBatch(quickReplyMessages);
@@ -318,7 +323,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    const completedResult = lastResult as LineSendResult | null;
+    const completedResult = acceptedResults.at(-1);
     if (!completedResult) {
       throw new Error("Message must be non-empty for LINE sends");
     }
@@ -336,7 +341,15 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     // Core sends a single media reply through here rather than through the payload
     // owner, so the quote has to be resolved again; sendMessageLine puts it on the
     // caption, the one part of a media send LINE accepts a quote on.
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      accountId,
+      replyToId,
+      assertDirectAdapterHandoff,
+    }) =>
       await (
         await loadLineOutboundRuntime()
       ).sendMessageLine(to, text, {
@@ -344,6 +357,13 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         mediaUrl,
         cfg,
         accountId: accountId ?? undefined,
+        assertDirectAdapterHandoff,
+        authorize: assertDirectAdapterHandoff
+          ? () => {
+              assertDirectAdapterHandoff();
+              return true;
+            }
+          : undefined,
         quoteToken: resolveLineQuoteToken({ cfg, accountId, chatId: to, messageId: replyToId }),
       }),
   }),

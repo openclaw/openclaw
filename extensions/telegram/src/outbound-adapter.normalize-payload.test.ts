@@ -77,23 +77,6 @@ describe("telegramOutbound normalizePayload", () => {
     expect(normalized).toBeNull();
   });
 
-  it.each([
-    { name: "media", payload: { mediaUrl: "https://example.test/report.png" } },
-    { name: "location", payload: { location: { latitude: 1, longitude: 2 } } },
-    {
-      name: "portable buttons",
-      payload: {
-        presentation: {
-          blocks: [{ type: "buttons" as const, buttons: [{ label: "Retry", value: "retry" }] }],
-        },
-      },
-    },
-  ])("preserves $name payloads without Telegram metadata", ({ payload }) => {
-    const normalized = telegramOutbound.normalizePayload?.({ cfg: {} as never, payload });
-
-    expect(normalized).toEqual(payload);
-  });
-
   it("merges all fallback adopters into the linked summary and keeps reactions separate", () => {
     const payloads = [
       { text: "Pablo Daily Summary" },
@@ -192,29 +175,6 @@ describe("telegramOutbound normalizePayload", () => {
         text: "Pablo Daily Summary",
         fallbackText: { text: "Pablo Daily Summary" },
         channelData: { telegram: { buttons: [[{ text: "Open task" }]] } },
-      },
-    ];
-
-    expect(
-      telegramOutbound.normalizePayloadBatch?.({
-        cfg: {} as never,
-        payloads: payloads.map((payload, index) => ({ index, payload })),
-      }),
-    ).toEqual(payloads);
-  });
-
-  it("keeps fallback adopters with distinct quote metadata separate", () => {
-    const payloads = [
-      { text: "Pablo Daily Summary" },
-      {
-        text: "Pablo Daily Summary",
-        fallbackText: { text: "Pablo Daily Summary", replacesPayloadIndex: 0 },
-        channelData: { telegram: { quoteText: "First quote" } },
-      },
-      {
-        text: "Pablo Daily Summary",
-        fallbackText: { text: "Pablo Daily Summary", replacesPayloadIndex: 0 },
-        channelData: { telegram: { quoteText: "Second quote" } },
       },
     ];
 

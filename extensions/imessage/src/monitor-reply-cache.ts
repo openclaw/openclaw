@@ -1,11 +1,7 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isPositiveIMessageChatMatch,
-  resolveIMessageChatMatch,
-  type IMessageChatContext,
-} from "./chat-context.js";
+import { resolveIMessageChatMatch, type IMessageChatContext } from "./chat-context.js";
 import { getIMessageRuntime } from "./runtime.js";
 import {
   IMESSAGE_REPLY_CACHE_NAMESPACE,
@@ -35,21 +31,7 @@ type IMessageReplyCacheEntry = IMessageChatContext & {
   messageId: string;
   shortId: string;
   timestamp: number;
-  /**
-   * True when the gateway sent this message itself (recorded from the
-   * outbound path in send.ts after a successful imsg send), false when the
-   * cache entry came from inbound watch (most common path).
-   *
-   * Edit / unsend actions require this to be true: Messages.app only lets
-   * the original sender edit or retract a message, and even if the bridge
-   * accepted a non-sender attempt, letting an agent unsend a human user's
-   * message in a group chat would be a permission boundary violation.
-   *
-   * Optional for backwards compatibility with persisted entries from older
-   * gateway versions that did not record this field; missing values are
-   * treated as `false` (the safe default — pre-existing entries on disk
-   * came from the inbound-only writer that existed before this change).
-   */
+  // Edit/unsend require an outbound record; missing persisted provenance is untrusted.
   isFromMe?: boolean;
 };
 
@@ -58,7 +40,6 @@ type IMessageReplyCacheCounter = { counter: number };
 
 const imessageReplyCacheByMessageId = new Map<string, IMessageReplyCacheEntry>();
 const imessageShortIdToUuid = new Map<string, string>();
-const imessageUuidToShortId = new Map<string, string>();
 let imessageShortIdCounter = 0;
 
 function openReplyCacheStore(): IMessageReplyCacheStore {
@@ -102,7 +83,6 @@ function hydrateRows(entries: IMessageReplyCacheEntry[]): void {
     }
     imessageReplyCacheByMessageId.set(entry.messageId, entry);
     imessageShortIdToUuid.set(entry.shortId, entry.messageId);
-    imessageUuidToShortId.set(entry.messageId, entry.shortId);
   }
 }
 
@@ -205,11 +185,6 @@ function buildReplyCacheEntry(
   };
 }
 
-function generateShortId(): string {
-  imessageShortIdCounter += 1;
-  return String(imessageShortIdCounter);
-}
-
 export async function rememberIMessageReplyCache(
   entry: Omit<IMessageReplyCacheEntry, "shortId">,
 ): Promise<IMessageReplyCacheEntry> {
@@ -219,12 +194,11 @@ export async function rememberIMessageReplyCache(
     return { ...entry, shortId: "" };
   }
 
-  let shortId = imessageUuidToShortId.get(messageId);
+  let shortId = imessageReplyCacheByMessageId.get(messageId)?.shortId;
   const isNewMessage = !shortId;
   if (!shortId) {
-    shortId = generateShortId();
+    shortId = String(++imessageShortIdCounter);
     imessageShortIdToUuid.set(shortId, messageId);
-    imessageUuidToShortId.set(messageId, shortId);
   }
 
   const fullEntry = buildReplyCacheEntry(entry, messageId, shortId);
@@ -241,7 +215,6 @@ export async function rememberIMessageReplyCache(
     deletedMessageIds.push(key);
     if (value.shortId) {
       imessageShortIdToUuid.delete(value.shortId);
-      imessageUuidToShortId.delete(key);
     }
   }
   while (imessageReplyCacheByMessageId.size > IMESSAGE_REPLY_CACHE_MAX_ENTRIES) {
@@ -254,7 +227,6 @@ export async function rememberIMessageReplyCache(
     deletedMessageIds.push(oldest);
     if (oldEntry?.shortId) {
       imessageShortIdToUuid.delete(oldEntry.shortId);
-      imessageUuidToShortId.delete(oldest);
     }
   }
 
@@ -283,10 +255,6 @@ function hasChatScope(ctx?: IMessageChatContext): boolean {
     normalizeOptionalString(ctx.chatIdentifier) ||
     typeof ctx.chatId === "number",
   );
-}
-
-function isCrossChatMismatch(cached: IMessageReplyCacheEntry, ctx: IMessageChatContext): boolean {
-  return resolveIMessageChatMatch(cached, ctx) === "mismatch";
 }
 
 function describeChatForError(values: IMessageChatContext): string {
@@ -331,18 +299,7 @@ export async function resolveIMessageMessageId(
   opts?: {
     requireKnownShortId?: boolean;
     chatContext?: IMessageChatContext;
-    /**
-     * When true, only resolve message ids that the gateway recorded as sent
-     * by itself (`isFromMe: true`). Used by `edit` / `unsend` so an agent
-     * cannot retract or edit messages other participants sent — Messages.app
-     * enforces this at the OS level too, but failing earlier in the plugin
-     * gives a clean error and avoids dispatching a guaranteed-to-fail bridge
-     * call.
-     *
-     * Cache entries with no `isFromMe` field (older persisted entries from
-     * before this option existed, or any uncached UUID the agent passes
-     * through) are treated as not-from-me and rejected.
-     */
+    /** Reject inbound, uncached, or provenance-free records for edit/unsend. */
     requireFromMe?: boolean;
   },
 ): Promise<string> {
@@ -350,40 +307,16 @@ export async function resolveIMessageMessageId(
   if (!trimmed) {
     return trimmed;
   }
-  // Hydrate SQLite-backed mappings before reading them. Without this, the
-  // first post-restart action with a short MessageSid would miss
-  // `imessageShortIdToUuid` and fall through to "no longer available".
-  // `rememberIMessageReplyCache` already hydrates on its own, so this only
-  // matters for the resolve-first-after-restart sequence.
   await hydrateFromStoreOnce();
-
-  if (/^\d+$/.test(trimmed)) {
-    // Cache hit: the cached entry carries the chat info this short id was
-    // issued for, so we can resolve the UUID even without a caller-supplied
-    // chat scope. Cross-chat detection still fires when the caller did
-    // provide a scope and it disagrees with the cache.
-    const uuid = imessageShortIdToUuid.get(trimmed);
-    if (uuid) {
-      const cached = imessageReplyCacheByMessageId.get(uuid);
-      if (opts?.chatContext && hasChatScope(opts.chatContext)) {
-        if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
-          throw buildCrossChatError(trimmed, "short", cached, opts.chatContext);
-        }
-      }
-      if (opts?.requireFromMe && cached?.isFromMe !== true) {
-        throw buildFromMeError(trimmed, "short");
-      }
-      return uuid;
-    }
-    // Cache miss: now the chat-scope requirement matters — without scope
-    // we have no way to verify the caller is reacting in the right chat,
-    // and without a cached UUID the bridge cannot resolve the short id.
-    if (opts?.requireKnownShortId && !hasChatScope(opts.chatContext)) {
-      throw new Error(
-        `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
-      );
-    }
+  const inputKind = /^\d+$/.test(trimmed) ? "short" : "uuid";
+  const messageId = inputKind === "short" ? imessageShortIdToUuid.get(trimmed) : trimmed;
+  if (!messageId) {
     if (opts?.requireKnownShortId) {
+      if (!hasChatScope(opts.chatContext)) {
+        throw new Error(
+          `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
+        );
+      }
       throw new Error(
         `iMessage short message id ${describeMessageIdForError(trimmed, "short")} is no longer available. Use MessageSidFull.`,
       );
@@ -391,16 +324,19 @@ export async function resolveIMessageMessageId(
     return trimmed;
   }
 
-  const cached = imessageReplyCacheByMessageId.get(trimmed);
-  if (opts?.chatContext) {
-    if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
-      throw buildCrossChatError(trimmed, "uuid", cached, opts.chatContext);
-    }
+  const cached = imessageReplyCacheByMessageId.get(messageId);
+  if (
+    cached &&
+    opts?.chatContext &&
+    (inputKind === "uuid" || hasChatScope(opts.chatContext)) &&
+    resolveIMessageChatMatch(cached, opts.chatContext) === "mismatch"
+  ) {
+    throw buildCrossChatError(trimmed, inputKind, cached, opts.chatContext);
   }
   if (opts?.requireFromMe && cached?.isFromMe !== true) {
-    throw buildFromMeError(trimmed, "uuid");
+    throw buildFromMeError(trimmed, inputKind);
   }
-  return trimmed;
+  return messageId;
 }
 
 export async function isKnownFromMeIMessageMessageId(
@@ -413,10 +349,31 @@ export async function isKnownFromMeIMessageMessageId(
   }
   await hydrateFromStoreOnce();
   const cached = imessageReplyCacheByMessageId.get(trimmed);
-  if (!cached || cached.isFromMe !== true || cached.accountId !== ctx.accountId) {
+  if (!cached || cached.isFromMe !== true) {
     return false;
   }
-  return isPositiveIMessageChatMatch(cached, ctx);
+  return resolveCachedResourceBinding(trimmed, { ...ctx, accountId: ctx.accountId }) === "match";
+}
+
+export async function isKnownFromMeIMessageTarget(params: {
+  messageIds: string[];
+  accountId: string;
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  isKnownFromMeMessageId?: (
+    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
+  ) => boolean | Promise<boolean>;
+}): Promise<boolean> {
+  const { accountId, chatId, chatGuid, chatIdentifier } = params;
+  const ctx = { accountId, chatId, chatGuid, chatIdentifier };
+  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
+  for (const messageId of params.messageIds) {
+    if (await isKnownFromMe(messageId, ctx)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
@@ -427,31 +384,11 @@ function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
   );
 }
 
-/**
- * Return the most recent cached entry whose chat scope matches the supplied
- * context. Used as a fallback when an agent calls a per-message action (e.g.
- * `react`) without specifying a `messageId` — the natural intent is "react
- * to the message I just received in this chat."
- *
- * Strict semantics for safety:
- *  - Caller must supply a chat scope. We refuse to "guess" the active chat.
- *  - Cached entry must positively match on at least one identifier kind
- *    (chatGuid, chatIdentifier, chatId, or normalized direct-DM fingerprint).
- *    We do NOT fall through on "no overlapping identifier" — that's how a
- *    cached entry from a foreign chat could be returned when the caller's
- *    context didn't share any identifier kind with the cache.
- *  - Caller must supply an accountId; we never cross account boundaries.
- *  - We only consider entries newer than `LATEST_FALLBACK_MS`. The intent
- *    of "react to the latest" is "the message I just received," not
- *    "anything in this chat from any time."
- */
+/** Latest recent entry with a positive same-account conversation match; never guess a chat. */
 export function findLatestIMessageEntryForChat(
   ctx: IMessageChatContext & { accountId?: string },
 ): IMessageReplyCacheEntry | undefined {
-  if (!hasChatScope(ctx)) {
-    return undefined;
-  }
-  if (!ctx.accountId) {
+  if (!hasChatScope(ctx) || !ctx.accountId) {
     return undefined;
   }
   const cutoff = Date.now() - LATEST_FALLBACK_MS;
@@ -463,7 +400,7 @@ export function findLatestIMessageEntryForChat(
     if (entry.timestamp < cutoff) {
       continue;
     }
-    if (!isPositiveIMessageChatMatch(entry, ctx)) {
+    if (resolveIMessageChatMatch(entry, ctx) !== "match") {
       continue;
     }
     if (!best || entry.timestamp > best.timestamp) {
@@ -495,11 +432,7 @@ function resolveCachedResourceBinding(
   if (entry.accountId !== ctx.accountId) {
     return "mismatch";
   }
-  const chatMatch = resolveIMessageChatMatch(entry, ctx);
-  if (chatMatch !== "match") {
-    return chatMatch;
-  }
-  return "match";
+  return resolveIMessageChatMatch(entry, ctx);
 }
 
 type CurrentMessageChatParams = {

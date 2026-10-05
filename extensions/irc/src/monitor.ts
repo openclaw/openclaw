@@ -1,4 +1,3 @@
-// Irc plugin module implements monitor behavior.
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
@@ -60,16 +59,9 @@ export async function monitorIrcProvider(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   const monitorAbort = new AbortController();
-  let removeAbortListener: (() => void) | null = null;
-  if (opts.abortSignal) {
-    const forwardAbort = () => monitorAbort.abort();
-    if (opts.abortSignal.aborted) {
-      forwardAbort();
-    } else {
-      opts.abortSignal.addEventListener("abort", forwardAbort, { once: true });
-      removeAbortListener = () => opts.abortSignal?.removeEventListener("abort", forwardAbort);
-    }
-  }
+  const abortSignal = opts.abortSignal
+    ? AbortSignal.any([opts.abortSignal, monitorAbort.signal])
+    : monitorAbort.signal;
 
   const ingress: IrcIngressMonitor = createIrcIngressMonitor({
     accountId: account.accountId,
@@ -81,7 +73,7 @@ export async function monitorIrcProvider(
       context: { connectedNick: string; connectionEpoch: string },
     ) => {
       const activeClient = client;
-      if (!activeClient || stopped || monitorAbort.signal.aborted) {
+      if (!activeClient || stopped || abortSignal.aborted) {
         return {
           kind: "failed-retryable",
           error: new Error("IRC transport disconnected before ingress dispatch."),
@@ -114,13 +106,13 @@ export async function monitorIrcProvider(
         turnAdoptionLifecycle,
         sendReply: async (target, text) => {
           const replyClient = client;
-          if (!replyClient || !replyClient.isReady() || stopped || monitorAbort.signal.aborted) {
+          if (!replyClient || !replyClient.isReady() || stopped || abortSignal.aborted) {
             throw new Error("IRC transport disconnected before reply send.");
           }
           if (!message.isGroup && context.connectionEpoch !== activeConnectionEpoch) {
             throw new Error("IRC connection changed before private reply send.");
           }
-          replyClient.sendPrivmsg(target, text);
+          await replyClient.sendPrivmsg(target, text);
           opts.statusSink?.({ lastOutboundAt: Date.now() });
           core.channel.activity.record({
             channel: "irc",
@@ -134,14 +126,14 @@ export async function monitorIrcProvider(
   });
 
   function scheduleReconnect() {
-    if (stopped || monitorAbort.signal.aborted || reconnectTimer) {
+    if (stopped || abortSignal.aborted || reconnectTimer) {
       return;
     }
     opts.statusSink?.({ lifecycle: "recovering" });
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       void connect().catch((error: unknown) => {
-        if (stopped || monitorAbort.signal.aborted) {
+        if (stopped || abortSignal.aborted) {
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
@@ -152,14 +144,14 @@ export async function monitorIrcProvider(
   }
 
   async function connect() {
-    if (stopped || monitorAbort.signal.aborted) {
+    if (stopped || abortSignal.aborted) {
       return;
     }
     const ingressConnection = ingress.openConnection();
     const nextClient = await connectIrcClient(
       buildIrcConnectOptions(account, {
         channels: account.config.channels,
-        abortSignal: monitorAbort.signal,
+        abortSignal,
         onLine: (line) => {
           if (core.logging.shouldLogVerbose()) {
             logger.debug?.(`[${account.accountId}] << ${line}`);
@@ -174,7 +166,7 @@ export async function monitorIrcProvider(
           logger.error(`[${account.accountId}] IRC error: ${error.message}`);
         },
         onDisconnect: () => {
-          if (stopped || monitorAbort.signal.aborted) {
+          if (stopped || abortSignal.aborted) {
             return;
           }
           ingressPause = ingress.pause();
@@ -204,7 +196,7 @@ export async function monitorIrcProvider(
         },
       }),
     );
-    if (stopped || monitorAbort.signal.aborted) {
+    if (stopped || abortSignal.aborted) {
       nextClient.quit("shutdown");
       return;
     }
@@ -228,8 +220,6 @@ export async function monitorIrcProvider(
   try {
     await connect();
   } catch (error) {
-    removeAbortListener?.();
-    removeAbortListener = null;
     await ingress.stop();
     throw error;
   }
@@ -239,9 +229,7 @@ export async function monitorIrcProvider(
     stop: () => {
       stopTask ??= (async () => {
         stopped = true;
-        removeAbortListener?.();
-        removeAbortListener = null;
-        if (!monitorAbort.signal.aborted) {
+        if (!abortSignal.aborted) {
           monitorAbort.abort();
         }
         if (reconnectTimer) {

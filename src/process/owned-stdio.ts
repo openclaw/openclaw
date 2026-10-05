@@ -1,7 +1,7 @@
 import type { Writable } from "node:stream";
 import { settlesWithin } from "../shared/settle-within.js";
 import { createChildAdapter } from "./supervisor/adapters/child.js";
-import type { SpawnProcessAdapter } from "./supervisor/types.js";
+import type { ProcessCleanupResult, SpawnProcessAdapter } from "./supervisor/types.js";
 
 export type OwnedStdioProcess = SpawnProcessAdapter<NodeJS.Signals | null> &
   Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
@@ -52,7 +52,7 @@ export async function createOwnedStdioProcess(params: {
 export async function closeOwnedStdioProcess(
   process: OwnedStdioProcess,
   options: { graceMs?: number; force?: boolean } = {},
-): Promise<void> {
+): Promise<ProcessCleanupResult | undefined> {
   const settled = Promise.allSettled([
     process.wait(),
     process.waitForExtinction?.() ??
@@ -84,6 +84,7 @@ export async function closeOwnedStdioProcess(
     if (failure) {
       throw failure.reason;
     }
+    return process.cleanupResult;
   } finally {
     process.dispose();
   }

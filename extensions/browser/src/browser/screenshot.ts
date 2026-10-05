@@ -1,20 +1,15 @@
-/**
- * Browser screenshot normalization helpers that bound screenshots for media
- * transport and model input.
- */
-import { toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
   isImageProcessorUnavailableError,
   resizeToJpeg,
-} from "../media/media-services.js";
+} from "openclaw/plugin-sdk/media-runtime";
 
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
-/** Downscales/re-encodes screenshots to fit Browser plugin byte and dimension caps. */
 export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {
@@ -42,8 +37,6 @@ export async function normalizeBrowserScreenshot(
   const sideGrid = buildImageResizeSideGrid(maxSide, sideStart);
 
   let smallestSize: number | undefined;
-  let processorUnavailableError: unknown;
-
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
       let out: Buffer;
@@ -56,8 +49,7 @@ export async function normalizeBrowserScreenshot(
         });
       } catch (err) {
         if (isImageProcessorUnavailableError(err)) {
-          processorUnavailableError = err;
-          break;
+          throw toErrorObject(err, "Non-Error thrown");
         }
         throw err;
       }
@@ -70,13 +62,6 @@ export async function normalizeBrowserScreenshot(
         return { buffer: out, contentType: "image/jpeg", sourceDimensions: meta };
       }
     }
-    if (processorUnavailableError) {
-      break;
-    }
-  }
-
-  if (processorUnavailableError) {
-    throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
   const bestSize = smallestSize ?? buffer.byteLength;

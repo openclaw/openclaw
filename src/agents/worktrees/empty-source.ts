@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import { listGitWorktrees, requireGit, worktreePathExists } from "./git.js";
 import { listRegistryWorktrees } from "./registry.js";
@@ -51,15 +51,14 @@ export async function ensureEmptyWorktreeSource(params: {
   commitGuard: () => void;
 }): Promise<string> {
   const { env, commitGuard } = params;
-  // Each session owns its Git metadata as well as its files. Git configuration
-  // and remote changes made by one empty task cannot affect another task.
+  // Isolate each session's Git metadata and configuration from other tasks.
   const gitEnv = Object.fromEntries(
     Object.entries(mergeProcessEnv([process.env, env])).filter(
       ([key]) => !key.toUpperCase().startsWith("GIT_"),
     ),
   );
   gitEnv.GIT_CONFIG_NOSYSTEM = "1";
-  gitEnv.GIT_CONFIG_GLOBAL = os.devNull;
+  gitEnv.GIT_CONFIG_GLOBAL = gitNullConfigPath();
   gitEnv.GIT_NO_REPLACE_OBJECTS = "1";
   const gitOptions = {
     baseEnv: gitEnv,

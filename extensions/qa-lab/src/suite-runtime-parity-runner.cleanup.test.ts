@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   projectQaEvidenceScenarioOutcomes,
-  type QaEvidenceSummaryJson,
   type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -14,7 +13,7 @@ import {
 import * as scenarioCatalog from "./scenario-catalog.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import { runQaRuntimeParitySuite } from "./suite-runtime-parity-runner.js";
-import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteRunner, QaSuiteScenarioRunner } from "./suite-types.js";
 import * as suite from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -59,8 +58,8 @@ const mocks = vi.hoisted(() => ({
     async (_params: {
       channel?: string | null;
       channelDriver?: string | null;
-      publishTransportArtifacts?: boolean;
-      recordedEvidence?: QaEvidenceSummaryJson;
+      transportArtifacts?: unknown;
+      recordedEvidence: QaEvidenceSummaryV3Json;
     }) => ({
       evidence: _params.recordedEvidence,
       evidencePath: "/qa-output/qa-evidence.json",
@@ -95,6 +94,10 @@ vi.mock("./crabline-transport.js", () => {
     }),
     handleAction: vi.fn(async () => {}),
     createReportNotes: () => [],
+    captureArtifacts: vi.fn(async () => ({
+      artifacts: [{ kind: "channel-driver-smoke", path: "/qa-output/driver-smoke.json" }],
+      reportNotes: [],
+    })),
     cleanupAfterGatewayStop: vi.fn(async () => {}),
   }));
   return {
@@ -215,6 +218,35 @@ async function runCleanupTestSuite(params: {
   });
 }
 
+function createCleanupTestChild(
+  lab: QaLabServerHandle,
+  startedScenarioIds: string[] = ["runtime-cleanup"],
+) {
+  return vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
+    outputDir: "/qa-child",
+    evidencePath: "/qa-child/qa-evidence.json",
+    reportPath: "/qa-child/qa-suite-report.md",
+    summaryPath: "/qa-child/qa-suite-summary.json",
+    report: "",
+    ...recordQaSuiteTestResults(
+      params,
+      [makeQaSuiteTestScenario("runtime-cleanup")],
+      [{ name: "runtime-cleanup", status: "pass", steps: [] }],
+    ),
+    startedScenarioIds,
+    watchUrl: lab.baseUrl,
+    runtimeParityCell: {
+      runtime: params?.forcedRuntime ?? "openclaw",
+      transcriptBytes: "",
+      toolCalls: [],
+      finalText: "ok",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      wallClockMs: 1,
+      bootStateLines: [],
+    },
+  }));
+}
+
 describe("runtime parity suite transport cleanup", () => {
   it("executes repeated flow instances in request order through the standard producer", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-repeated-flow-");
@@ -278,25 +310,7 @@ describe("runtime parity suite transport cleanup", () => {
     const cleanup = vi.fn(async () => {});
     const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
-      outputDir: "/qa-child",
-      evidencePath: "/qa-child/qa-evidence.json",
-      reportPath: "/qa-child/qa-suite-report.md",
-      summaryPath: "/qa-child/qa-suite-summary.json",
-      report: "",
-      scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
-      startedScenarioIds: ["runtime-cleanup"],
-      watchUrl: lab.baseUrl,
-      runtimeParityCell: {
-        runtime: params?.forcedRuntime ?? "openclaw",
-        transcriptBytes: "",
-        toolCalls: [],
-        finalText: "ok",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        wallClockMs: 1,
-        bootStateLines: [],
-      },
-    }));
+    const runChild = createCleanupTestChild(lab);
 
     try {
       const thrown = await runCleanupTestSuite({
@@ -329,25 +343,7 @@ describe("runtime parity suite transport cleanup", () => {
     const lab = createCleanupTestLab();
     const cleanup = vi.fn(async () => {});
     const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
-    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
-      outputDir: "/qa-child",
-      evidencePath: "/qa-child/qa-evidence.json",
-      reportPath: "/qa-child/qa-suite-report.md",
-      summaryPath: "/qa-child/qa-suite-summary.json",
-      report: "",
-      scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
-      startedScenarioIds: [],
-      watchUrl: lab.baseUrl,
-      runtimeParityCell: {
-        runtime: params?.forcedRuntime ?? "openclaw",
-        transcriptBytes: "",
-        toolCalls: [],
-        finalText: "ok",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        wallClockMs: 1,
-        bootStateLines: [],
-      },
-    }));
+    const runChild = createCleanupTestChild(lab, []);
 
     const result = await runCleanupTestSuite({ factory, lab, runChild });
 
@@ -409,12 +405,14 @@ describe("runtime parity suite transport cleanup", () => {
         expect(runScenario).toHaveBeenCalledTimes(parity ? 2 : 1);
         expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(labs.length);
         for (const [childArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
-          expect(childArtifacts.publishTransportArtifacts).toBe(false);
+          expect(childArtifacts.transportArtifacts).toBeUndefined();
         }
         expect(mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0]).toMatchObject({
           channel: "telegram",
           channelDriver: "crabline",
-          publishTransportArtifacts: true,
+          transportArtifacts: {
+            artifacts: [{ kind: "channel-driver-smoke", path: "/qa-output/driver-smoke.json" }],
+          },
         });
         for (const lab of labs) {
           expect(lab.stop).toHaveBeenCalledOnce();

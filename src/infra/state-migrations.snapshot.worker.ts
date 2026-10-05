@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants, lstatSync, readdirSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import { endianness } from "node:os";
 import path from "node:path";
 import { text } from "node:stream/consumers";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { openLocalFileSafely } from "@openclaw/fs-safe/root";
 import { formatErrorMessage } from "./errors.js";
 
 const SQLITE_FILE_HEADER = Buffer.from("SQLite format 3\0", "utf8");
@@ -70,38 +72,17 @@ async function digestFile(
 }
 
 async function openSnapshotRegularFile(filePath: string): Promise<fs.FileHandle | undefined> {
-  let before: Awaited<ReturnType<typeof fs.lstat>>;
   try {
-    before = await fs.lstat(filePath);
+    return (await openLocalFileSafely({ filePath })).handle;
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return undefined;
+    if (error instanceof FsSafeError) {
+      if (error.code === "not-found" || error.code === "not-file" || error.code === "symlink") {
+        return undefined;
+      }
+      if (error.code === "path-mismatch") {
+        throw new Error(`Snapshot file changed while opening: ${filePath}`, { cause: error });
+      }
     }
-    throw error;
-  }
-  if (!before.isFile()) {
-    return undefined;
-  }
-  let handle: fs.FileHandle | undefined;
-  try {
-    handle = await fs.open(
-      filePath,
-      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
-    );
-    const [opened, after] = await Promise.all([handle.stat(), fs.lstat(filePath)]);
-    if (
-      !opened.isFile() ||
-      !after.isFile() ||
-      before.dev !== opened.dev ||
-      before.ino !== opened.ino ||
-      before.dev !== after.dev ||
-      before.ino !== after.ino
-    ) {
-      throw new Error(`Snapshot file changed while opening: ${filePath}`);
-    }
-    return handle;
-  } catch (error) {
-    await handle?.close();
     throw error;
   }
 }

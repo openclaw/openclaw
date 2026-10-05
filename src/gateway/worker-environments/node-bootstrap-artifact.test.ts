@@ -1,182 +1,121 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
 import * as tmpDirs from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
+import {
+  buildId,
+  longEntryPath,
+  longEntryPayload,
+  useNodeBootstrapArtifactFixtures,
+  version,
+  write,
+  writeBundledBrowser,
+  writeOwnedChunks,
+  type OwnedRuntimeChunk,
+} from "./node-bootstrap-artifact.test-support.js";
 
-const roots: string[] = [];
-const providers: ReturnType<typeof createNodeBootstrapArtifactProvider>[] = [];
-const buildId = "fixture-source-build";
-const version = "2026.8.1";
-const longEntryPath = `dist/${"entry-".repeat(25)}.json`;
-const longEntryPayload = "payload".repeat(90);
+// Keep byte/race fault injection beside the real builder. The worker suite covers transport.
+vi.mock("./node-bootstrap-artifact-worker.js", async () => {
+  const { prepareNodeBootstrapArtifact } = await import("./node-bootstrap-artifact-build.js");
+  return { prepareNodeBootstrapArtifactInWorker: prepareNodeBootstrapArtifact };
+});
 
-async function write(root: string, relative: string, contents: string | object) {
-  const target = path.join(root, relative);
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, typeof contents === "string" ? contents : JSON.stringify(contents));
-}
+const { fixture, tempDirs } = useNodeBootstrapArtifactFixtures();
 
-type OwnedRuntimeChunk = { source: string; extensions: readonly string[] };
-
-async function writeOwnedChunks(packageRoot: string, chunks: Record<string, OwnedRuntimeChunk>) {
-  for (const [file, chunk] of Object.entries(chunks)) {
-    await write(packageRoot, `dist/${file}`, chunk.source);
-  }
-  await write(packageRoot, "dist/runtime-dependency-ownership.json", {
-    chunks: Object.fromEntries(
-      Object.entries(chunks).map(([file, chunk]) => [
-        file,
-        {
-          sha256: createHash("sha256").update(chunk.source).digest("hex"),
-          extensions: chunk.extensions,
-        },
-      ]),
-    ),
-  });
-}
-
-async function fixture(mode: "source" | "package" | "external-plugin" = "source") {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "node-artifact-test-")));
-  roots.push(root);
-  const packageRoot = path.join(root, "gateway");
-  const pluginPackage = {
-    name: "@fixture/remote-runtime",
-    version,
-    type: "module",
-    dependencies: { "native-runtime": "1.2.3" },
-    openclaw: { extensions: ["./index.ts"] },
-  };
-  const sourcePackage = {
-    name: "openclaw",
-    version,
-    type: "module",
-    files: [
-      "dist/",
-      "!dist/extensions/remote-runtime/**",
-      "scripts/preinstall.mjs",
-      "scripts/postinstall.mjs",
-    ],
-    dependencies: { "@fixture/ai": mode === "source" ? "workspace:*" : version },
-    ...(mode !== "source" ? { bundleDependencies: ["@fixture/ai"] } : {}),
-    devDependencies: { "typescript-only": "workspace:*" },
-    scripts: {
-      prepare: "exit 91",
-      prepack: "exit 92",
-      preinstall: "node scripts/preinstall.mjs",
-      postinstall: "node scripts/postinstall.mjs",
-    },
-  };
-  await write(packageRoot, "package.json", sourcePackage);
-  await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";', {
-    mode: 0o755,
-  });
-  await write(packageRoot, "node-version.mjs", "export const supported = true;");
-  await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
-  await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");
-  await write(packageRoot, "node-runtime-recovery.mjs", "export const recovery = true;");
-  await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
-  await write(
-    packageRoot,
-    "scripts/postinstall.mjs",
-    'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
-  );
-  await write(
-    packageRoot,
-    "dist/entry.js",
-    'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "../node_modules/@fixture/ai/dist/index.js"; console.log(`${name}:${answer}`);',
-  );
-  await write(packageRoot, "dist/control-ui/index.html", "<title>Gateway dashboard</title>");
-  await write(packageRoot, "dist/control-ui/assets/app.js", 'console.log("gateway-ui");');
-  await write(packageRoot, "dist/shared.js", 'export const answer = "cloud-ready";');
-  await write(packageRoot, "dist/empty.js", "");
-  await write(packageRoot, longEntryPath, { payload: longEntryPayload });
-  await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
-  await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
-  await write(packageRoot, "dist/worker/github-exec-launcher.mjs", "export {};");
-  await write(packageRoot, "dist/build-info.json", { version, buildId });
-  await write(packageRoot, "dist/extensions/remote-runtime/package.json", pluginPackage);
-  await write(packageRoot, "dist/extensions/remote-runtime/openclaw.plugin.json", {
-    id: "remote-runtime",
-  });
-  await write(
-    packageRoot,
-    "dist/extensions/remote-runtime/index.js",
-    'export { answer } from "../../shared.js";',
-  );
-  await write(
-    packageRoot,
-    "dist/extensions/remote-runtime/node_modules/native-runtime/vendor/host-native",
-    "do-not-transfer-native",
-  );
-  await write(packageRoot, "dist/.buildstamp", "local-build-only");
-  await write(packageRoot, "dist/debug.js.map", "source-map-only");
-  await write(packageRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
-  await write(packageRoot, "src/private.ts", "source-only");
-  await write(packageRoot, "extensions/remote-runtime/package.json", pluginPackage);
-  const aiRoot =
-    mode === "source"
-      ? path.join(root, "ai-source")
-      : path.join(packageRoot, "node_modules/@fixture/ai");
-  await write(aiRoot, "package.json", {
-    name: "@fixture/ai",
-    version,
-    type: "module",
-    exports: "./dist/index.js",
-  });
-  await write(aiRoot, "dist/index.js", 'export const name = "local-ai";');
-  if (mode === "source") {
-    await fs.mkdir(path.join(packageRoot, "node_modules/@fixture"), { recursive: true });
-    await fs.symlink(aiRoot, path.join(packageRoot, "node_modules/@fixture/ai"), "junction");
-  }
-  let pluginRoot = path.join(
-    packageRoot,
-    mode === "source" ? "extensions" : "dist/extensions",
-    "remote-runtime",
-  );
-  if (mode === "external-plugin") {
-    pluginRoot = path.join(root, "installed-plugin");
-    await write(pluginRoot, "package.json", {
-      ...pluginPackage,
-      openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
+describe("node bootstrap distribution", () => {
+  it("packs and runs an installed CommonJS bundle with extensionless relative requires", async () => {
+    const { root, packageRoot, provider, sourcePackage } = await fixture();
+    const bundledName = "@fixture/undici";
+    await write(packageRoot, "package.json", {
+      ...sourcePackage,
+      dependencies: { ...sourcePackage.dependencies, [bundledName]: "8.10.2" },
+      bundleDependencies: [bundledName],
     });
-    await write(pluginRoot, "openclaw.plugin.json", { id: "remote-runtime" });
-    await write(pluginRoot, "dist/index.js", 'export const answer = "cloud-ready";');
-    await write(pluginRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
+    const bundledRoot = path.join(packageRoot, "node_modules", bundledName);
+    const bundledFiles = {
+      "package.json": { name: bundledName, version: "8.10.2", main: "./index-fetch.js" },
+      "index-fetch.js": [
+        'const global = require("./lib/global");',
+        'const proxy = require("./lib/dispatcher/env-http-proxy-agent");',
+        'const options = require("./lib/options");',
+        "module.exports = `${global}:${proxy}:${options.mode}`;",
+      ].join("\n"),
+      "lib/global.js": 'module.exports = require("./state");',
+      "lib/state/index.js": 'module.exports = "commonjs";',
+      "lib/dispatcher/env-http-proxy-agent.js": 'module.exports = require("../proxy");',
+      "lib/proxy/package.json": { main: "./runtime" },
+      "lib/proxy/runtime/index.js": 'module.exports = "proxy";',
+      "lib/options.json": { mode: "ready" },
+    };
+    for (const [relative, contents] of Object.entries(bundledFiles)) {
+      await write(bundledRoot, relative, contents);
+    }
     await write(
-      pluginRoot,
-      "node_modules/native-runtime/vendor/host-native",
-      "do-not-transfer-native",
+      packageRoot,
+      "dist/entry.js",
+      `import result from "${bundledName}"; console.log(result);`,
+    );
+
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      path.join(installed, "package/openclaw.mjs"),
+    ]);
+    expect(stdout.trim()).toBe("commonjs:proxy:ready");
+  });
+
+  it("preserves an installed bundled dependency's runtime layout and assets", async () => {
+    const { root, packageRoot, provider } = await fixture();
+    const browserRoot = await writeBundledBrowser(packageRoot);
+    await write(browserRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
+    await write(root, "nested-native/host-native", "do-not-transfer-native");
+    await fs.symlink(
+      path.join(root, "nested-native"),
+      path.join(browserRoot, "node_modules"),
+      "junction",
     );
     await write(
       packageRoot,
       "dist/entry.js",
-      'import { answer } from "./extensions/remote-runtime/dist/index.js"; import { name } from "@fixture/ai"; console.log(`${name}:${answer}`);',
+      'import { notice } from "@fixture/browser"; console.log(notice);',
     );
-  }
-  const provider = createNodeBootstrapArtifactProvider({
-    packageRoot,
-    runningBuildId: buildId,
-    plugins: [{ id: "remote-runtime", root: pluginRoot }],
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const target = path.join(installed, "package");
+    for (const relative of [".env", "node_modules"]) {
+      await expect(
+        fs.access(path.join(target, "node_modules/@fixture/browser", relative)),
+      ).rejects.toHaveProperty("code", "ENOENT");
+    }
+    for (const entry of [
+      "openclaw.mjs",
+      "node_modules/@fixture/browser/build/src/bin/browser.js",
+    ]) {
+      const { stdout } = await promisify(execFile)(process.execPath, [path.join(target, entry)]);
+      expect(stdout.trim()).toBe("bundled-notice");
+    }
+    for (const [relative, contents] of [
+      ["build/src/OPENCLAW_PATCH_NOTICE.md", "patched-runtime"],
+      ["skills/browser/SKILL.md", "browser-skill"],
+      ["LICENSE", "fixture-license"],
+    ]) {
+      expect(
+        await fs.readFile(path.join(target, "node_modules/@fixture/browser", relative!), "utf8"),
+      ).toBe(contents);
+    }
   });
-  providers.push(provider);
-  return { root, packageRoot, provider, sourcePackage, pluginPackage };
-}
 
-afterEach(async () => {
-  await Promise.all(providers.splice(0).map((provider) => provider.close()));
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
-
-describe("node bootstrap distribution", () => {
-  it.each(["source", "package", "external-plugin"] as const)(
+  it.each(["source", "package", "external-plugin", "linked-package"] as const)(
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
       const { root, packageRoot, provider, sourcePackage } = await fixture(mode);
@@ -239,6 +178,9 @@ describe("node bootstrap distribution", () => {
         ),
       ).toBe(false);
       expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
+      expect(entries.some((entry) => entry.startsWith("package/dist/worker-artifacts/"))).toBe(
+        false,
+      );
       expect(entries.some((entry) => entry.startsWith("package/dist/control-ui/"))).toBe(false);
       for (const [file, chunk] of Object.entries(privateChunks)) {
         expect(entries).not.toContain(`package/dist/${file}`);
@@ -449,6 +391,32 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).resolves.toMatchObject({ buildId });
   });
 
+  it("refuses a shortened non-JavaScript package member", async () => {
+    const { packageRoot, provider } = await fixture();
+    const entryPath = path.join(packageRoot, longEntryPath);
+    const openFile = fs.open.bind(fs);
+    let truncated = false;
+    const reader = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      if (args[0] === entryPath) {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+          const before = await stat();
+          await fs.truncate(entryPath, 1);
+          truncated = true;
+          return before;
+        });
+      }
+      return handle;
+    });
+    try {
+      await expect(provider.prepare()).rejects.toThrow("Node distribution changed while packaging");
+      expect(truncated).toBe(true);
+    } finally {
+      reader.mockRestore();
+    }
+  });
+
   it.each(["root resolution", "staging creation"])(
     "retries preparation after temporary %s becomes available",
     async (stage) => {
@@ -513,8 +481,7 @@ describe("node bootstrap distribution", () => {
 
   it("cancels one waiting enrollment without abandoning shared artifact preparation", async () => {
     const { provider } = await fixture();
-    const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "node-artifact-held-"));
-    roots.push(stagingRoot);
+    const stagingRoot = tempDirs.make("node-artifact-held-");
     const entered = createDeferredCore();
     const resume = createDeferredCore<string>();
     const makeTemp = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async () => {
@@ -550,12 +517,19 @@ describe("node bootstrap distribution", () => {
     }
   });
 
-  it.each(["plugin", "private runtime"])(
+  it.each(["plugin", "private runtime", "bundled runtime"])(
     "rejects an incomplete %s import closure before publishing the artifact",
     async (owner) => {
       const { packageRoot, provider } = await fixture();
       if (owner === "plugin") {
         await fs.rm(path.join(packageRoot, "dist/shared.js"));
+      } else if (owner === "bundled runtime") {
+        const browserRoot = await writeBundledBrowser(packageRoot);
+        await write(browserRoot, "build/src/transport.js", 'import "./missing.js";');
+        await fs.appendFile(
+          path.join(browserRoot, "build/src/index.js"),
+          'import "./transport.js";',
+        );
       } else {
         const aiRoot = await fs.realpath(path.join(packageRoot, "node_modules/@fixture/ai"));
         await write(aiRoot, "dist/index.js", 'export { name } from "./missing.js";');
@@ -573,12 +547,21 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).rejects.toThrow("requires an exact dependency pin");
   });
 
-  it("rejects a link escaping the build tree without reading the target into the artifact", async () => {
-    const { root, packageRoot, provider } = await fixture();
-    await write(root, "private.json", { secret: "fixture-only" });
-    await fs.symlink(path.join(root, "private.json"), path.join(packageRoot, "dist/private.json"));
-    await expect(provider.prepare()).rejects.toThrow("Unsafe package dist path");
-  });
+  it.each(["Gateway", "bundled dependency"])(
+    "rejects a link escaping the %s tree without reading the target into the artifact",
+    async (owner) => {
+      const { root, packageRoot, provider } = await fixture();
+      await write(root, "private.json", { secret: "fixture-only" });
+      const destination =
+        owner === "Gateway"
+          ? path.join(packageRoot, "dist/private.json")
+          : path.join(await writeBundledBrowser(packageRoot), "build/src/private.json");
+      await fs.symlink(path.join(root, "private.json"), destination);
+      await expect(provider.prepare()).rejects.toThrow(
+        owner === "Gateway" ? "Unsafe package dist path" : "Unsafe bundled node distribution path",
+      );
+    },
+  );
 
   it("gives different archive identities to different built bytes with the same package version", async () => {
     const first = await fixture();
@@ -598,15 +581,16 @@ describe("node bootstrap distribution", () => {
     // oxlint-disable-next-line typescript/unbound-method -- Fault injection reapplies the original ReadEntry receiver below.
     const writeEntry = tar.ReadEntry.prototype.write;
     let substituted = false;
-    const writer = vi
-      .spyOn(tar.ReadEntry.prototype, "write")
-      .mockImplementation(function (this: tar.ReadEntry, chunk) {
-        if (this.path === "package/dist/shared.js") {
-          substituted = true;
-          return writeEntry.call(this, Buffer.alloc(chunk.length, 0x20));
-        }
-        return writeEntry.call(this, chunk);
-      });
+    const writer = vi.spyOn(tar.ReadEntry.prototype, "write").mockImplementation(function (
+      this: tar.ReadEntry,
+      chunk,
+    ) {
+      if (this.path === "package/dist/shared.js") {
+        substituted = true;
+        return writeEntry.call(this, Buffer.alloc(chunk.length, 0x20));
+      }
+      return writeEntry.call(this, chunk);
+    });
     try {
       await expect(provider.prepare()).rejects.toThrow(
         "Node bootstrap archive does not match the verified distribution",

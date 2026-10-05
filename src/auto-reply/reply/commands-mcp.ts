@@ -1,5 +1,4 @@
 /** Handles /mcp commands for showing and mutating configured MCP servers. */
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -16,7 +15,6 @@ import {
   requireGatewayClientScope,
 } from "./command-gates.js";
 import {
-  buildPrivateCommandApprovalRequest,
   deliverPrivateCommandReply,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
@@ -95,22 +93,10 @@ async function buildMcpShowReply(name?: string): Promise<ReplyPayload> {
 }
 
 async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, name?: string) {
-  const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   const targets = await resolvePrivateCommandRouteTargets({
     commandParams: params,
-    request: buildPrivateCommandApprovalRequest({
-      commandParams: params,
-      id: "mcp-show-private-route",
-      command: params.command.commandBodyNormalized,
-      agentId,
-      createdAtMs: now,
-    }),
+    id: "mcp-show-private-route",
+    command: params.command.commandBodyNormalized,
   });
   if (targets.length === 0) {
     return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);
@@ -162,6 +148,7 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       const result = await setConfiguredMcpServer({
         name: mcpCommand.name,
         server: mcpCommand.value,
+        assertCurrent: params.command.assertOwnerCurrent,
       });
       if (!result.ok) {
         return commandReply(`⚠️ ${result.error}`);
@@ -169,7 +156,10 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
     }
 
-    const result = await unsetConfiguredMcpServer({ name: mcpCommand.name });
+    const result = await unsetConfiguredMcpServer({
+      name: mcpCommand.name,
+      assertCurrent: params.command.assertOwnerCurrent,
+    });
     if (!result.ok) {
       return commandReply(`⚠️ ${result.error}`);
     }

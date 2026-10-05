@@ -15,6 +15,7 @@ import {
   type SkillResourceDelivery,
 } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
 import {
+  WorkerRuntimeContextFragmentsSchema,
   type WorkerConnectParams,
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -32,17 +33,14 @@ import {
   WorkerInferenceModelRefSchema,
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  WorkerSkillWorkshopBindingSchema,
-  type WorkerSkillWorkshopBinding,
-} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import {
   ComputerUseCapabilityDescriptorSchema,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import { isWorkerDesktopArgs, isWorkerDesktopString } from "../shared/worker-desktop-descriptor.js";
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
-import { isWorkerToolName, type WorkerToolName } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
   parseWorkerConnectionEndpoint,
@@ -55,6 +53,7 @@ type WorkerLaunchPermissionContext =
   | { permissionMode: SessionPermissionMode; workerContainmentRoot: string }
   | { permissionMode?: never; workerContainmentRoot?: never };
 
+export type WorkerToolAuthority = z.infer<typeof ToolAuthoritySchema>;
 export type WorkerBrowserLaunchDescriptor = z.infer<typeof BrowserLaunchSchema>;
 export type WorkerComputerLaunchDescriptor = z.infer<typeof ComputerLaunchSchema>;
 export type WorkerGitHubLaunchBinding = z.infer<typeof GitHubLaunchSchema>;
@@ -91,16 +90,43 @@ const AbsoluteHostPath = z
 const WorkspacePath = AbsoluteHostPath.refine(
   (value) => value.trim() === value && value.length <= 4_096 && !value.includes("\0"),
 );
+const ExecAuthorityFields = {
+  security: z.enum(["deny", "allowlist", "full"]),
+  ask: z.enum(["off", "on-miss", "always"]),
+  // Host-specific approvals and default safe bins are not portable.
+  safeBins: z.tuple([]).optional(),
+};
+const ExecAuthoritySchema = z
+  .union([
+    z
+      .unknown()
+      .refine((value) => isRecord(value) && value.node === undefined)
+      .pipe(workerProtocolObject({ host: z.enum(["sandbox", "gateway"]), ...ExecAuthorityFields })),
+    workerProtocolObject({
+      host: z.literal("node"),
+      ...ExecAuthorityFields,
+      node: z
+        .string()
+        .min(1)
+        .refine((value) => value.trim() === value)
+        .optional(),
+    }).transform(({ node, ...authority }) => ({
+      ...authority,
+      ...(node === undefined ? {} : { node }),
+    })),
+  ])
+  .refine((value) => !Object.hasOwn(value, "safeBins") || value.safeBins !== undefined);
 const ToolAuthoritySchema = workerProtocolObject({
   allowedToolNames: z
-    .custom<WorkerToolName[]>(
-      (value) =>
-        Array.isArray(value) &&
-        value.every(isWorkerToolName) &&
-        new Set(value).size === value.length,
-    )
-    .transform((names) => [...names]),
-});
+    .array(Identifier)
+    .max(256)
+    .refine((names) => new Set(names).size === names.length),
+  // Legacy absence denies execution; workers never reconstruct permissive policy.
+  exec: ExecAuthoritySchema.optional(),
+}).transform(({ exec, ...authority }) => ({
+  ...authority,
+  ...(exec === undefined ? {} : { exec }),
+}));
 const BrowserLaunchSchema = workerProtocolObject({
   cdpUrl: z.string().refine((value) => {
     const url = URL.parse(value);
@@ -118,7 +144,8 @@ const BrowserLaunchSchema = workerProtocolObject({
       url.hash === ""
     );
   }),
-  launcherPath: AbsoluteHostPath,
+  launcherPath: AbsoluteHostPath.refine(isWorkerDesktopString),
+  launcherArgs: z.custom<string[]>(isWorkerDesktopArgs).optional(),
 });
 const ComputerLaunchSchema = workerProtocolObject({
   nodeId: Identifier,
@@ -167,16 +194,12 @@ const GitHubLaunchSchema = workerProtocolObject({
 export function parseWorkerGitHubLaunchBinding(
   value: unknown,
 ): WorkerGitHubLaunchBinding | undefined {
-  const parsed = GitHubLaunchSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return GitHubLaunchSchema.safeParse(value).data;
 }
 
 const AssignmentSchema = workerProtocolObject({
-  skillAuthoring: z
-    .custom<WorkerSkillWorkshopBinding>((value) =>
-      Value.Check(WorkerSkillWorkshopBindingSchema, value),
-    )
-    .optional(),
+  // Relay published 2026.9.8 assignments unchanged until the next supervisor dialect.
+  skillAuthoring: workerProtocolObject({ multipleProfiles: z.boolean() }).optional(),
   skillResources: z
     .custom<SkillResourceDelivery>((value) => Value.Check(SkillResourceDeliverySchema, value))
     .optional(),
@@ -204,6 +227,13 @@ const AssignmentSchema = workerProtocolObject({
     Value.Check(WorkerInferenceOptionsSchema, value),
   ),
   systemPrompt: z.string().optional(),
+  inHistorySystemUpdates: z.boolean().optional(),
+  includeEmptySnapshots: z.boolean().optional(),
+  runtimeContext: z
+    .custom<RuntimeContextFragment[]>((value) =>
+      Value.Check(WorkerRuntimeContextFragmentsSchema, value),
+    )
+    .optional(),
   initialMessages: z.custom<WorkerTranscriptMessage[]>(
     (value) =>
       Array.isArray(value) &&
@@ -231,18 +261,6 @@ const AssignmentSchema = workerProtocolObject({
       ? value.permissionMode !== undefined && value.workerContainmentRoot !== undefined
       : !Object.hasOwn(value, "workerContainmentRoot")),
 );
-
-function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
-  const parsed = AssignmentSchema.safeParse(value);
-  if (!parsed.success) {
-    return undefined;
-  }
-  const { permissionMode, workerContainmentRoot, ...assignment } = parsed.data;
-  if (permissionMode !== undefined && workerContainmentRoot !== undefined) {
-    return { ...assignment, permissionMode, workerContainmentRoot };
-  }
-  return assignment;
-}
 
 export function buildWorkerConnectParams(
   descriptor: Pick<WorkerLaunchPlan, "admission" | "assignment">,
@@ -297,14 +315,18 @@ export function parseWorkerLaunchPlan(value: unknown): WorkerLaunchPlan {
   ) {
     throw new Error("invalid worker launch descriptor");
   }
-  const assignment = parseAssignment(value.assignment);
-  if (!assignment || !isRecord(value.admission)) {
+  const parsed = AssignmentSchema.safeParse(value.assignment).data;
+  if (!parsed || !isRecord(value.admission)) {
     throw new Error("invalid worker launch descriptor");
   }
+  const { permissionMode, workerContainmentRoot, ...assignment } = parsed;
   return validateWorkerLaunchPlan({
     version: LAUNCH_VERSION,
     admission: value.admission as WorkerLaunchAdmission,
-    assignment,
+    assignment:
+      permissionMode !== undefined && workerContainmentRoot !== undefined
+        ? { ...assignment, permissionMode, workerContainmentRoot }
+        : assignment,
   });
 }
 

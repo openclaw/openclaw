@@ -1,5 +1,6 @@
 /** Durable per-agent voice-call records for Talk continuity and mutation evidence. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -43,16 +44,15 @@ import {
   writeVoiceSessionRecordInTransaction as writeRecordInTransaction,
 } from "./client-voice-session-store.js";
 import {
-  createVoiceTranscriptOperationRegistry,
+  buildPersistedVoiceMessage,
+  VoiceTranscriptOperationRegistry,
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_MAX_UNRESOLVED,
-  VOICE_TRANSCRIPT_QUEUE_POLICY,
+  voiceTranscriptEventId,
 } from "./voice-transcript.js";
 
 const voiceSessionByRunId = new Map<string, ClientVoiceRunBinding>();
-const voiceSessionOperations = createVoiceTranscriptOperationRegistry(
-  VOICE_TRANSCRIPT_QUEUE_POLICY,
-);
+const voiceSessionOperations = new VoiceTranscriptOperationRegistry();
 let unsubscribeToolEffects: (() => void) | undefined;
 let unsubscribeRunCompletion: (() => void) | undefined;
 
@@ -67,19 +67,6 @@ function hasLiveConsultRun(record: ClientVoiceSessionRecord): boolean {
   });
 }
 
-async function runVoiceSessionOperation<T>(
-  agentId: string,
-  voiceSessionId: string,
-  operation: () => Promise<T>,
-  options: { weight?: number; waitForCapacity?: boolean } = {},
-): Promise<T> {
-  return await voiceSessionOperations.run(
-    operationKey(agentId, voiceSessionId),
-    operation,
-    options,
-  );
-}
-
 async function closeVoiceSessionOperationOwner(
   params: Parameters<typeof closeClientVoiceSessionInternal>[0],
 ): Promise<void> {
@@ -89,10 +76,9 @@ async function closeVoiceSessionOperationOwner(
   );
 }
 
-function effectStatus(event: TrustedToolExecutionEvent): ClientVoiceToolEffect["status"] {
-  if (event.type === "tool.execution.started") {
-    return "started";
-  }
+function effectStatus(
+  event: Exclude<TrustedToolExecutionEvent, { type: "tool.execution.started" }>,
+): ClientVoiceToolEffect["status"] {
   if (event.type === "tool.execution.completed") {
     return "succeeded";
   }
@@ -146,6 +132,7 @@ function recordClientVoiceToolEffect(event: TrustedToolExecutionEvent): void {
       writeRecordInTransaction(database, record);
     },
     { agentId: binding.agentId },
+    { operationLabel: "voice.session.tool-effect" },
   );
 }
 
@@ -222,10 +209,10 @@ export function createOrResumeClientVoiceSession(params: {
       });
     },
     { agentId: params.agentId },
+    { operationLabel: "voice.session.create-or-resume" },
   );
   return voiceSessionId;
 }
-
 /** Read the canonical agent-session id without creating state during provider startup. */
 export function resolveClientVoiceAgentSessionId(params: {
   agentId: string;
@@ -304,6 +291,7 @@ export function registerClientVoiceConsultRun(params: {
       }
     },
     { agentId: params.agentId },
+    { operationLabel: "voice.session.register-consult" },
   );
   const previousBinding = voiceSessionByRunId.get(params.runId);
   if (
@@ -420,37 +408,6 @@ export function resolveOpenClientVoiceSessionId(params: {
   return match;
 }
 
-function buildPersistedVoiceMessage(params: {
-  role: "user" | "assistant";
-  text: string;
-  timestamp: number;
-  provider: string;
-}): Record<string, unknown> {
-  const provenance = { kind: "realtime_voice", sourceChannel: "talk" };
-  if (params.role === "user") {
-    return {
-      role: "user",
-      content: [{ type: "text", text: params.text }],
-      timestamp: params.timestamp,
-      provenance,
-    };
-  }
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: params.text }],
-    api: "realtime",
-    provider: params.provider,
-    model: "realtime-voice",
-    stopReason: "stop",
-    timestamp: params.timestamp,
-    provenance,
-  };
-}
-
-function transcriptFailureKey(entryId: string): string {
-  return createHash("sha256").update(entryId, "utf8").digest("hex");
-}
-
 function appendVoiceTranscript(params: {
   agentId: string;
   sessionKey: string;
@@ -478,9 +435,8 @@ function appendVoiceTranscript(params: {
           confirmation: normalized.confirmation,
         })
       : null;
-  return runVoiceSessionOperation(
-    normalized.agentId,
-    normalized.voiceSessionId,
+  return voiceSessionOperations.run(
+    operationKey(normalized.agentId, normalized.voiceSessionId),
     async () => {
       const record = readRecord(normalized.agentId, normalized.voiceSessionId);
       if (!record) {
@@ -493,7 +449,7 @@ function appendVoiceTranscript(params: {
       if (record.origin !== normalized.origin) {
         throw new Error("voice session origin does not allow this transcript source");
       }
-      const failureKey = transcriptFailureKey(normalized.entryId);
+      const failureKey = sha256Hex(normalized.entryId);
       if (
         record.transcriptFailureKeys.length >= VOICE_TRANSCRIPT_MAX_UNRESOLVED &&
         !record.transcriptFailureKeys.includes(failureKey)
@@ -524,12 +480,13 @@ function appendVoiceTranscript(params: {
           writeRecordInTransaction(database, current);
         },
         { agentId: normalized.agentId },
+        { operationLabel: "voice.transcript.reserve" },
       );
       const appended = await appendTranscriptMessage(
         { ...sessionTarget, sessionId: sessionEntry.sessionId },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
-          eventId: `voice:${normalized.voiceSessionId}:${normalized.entryId}`,
+          eventId: voiceTranscriptEventId(normalized.voiceSessionId, normalized.entryId),
           message: buildPersistedVoiceMessage({
             role: normalized.role,
             text: normalized.text,
@@ -574,6 +531,7 @@ function appendVoiceTranscript(params: {
           writeRecordInTransaction(database, current);
         },
         { agentId: normalized.agentId },
+        { operationLabel: "voice.transcript.confirm" },
       );
       if (normalized.role === "user" && confirmation) {
         noteClientVoiceConfirmationUtterance({
@@ -663,6 +621,7 @@ async function closeClientVoiceSessionInternal(params: {
       }
     },
     { agentId: params.agentId },
+    { operationLabel: "voice.session.close" },
   );
   const closed = readRecord(params.agentId, params.voiceSessionId);
   if (!closed) {

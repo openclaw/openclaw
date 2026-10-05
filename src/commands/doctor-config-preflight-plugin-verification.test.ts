@@ -8,10 +8,7 @@ import { listOfficialExternalPluginCatalogEntries } from "../plugins/official-ex
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
-import {
-  formatStartupPluginVerificationFailure,
-  runDoctorPluginConvergence,
-} from "./doctor-config-preflight-plugin-verification.js";
+import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import { runPostCorePluginConvergence } from "./doctor/shared/post-core-plugin-convergence.js";
 
 const npmInstall = vi.hoisted(() =>
@@ -29,23 +26,6 @@ vi.mock("../plugins/clawhub.js", async (importOriginal) => ({
     throw new Error("unselected plugin reached ClawHub installation");
   },
 }));
-
-describe("formatStartupPluginVerificationFailure", () => {
-  it("uses install-neutral gateway restart guidance", () => {
-    expect(
-      formatStartupPluginVerificationFailure({
-        kind: "plugin-verification",
-        messages: ['Plugin "discord" has no install path.'],
-      }),
-    ).toBe(
-      [
-        "OpenClaw plugin verification failed; refusing to report the gateway ready.",
-        '- Plugin "discord" has no install path.',
-        "Resolve the plugin verification errors above, then restart the Gateway.",
-      ].join("\n"),
-    );
-  });
-});
 
 describe("update canary plugin verification", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -69,8 +49,17 @@ describe("update canary plugin verification", () => {
       const result = await runDoctorPluginConvergence({ cfg, env });
       expect(npmInstall).not.toHaveBeenCalled();
       expect(result).toEqual({
-        blockingDiagnostic: null,
-        quarantinedPlugins: [],
+        quarantinedPlugins: [
+          {
+            pluginId: "canary-fixture",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "missing-install-path",
+              detail: "Install path is missing from the plugin install record.",
+            },
+          },
+        ],
         migrationInspection: {
           requiredPluginIds: [],
           inspectionRequiredPluginIds: [],
@@ -100,7 +89,6 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   ) {
     if (first === "startup") {
       expect(await runDoctorPluginConvergence({ cfg, env })).toEqual({
-        blockingDiagnostic: null,
         quarantinedPlugins: [],
       });
     } else {

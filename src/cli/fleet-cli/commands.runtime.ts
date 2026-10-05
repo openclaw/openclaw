@@ -1,4 +1,3 @@
-// Runtime-backed fleet command handlers and human/JSON output formatting.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import {
   createFleetService,
@@ -72,6 +71,8 @@ export async function runFleetDoctorCommand(options: {
   if (options.json) {
     defaultRuntime.writeJson(reports);
   } else {
+    let failures = 0;
+    let warnings = 0;
     for (const report of reports) {
       defaultRuntime.log(`${report.tenant}:`);
       const nonPass = report.findings.filter((entry) => entry.status !== "pass");
@@ -80,15 +81,11 @@ export async function runFleetDoctorCommand(options: {
       } else {
         for (const entry of nonPass) {
           defaultRuntime.log(`  [${entry.status}] ${entry.check}: ${entry.detail}`);
+          failures += entry.status === "fail" ? 1 : 0;
+          warnings += entry.status === "warn" ? 1 : 0;
         }
       }
     }
-    const failures = reports
-      .flatMap((report) => report.findings)
-      .filter((entry) => entry.status === "fail").length;
-    const warnings = reports
-      .flatMap((report) => report.findings)
-      .filter((entry) => entry.status === "warn").length;
     defaultRuntime.log(
       `Summary: ${reports.length} cell(s), ${failures} failure(s), ${warnings} warning(s).`,
     );
@@ -150,6 +147,7 @@ export async function runFleetStatusCommand(options: {
   }
   defaultRuntime.log(`Tenant: ${result.tenant}`);
   defaultRuntime.log(`Container: ${result.containerName}`);
+  defaultRuntime.log(`Runtime: ${result.runtime}`);
   defaultRuntime.log(`State: ${result.container.state}`);
   defaultRuntime.log(`Port: ${result.port}`);
   defaultRuntime.log(`Image: ${result.image}`);

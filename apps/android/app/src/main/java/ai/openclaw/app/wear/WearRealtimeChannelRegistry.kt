@@ -92,19 +92,15 @@ internal class WearRealtimeChannelRegistry(
     val path: String,
   )
 
-  private data class ChannelPromotion(
-    val connection: Connection,
-    val displaced: Connection?,
-    val claimSequence: Long,
-  )
-
   private sealed interface ChannelClaimSelection {
     data class Claimed(
       val claim: WearRealtimeChannelClaim,
     ) : ChannelClaimSelection
 
     data class Promote(
-      val promotion: ChannelPromotion,
+      val connection: Connection,
+      val displaced: Connection?,
+      val claimSequence: Long,
     ) : ChannelClaimSelection
 
     data object Wait : ChannelClaimSelection
@@ -218,7 +214,7 @@ internal class WearRealtimeChannelRegistry(
       } finally {
         if (openingSlotReserved) {
           withContext(NonCancellable) {
-            releaseOpeningSlot(channel.nodeId)
+            lifecycleMutex.withLock { releaseOpeningSlotLocked(channel.nodeId) }
           }
         }
       }
@@ -251,7 +247,7 @@ internal class WearRealtimeChannelRegistry(
         }
 
         is ChannelClaimSelection.Promote -> {
-          return completePromotion(nodeId, attemptId, key, selection.promotion)
+          return completePromotion(nodeId, attemptId, key, selection)
         }
 
         ChannelClaimSelection.Superseded -> {
@@ -291,11 +287,9 @@ internal class WearRealtimeChannelRegistry(
         displaced?.ready = false
         promotingConnections[key] = connection
         return@withLock ChannelClaimSelection.Promote(
-          ChannelPromotion(
-            connection = connection,
-            displaced = displaced,
-            claimSequence = sequence,
-          ),
+          connection = connection,
+          displaced = displaced,
+          claimSequence = sequence,
         )
       }
       connections[nodeId]?.let { active ->
@@ -339,12 +333,6 @@ internal class WearRealtimeChannelRegistry(
       true
     }
 
-  private suspend fun releaseOpeningSlot(nodeId: String) {
-    lifecycleMutex.withLock {
-      releaseOpeningSlotLocked(nodeId)
-    }
-  }
-
   private fun releaseOpeningSlotLocked(nodeId: String) {
     val count = checkNotNull(openingConnectionsByNode[nodeId])
     if (count == 1) {
@@ -359,13 +347,13 @@ internal class WearRealtimeChannelRegistry(
     nodeId: String,
     attemptId: String,
     key: ChannelKey,
-    promotion: ChannelPromotion,
+    promotion: ChannelClaimSelection.Promote,
   ): WearRealtimeChannelClaim? {
     var connection = promotion.connection
     var promoted = false
     try {
       // Discovery already succeeded, so finish this bounded handoff even if the polling deadline has elapsed.
-      promotion.displaced?.let { retireCurrentConnection(it) }
+      promotion.displaced?.let { retireKnownConnection(it) }
       while (true) {
         currentCoroutineContext().ensureActive()
         var superseded: Connection? = null
@@ -408,7 +396,7 @@ internal class WearRealtimeChannelRegistry(
         return WearRealtimeChannelClaim(committedOwner, newlyAcquired = true)
       }
     } finally {
-      if (!promoted) retirePromotingConnection(connection)
+      if (!promoted) retireKnownConnection(connection)
     }
   }
 
@@ -448,7 +436,7 @@ internal class WearRealtimeChannelRegistry(
           ?.takeIf { it.owner == owner }
           ?.also { it.ready = false }
       }
-    connection?.let { retireCurrentConnection(it) }
+    connection?.let { retireKnownConnection(it) }
   }
 
   private fun schedulePendingExpiry(connection: Connection) {
@@ -470,27 +458,6 @@ internal class WearRealtimeChannelRegistry(
       promotingConnections[item.key] === item
 
   private fun isCurrentLocked(item: Connection): Boolean = connections[item.channel.nodeId] === item
-
-  private suspend fun retireCurrentConnection(connection: Connection) {
-    withContext(NonCancellable) {
-      lifecycleMutex.withLock {
-        if (isCurrentLocked(connection)) connection.ready = false
-      }
-      connection.retire(transport)
-      lifecycleMutex.withLock {
-        if (isCurrentLocked(connection)) connections.remove(connection.channel.nodeId)
-      }
-    }
-  }
-
-  private suspend fun retirePromotingConnection(connection: Connection) {
-    withContext(NonCancellable) {
-      lifecycleMutex.withLock {
-        promotingConnections.remove(connection.key, connection)
-      }
-      connection.retire(transport)
-    }
-  }
 
   private suspend fun retireKnownConnection(connection: Connection) {
     withContext(NonCancellable) {
@@ -552,7 +519,6 @@ internal class WearRealtimeChannelRegistry(
   ) {
     val key = ChannelKey(channel.nodeId, channel.path)
     private val writeMutex = Mutex()
-    private val closeMutex = Mutex()
     private var closed = false
     val retirementStarted = AtomicBoolean()
     val retirementComplete = CompletableDeferred<Unit>()
@@ -578,11 +544,9 @@ internal class WearRealtimeChannelRegistry(
     suspend fun close(transport: WearRealtimeChannelTransport) {
       // Retirement must not close the stream beneath a frame already selected for this connection.
       writeMutex.withLock {
-        closeMutex.withLock {
-          if (closed) return
-          transport.close(channel, resources)
-          closed = true
-        }
+        if (closed) return
+        transport.close(channel, resources)
+        closed = true
       }
     }
   }

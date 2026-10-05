@@ -41,7 +41,7 @@ function setup(mode: "all" | "non-main" = "all") {
   const cfg = {
     session: { store: databasePath },
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         workspace: workspaceDir,
         sandbox: { mode, scope: "session", workspaceAccess: "ro", workspaceRoot },
@@ -113,26 +113,23 @@ function observeColdSessionReads() {
 }
 
 describe("Gateway configured workspace readiness", () => {
-  it.each([8, 32])(
-    "validates one cold session store once and reports all %i blocked workspaces",
-    async (count) => {
-      const state = setup();
-      const workspaces = Array.from({ length: count }, (_, index) => {
-        const sessionKey = `agent:main:readiness-${index}`;
-        state.seed(sessionKey);
-        return state.addLegacyWorkspace(sessionKey);
-      });
-      closeOpenClawAgentDatabasesForTest();
-      const reads = observeColdSessionReads();
-      const readiness = assertConfiguredWorkspaceStateReady(state);
-      await expect(readiness).rejects.toThrow("Legacy workspace setup state requires migration");
-      for (const workspace of workspaces) {
-        await expect(readiness).rejects.toThrow(workspace);
-      }
-      expect(reads.scans()).toBe(1);
-      expect(reads.handles.size).toBe(2);
-    },
-  );
+  it("validates one cold session store once and reports all blocked workspaces", async () => {
+    const state = setup();
+    const workspaces = Array.from({ length: 32 }, (_, index) => {
+      const sessionKey = `agent:main:readiness-${index}`;
+      state.seed(sessionKey);
+      return state.addLegacyWorkspace(sessionKey);
+    });
+    closeOpenClawAgentDatabasesForTest();
+    const reads = observeColdSessionReads();
+    const readiness = assertConfiguredWorkspaceStateReady(state);
+    await expect(readiness).rejects.toThrow("Legacy workspace setup state requires migration");
+    for (const workspace of workspaces) {
+      await expect(readiness).rejects.toThrow(workspace);
+    }
+    expect(reads.scans()).toBe(1);
+    expect(reads.handles.size).toBe(1);
+  });
 
   it.each([false, true])(
     "classifies a main session in non-main mode with required sandbox: %s",

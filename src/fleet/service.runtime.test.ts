@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult } from "./containers.runtime.js";
@@ -23,10 +26,13 @@ describe("fleet service", () => {
 
   const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-service-" });
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     root = await tempRoot.setup();
     setFleetSuiteRoot(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  });
+
+  beforeEach(() => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
@@ -34,8 +40,17 @@ describe("fleet service", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
     vi.unstubAllGlobals();
+    // Keep the database workers warm while resetting each case's records and cell files.
+    for (const cell of await listFleetCells(env)) {
+      await deleteFleetCell(env, cell.tenantId);
+    }
+    await fs.rm(path.join(root, "fleet"), { recursive: true, force: true });
+  });
+
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
     await tempRoot.cleanup();
   });
 
@@ -164,7 +179,7 @@ describe("fleet service", () => {
       "Fleet cell sick was created but did not become healthy within 60s; inspect it with `openclaw fleet status sick` or `openclaw fleet logs sick`, or remove it with `openclaw fleet rm sick --force`.",
     );
 
-    expect(getFleetCell(env, "sick")).toBeDefined();
+    expect(await getFleetCell(env, "sick")).toBeDefined();
     expect(containers.remove).not.toHaveBeenCalled();
     expect(containers.removeNetwork).not.toHaveBeenCalled();
   });
@@ -179,7 +194,7 @@ describe("fleet service", () => {
     await expect(
       busy.create({ tenant: "busy", port: 20_000, gatewayToken: "token" }),
     ).rejects.toThrow("Host port 20000 is already in use on 127.0.0.1 by another process.");
-    expect(getFleetCell(env, "busy")).toBeUndefined();
+    expect(await getFleetCell(env, "busy")).toBeUndefined();
 
     const failure = new Error("bind permission denied");
     const broken = createFleetService({
@@ -190,7 +205,7 @@ describe("fleet service", () => {
       },
     });
     await expect(broken.create({ tenant: "broken", gatewayToken: "token" })).rejects.toBe(failure);
-    expect(getFleetCell(env, "broken")).toBeUndefined();
+    expect(await getFleetCell(env, "broken")).toBeUndefined();
   });
 
   it("skips probe-busy ports during automatic allocation", async () => {
@@ -202,7 +217,7 @@ describe("fleet service", () => {
 
     expect(probePort.mock.calls.map(([port]) => port)).toEqual([19_100, 19_101]);
     expect(result.port).toBe(19_101);
-    expect(getFleetCell(env, "acme")?.hostPort).toBe(19_101);
+    expect((await getFleetCell(env, "acme"))?.hostPort).toBe(19_101);
   });
 
   it("keeps scanning past long busy runs instead of capping attempts", async () => {
@@ -240,7 +255,7 @@ describe("fleet service", () => {
 
     expect(new Set([alpha.port, beta.port])).toEqual(new Set([19_100, 19_101]));
     expect(
-      listFleetCells(env)
+      (await listFleetCells(env))
         .map((cell) => cell.hostPort)
         .toSorted((left, right) => left - right),
     ).toEqual([19_100, 19_101]);
@@ -276,7 +291,7 @@ describe("fleet service", () => {
     await expect(
       service.create({ tenant: "acme", network: "internal", gatewayToken: "token" }),
     ).rejects.toThrow(/Docker cannot publish loopback ports/iu);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     expect(containers.createNetwork).not.toHaveBeenCalled();
   });
 
@@ -287,7 +302,7 @@ describe("fleet service", () => {
     await expect(
       service.create({ tenant: "acme", disk: "10g", gatewayToken: "token" }),
     ).rejects.toThrow(/Fleet cannot enforce --disk.*XFS/iu);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("rejects a remote runtime before registry or filesystem mutation", async () => {
@@ -301,7 +316,7 @@ describe("fleet service", () => {
       /local Docker endpoint.*remote cells/iu,
     );
 
-    expect(getFleetCell(env, "remote")).toBeUndefined();
+    expect(await getFleetCell(env, "remote")).toBeUndefined();
     expect(containers.createNetwork).not.toHaveBeenCalled();
     expect(containers.run).not.toHaveBeenCalled();
     await expect(fs.stat(path.join(root, "fleet", "cells", "remote"))).rejects.toMatchObject({
@@ -488,7 +503,7 @@ describe("fleet service", () => {
     );
 
     expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("releases a failed-create reservation when a foreign container takes the freed name", async () => {
@@ -515,7 +530,7 @@ describe("fleet service", () => {
     );
 
     expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("retains a failed-create reservation when partial cleanup is uncertain", async () => {
@@ -532,7 +547,7 @@ describe("fleet service", () => {
     );
 
     expect(containers.remove).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 
   it("cleans up its exact-attempt network when network creation fails", async () => {
@@ -559,7 +574,7 @@ describe("fleet service", () => {
 
     expect(containers.run).not.toHaveBeenCalled();
     expect(containers.removeNetwork).toHaveBeenCalledWith("docker", "openclaw-cell-acme-net");
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("serializes same-tenant mutations across service instances", async () => {
@@ -602,7 +617,7 @@ describe("fleet service", () => {
   it("removes its exact-attempt container when the reservation disappears mid-create", async () => {
     const containers = createContainerMock(runningInspection({ state: "created", running: false }));
     containers.run.mockImplementation(async () => {
-      deleteFleetCell(env, "acme");
+      await deleteFleetCell(env, "acme");
     });
     const service = createFleetService({
       env,
@@ -617,7 +632,7 @@ describe("fleet service", () => {
 
     expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
     expect(containers.start).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("releases the reservation when an unlabeled foreign container holds the cell name", async () => {
@@ -630,7 +645,7 @@ describe("fleet service", () => {
     );
 
     expect(containers.remove).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("releases the reservation when an unlabeled foreign network holds the cell name", async () => {
@@ -649,7 +664,7 @@ describe("fleet service", () => {
     );
 
     expect(containers.removeNetwork).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("never removes a same-tenant container owned by another profile", async () => {
@@ -669,7 +684,7 @@ describe("fleet service", () => {
     );
 
     expect(containers.remove).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("never removes a same-profile container that predates the create attempt", async () => {
@@ -691,6 +706,6 @@ describe("fleet service", () => {
     );
 
     expect(containers.remove).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 });

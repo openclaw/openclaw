@@ -16,8 +16,9 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
+import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
@@ -33,10 +34,14 @@ let envSnapshot: Record<string, string | undefined> | undefined;
 let fixtureId = 0;
 
 beforeAll(() => {
-  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
+  fixtureRoot = fsSync.realpathSync.native(
+    fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-")),
+  );
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
@@ -52,11 +57,9 @@ beforeEach(() => {
   clearConfigCache();
 });
 
-afterEach(() => {
-  // Agent close releases leases through shared state; close agent handles first while the fixture
-  // env is active, then close shared state before removing the Windows-owned directory.
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  // Close case databases before restoring its environment or removing its files.
+  await cleanupSessionStateForTest({ stateDir: tmpDir, rootPath: tmpDir });
   for (const [key, value] of Object.entries(envSnapshot ?? {})) {
     if (value === undefined) {
       Reflect.deleteProperty(process.env, key);
@@ -726,10 +729,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         },
       }),
     );
-    fsSync.writeFileSync(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-    );
+    fsSync.writeFileSync(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }));
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();

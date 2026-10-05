@@ -1,5 +1,5 @@
 ---
-summary: "Runtime config: worktree storage and acceleration, model routing, discovery, updates, ACP, and the wizard"
+summary: "Runtime config: worktree storage, capacity, and acceleration, model routing, discovery, updates, ACP, and the wizard"
 read_when:
   - Choosing where agent worktrees live
   - Setting model routing or discovery defaults
@@ -7,7 +7,7 @@ read_when:
 title: "Configuration — runtime basics"
 ---
 
-Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
+Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `worktreeMaxCount`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
 
 For the full key index and the other top-level config domains, see [Configuration reference](/gateway/configuration-reference).
 
@@ -36,6 +36,20 @@ Optional global boolean for [managed worktree filesystem acceleration](/concepts
 ```
 
 Set `false` to use normal Git checkout and file copying for new worktrees. This option applies across agents and managed-worktree owners; existing checkouts are unchanged. Supported backends are Btrfs snapshots on Linux, APFS directory clones on macOS, and ReFS block clones on Windows. Repository setup and dependencies remain per-worktree.
+
+## `worktreeMaxCount`
+
+Optional positive integer limiting live [managed worktrees](/concepts/managed-worktrees#capacity-and-eviction) across all agents, repositories, and owners in the same OpenClaw state directory. Defaults to `4096`. Removed checkouts with retained recovery snapshots do not count toward this limit.
+
+```json5
+{
+  worktreeMaxCount: 4096,
+}
+```
+
+The cap is enforced: cleanup purges merged or squashed branches first, then idle worktrees by last-used age, including manual checkouts and unsaved data. Snapshot capture is best effort during cap eviction; a failed snapshot does not prevent purge. Lowering the cap can therefore remove existing checkouts. Live runs remain protected; if no other checkout can be evicted, creation fails with the cap and live owners in the error. Raise `worktreeMaxCount` or let those runs finish before retrying.
+
+Background maintenance and creation use the same eviction owner. Concurrent creates cannot each claim the final slot. Disk-space admission remains a separate guard even when the configured count leaves room.
 
 ## Models
 
@@ -66,10 +80,19 @@ The `models` root also owns global model-catalog behavior.
   model metadata and pricing then stay at the values shipped in the installed
   release or declared under `models.providers.*.models[].cost`.
 - `models.catalogRefresh.url`: optional HTTPS mirror override (plain HTTP is
-  accepted only for explicit localhost testing). The Gateway
-  checks in the background at startup and every six hours. A downloaded catalog
-  applies on the next Gateway restart; a release whose bundled catalog is newer
-  always wins.
+  accepted only for explicit localhost testing). The default is
+  `https://catalog.openclaw.ai/models/v2/catalog.json`. Mirrors can serve v1 or v2.
+  The Gateway
+  checks in the background at startup and every six hours. A compatible download
+  is prepared and published as one model-and-pricing generation without a
+  Gateway restart. Readers retain the current generation until preparation
+  succeeds; a release whose bundled catalog is newer always wins.
+
+V2 includes pricing in each model row. Unknown or unavailable pricing does not
+mean a model is free. Models outside the catalog, such as older model IDs or
+models routed through a gateway, use standalone rates in the same file: a
+gateway that charges the vendor's price reads that vendor's rate once, without a
+per-gateway copy. Explicit model costs still take precedence.
 
 Pricing updates ship in the same hosted catalog file as model metadata. The
 retired `models.pricing` toggle is removed automatically by `openclaw doctor
@@ -131,6 +154,11 @@ Setup: `openclaw dns setup --apply`.
 - `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or `"dev"`. Extended-stable is package-only: foreground commands own installation, while the Gateway may emit read-only update hints.
 - `checkOnStart`: check for updates through `https://telemetry.openclaw.ai/api/latest-version` when the Gateway starts and at most once every 24 hours afterward (default: `true`). The default request shares only the OpenClaw version and platform information in its `User-Agent`; anonymous feature statistics are included only when `telemetry.enabled` is `true`. Setting this to `false`, or setting `OPENCLAW_NO_AUTO_UPDATE=1`, prevents all automatic update requests, feature statistics, and update notices, even when `auto.enabled` is `true`. Stored extended-stable selections use the same read-only hint and 24-hour hint schedule.
 - `auto.enabled`: enable background auto-update campaigns for stable and beta package installs and dev git installs when `checkOnStart` is also enabled (default: `false`). Extended-stable never applies automatically.
+
+Headless nodes have a separate default-on `nodeHost.autoUpdate.enabled` policy
+with hourly checks and idle-only activation. `update.checkOnStart: false` and
+`OPENCLAW_NO_AUTO_UPDATE=1` disable that policy too. See
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates).
 
 ---
 

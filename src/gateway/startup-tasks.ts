@@ -3,7 +3,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 
 // Startup tasks run sequentially so logs and side effects stay ordered during
-// gateway startup. Failures are collected and logged without aborting later
+// gateway startup. Failures are logged without aborting later
 // tasks.
 type StartupTaskResult =
   | { status: "skipped"; reason: string }
@@ -24,15 +24,13 @@ type StartupTaskLogger = {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
-function taskMeta(task: StartupTask, result?: StartupTaskResult): Record<string, unknown> {
+function taskMeta(task: StartupTask, reason: string): Record<string, unknown> {
   return {
     source: task.source,
     ...(task.agentId ? { agentId: task.agentId } : {}),
     ...(task.sessionKey ? { sessionKey: task.sessionKey } : {}),
     ...(task.workspaceDir ? { workspaceDir: task.workspaceDir } : {}),
-    ...(result?.status === "failed" || result?.status === "skipped"
-      ? { reason: result.reason }
-      : {}),
+    reason,
   };
 }
 
@@ -40,8 +38,7 @@ function taskMeta(task: StartupTask, result?: StartupTaskResult): Record<string,
 export async function runStartupTasks(params: {
   tasks: StartupTask[];
   log: StartupTaskLogger;
-}): Promise<StartupTaskResult[]> {
-  const results: StartupTaskResult[] = [];
+}): Promise<void> {
   for (const task of params.tasks) {
     let result: StartupTaskResult;
     try {
@@ -49,14 +46,12 @@ export async function runStartupTasks(params: {
     } catch (err) {
       result = { status: "failed", reason: formatErrorMessage(err) };
     }
-    results.push(result);
     if (result.status === "failed") {
-      params.log.warn("startup task failed", taskMeta(task, result));
+      params.log.warn("startup task failed", taskMeta(task, result.reason));
       continue;
     }
     if (result.status === "skipped") {
-      params.log.debug("startup task skipped", taskMeta(task, result));
+      params.log.debug("startup task skipped", taskMeta(task, result.reason));
     }
   }
-  return results;
 }

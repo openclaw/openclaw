@@ -7,10 +7,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.each(["web_search", "tavily_search"] as const)("%s cache TTL", (kind) => {
-  it.each([0, 1])(
-    "applies the current %s-minute TTL to cached results",
-    async (cacheTtlMinutes) => {
+describe("Tavily search cache TTL", () => {
+  it.each([
+    { kind: "web_search", cacheTtlMinutes: 1 },
+    { kind: "tavily_search", cacheTtlMinutes: 0 },
+  ])(
+    "$kind applies the current $cacheTtlMinutes-minute TTL to cached results",
+    async ({ kind, cacheTtlMinutes }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       let requests = 0;
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {

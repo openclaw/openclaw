@@ -248,6 +248,22 @@
   ],
   "overrides": [
     {
+      "files": ["packages/worker-runtime/**/*.{js,ts,mts,cts}"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(?:openclaw(?:/|$)|(?:\\.\\./){3,}src/)",
+                "message": "worker-runtime must remain independent of application src; supply host behavior through its runtime contracts."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["extensions/browser/src/browser/routes/*.ts"],
       "rules": {
         "oxc/no-async-endpoint-handlers": "off"
@@ -293,6 +309,14 @@
       }
     },
     {
+      "files": ["src/cli/cli-process-diagnostics.test-support.cjs"],
+      "rules": {
+        // The saved emitter is always invoked with the caller's receiver via Reflect.apply.
+        // CJS semantic discovery varies by lint target set; an inline disable can appear unused.
+        "typescript/unbound-method": "off"
+      }
+    },
+    {
       "files": ["src/agents/subagents/registry/subagent-registry.ts"],
       "rules": {
         // Preserve the explicit maintenance side-effect import's module-request order.
@@ -317,7 +341,7 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["warn", { "max": 700, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -338,7 +362,7 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["warn", { "max": 700, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -359,7 +383,7 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["warn", { "max": 800, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -379,19 +403,19 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["warn", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
       "files": ["extensions/copilot/src/event-bridge.ts"],
       "rules": {
-        "max-lines": ["warn", { "max": 950, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
       "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
       "rules": {
-        "max-lines": ["warn", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

@@ -1,8 +1,8 @@
-// Qa Lab plugin module implements docker harness behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { toRepoRelativePath } from "./cli-paths.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import {
   createQaChannelGatewayConfig,
@@ -16,14 +16,6 @@ const QA_LAB_UI_OVERLAY_DIR = "/opt/openclaw-qa-lab-ui";
 // not block startup on a network install before their health deadline.
 const QA_DOCKER_PLUGIN_SELECTION = "acpx qa-channel qa-lab";
 
-function toPosixRelative(fromDir: string, toPath: string): string {
-  return path.relative(fromDir, toPath).split(path.sep).join("/");
-}
-
-function yamlDoubleQuoted(value: string) {
-  return JSON.stringify(value);
-}
-
 function renderImageBlock(params: {
   outputDir: string;
   repoRoot: string;
@@ -33,8 +25,22 @@ function renderImageBlock(params: {
   if (params.usePrebuiltImage) {
     return `    image: ${params.imageName}\n`;
   }
-  const context = toPosixRelative(params.outputDir, params.repoRoot) || ".";
-  return `    build:\n      context: ${yamlDoubleQuoted(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
+  const context = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
+  return `    build:\n      context: ${JSON.stringify(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
+}
+
+function renderHealthcheck(port: number, retries: number, startPeriod: number) {
+  return `    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch("http://127.0.0.1:${port}/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: ${retries}
+      start_period: ${startPeriod}s
+`;
 }
 
 function renderCompose(params: {
@@ -45,15 +51,14 @@ function renderCompose(params: {
   bindUiDist: boolean;
   gatewayPort: number;
   qaLabPort: number;
-  includeQaLabUi: boolean;
 }) {
   const imageBlock = renderImageBlock(params);
-  const repoMount = toPosixRelative(params.outputDir, params.repoRoot) || ".";
-  const taxonomyMount = toPosixRelative(
+  const repoMount = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
+  const taxonomyMount = toRepoRelativePath(
     params.outputDir,
     path.join(params.repoRoot, "taxonomy.yaml"),
   );
-  const qaLabUiMount = toPosixRelative(
+  const qaLabUiMount = toRepoRelativePath(
     params.outputDir,
     path.join(params.repoRoot, "extensions", "qa-lab", "web", "dist"),
   );
@@ -61,17 +66,7 @@ function renderCompose(params: {
   return `services:
   qa-mock-openai:
 ${imageBlock}    pull_policy: never
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - fetch("http://127.0.0.1:44080/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 3s
-    environment:
+${renderHealthcheck(44080, 6, 3)}    environment:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
       OPENCLAW_PROFILE: ""
     command:
@@ -83,26 +78,14 @@ ${imageBlock}    pull_policy: never
       - "0.0.0.0"
       - --port
       - "44080"
-${
-  params.includeQaLabUi
-    ? `  qa-lab:
+  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
       - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
-      - ${yamlDoubleQuoted(`${taxonomyMount}:/app/taxonomy.yaml:ro`)}
-${params.bindUiDist ? `      - ${yamlDoubleQuoted(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - fetch("http://127.0.0.1:${QA_LAB_INTERNAL_PORT}/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 5s
-    environment:
+      - ${JSON.stringify(`${taxonomyMount}:/app/taxonomy.yaml:ro`)}
+${params.bindUiDist ? `      - ${JSON.stringify(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}${renderHealthcheck(QA_LAB_INTERNAL_PORT, 6, 5)}    environment:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
       OPENCLAW_CONFIG_PATH: /opt/openclaw-scaffold/openclaw.json
       OPENCLAW_STATE_DIR: /tmp/openclaw/state
@@ -117,9 +100,7 @@ ${params.bindUiDist ? `      - ${yamlDoubleQuoted(`${qaLabUiMount}:${QA_LAB_UI_O
     depends_on:
       qa-mock-openai:
         condition: service_healthy
-`
-    : ""
-}  openclaw-qa-gateway:
+  openclaw-qa-gateway:
 ${imageBlock}    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -135,25 +116,11 @@ ${imageBlock}    pull_policy: never
       OPENCLAW_PROFILE: ""
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
-      - ${yamlDoubleQuoted(`${repoMount}:/opt/openclaw-repo:ro`)}
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - fetch("http://127.0.0.1:18789/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 15s
-    depends_on:
-${
-  params.includeQaLabUi
-    ? `      qa-lab:
+      - ${JSON.stringify(`${repoMount}:/opt/openclaw-repo:ro`)}
+${renderHealthcheck(18789, 12, 15)}    depends_on:
+      qa-lab:
         condition: service_healthy
-`
-    : ""
-}      qa-mock-openai:
+      qa-mock-openai:
         condition: service_healthy
     command:
       - sh
@@ -168,22 +135,20 @@ function renderEnvExample(params: {
   gatewayToken: string;
   providerBaseUrl: string;
   qaBusBaseUrl: string;
-  includeQaLabUi: boolean;
 }) {
   return `# QA Docker harness example env
 OPENCLAW_GATEWAY_TOKEN=${params.gatewayToken}
 QA_GATEWAY_PORT=${params.gatewayPort}
 QA_BUS_BASE_URL=${params.qaBusBaseUrl}
 QA_PROVIDER_BASE_URL=${params.providerBaseUrl}
-${params.includeQaLabUi ? `QA_LAB_URL=http://127.0.0.1:${params.qaLabPort}\n` : ""}`;
+QA_LAB_URL=http://127.0.0.1:${params.qaLabPort}
+`;
 }
 
 function renderReadme(params: {
   gatewayPort: number;
   qaLabPort: number;
   usePrebuiltImage: boolean;
-  bindUiDist: boolean;
-  includeQaLabUi: boolean;
 }) {
   return `# QA Docker Harness
 
@@ -202,7 +167,7 @@ Suggested flow:
 2. Start the stack:
    - \`docker compose -f docker-compose.qa.yml up${params.usePrebuiltImage ? "" : " --build"} -d\`
 3. Open the QA dashboard:
-   - \`${params.includeQaLabUi ? `http://127.0.0.1:${params.qaLabPort}` : "not published in this scaffold"}\`
+   - \`http://127.0.0.1:${params.qaLabPort}\`
 4. The single QA site embeds both panes:
    - left: Control UI
    - right: Slack-ish QA lab
@@ -239,7 +204,6 @@ export async function writeQaDockerHarnessFiles(params: {
   imageName?: string;
   usePrebuiltImage?: boolean;
   bindUiDist?: boolean;
-  includeQaLabUi?: boolean;
 }) {
   const gatewayPort = params.gatewayPort ?? 18789;
   const qaLabPort = params.qaLabPort ?? 43124;
@@ -249,7 +213,6 @@ export async function writeQaDockerHarnessFiles(params: {
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
   const usePrebuiltImage = params.usePrebuiltImage ?? false;
   const bindUiDist = params.bindUiDist ?? false;
-  const includeQaLabUi = params.includeQaLabUi ?? true;
 
   await fs.mkdir(path.join(params.outputDir, "state", "seed-workspace"), { recursive: true });
   await seedQaAgentWorkspace({
@@ -272,15 +235,8 @@ export async function writeQaDockerHarnessFiles(params: {
   });
 
   const files = [
-    path.join(params.outputDir, "docker-compose.qa.yml"),
-    path.join(params.outputDir, ".env.example"),
-    path.join(params.outputDir, "README.md"),
-    path.join(params.outputDir, "state", "openclaw.json"),
-  ];
-
-  await Promise.all([
-    fs.writeFile(
-      path.join(params.outputDir, "docker-compose.qa.yml"),
+    [
+      "docker-compose.qa.yml",
       renderCompose({
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
@@ -289,49 +245,43 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         gatewayPort,
         qaLabPort,
-        includeQaLabUi,
       }),
-      "utf8",
-    ),
-    fs.writeFile(
-      path.join(params.outputDir, ".env.example"),
+    ],
+    [
+      ".env.example",
       renderEnvExample({
         gatewayPort,
         qaLabPort,
         gatewayToken,
         providerBaseUrl,
         qaBusBaseUrl,
-        includeQaLabUi,
       }),
-      "utf8",
-    ),
-    fs.writeFile(
-      path.join(params.outputDir, "README.md"),
+    ],
+    [
+      "README.md",
       renderReadme({
         gatewayPort,
         qaLabPort,
         usePrebuiltImage,
-        bindUiDist,
-        includeQaLabUi,
       }),
-      "utf8",
+    ],
+    [path.join("state", "openclaw.json"), `${JSON.stringify(config, null, 2)}\n`],
+  ] as const;
+
+  await Promise.all(
+    files.map(([name, content]) =>
+      fs.writeFile(path.join(params.outputDir, name), content, "utf8"),
     ),
-    fs.writeFile(
-      path.join(params.outputDir, "state", "openclaw.json"),
-      `${JSON.stringify(config, null, 2)}\n`,
-      "utf8",
-    ),
-  ]);
+  );
 
   return {
     outputDir: params.outputDir,
     imageName,
     files: [
-      ...files,
-      path.join(params.outputDir, "state", "seed-workspace", "IDENTITY.md"),
-      path.join(params.outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
-      path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
-      path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
+      ...files.map(([name]) => path.join(params.outputDir, name)),
+      ...["IDENTITY.md", "QA_KICKOFF_TASK.md", "QA_SCENARIO_PLAN.md", "QA_SCENARIOS.yaml"].map(
+        (name) => path.join(params.outputDir, "state", "seed-workspace", name),
+      ),
     ],
   };
 }
@@ -352,9 +302,8 @@ export async function buildQaDockerHarnessImage(
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
   const runCommand =
     deps?.runCommand ??
-    (async (command: string, args: string[], cwd: string) => {
-      return await runExec(command, args, { cwd, logOutput: false });
-    });
+    ((command: string, args: string[], cwd: string) =>
+      runExec(command, args, { cwd, logOutput: false }));
 
   await runCommand(
     "docker",

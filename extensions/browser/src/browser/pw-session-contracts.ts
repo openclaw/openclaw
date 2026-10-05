@@ -8,7 +8,7 @@ import type {
   Request,
 } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
-import type { PlaywrightDownload } from "./pw-download-capture.js";
+import type { BrowserEngineId } from "./engines/types.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -91,11 +91,8 @@ export type ArmedDialogResponse = {
 export type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
+  engine?: BrowserEngineId;
   onDisconnected?: () => void;
-};
-
-export type DownloadPayload = PlaywrightDownload & {
-  path?: () => Promise<string>;
 };
 
 export type ActionDownloadCapture = {

@@ -1,5 +1,21 @@
 [
   {
+    "source": "X / Twitter",
+    "target": "X / Twitter"
+  },
+  {
+    "source": "X plugin reference",
+    "target": "X 插件参考"
+  },
+  {
+    "source": "X replies",
+    "target": "X 回复"
+  },
+  {
+    "source": "x",
+    "target": "x"
+  },
+  {
     "source": "Radius",
     "target": "Radius"
   },
@@ -18,6 +34,26 @@
   {
     "source": "OpenClaw",
     "target": "OpenClaw"
+  },
+  {
+    "source": "FaceTime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "FaceTime recovery and removal",
+    "target": "FaceTime 恢复与移除"
+  },
+  {
+    "source": "Facetime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "Facetime plugin reference",
+    "target": "FaceTime 插件参考"
+  },
+  {
+    "source": "facetime",
+    "target": "facetime"
   },
   {
     "source": "macOS platform notes",
@@ -170,6 +206,14 @@
   {
     "source": "OpenAI provider",
     "target": "OpenAI provider"
+  },
+  {
+    "source": "OpenAI authentication",
+    "target": "OpenAI 身份验证"
+  },
+  {
+    "source": "Authentication",
+    "target": "身份验证"
   },
   {
     "source": "xAI provider",
@@ -780,8 +824,24 @@
     "target": "Kubernetes"
   },
   {
+    "source": "Cloudflare",
+    "target": "Cloudflare"
+  },
+  {
     "source": "Cloudflare Containers",
     "target": "Cloudflare Containers"
+  },
+  {
+    "source": "Cloudflare plugin",
+    "target": "Cloudflare 插件"
+  },
+  {
+    "source": "Cloudflare plugin reference",
+    "target": "Cloudflare 插件参考"
+  },
+  {
+    "source": "cloudflare",
+    "target": "cloudflare"
   },
   {
     "source": "Fly.io",
@@ -1438,6 +1498,26 @@
   {
     "source": "Zoom meetings plugin",
     "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Slack huddles plugin",
+    "target": "Slack 快速通话插件"
+  },
+  {
+    "source": "Slack huddles plugin reference",
+    "target": "Slack 快速通话插件参考"
+  },
+  {
+    "source": "slack-huddles",
+    "target": "slack-huddles"
+  },
+  {
+    "source": "Slack channel",
+    "target": "Slack 频道"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "转录 CLI"
   },
   {
     "source": "Voice call plugin",
@@ -2900,6 +2980,10 @@
     "target": "llmman（本地模型）"
   },
   {
+    "source": "llmman (local + hybrid local/hosted models)",
+    "target": "llmman（本地 + 本地/托管混合模型）"
+  },
+  {
     "source": "llama.cpp (managed or existing server)",
     "target": "llama.cpp（托管或现有服务器）"
   },
@@ -3226,6 +3310,10 @@
   {
     "source": "CI runner classes",
     "target": "CI 运行器类型"
+  },
+  {
+    "source": "CI routing costs",
+    "target": "CI 路由成本"
   },
   {
     "source": "CI capacity and shard weights",
@@ -3764,8 +3852,8 @@
     "target": "OpenAI 覆盖范围与费用"
   },
   {
-    "source": "OpenAI image and video generation",
-    "target": "OpenAI 图像与视频生成"
+    "source": "OpenAI image generation",
+    "target": "OpenAI 图像生成"
   },
   {
     "source": "OpenAI voice and speech",
@@ -3782,6 +3870,10 @@
   {
     "source": "Code Mode quickstart",
     "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode executors",
+    "target": "代码模式执行器"
   },
   {
     "source": "Code Mode configuration",
@@ -3858,6 +3950,10 @@
   {
     "source": "Remote and hosted browsers",
     "target": "远程与托管浏览器"
+  },
+  {
+    "source": "Lightweight browsers",
+    "target": "轻量级浏览器"
   },
   {
     "source": "Browser security",
@@ -4288,6 +4384,18 @@
     "target": "存储变更与发布预检"
   },
   {
+    "source": "storage",
+    "target": "storage"
+  },
+  {
+    "source": "Storage locations",
+    "target": "存储位置"
+  },
+  {
+    "source": "Storage CLI",
+    "target": "存储 CLI"
+  },
+  {
     "source": "Agent schema history",
     "target": "Agent 数据库 schema 历史"
   },
@@ -4580,8 +4688,12 @@
     "target": "Telegram 传输方式"
   },
   {
-    "source": "Telegram Dashboard Mini App",
-    "target": "Telegram 仪表盘小程序"
+    "source": "Control UI Mini App",
+    "target": "Control UI 小程序"
+  },
+  {
+    "source": "Telegram Control UI Mini App",
+    "target": "Telegram Control UI 小程序"
   },
   {
     "source": "Telegram troubleshooting",
@@ -4858,5 +4970,57 @@
   {
     "source": "FAQ: providers, hardware, and hosting",
     "target": "常见问题：服务商、硬件与托管"
+  },
+  {
+    "source": "Decision models",
+    "target": "决策模型"
+  },
+  {
+    "source": "TypeSafe AI",
+    "target": "TypeSafe AI"
+  },
+  {
+    "source": "Typesafe plugin reference",
+    "target": "TypeSafe 插件参考"
+  },
+  {
+    "source": "typesafe",
+    "target": "typesafe"
+  },
+  {
+    "source": "Local ONNX decision models",
+    "target": "本地 ONNX 决策模型"
+  },
+  {
+    "source": "ONNX",
+    "target": "ONNX"
+  },
+  {
+    "source": "onnx",
+    "target": "onnx"
+  },
+  {
+    "source": "Onnx plugin reference",
+    "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Telnyx",
+    "target": "Telnyx"
+  },
+  {
+    "source": "Telnyx plugin",
+    "target": "Telnyx 插件"
+  },
+  {
+    "source": "telnyx",
+    "target": "telnyx"
+  },
+  {
+    "source": "Telnyx (AI inference)",
+    "target": "Telnyx（AI 推理）"
+  },
+  {
+    "source": "Deploy a team server",
+    "target": "部署团队服务器"
   }
 ]

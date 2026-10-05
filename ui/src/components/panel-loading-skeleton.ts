@@ -8,9 +8,10 @@ export type PanelLoadingSkeletonVariant =
   | "chat"
   | "desktop"
   | "discussion"
+  | "document"
+  | "file-list"
   | "files"
   | "review"
-  | "tasks"
   | "terminal";
 
 class PanelLoadingSkeleton extends OpenClawLitElement {
@@ -305,12 +306,9 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .desktop-spinner {
-        animation: none;
-      }
+      .desktop-spinner,
       .skeleton::after {
-        animation-duration: 0.01ms;
-        animation-iteration-count: 1;
+        animation: none;
       }
     }
   `;
@@ -319,9 +317,9 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     return html`<div class="skeleton line ${width}"></div>`;
   }
 
-  private rows(count: number) {
+  private rows() {
     return Array.from(
-      { length: count },
+      { length: 5 },
       (_, index) => html`
         <div class="row">
           <div class="skeleton icon"></div>
@@ -346,7 +344,7 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     `;
   }
 
-  private renderContent() {
+  override render() {
     switch (this.variant) {
       case "board":
         return html`
@@ -392,6 +390,16 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             </div>
           </div>
         `;
+      case "file-list":
+        return html`<div class="rows">${this.rows()}</div>`;
+      case "document":
+        return html`
+          <div class="skeleton file-heading medium"></div>
+          <div class="code">
+            ${this.line()} ${this.line()} ${this.line("medium")} ${this.line()}
+            ${this.line("short")}
+          </div>
+        `;
       case "review":
         return html`
           <div class="summary">
@@ -414,24 +422,15 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             ${this.line("medium")} ${this.line()} ${this.line("short")} ${this.line("long")}
           </div>
         `;
-      case "tasks":
-        return html`
-          <div class="toolbar">${this.line("short")}</div>
-          <div class="rows">${this.rows(4)}</div>
-        `;
       default:
         return html`
           <div class="toolbar">
             <div class="skeleton address"></div>
             <div class="skeleton button"></div>
           </div>
-          <div class="rows">${this.rows(5)}</div>
+          <div class="rows">${this.rows()}</div>
         `;
     }
-  }
-
-  override render() {
-    return html`${this.renderContent()}`;
   }
 }
 

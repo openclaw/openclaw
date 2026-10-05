@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -17,10 +18,13 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createBackgroundWorkOwner } from "../../process/background-work.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -28,15 +32,19 @@ import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js"
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { SKILL_WORKSHOP_MAINTENANCE_TOOLS } from "./maintenance-prompt.js";
 import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
-import { runSkillWorkshopReview } from "./review-run.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
+
+const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
 
 export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
   config: OpenClawConfig,
 ): Promise<ExperienceReviewCandidate | undefined> {
-  if (resolveSkillWorkshopConfig(config).autonomous.mode === "off") {
+  if (
+    isIncognitoSessionKey(candidate.source.sessionKey) ||
+    resolveSkillWorkshopConfig(config).autonomous.mode === "off"
+  ) {
     return undefined;
   }
   const { resolveConversationCapabilityProfile } =
@@ -60,11 +68,9 @@ export async function prepareSkillExperienceReviewCandidate(
     agentAccountId: foreground.agentAccountId,
     messageProvider: foreground.messageProvider,
     messageChannel: foreground.messageChannel,
-    chatType: foreground.chatType,
     groupId: foreground.groupId,
     groupChannel: foreground.groupChannel,
     groupSpace: foreground.groupSpace,
-    memberRoleIds: foreground.memberRoleIds,
     spawnedBy: foreground.spawnedBy,
     senderId: foreground.senderId,
     senderName: foreground.senderName,
@@ -124,6 +130,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   if (mode === "off") {
     return;
   }
+  const outcomeStore = { context: captureOpenClawStateWorkerContext() };
   const executionRoot =
     mode === "auto" ? resolveWorkshopSkillsDir(config, foregroundPromptContext.agentId) : undefined;
   const runId = `skill-workshop-review:${randomUUID()}`;
@@ -212,8 +219,11 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       },
       assertSourceCurrent,
     });
-    const run = () =>
-      runSkillWorkshopReview({
+    const run = async () => {
+      const reviewAbortSignal = AbortSignal.any([getGatewayRestartDrainSignal(), abortSignal]);
+      const reviewParams: Parameters<
+        typeof import("../../agents/embedded-agent.js").runEmbeddedAgent
+      >[0] = {
         ...foregroundPromptContext,
         preparedRunAdmission,
         sessionId: reviewSession.sessionId,
@@ -227,7 +237,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         permissionMode: sourceEntry.permissionMode ?? foregroundPromptContext.permissionMode,
         ...(executionRoot ? { skillsSnapshot: { prompt: "", skills: [] } } : {}),
         config,
-        abortSignal,
+        abortSignal: reviewAbortSignal,
         prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }, mode),
         provider: candidate.ctx.modelProviderId,
         model: candidate.ctx.modelId,
@@ -251,7 +261,25 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
           ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
         },
         ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
-      });
+        lane: reviews.lane,
+        agentHarnessId: "openclaw",
+        agentHarnessRuntimeOverride: "openclaw",
+        // Review prompts and cloned prefixes are sized for this exact model.
+        modelSelectionLocked: true,
+        modelFallbacksOverride: [],
+        requestedRouteResolution: "resolved",
+        disableTrajectory: true,
+        cleanupBundleMcpOnRunEnd: true,
+        verboseLevel: "off",
+      };
+      reviewAbortSignal.throwIfAborted();
+      try {
+        const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
+        return await runEmbeddedAgent(reviewParams);
+      } finally {
+        preparedRunAdmission.close();
+      }
+    };
     const embeddedResult = capability
       ? await runWithCronCreatorAuthorityCapability(capability, run)
       : await run();
@@ -273,11 +301,16 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         }
       : undefined;
   } catch (error) {
-    recordSkillExperienceReviewOutcome(foregroundPromptContext.agentId, workspaceDir, {
-      attemptedAtMs,
-      outcome: "failed",
-      error: String(error).slice(0, 300),
-    });
+    await recordSkillExperienceReviewOutcome(
+      foregroundPromptContext.agentId,
+      workspaceDir,
+      {
+        attemptedAtMs,
+        outcome: "failed",
+        error: truncateUtf16Safe(String(error), 300),
+      },
+      outcomeStore,
+    );
     throw error;
   } finally {
     if (executionRoot) {
@@ -285,10 +318,15 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     }
     clearAgentRunContext(runId);
   }
-  recordSkillExperienceReviewOutcome(foregroundPromptContext.agentId, workspaceDir, {
-    attemptedAtMs,
-    outcome,
-    ...(proposalId ? { proposalId } : {}),
-    ...(usage ? { usage } : {}),
-  });
+  await recordSkillExperienceReviewOutcome(
+    foregroundPromptContext.agentId,
+    workspaceDir,
+    {
+      attemptedAtMs,
+      outcome,
+      ...(proposalId ? { proposalId } : {}),
+      ...(usage ? { usage } : {}),
+    },
+    outcomeStore,
+  );
 }

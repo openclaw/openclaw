@@ -1,11 +1,17 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  isArtifactPreservingStateRead,
+} from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { PluginMetadataStateSelector } from "./installed-plugin-index-row.js";
+import {
+  readPluginMetadataStateRowSync,
+  type PluginMetadataStateSelector,
+} from "./installed-plugin-index-row.js";
 import { PluginCacheFactInvalidatedError } from "./plugin-cache.js";
 
-/** Read raw metadata through the shared inspection actor, without creating state. */
+/** Read raw metadata from retained snapshot bytes or the shared inspection actor. */
 export async function readPluginMetadataStateRow(
   selector: PluginMetadataStateSelector,
   options: { path?: string; env?: NodeJS.ProcessEnv },
@@ -15,6 +21,10 @@ export async function readPluginMetadataStateRow(
   try {
     const context = captureOpenClawStateWorkerContext(options);
     try {
+      if (preserveArtifacts && getActiveOpenClawStateDatabaseReadSnapshot(options)) {
+        context.admission.assertCurrent();
+        return readPluginMetadataStateRowSync(selector, options, true);
+      }
       const { runOpenClawStateWorkerOperation } =
         await import("../state/openclaw-state-worker-store.js");
       context.admission.assertCurrent();

@@ -16,6 +16,7 @@ import {
   captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
+  openSidebarMoreMenu,
 } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
@@ -327,12 +328,9 @@ suite.define(() => {
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
-      await moreButton.click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      const moreButton = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
+      const moreMenu = await openSidebarMoreMenu(page);
+      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       const pinItems = sidebar
         .locator(
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
@@ -371,8 +369,7 @@ suite.define(() => {
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
+      const moreMenu = await openSidebarMoreMenu(page);
       await expect
         .poll(() =>
           moreMenu
@@ -409,16 +406,16 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Tab");
       await expect.poll(() => menu.count()).toBe(0);
-      const homeLink = sidebar.locator(".nav-item--home");
+      const nextLink = sidebar.locator('[data-sidebar-entry="route:agents-home"] .nav-item');
       await expect
-        .poll(() => homeLink.evaluate((element) => element === document.activeElement))
+        .poll(() => nextLink.evaluate((element) => element === document.activeElement))
         .toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
-  it("shows one row per agent and reaches agent switches with menu keys", async () => {
+  it("shows one tile per agent plus Show all and reaches them with menu keys", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -475,8 +472,9 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-      const mainSwitch = menu.getByRole("menuitemradio", { name: "Scheduled Automations" });
-      const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
+      const allSwitch = menu.getByRole("menuitem", { name: "Show all", exact: true });
+      const mainSwitch = menu.getByRole("menuitem", { name: "Scheduled Automations", exact: true });
+      const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
         .poll(() =>
           researchSwitch.evaluate(
@@ -496,14 +494,16 @@ suite.define(() => {
         const grid = dropdown.querySelector(".sidebar-agent-menu__agent-grid");
         const agentRows = [
           ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
-        ].slice(0, 3);
+        ];
         return {
           columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 0,
           bottomGap:
             grid && agentRows.length > 0
               ? Math.round(
-                  grid.getBoundingClientRect().bottom -
-                    Math.max(...agentRows.map((row) => row.getBoundingClientRect().bottom)),
+                  Math.abs(
+                    grid.getBoundingClientRect().bottom -
+                      Math.max(...agentRows.map((row) => row.getBoundingClientRect().bottom)),
+                  ),
                 )
               : Number.NaN,
           widths: agentRows.map((row) => Math.round(row.getBoundingClientRect().width)),
@@ -518,8 +518,8 @@ suite.define(() => {
       expect(gridLayout.columns).toBe(3);
       expect(gridLayout.bottomGap).toBe(0);
       expect(new Set(gridLayout.widths).size).toBe(1);
-      expect(gridLayout.avatarOffsets).toEqual([0, 0, 0]);
-      expect(gridLayout.labelOffsets).toEqual([0, 0, 0]);
+      expect(gridLayout.avatarOffsets).toEqual([0, 0, 0, 0]);
+      expect(gridLayout.labelOffsets).toEqual([0, 0, 0, 0]);
       const capabilities = menu.getByRole("menuitem", {
         name: "What can Scheduled Automations do?",
         exact: true,
@@ -552,8 +552,10 @@ suite.define(() => {
               return Number.NaN;
             }
             return Math.round(
-              grid.getBoundingClientRect().bottom -
-                Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
+              Math.abs(
+                grid.getBoundingClientRect().bottom -
+                  Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
+              ),
             );
           }),
         )
@@ -565,19 +567,23 @@ suite.define(() => {
       await expect
         .poll(() =>
           menu
-            .getByRole("menuitem", { name: "Agent settings" })
+            .getByRole("menuitem", { name: "Scheduled Automations settings", exact: true })
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
       await page.keyboard.press("Home");
       await expect
-        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
+        .poll(() => allSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await page.keyboard.press("r");
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await page.keyboard.press("Home");
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await page.keyboard.press("ArrowDown");
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))

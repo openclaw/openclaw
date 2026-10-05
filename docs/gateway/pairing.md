@@ -19,8 +19,8 @@ Gateway's SQLite state database:
   reject pending requests.
 
 The former standalone node pairing store (`nodes/paired.json` with a per-node
-token, retired from the connect path in January 2026) is gone: gateways fold
-any remaining rows into the device records once at startup and archive the
+token, retired from the connect path in January 2026) is gone: `openclaw doctor --fix`
+folds remaining rows into the device records and archives the
 legacy files with a `.migrated` suffix. Legacy TCP bridge support has been
 removed.
 
@@ -107,9 +107,9 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Restart the installed node with `openclaw node restart`, or stop and rerun its
-foreground command. A node paused on `PAIRING_REQUIRED` does not resume after
-manual approval. Its reconnect creates the separate command-surface request:
+Headless node hosts keep reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, the next reconnect
+creates the separate command-surface request:
 
 ```bash
 openclaw nodes pending
@@ -117,6 +117,10 @@ openclaw nodes approve <nodeRequestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+command once.
 
 The device and node request IDs are distinct. To reject a surface request or
 manage an existing node instead:
@@ -233,8 +237,22 @@ Gateway token.
 
 By default, trusted local connections silently approve first-time device
 pairing plus role and scope upgrades. This keeps normal same-host and SSH
-tunnel reconnects convenient. Operators using shell-less, port-forward-only
-SSH keys or a multi-user Mac can require explicit approval for every device:
+tunnel reconnects convenient. A native app that already paired as an operator
+can add its first node role with the same device identity without a device
+approval prompt, including retries of a pending request labeled as a repair.
+This preserves its operator token. The Gateway also approves the initial node
+capability surface directly for a silently paired, non-browser local device,
+including a native app using remote mode to connect to a Gateway on the same
+machine. No app-side SSH check or approval panel is needed.
+
+This uses the same-machine, same-user trust boundary. Gateway command denies
+and node-local OS permissions and exec approvals still apply. Later capability
+surface upgrades and explicitly revoked node tokens still require approval.
+Remote, trusted-CIDR, browser, and proxy connections do not gain local approval
+from a device's earlier silent pairing.
+
+Operators using shell-less, port-forward-only SSH keys or a multi-user Mac can
+require explicit approval for every device:
 
 ```json5
 {
@@ -248,9 +266,11 @@ SSH keys or a multi-user Mac can require explicit approval for every device:
 }
 ```
 
-With this setting, new pairing requests, role upgrades, and scope upgrades use
-the normal approval flow even when the connection is local. Metadata-only
-reconnect refreshes remain automatic so routine client or OS metadata changes
+With this setting, new pairing requests, role upgrades, scope upgrades, and
+initial node capability requests use the normal approval flow even when the
+connection is local. Re-enabling local auto-approval allows an unapproved initial
+surface to be approved on reconnect, including one previously rejected.
+Metadata-only reconnect refreshes remain automatic so routine client or OS metadata changes
 do not create approval churn.
 
 ## SSH-verified device auto-approval (default)
@@ -275,10 +295,10 @@ Enabled by default. Requirements for it to fire:
 - Same eligibility floor as trusted-CIDR approval: fresh scopeless node
   pairing only; upgrades, browsers, Control UI, and WebChat always prompt.
 
-While a probe is running, the node client is told to keep retrying
-(`wait_then_retry`) instead of pausing for manual approval; if the probe
-fails, the next attempt falls back to the normal prompt flow. Failed targets
-get a short cooldown (5 minutes after a key mismatch).
+While device approval is pending, the node client is told to keep retrying
+(`wait_then_retry`), including while an SSH probe is running. If the probe fails,
+the request remains available for manual approval and the node keeps retrying.
+Failed SSH targets get a short cooldown (5 minutes after a key mismatch).
 
 Pairing settings hot-apply without restarting the Gateway. Automatic approvals
 recheck the current policy immediately before granting access, even if an SSH
@@ -448,9 +468,12 @@ database under the Gateway state directory (default `~/.openclaw`):
   approved node surfaces, pending surface requests, pending device pairing
   requests, and bootstrap tokens)
 
-If you override `OPENCLAW_STATE_DIR`, the database moves with it. Gateways
-upgraded from releases with JSON stores import them at startup and leave
-`devices/*.json.migrated` and `nodes/*.json.migrated` archives behind.
+If you override `OPENCLAW_STATE_DIR`, the database moves with it. Stop the Gateway
+and run `openclaw doctor --fix` to import stores from older releases. Doctor leaves
+`devices/*.json.migrated` and `nodes/*.json.migrated` archives behind. It imports
+device approvals before folding node capabilities; existing SQLite approvals
+take precedence. Normal Gateway startup reports pending legacy stores without
+changing them.
 
 Security notes:
 

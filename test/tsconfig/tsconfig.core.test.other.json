@@ -11,6 +11,7 @@
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
+    "../../src/audit/**",
     "../../src/agents/**",
     "../../src/gateway/**",
     "../../src/infra/**",
@@ -36,6 +37,8 @@
     "../../src/hooks/**",
     "../../src/daemon/**",
     "../../src/plugin-state/**",
-    "../../src/state/**"
+    "../../src/state/**",
+    "../../src/node-host/**",
+    "../../src/worker/**"
   ]
 }

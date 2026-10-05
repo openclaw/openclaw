@@ -7,7 +7,7 @@ struct SessionTokenStats {
 
     var percentUsed: Int? {
         guard self.contextTokens > 0, self.total > 0 else { return nil }
-        return min(100, Int(round((Double(self.total) / Double(self.contextTokens)) * 100)))
+        return Int(min(100, round((Double(self.total) / Double(self.contextTokens)) * 100)))
     }
 }
 
@@ -76,7 +76,8 @@ enum SessionLoader {
         activeMinutes: Int? = nil,
         limit: Int? = nil,
         includeGlobal: Bool = true,
-        includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
+        includeUnknown: Bool = true,
+        control: ControlChannel = .shared) async throws -> SessionStoreSnapshot
     {
         let data: Data
         do {
@@ -87,7 +88,7 @@ enum SessionLoader {
                 includeGlobal: includeGlobal,
                 includeUnknown: includeUnknown,
                 activeMinutes: activeMinutes)
-            data = try await ControlChannel.shared.request(request)
+            data = try await control.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {

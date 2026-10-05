@@ -74,6 +74,7 @@ The anchors from the single-page version still resolve here.
 - <a id="setup-reference"></a>[`setup`, `providerUsageAuthEnvVars`](/plugins/manifest/setup-and-auth#setup-reference)
 - <a id="setup.providers-reference"></a><a id="setup-providers-reference"></a>[`setup.providers`](/plugins/manifest/setup-and-auth#setup-providers-reference)
 - <a id="setup-fields"></a>[`setup` field table](/plugins/manifest/setup-and-auth#setup-fields)
+- [`configGroups`](/plugins/manifest/setup-and-auth#configgroups-reference)
 - <a id="uihints-reference"></a>[`uiHints`](/plugins/manifest/setup-and-auth#uihints-reference)
 
 ### Capability fields
@@ -81,6 +82,7 @@ The anchors from the single-page version still resolve here.
 [Manifest capability fields](/plugins/manifest/capabilities) — Manifest capability ownership, tool availability metadata, and activation planning.
 
 - <a id="contracts-reference"></a>[`contracts`](/plugins/manifest/capabilities#contracts-reference)
+- [`decisionModels`](/plugins/manifest/capabilities#decision-models-reference)
 - <a id="tool-metadata-reference"></a>[`toolMetadata`](/plugins/manifest/capabilities#tool-metadata-reference)
 - <a id="activation-reference"></a>[`activation`](/plugins/manifest/capabilities#activation-reference)
 
@@ -92,7 +94,9 @@ The anchors from the single-page version still resolve here.
 - <a id="transcript-sources-reference"></a>[`transcriptSources`](/plugins/manifest/surfaces#transcript-sources-reference)
 - <a id="backupresources-reference"></a>[`backupResources`](/plugins/manifest/surfaces#backupresources-reference)
 - <a id="mcp-server-reference"></a>[`mcpServers`](/plugins/manifest/surfaces#mcp-server-reference)
+- [`uiCapabilities`](/plugins/manifest/surfaces#ui-capabilities)
 - <a id="controlui-reference"></a>[`controlUi`](/plugins/manifest/surfaces#controlui-reference)
+- [`themes`](/plugins/manifest/surfaces#themes)
 - <a id="dashboard-reference"></a>[`dashboard`](/plugins/manifest/surfaces#dashboard-reference)
 - <a id="catalog-reference"></a>[`catalog`](/plugins/manifest/surfaces#catalog-reference)
 - <a id="clicommands-reference"></a>[`cliCommands`](/plugins/manifest/surfaces#clicommands-reference)
@@ -247,8 +251,10 @@ The anchors from the single-page version still resolve here.
 | `doctorHealthChecks`                 | No       | `boolean`                    | Declares health-check registration in the selected plugin's public API. Read by the Codex doctor health API.                                                                                                                                                                                                                                                                                     |
 | `sessionRouteStateOwners`            | No       | `object[]`                   | Static session-route ownership for doctor cleanup. Each entry declares an `id`, `label`, and optional `providerIds`, `runtimeIds`, `cliSessionKeys`, and `authProfilePrefixes`.                                                                                                                                                                                                                  |
 | `qaRunners`                          | No       | `object[]`                   | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                                                                                                                                                                                   |
+| `uiCapabilities`                     | No       | `string[]`                   | Static UI contribution kinds displayed in the plugin’s Capabilities section without activation. Omission means unspecified; `[]` declares none. See [UI capabilities](/plugins/manifest/surfaces#ui-capabilities).                                                                                                                                                                               |
 | `dashboard`                          | No       | `object`                     | Dashboard widget data bindings and action verbs. Each entry is validated against a Gateway method registered by this plugin with the required read or write scope. See [dashboard reference](/plugins/manifest/surfaces#dashboard-reference).                                                                                                                                                    |
 | `mcpServers`                         | No       | `Record<string, object>`     | Static MCP server definitions contributed while this plugin is enabled. Relative command arguments and working directories resolve from the plugin root. Operator `mcp.servers` entries override or disable definitions with the same name. See [MCP server reference](/plugins/manifest/surfaces#mcp-server-reference).                                                                         |
+| `themes`                             | No       | `object[]`                   | Static theme IDs, names, descriptions, and plugin-relative JSON sources. Enabled plugins contribute to the shared settings and agent theme catalog; plugin reload refreshes palette edits without a Gateway restart. See [Themes](/plugins/manifest/surfaces#themes).                                                                                                                            |
 | `contracts`                          | No       | `object`                     | Static capability ownership snapshot for external auth hooks, embeddings, speech, realtime transcription, realtime voice, media-understanding, image/video/music generation, web fetch, web search, worker providers, document/web-content extraction, and tool ownership.                                                                                                                       |
 | `transcriptSources`                  | No       | `Record<string, object>`     | Static transcript source names and auto-start locator requirements for IDs declared in `contracts.transcriptSourceProviders`. See [Transcript sources reference](/plugins/manifest/surfaces#transcript-sources-reference).                                                                                                                                                                       |
 | `configContracts`                    | No       | `object`                     | Manifest-owned config behavior consumed by generic core helpers: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing. See [configContracts reference](/plugins/manifest/config-and-secrets#configcontracts-reference).                                                                                                                                       |
@@ -265,6 +271,7 @@ The anchors from the single-page version still resolve here.
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
 | `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare exactly one active category.                                                                                                                                                                                                                                               |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
+| `configGroups`                       | No       | `object[]`                   | Author-defined Settings sections with unique ids, titles, optional integer order, and immediate config property names. See [configGroups](/plugins/manifest/setup-and-auth#configgroups-reference).                                                                                                                                                                                              |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
 
 An `AuthAlias` is either a provider id string or an object with `provider` and
@@ -285,6 +292,19 @@ Bundled OpenClaw plugins declare exactly one active category. New ClawHub public
 also accept exactly one declared category, using the same array shape, or omit the
 field for ClawHub to generate a category.
 
+OpenClaw catalog browsing also derives Media membership from an enabled, locally known plugin’s
+`imageGenerationProviders`, `videoGenerationProviders`, or `musicGenerationProviders`
+contracts. This lets a Models plugin remain discoverable under Media without adding
+a second purpose category to its manifest. The Gateway carries these display-only
+memberships as `capabilityCategories`, separately from the declared `categories`,
+and combines them when joining local entries with hosted catalog cards. The same
+join applies on later pages; category ranks, identities, and the hosted cursor remain
+with their existing owners. Remote-only entries without local manifest facts retain
+the registry’s categories. Speech or transcription alone does not add Media membership.
+
+Disabled plugins keep only their declared categories. These memberships do not
+install or enable a plugin, grant permissions, or change provider selection.
+
 OpenClaw's manifest reader continues to accept one to three unique, ordered categories
 so previously installed and published packages remain readable. When reading older
 multiple-category declarations, the first remains primary and all remain searchable.
@@ -300,7 +320,8 @@ The active categories below are listed in browse order:
 | `memory`              | Durable agent memory, embeddings, and retrieval across conversations. Building or compacting the active conversation context belongs in Context.                                                                                            |
 | `context`             | Building, selecting, compacting, or managing the active conversation context. Durable memory belongs in Memory; an engine that runs the agent and owns its native sessions belongs in Agent runtimes.                                       |
 | `voice`               | Speech synthesis, transcription, voice calls, and spoken interaction. Music and general media creation or analysis belong in Media.                                                                                                         |
-| `web`                 | General web search, browser control, and fetching web pages. A tool whose main purpose is a specific research or business workflow belongs in that workflow's category.                                                                     |
+| `web`                 | General web search, crawling, and fetching web pages. A tool whose main purpose is a specific research or business workflow belongs in that workflow's category.                                                                            |
+| `computer-use`        | Interactive desktop and browser navigation, clicking, typing, and screenshots. Hosting execution environments belongs in Infrastructure; web search and crawling belong in Web.                                                             |
 | `media`               | Creating, transforming, or understanding images, video, music, and other media. Spoken interaction and transcription belong in Voice.                                                                                                       |
 | `security`            | Protecting access and enforcing trust through authentication, authorization, credential controls, security auditing, or policy. Authentication incidental to another purpose does not belong here.                                          |
 | `integrations`        | General connectors, API bridges, and service integration platforms without a more specific user purpose. A connector to a particular workflow belongs in that workflow's category; exposing tools or MCP is not enough.                     |
@@ -314,7 +335,7 @@ The active categories below are listed in browse order:
 | `sales-marketing`     | Customer relationships, sales, customer support, outreach, campaigns, and marketing operations. General email or chat management belongs in Inbox & collaboration.                                                                          |
 | `data-analytics`      | Querying databases, processing datasets, analysis, reporting, and business intelligence. Agent memory storage belongs in Memory; operational telemetry belongs in Infrastructure.                                                           |
 | `agent-orchestration` | Coordinating agents, delegating work, and running multi-step agent workflows. Engines and backends that execute the agent loop and manage its native sessions belong in Agent runtimes.                                                     |
-| `research`            | Investigating topics, evaluating sources, working with scientific literature, and synthesizing evidence. General web search, browsing, and page fetching belong in Web.                                                                     |
+| `research`            | Investigating topics, evaluating sources, working with scientific literature, and synthesizing evidence. General web search and page fetching belong in Web; interactive browser control belongs in Computer use.                           |
 | `other`               | Use only when the plugin's main purpose does not fit another category or the available evidence is insufficient. Do not use this just because a plugin has several capabilities.                                                            |
 
 Legacy `tools`, `runtime`, and `gateway` declarations remain valid so existing
@@ -331,6 +352,7 @@ declare exactly one active category.
 - **Every plugin must ship a JSON Schema**, even if it accepts no config.
 - An empty schema is acceptable (for example, `{ "type": "object", "additionalProperties": false }`).
 - Config is validated against the manifest schema at config read/write time and before the plugin loads.
+- Local `$ref` JSON Pointer fragments support URI percent-encoding, including encoded `/` separators. Fragments are decoded once before resolving pointer tokens; use `~1` for a slash within a key and `~0` for a tilde.
 - When extending or forking a bundled plugin with new config keys, update that plugin's `openclaw.plugin.json` `configSchema` at the same time. Bundled plugin schemas are strict, so adding `plugins.entries.<id>.config.myNewKey` in user config without adding `myNewKey` to `configSchema.properties` will be rejected before the plugin runtime loads.
 
 Example schema extension:
@@ -348,6 +370,23 @@ Example schema extension:
   }
 }
 ```
+
+## Retained state checks
+
+A source plugin may expose a lightweight `state-retention-api.ts` alongside its
+Doctor contract. The core package retains this artifact separately when it
+externalizes the plugin runtime. It exports `packageName` and `stateMigrations`,
+using the same `defineRetiredPluginStateMigration` objects as Doctor. Checks only
+inspect source presence; they must not decode, mutate, or migrate state.
+
+Before replacing the Gateway, candidate update admission runs matching checks
+for selected official installed owners and bundled owners. The package name and
+migration ID must match the selected owner's manifest declaration. External
+shadows and disabled installed owners retain their own contracts. Disabling
+bundled runtimes does not disable these host-retained checks or activate plugins.
+Admission reads checks only from the staged candidate package, independently of
+runtime registry and bundle-directory overrides. Inspection failures produce a refusal verdict so published updaters preserve the
+running Gateway and original files instead of falling back to older admission.
 
 ## Validation behavior
 
@@ -373,6 +412,7 @@ catalog requests do not poll files for changes.
 
 ### Configuration validation
 
+- Settings validation matches manifest IDs case-insensitively. Errors and schema defaults use the authored settings entry rather than creating a second entry with different casing.
 - Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.
 - `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup. An exact `{ enabled: false }` plugin entry is an intentional uninstall marker, so validation and Doctor keep it without a stale-config warning.

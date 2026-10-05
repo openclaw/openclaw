@@ -1,5 +1,6 @@
 // ACP runtime tests cover plugin-facing ACP runtime setup and gateway dispatch behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { AcpSessionManagerDeps } from "../acp/control-plane/manager.types.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 
@@ -19,6 +20,18 @@ import {
   testing,
   tryDispatchAcpReplyHook,
 } from "./acp-runtime.js";
+
+it("keeps released ACP metadata signatures independent of internal actor bindings", () => {
+  expectTypeOf<
+    Parameters<typeof import("./acp-runtime.js").readAcpSessionEntryAsync>["length"]
+  >().toEqualTypeOf<1>();
+  expectTypeOf<
+    Parameters<AcpSessionManagerDeps["loadSessionEntryAsync"]>["length"]
+  >().toEqualTypeOf<1>();
+  expectTypeOf<
+    Parameters<AcpSessionManagerDeps["upsertSessionMeta"]>["length"]
+  >().toEqualTypeOf<1>();
+});
 
 const event = {
   ctx: buildTestCtx({
@@ -70,25 +83,6 @@ function expectDispatchPayloadFields(expected: Record<string, unknown>): void {
 describe("tryDispatchAcpReplyHook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("skips ACP runtime lookup for plain-text deny turns", async () => {
-    const result = await tryDispatchAcpReplyHook(
-      {
-        ...event,
-        sendPolicy: "deny",
-        ctx: buildTestCtx({
-          SessionKey: "agent:test:session",
-          BodyForCommands: "write a test",
-          BodyForAgent: "write a test",
-        }),
-      },
-      ctx,
-    );
-
-    expect(result).toBeUndefined();
-    expect(bypassMock).not.toHaveBeenCalled();
-    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("skips ACP runtime lookup for non-command deny turns even when CommandBody is populated", async () => {

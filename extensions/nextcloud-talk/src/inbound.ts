@@ -1,14 +1,13 @@
-import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
-// Nextcloud Talk plugin module implements inbound behavior.
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
-  resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   isRecord,
   normalizeOptionalString,
@@ -26,7 +25,6 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
   type GroupPolicy,
   type OpenClawConfig,
-  type OutboundReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -97,28 +95,6 @@ function roomRoutes(params: {
           }),
     },
   );
-}
-
-async function deliverNextcloudTalkReply(params: {
-  cfg: CoreConfig;
-  payload: OutboundReplyPayload;
-  roomToken: string;
-  accountId: string;
-  statusSink?: (patch: { lastOutboundAt?: number }) => void;
-}): Promise<{ visibleReplySent: boolean }> {
-  const { cfg, payload, roomToken, accountId, statusSink } = params;
-  const visibleReplySent = await deliverFormattedTextWithAttachments({
-    payload,
-    send: async ({ text, replyToId }) => {
-      await sendMessageNextcloudTalk(roomToken, text, {
-        cfg,
-        accountId,
-        replyTo: replyToId,
-      });
-      statusSink?.({ lastOutboundAt: Date.now() });
-    },
-  });
-  return { visibleReplySent };
 }
 
 export async function handleNextcloudTalkInbound(params: {
@@ -206,7 +182,7 @@ export async function handleNextcloudTalkInbound(params: {
     wasMentioned?: boolean,
     contextBinding?: ChannelIngressContextBinding,
   ) =>
-    await resolveStableChannelMessageIngress({
+    await core.channel.inbound.ingress.resolveStable({
       channelId: CHANNEL_ID,
       accountId: account.accountId,
       identity: {
@@ -324,7 +300,7 @@ export async function handleNextcloudTalkInbound(params: {
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : false;
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -350,6 +326,7 @@ export async function handleNextcloudTalkInbound(params: {
   }
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Nextcloud Talk",
     from: fromLabel,
@@ -406,13 +383,18 @@ export async function handleNextcloudTalkInbound(params: {
               text: sanitizeAssistantVisibleText(payload.text),
             },
       deliver: async (payload) => {
-        return await deliverNextcloudTalkReply({
-          cfg: config,
+        const visibleReplySent = await deliverFormattedTextWithAttachments({
           payload,
-          roomToken,
-          accountId: account.accountId,
-          statusSink,
+          send: async ({ text, replyToId }) => {
+            await sendMessageNextcloudTalk(roomToken, text, {
+              cfg: config,
+              accountId: account.accountId,
+              replyTo: replyToId,
+            });
+            statusSink?.({ lastOutboundAt: Date.now() });
+          },
         });
+        return { visibleReplySent };
       },
       onError: (err, info) => {
         runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);

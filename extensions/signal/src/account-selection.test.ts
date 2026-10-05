@@ -6,6 +6,10 @@ import { signalPlugin } from "./channel.js";
 import { signalDoctor } from "./doctor.js";
 import { signalSetupAdapter } from "./setup-core.js";
 
+function signalConfig(signal: NonNullable<OpenClawConfig["channels"]>["signal"]): OpenClawConfig {
+  return { channels: { signal } };
+}
+
 const authored = {
   account: "+12025550124",
   transport: { kind: "external-native" as const, url: "http://127.0.0.1:19962" },
@@ -21,30 +25,26 @@ describe("Signal registered account entry points", () => {
   ] as const)(
     "channels.add setupContract preserves default %s winner when restoring its number (restricted=%s)",
     (key, restricted) => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          signal: {
-            replyToMode: "all",
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            transport: { kind: "external-native", url: "http://127.0.0.1:19961" },
-            accounts: {
-              [key]: {
-                account: "+12025550123",
-                ...(restricted
-                  ? {
-                      enabled: false,
-                      dmPolicy: "allowlist" as const,
-                      allowFrom: ["+12025550126"],
-                      replyToMode: "off" as const,
-                    }
-                  : {}),
-              },
-              "DEFAULT!": { account: "+12025550125", dmPolicy: "disabled" },
-            },
+      const cfg = signalConfig({
+        replyToMode: "all",
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        transport: { kind: "external-native", url: "http://127.0.0.1:19961" },
+        accounts: {
+          [key]: {
+            account: "+12025550123",
+            ...(restricted
+              ? {
+                  enabled: false,
+                  dmPolicy: "allowlist" as const,
+                  allowFrom: ["+12025550126"],
+                  replyToMode: "off" as const,
+                }
+              : {}),
           },
+          "DEFAULT!": { account: "+12025550125", dmPolicy: "disabled" },
         },
-      };
+      });
       const setup = expectDefined(signalPlugin.setupContract, "registered setup contract");
       const next = setup.applyAccountConfig({
         cfg,
@@ -127,15 +127,11 @@ describe("Signal registered account entry points", () => {
   );
 
   it("channels.status config.resolveAccount preserves ignored settings without an owned number", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          account: "+12025550123",
-          replyToMode: "all",
-          accounts: { "Work Phone": { ...authored, account: undefined, enabled: false } },
-        },
-      },
-    };
+    const cfg = signalConfig({
+      account: "+12025550123",
+      replyToMode: "all",
+      accounts: { "Work Phone": { ...authored, account: undefined, enabled: false } },
+    });
     expect(signalPlugin.config.resolveAccount(cfg, "work-phone")).toMatchObject({
       enabled: true,
       configured: true,
@@ -150,16 +146,12 @@ describe("Signal registered account entry points", () => {
   it.each([false, true])(
     "channels.add setup and config enable/delete update the selected stored key (collision=%s)",
     (collision) => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          signal: {
-            accounts: {
-              "Work Phone": authored,
-              ...(collision ? { "work-phone": { ...authored, account: "+12025550125" } } : {}),
-            },
-          },
+      const cfg = signalConfig({
+        accounts: {
+          "Work Phone": authored,
+          ...(collision ? { "work-phone": { ...authored, account: "+12025550125" } } : {}),
         },
-      };
+      });
       const key = collision ? "work-phone" : "Work Phone";
       const next = expectDefined(
         signalSetupAdapter.applyAccountConfig?.({
@@ -205,18 +197,14 @@ describe("Signal registered account entry points", () => {
   );
 
   it("channels.add setup preserves the authored container transport when editing its URL", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          accounts: {
-            "Work Phone": {
-              ...authored,
-              transport: { kind: "container", url: authored.transport.url },
-            },
-          },
+    const cfg = signalConfig({
+      accounts: {
+        "Work Phone": {
+          ...authored,
+          transport: { kind: "container", url: authored.transport.url },
         },
       },
-    };
+    });
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg,
       accountId: "work-phone",
@@ -229,18 +217,14 @@ describe("Signal registered account entry points", () => {
   });
 
   it("channels.add setup reserves the managed port of a named alias", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          accounts: {
-            "Work Phone": {
-              account: authored.account,
-              transport: { kind: "managed-native", httpPort: 18081 },
-            },
-          },
+    const cfg = signalConfig({
+      accounts: {
+        "Work Phone": {
+          account: authored.account,
+          transport: { kind: "managed-native", httpPort: 18081 },
         },
       },
-    };
+    });
     expect(() =>
       signalSetupAdapter.applyAccountConfig?.({
         cfg,

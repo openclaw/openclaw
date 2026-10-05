@@ -1,4 +1,5 @@
 // Msteams tests cover monitor handler.feedback authz plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
@@ -43,6 +44,7 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
       shouldLogVerbose: () => false,
     },
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       debounce: {
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({

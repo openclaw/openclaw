@@ -9,6 +9,12 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  registerMemoryCapability,
+  type MemoryFlushPlanResolver,
+} from "../../plugins/memory-state.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -21,16 +27,24 @@ type FollowupRunFixture = Pick<FollowupRun, "prompt" | "summaryLine" | "enqueued
   };
 
 export function isModelRuntimeContextCarrier(message: { role: string; content: unknown }): boolean {
+  // These non-reasoning OpenAI fixtures receive privileged context as a system message.
   const text =
     extractTextFromChatContent(message.content, {
       joinWith: "\n",
       normalizeText: (value) => value,
     }) ?? "";
   return (
-    message.role === "user" &&
+    message.role === "system" &&
     hasInternalRuntimeContext(text) &&
     !stripInternalRuntimeContext(text).trim()
   );
+}
+
+export function installAgentRunnerMemoryFixture(flushPlanResolver: MemoryFlushPlanResolver): void {
+  // Default channel stubs fall back to real bundled message-tool artifacts during compaction.
+  // These local model fixtures own only the memory capability they register.
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  registerMemoryCapability("memory-core", { flushPlanResolver });
 }
 
 export function createTestTemplateContext(

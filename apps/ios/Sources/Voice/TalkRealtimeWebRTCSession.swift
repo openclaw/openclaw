@@ -211,7 +211,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private struct AgentWaitResponse: Decodable {
-        let runId: String?
         let status: String?
         let startedAt: Double?
         let error: String?
@@ -417,7 +416,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private func trace(_ message: String) {
         GatewayDiagnostics.log("talk.timeline realtime +\(self.elapsedMs())ms \(message)")
-        Self.logger.info("timeline +\(self.elapsedMs(), privacy: .public)ms \(message, privacy: .public)")
     }
 
     private func cancelActiveToolCalls(preserveRuns: Bool = false) {
@@ -443,12 +441,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
             text: trimmed,
             timestamp: Date().timeIntervalSince1970 * 1000,
             persist: { [gateway, gatewayRoute] params in
-                let data = try JSONEncoder().encode(params)
-                guard let json = String(data: data, encoding: .utf8) else {
-                    throw NSError(domain: "TalkRealtimeTranscript", code: 2, userInfo: [
-                        NSLocalizedDescriptionKey: "Failed to encode transcript request",
-                    ])
-                }
+                let json = try String(bytes: JSONEncoder().encode(params), encoding: .utf8)!
                 _ = try await gateway.request(
                     method: "talk.client.transcript",
                     paramsJSON: json,
@@ -482,8 +475,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private func handleRealtimeEvent(_ event: TalkRealtimeServerEvent) {
         guard !self.stopped else { return }
-        if !self.seenRealtimeEventTypes.contains(event.type) {
-            self.seenRealtimeEventTypes.insert(event.type)
+        if self.seenRealtimeEventTypes.insert(event.type).inserted {
             self.trace("event first type=\(event.type)")
         }
         if self.handleRealtimeAudioStateEvent(event) {
@@ -660,12 +652,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
             if let voiceSessionId = self.voiceSessionId {
                 params["voiceSessionId"] = voiceSessionId
             }
-            let data = try JSONSerialization.data(withJSONObject: params)
-            guard let json = String(data: data, encoding: .utf8) else {
-                throw NSError(domain: "TalkRealtimeWebRTC", code: 7, userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to encode realtime tool call",
-                ])
-            }
+            let json = try String(bytes: JSONSerialization.data(withJSONObject: params), encoding: .utf8)!
             let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
             try Task.checkCancellation()
             try self.checkNotStopped()
@@ -741,12 +728,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         defer { self.activeToolTasks[callId] = nil }
         do {
             let params = try Self.controlParams(sessionKey: self.sessionKey, argsJSON: argsJSON)
-            let data = try JSONSerialization.data(withJSONObject: params)
-            guard let json = String(data: data, encoding: .utf8) else {
-                throw NSError(domain: "TalkRealtimeWebRTC", code: 19, userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to encode realtime control call",
-                ])
-            }
+            let json = try String(bytes: JSONSerialization.data(withJSONObject: params), encoding: .utf8)!
             let res = try await gateway.request(
                 method: "talk.client.steer",
                 paramsJSON: json,
@@ -775,10 +757,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static func controlParams(sessionKey: String, argsJSON: String) throws -> [String: Any] {
         let args = try Self.decodeJSONObject(argsJSON)
         let record = args as? [String: Any] ?? [:]
-        let text = Self.nonEmptyString(record["text"])
-            ?? Self.nonEmptyString(record["message"])
-            ?? Self.nonEmptyString(record["request"])
-            ?? Self.nonEmptyString(record["query"])
+        let text = (record["text"] as? String)?.trimmedNonEmpty
+            ?? (record["message"] as? String)?.trimmedNonEmpty
+            ?? (record["request"] as? String)?.trimmedNonEmpty
+            ?? (record["query"] as? String)?.trimmedNonEmpty
         guard let text else {
             throw NSError(domain: "TalkRealtimeWebRTC", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "OpenClaw control tool call missing text",
@@ -788,16 +770,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
             "sessionKey": sessionKey,
             "text": text,
         ]
-        if let mode = Self.nonEmptyString(record["mode"]) {
+        if let mode = (record["mode"] as? String)?.trimmedNonEmpty {
             params["mode"] = mode
         }
         return params
-    }
-
-    private static func nonEmptyString(_ value: Any?) -> String? {
-        guard let raw = value as? String else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func voiceConfirmationInstruction(from error: Error) -> String? {
@@ -826,7 +802,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let record = object as? [String: Any]
         else { return nil }
-        return Self.nonEmptyString(record["message"])
+        return (record["message"] as? String)?.trimmedNonEmpty
     }
 
     private static func abortChatRun(gateway: GatewayNodeSession, run: ConsultRun) -> Task<Void, Never> {
@@ -867,7 +843,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     }
                     guard chatEvent.runId == runId else { continue }
                     if let eventSessionKey = chatEvent.sessionKey,
-                       !Self.matchesSessionKey(eventSessionKey, target.sessionKey)
+                       !OpenClawChatSessionKey.matchesIncludingDefaultMainAlias(eventSessionKey, target.sessionKey)
                     {
                         continue
                     }
@@ -920,16 +896,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private nonisolated static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
-        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incoming == current {
-            return true
-        }
-        return (incoming == "agent:main:main" && current == "main") ||
-            (incoming == "main" && current == "agent:main:main")
-    }
-
     private static func waitForAgentResult(
         gateway: GatewayNodeSession,
         target: OpenClawChatSessionTarget,
@@ -978,8 +944,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 throw NSError(domain: "TalkRealtimeWebRTC", code: 15, userInfo: [
                     NSLocalizedDescriptionKey: wait.stopReason ?? "OpenClaw realtime tool call aborted",
                 ])
-            case "timeout":
-                break
             default:
                 break
             }
@@ -1054,18 +1018,16 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.sendRealtimeEvent(["type": "response.create"])
     }
 
-    private static func encodeJSONString(_ value: Any) -> String? {
-        guard JSONSerialization.isValidJSONObject(value) else { return nil }
+    private static func encodeJSONString(_ value: [String: String]) -> String? {
         guard let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
-        return String(data: data, encoding: .utf8)
+        return String(bytes: data, encoding: .utf8)
     }
 
     private func sendRealtimeEvent(_ event: [String: Any]) {
         guard
             let channel = dataChannel,
             channel.readyState == .open,
-            let json = Self.encodeJSONString(event),
-            let data = json.data(using: .utf8)
+            let data = try? JSONSerialization.data(withJSONObject: event)
         else { return }
         channel.sendData(RTCDataBuffer(data: data, isBinary: false))
         if let type = event["type"] as? String {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toGenericTranscriptItem } from "../session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
@@ -24,6 +25,7 @@ const roots: string[] = [];
 
 afterEach(async () => {
   for (const root of roots.splice(0)) {
+    await closeOpenClawAgentDatabasesAsync(root);
     await fs.rm(root, { recursive: true, force: true });
   }
 });
@@ -181,6 +183,7 @@ describe("fork boundaries from imported Codex history", () => {
       const result = await forkCodexUpstreamSession(
         {
           targetKey,
+          assertCurrent: () => {},
           source: { ...history.target, entryId: history.users.at(-1)!.entryId },
           upstream: {
             catalogId: "codex",
@@ -193,12 +196,14 @@ describe("fork boundaries from imported Codex history", () => {
         {
           bindingStore,
           controlFactory: {
+            hasActiveWork: () => false,
+            disconnect: async () => {},
             forRequest: () => control,
-            forNode: () => {
+            forNode: async () => {
               throw new Error("Node source is outside this local fork fixture");
             },
-            forUpstream: () => control,
-            homesForAgent: () => [],
+            forUpstream: async () => control,
+            homesForAgent: async () => [],
           },
           harnessRuntimeId: "codex",
           resolveConfig: () => ({ session: { store: history.target.storePath } }),
@@ -208,11 +213,14 @@ describe("fork boundaries from imported Codex history", () => {
       const child = await createSession.mock.results[0]!.value;
       expect(result).toEqual({ status: "created", key: targetKey, editorText: "edit me" });
 
-      expect(forkThread).toHaveBeenCalledExactlyOnceWith({
-        threadId: history.thread.id,
-        beforeTurnId: "turn-2",
-        excludeTurns: true,
-      });
+      expect(forkThread).toHaveBeenCalledExactlyOnceWith(
+        {
+          threadId: history.thread.id,
+          beforeTurnId: "turn-2",
+          excludeTurns: true,
+        },
+        expect.any(Function),
+      );
       expect(child.entry.label).toBeUndefined();
       expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("label");
       expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("displayName");
@@ -256,15 +264,25 @@ describe("fork boundaries from imported Codex history", () => {
   });
 
   it.each([
-    { label: "message count", count: 105, text: "same question" },
+    { label: "message count", count: 105, text: "same question", omittedImage: false },
+    {
+      label: "message count with an earlier image",
+      count: 105,
+      text: "same question",
+      omittedImage: true,
+    },
     { label: "total UTF-8 bytes", count: 12, text: "🦞".repeat(16_000) },
   ])(
     "selects the original turn after the $label cap drops an identical-text prefix",
-    async ({ count, text }) => {
+    async ({ count, text, omittedImage }) => {
       // Repeated text makes ordinal misalignment select the wrong valid turn rather than reject.
-      const history = await importHistory(
-        Array.from({ length: count }, (_, index) => turn(`turn-${index}`, [text])),
-      );
+      const turns = Array.from({ length: count }, (_, index) => turn(`turn-${index}`, [text]));
+      if (omittedImage) {
+        turns[0]!.items[0]!.content = [
+          { type: "localImage", path: "/synthetic/omitted-image.png" },
+        ];
+      }
+      const history = await importHistory(turns);
       expect(history.imported.omittedMessages).toBeGreaterThan(0);
       expect(history.users.length).toBeLessThan(count);
 

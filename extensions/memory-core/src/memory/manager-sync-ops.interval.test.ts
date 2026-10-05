@@ -8,7 +8,7 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -19,7 +19,7 @@ type MemoryIndexEntry = {
   content?: string;
 };
 
-class IntervalSyncHarness extends MemoryManagerSyncOps {
+class IntervalSyncHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Interval harness does not acquire embedding providers");
   };
@@ -66,7 +66,7 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     }
   }
 
-  batchConfig(): ReturnType<MemoryManagerSyncOps["resolveBatchConfig"]> {
+  batchConfig(): ReturnType<MemorySyncTestHarness["resolveBatchConfig"]> {
     return this.resolveBatchConfig();
   }
 

@@ -12,6 +12,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
+import { createCanonicalAgentConfigFixture } from "../../../test-utils/config-roster.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -27,7 +28,7 @@ import { talkSessionHandlers } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
-  bootstrap: vi.fn(async () => undefined),
+  bootstrap: vi.fn(async () => "Agent context fixture."),
   createRelay: vi.fn(() => ({
     relaySessionId: "test-relay",
     provider: "test-voice",
@@ -42,7 +43,7 @@ vi.mock("../../../talk/provider-resolver.js", () => ({
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: mocks.bootstrap,
+  resolveRealtimeVoiceAgentContextInstructions: mocks.bootstrap,
 }));
 vi.mock("../relay/index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../relay/index.js")>()),
@@ -127,7 +128,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   createdCalls.length = 0;
   createBrowserSession.mockReset().mockResolvedValue(browserSession);
-  mocks.bootstrap.mockReset().mockResolvedValue(undefined);
+  mocks.bootstrap.mockReset().mockResolvedValue("Agent context fixture.");
   setActivePluginRegistry(createEmptyPluginRegistry());
   const provider = {
     id: "test-voice",
@@ -173,19 +174,29 @@ describe("Talk target preparation through Gateway authorization", () => {
     ).toBeTruthy();
   });
 
-  it.each<{ name: string; agents: NonNullable<OpenClawConfig["agents"]> }>([
-    { name: "sole agent", agents: { entries: { voice: {} }, ownership: "explicit" as const } },
+  it.each<{ name: string; cfg: OpenClawConfig }>([
+    {
+      name: "sole agent",
+      cfg: { agents: { entries: { voice: {} }, ownership: "explicit" } },
+    },
     {
       name: "system agent",
-      agents: {
-        entries: { primary: {}, voice: {} },
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "voice" } },
+      cfg: {
+        agents: {
+          entries: { primary: {}, voice: {} },
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "voice" } },
+        },
       },
     },
-    { name: "legacy default", agents: { entries: { primary: {}, voice: { default: true } } } },
-  ])("uses a valid $name default without talk.agentId", async ({ agents }) => {
-    config = { agents };
+    {
+      name: "migrated legacy default",
+      cfg: createCanonicalAgentConfigFixture({
+        agents: { entries: { primary: {}, voice: { default: true } } },
+      }).config,
+    },
+  ])("uses a valid $name default without authored talk.agentId", async ({ cfg }) => {
+    config = cfg;
     const respond = await dispatch("talk.client.create", createParams);
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
     expect(createBrowserSession).toHaveBeenCalledWith(
@@ -643,7 +654,8 @@ describe("Talk target preparation through Gateway authorization", () => {
     const started = createDeferredCore();
     mocks.bootstrap.mockImplementationOnce(async () => {
       started.resolve();
-      return await gate.promise;
+      await gate.promise;
+      return "Agent context fixture.";
     });
     const pending = dispatch("talk.client.create", createParams);
     await started.promise;

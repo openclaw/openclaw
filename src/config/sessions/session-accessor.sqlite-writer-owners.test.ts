@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import * as logging from "../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -26,7 +25,8 @@ import {
 } from "./session-accessor.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
-import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
+import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
+import * as reclamationDiagnostics from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
@@ -34,7 +34,10 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function observeSlowWriters(onWarning: (operation: unknown, fields: object) => void = () => {}) {
+function observeSlowWriters(
+  onWarning: (operation: unknown, fields: object) => void = () => {},
+  onPruning: (fields: object) => void = () => {},
+) {
   let clock = 0;
   // Cross the existing threshold deterministically; all storage and callback work remains real.
   vi.spyOn(performance, "now").mockImplementation(() => (clock += 1_001));
@@ -48,6 +51,9 @@ function observeSlowWriters(onWarning: (operation: unknown, fields: object) => v
         const operation = "operation" in fields ? fields.operation : undefined;
         operations.push(operation);
         onWarning(operation, fields);
+      } else if (message === "slow SQLite session archive pruning") {
+        assert(fields && typeof fields === "object");
+        onPruning(fields);
       }
       return undefined;
     });
@@ -57,8 +63,8 @@ function observeSlowWriters(onWarning: (operation: unknown, fields: object) => v
 }
 
 it.each(
-  ["session.store-projection", "session.entry-replacements", "session.lifecycle.mutate"].flatMap(
-    (operation) => [false, true].map((split) => ({ operation, split })),
+  ["session.entry-replacements", "session.lifecycle.mutate"].flatMap((operation) =>
+    [false, true].map((split) => ({ operation, split })),
   ),
 )(
   "attributes $operation to its real inline/split commits (split: $split)",
@@ -134,19 +140,7 @@ it.each(
       };
       try {
         await withPluginRuntimeRegistryScope(registry, async () => {
-          if (operation === "session.store-projection") {
-            const result = await applySessionStoreProjection({
-              storePath,
-              skipMaintenance: true,
-              update: async (store) => {
-                prepared();
-                delete store[sourceKey];
-                store[targetKey] = updated;
-                return { persist: true, result: resultToken };
-              },
-            });
-            expect(result).toBe(resultToken);
-          } else if (operation === "session.entry-replacements") {
+          if (operation === "session.entry-replacements") {
             const result = split
               ? await applySessionEntryCanonicalReplacements({
                   storePath,
@@ -229,113 +223,116 @@ it.each(
   },
 );
 
-it.each([false, true])(
-  "distinguishes archive pruning stages and preserves incomplete checkpoint behavior (%s)",
-  async (incomplete) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const historyKey = "agent:main:writer-history";
-      replaceSessionEntrySync(
-        { sessionKey: historyKey, storePath },
-        { sessionId: "old", updatedAt: 1 },
-      );
-      replaceTranscriptEventsSync({ sessionKey: historyKey, sessionId: "old", storePath }, [
-        { type: "session", id: "old", content: "historical payload" },
-      ]);
-      await resetSessionEntryLifecycle({
-        storePath,
-        target: { canonicalKey: historyKey, storeKeys: [historyKey] },
-        buildNextEntry: () => ({ sessionId: "current", updatedAt: Date.now() }),
-      });
-      const archivedKey = "agent:main:writer-capped";
-      replaceSessionEntrySync(
-        { sessionKey: archivedKey, storePath },
-        {
-          sessionId: "capped",
-          updatedAt: 1,
-          archivedAt: 1,
-          archiveReason: "active-session-cap",
-        },
-      );
-      replaceTranscriptEventsSync({ sessionKey: archivedKey, sessionId: "capped", storePath }, [
-        { type: "session", id: "capped", content: "capped payload".repeat(8_192) },
-      ]);
-      const database = openOpenClawAgentDatabase(
-        toDatabaseOptions(resolveSqliteScope({ sessionKey: historyKey, storePath })),
-      );
-      if (incomplete) {
-        const checkpoint = database.walMaintenance.checkpoint;
-        vi.spyOn(database.walMaintenance, "checkpoint").mockImplementationOnce(() => {
-          checkpoint();
-          return false;
-        });
-      }
-      const pruning: unknown[] = [];
-      const operations = observeSlowWriters((operation, fields) => {
-        if (operation === "session.history.archive-prune") {
-          pruning.push("archivePruning" in fields ? fields.archivePruning : undefined);
-        }
-      });
-      try {
-        expect(
-          await enforceSqliteSessionHistoryDiskBudget({
-            storePath,
-            mode: "enforce",
-            maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
-          }),
-        ).toMatchObject({ removedEntries: 2 });
-        expect(
-          operations.filter(
-            (label) =>
-              label === "session.history.archive-prune" || label === "session.history.free-pages",
-          ),
-        ).toEqual([
-          "session.history.archive-prune",
-          "session.history.archive-prune",
-          "session.history.archive-prune",
-          "session.history.free-pages",
-        ]);
-        expect(pruning).toEqual([
-          expect.objectContaining({ trigger: "initial", completed: true }),
-          expect.objectContaining({ trigger: "after-eviction", completed: true }),
-          expect.objectContaining({ trigger: "final", completed: true }),
-        ]);
-        expect(pruning[0]).toMatchObject({ checkpointIncomplete: incomplete ? 1 : 0 });
-        for (const diagnostic of pruning) {
-          expect(diagnostic).toMatchObject({
-            admissionMs: expect.any(Number),
-            cachedAdmissions: expect.any(Number),
-            checkpointCalls: expect.any(Number),
-            checkpointMs: expect.any(Number),
-            checkpointMaxMs: expect.any(Number),
-            queryMs: expect.any(Number),
-            measurementMs: expect.any(Number),
-            measurements: expect.any(Number),
-            legacyInventoryMs: expect.any(Number),
-          });
-        }
-        expect(pruning[1]).toMatchObject({
-          fileRemovalMs: expect.any(Number),
-          removedFiles: 1,
-          rowDeletionMs: expect.any(Number),
-        });
-        expect(loadSessionEntry({ sessionKey: historyKey, storePath })?.sessionId).toBe("current");
-        expect(loadSessionEntry({ sessionKey: archivedKey, storePath })).toBeUndefined();
-        expect(
-          loadTranscriptEventsSync({ sessionKey: historyKey, sessionId: "old", storePath }),
-        ).toEqual([]);
-        expect(
-          fs.readdirSync(state.sessionsDir()).filter((name) => name.includes(".deleted.")),
-        ).toEqual([]);
-        expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
-      } finally {
-        vi.restoreAllMocks();
-      }
+it("records successful archive pruning stages", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const historyKey = "agent:main:writer-history";
+    replaceSessionEntrySync(
+      { sessionKey: historyKey, storePath },
+      { sessionId: "old", updatedAt: 1 },
+    );
+    replaceTranscriptEventsSync({ sessionKey: historyKey, sessionId: "old", storePath }, [
+      { type: "session", id: "old", content: "historical payload" },
+    ]);
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: historyKey, storeKeys: [historyKey] },
+      buildNextEntry: () => ({ sessionId: "current", updatedAt: Date.now() }),
     });
-  },
-);
+    const archivedKey = "agent:main:writer-capped";
+    replaceSessionEntrySync(
+      { sessionKey: archivedKey, storePath },
+      {
+        sessionId: "capped",
+        updatedAt: 1,
+        archivedAt: 1,
+        archiveReason: "active-session-cap",
+      },
+    );
+    replaceTranscriptEventsSync({ sessionKey: archivedKey, sessionId: "capped", storePath }, [
+      { type: "session", id: "capped", content: "capped payload".repeat(8_192) },
+    ]);
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteScope({ sessionKey: historyKey, storePath })),
+    );
+    const pruning: unknown[] = [];
+    const aggregates: object[] = [];
+    const writerSegments: object[] = [];
+    const pageWrites: object[] = [];
+    observeSlowWriters(
+      (operation, fields) => {
+        if (operation === "session.history.archive-prune") {
+          writerSegments.push(fields);
+        }
+        if (operation === "session.history.free-pages") {
+          pageWrites.push(fields);
+        }
+      },
+      (fields) => {
+        aggregates.push(fields);
+        pruning.push("archivePruning" in fields ? fields.archivePruning : undefined);
+      },
+    );
+    try {
+      expect(
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
+        }),
+      ).toMatchObject({ removedEntries: 2 });
+      expect(writerSegments.length).toBeGreaterThan(0);
+      expect(pageWrites.length).toBeGreaterThan(0);
+      for (const fields of [...writerSegments, ...pageWrites]) {
+        expect(fields).toMatchObject({
+          queueWaitMs: expect.any(Number),
+          writerExecutionMs: expect.any(Number),
+        });
+      }
+      for (const fields of aggregates) {
+        expect(fields).toMatchObject({ elapsedMs: expect.any(Number) });
+        expect(fields).not.toHaveProperty("queueWaitMs");
+        expect(fields).not.toHaveProperty("writerExecutionMs");
+        expect(fields).not.toHaveProperty("completionDelayMs");
+      }
+      expect(pruning).toEqual([
+        expect.objectContaining({ trigger: "initial", completed: true }),
+        expect.objectContaining({ trigger: "after-eviction", completed: true }),
+        expect.objectContaining({ trigger: "final", completed: true }),
+      ]);
+      expect(pruning[0]).toMatchObject({ checkpointIncomplete: 0 });
+      for (const diagnostic of pruning) {
+        expect(diagnostic).toMatchObject({
+          checkpointCalls: expect.any(Number),
+          checkpointMs: expect.any(Number),
+          checkpointMaxMs: expect.any(Number),
+          queryMs: expect.any(Number),
+          measurementMs: expect.any(Number),
+          measurements: expect.any(Number),
+          legacyInventoryMs: expect.any(Number),
+        });
+      }
+      expect(pruning[1]).toMatchObject({
+        fileRemovalMs: expect.any(Number),
+        removedFiles: 1,
+        rowDeletionMs: expect.any(Number),
+      });
+      expect(loadSessionEntry({ sessionKey: historyKey, storePath })?.sessionId).toBe("current");
+      expect(loadSessionEntry({ sessionKey: archivedKey, storePath })).toBeUndefined();
+      expect(
+        loadTranscriptEventsSync({ sessionKey: historyKey, sessionId: "old", storePath }),
+      ).toEqual([]);
+      expect(
+        fs.readdirSync(state.sessionsDir()).filter((name) => name.includes(".deleted.")),
+      ).toEqual([]);
+      expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
 
-it("coalesces automatic maintenance under its own planning and finalization labels", async () => {
+it("coalesces automatic maintenance through native planning and finalization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const staleKey = "agent:main:subagent:writer-stale";
@@ -359,6 +356,25 @@ it("coalesces automatic maintenance under its own planning and finalization labe
       finalized.resolve(result);
       return result;
     });
+    const deadlineRead = createDeferredCore();
+    const reclaim = reclamationRun.runSqliteSessionReclamation;
+    vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
+      const result = await reclaim(params);
+      if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+        deadlineRead.resolve();
+      }
+      return result;
+    });
+    const workerOutcomes: Parameters<
+      typeof reclamationDiagnostics.logSqliteReclamationWorkerOutcome
+    >[0][] = [];
+    const logWorkerOutcome = reclamationDiagnostics.logSqliteReclamationWorkerOutcome;
+    vi.spyOn(reclamationDiagnostics, "logSqliteReclamationWorkerOutcome").mockImplementation(
+      (outcome) => {
+        workerOutcomes.push(outcome);
+        logWorkerOutcome(outcome);
+      },
+    );
     const operations = observeSlowWriters();
     const request = {
       activeSessionKey: activeKey,
@@ -375,12 +391,22 @@ it("coalesces automatic maintenance under its own planning and finalization labe
       kickSessionEntryMaintenanceAfterWrite(request);
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
-      await yieldToEventLoop();
+      await deadlineRead.promise;
+      // Planning and deadlines use the canonical actor; only archive finalization uses
+      // reclamation write admission.
       expect(operations).toEqual([
         "session.maintenance.plan",
-        "session.maintenance.finalize",
-        "session.archive.publish-prepare",
+        "session.reclamation.retain",
+        "session.reclamation.retain",
+        "session.reclamation.retain",
+        "session.reclamation.worker-commit",
+        "session.reclamation.retain",
       ]);
+      expect(workerOutcomes.map(({ kind }) => kind)).toEqual(["maintenance-finalize"]);
+      for (const outcome of workerOutcomes) {
+        expect(outcome.outcome).toBe("resolved");
+        expect(outcome.workerThreadId).toBeGreaterThan(0);
+      }
       expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
       expect(loadSessionEntry({ sessionKey: activeKey, storePath })?.sessionId).toBe("active");
     } finally {

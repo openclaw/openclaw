@@ -1,13 +1,18 @@
-/** Sanitizes replayed tool calls and provider-specific transcript structure. */
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
-import { hasNonEmptyString as replayToolCallNonEmptyString } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   normalizeOpenAIResponsesToolCallIds,
+} from "../../embedded-agent-helpers/openai.js";
+import {
+  mergeConsecutiveUserMessages,
+  shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
-} from "../../embedded-agent-helpers.js";
-import { mergeConsecutiveUserMessages } from "../../embedded-agent-helpers/turns.js";
+} from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
   sanitizeToolUseResultPairing,
@@ -22,35 +27,15 @@ import {
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
 import { createCompletedToolCallPredicate } from "../../tool-call-shared.js";
-import {
-  shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
-} from "../../transcript-policy.js";
-import type { TranscriptPolicy } from "../../transcript-policy.js";
-import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
 
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
 
-type ReplayToolCallBlock = {
-  type?: unknown;
-  id?: unknown;
-  name?: unknown;
-  input?: unknown;
-  arguments?: unknown;
-};
-
 type ReplayToolCallSanitizeReport = {
   messages: AgentMessage[];
   droppedAssistantMessages: number;
-};
-
-type AnthropicToolResultContentBlock = {
-  type?: unknown;
-  toolUseId?: unknown;
-  toolCallId?: unknown;
-  tool_use_id?: unknown;
-  tool_call_id?: unknown;
 };
 
 function isReplaySafeThinkingTurn(
@@ -60,33 +45,25 @@ function isReplaySafeThinkingTurn(
 ): boolean {
   const seenToolCallIds = new Set<string>();
   for (const block of content) {
-    if (!isReplayToolCallBlock(block)) {
+    if (!isRunnerToolCallBlock(block)) {
       continue;
     }
-    const replayBlock = block;
-    const toolCallId = typeof replayBlock.id === "string" ? replayBlock.id.trim() : "";
-    if (!hasToolCallInput(replayBlock) || !toolCallId || seenToolCallIds.has(toolCallId)) {
+    const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
+    if (!hasToolCallInput(block) || !toolCallId || seenToolCallIds.has(toolCallId)) {
       return false;
     }
     seenToolCallIds.add(toolCallId);
-    const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
+    const rawName = typeof block.name === "string" ? block.name : "";
     const resolvedName = resolveReplayToolCallName(
       rawName,
       toolCallId,
-      isCompleted(replayBlock) ? undefined : allowedToolNames,
+      isCompleted(block) ? undefined : allowedToolNames,
     );
-    if (!resolvedName || replayBlock.name !== resolvedName) {
+    if (!resolvedName || block.name !== resolvedName) {
       return false;
     }
   }
   return true;
-}
-
-function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  return isRunnerToolCallBlockType((block as { type?: unknown }).type);
 }
 
 function collectFollowingToolResults(
@@ -154,19 +131,15 @@ function sanitizeReplayToolCallInputs(
       changed = true;
       continue;
     }
-    if (typeof message !== "object" || message.role !== "assistant") {
-      out.push(message);
-      continue;
-    }
-    if (!Array.isArray(message.content)) {
-      out.push(message);
-      continue;
-    }
     if (
-      allowProviderOwnedThinkingReplay &&
-      message.content.some((block) => isThinkingLikeBlock(block)) &&
-      message.content.some((block) => isReplayToolCallBlock(block))
+      typeof message !== "object" ||
+      message.role !== "assistant" ||
+      !Array.isArray(message.content)
     ) {
+      out.push(message);
+      continue;
+    }
+    if (allowProviderOwnedThinkingReplay && isSignedThinkingReplayAssistantSpan(message)) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
       const followingToolResults = collectFollowingToolResults(messages, index);
       if (
@@ -195,57 +168,43 @@ function sanitizeReplayToolCallInputs(
     let messageChanged = false;
 
     for (const block of message.content) {
-      if (!isReplayToolCallBlock(block)) {
+      if (!isRunnerToolCallBlock(block)) {
         nextContent.push(block);
         continue;
       }
-      const replayBlock = block as ReplayToolCallBlock;
 
-      if (!hasToolCallInput(replayBlock) || !replayToolCallNonEmptyString(replayBlock.id)) {
-        changed = true;
+      if (!hasToolCallInput(block) || !hasNonEmptyString(block.id)) {
         messageChanged = true;
         continue;
       }
 
-      const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
+      const rawName = typeof block.name === "string" ? block.name : "";
       const resolvedName = resolveReplayToolCallName(
         rawName,
-        replayBlock.id,
-        isCompleted(replayBlock) ? undefined : allowedToolNames,
+        block.id,
+        isCompleted(block) ? undefined : allowedToolNames,
       );
       if (!resolvedName) {
-        changed = true;
         messageChanged = true;
         continue;
       }
 
-      if (replayBlock.name !== resolvedName) {
-        nextContent.push({ ...(block as object), name: resolvedName } as typeof block);
-        changed = true;
-        messageChanged = true;
-        continue;
-      }
-      nextContent.push(block);
+      messageChanged ||= block.name !== resolvedName;
+      nextContent.push(block.name === resolvedName ? block : { ...block, name: resolvedName });
     }
 
-    if (messageChanged) {
-      changed = true;
-      if (nextContent.length > 0) {
-        const nextMessage = replaceCompactionReplayOwnerContent(message, nextContent);
-        for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
-          priorToolCallIds.add(toolCall.id);
-        }
-        out.push(nextMessage);
-      } else {
-        droppedAssistantMessages += 1;
-      }
+    changed ||= messageChanged;
+    if (nextContent.length === 0 && messageChanged) {
+      droppedAssistantMessages += 1;
       continue;
     }
-
-    for (const toolCall of extractToolCallsFromAssistant(message)) {
+    const nextMessage = messageChanged
+      ? replaceCompactionReplayOwnerContent(message, nextContent)
+      : message;
+    for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
       priorToolCallIds.add(toolCall.id);
     }
-    out.push(message);
+    out.push(nextMessage);
   }
 
   return {
@@ -254,33 +213,8 @@ function sanitizeReplayToolCallInputs(
   };
 }
 
-function extractAnthropicReplayToolResultIds(block: AnthropicToolResultContentBlock): string[] {
-  const ids: string[] = [];
-  for (const value of [block.toolUseId, block.toolCallId, block.tool_use_id, block.tool_call_id]) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (!trimmed || ids.includes(trimmed)) {
-      continue;
-    }
-    ids.push(trimmed);
-  }
-  return ids;
-}
-
 function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined): boolean {
-  if (!message || typeof message !== "object" || message.role !== "assistant") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return (
-    content.some((block) => isThinkingLikeBlock(block)) &&
-    content.some((block) => isReplayToolCallBlock(block))
-  );
+  return assistantTurnHasReplayToolCall(message) && message.content.some(isThinkingLikeBlock);
 }
 
 function sanitizeAnthropicReplayToolResults(
@@ -299,11 +233,7 @@ function sanitizeAnthropicReplayToolResults(
       changed = true;
       continue;
     }
-    if (typeof message !== "object" || message.role !== "user") {
-      out.push(message);
-      continue;
-    }
-    if (!Array.isArray(message.content)) {
+    if (typeof message !== "object" || message.role !== "user" || !Array.isArray(message.content)) {
       out.push(message);
       continue;
     }
@@ -313,38 +243,29 @@ function sanitizeAnthropicReplayToolResults(
       disallowEmbeddedUserToolResultsForSignedThinkingReplay &&
       isSignedThinkingReplayAssistantSpan(previous);
     const validToolUseIds = new Set<string>();
-    if (previous && typeof previous === "object" && previous.role === "assistant") {
-      const previousContent = (previous as { content?: unknown }).content;
-      if (Array.isArray(previousContent)) {
-        for (const block of previousContent) {
-          if (!block || typeof block !== "object") {
-            continue;
-          }
-          const typedBlock = block as { type?: unknown; id?: unknown };
-          if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
-            continue;
-          }
-          const trimmedId = typedBlock.id.trim();
-          if (trimmedId) {
-            validToolUseIds.add(trimmedId);
-          }
+    if (assistantTurnHasReplayToolCall(previous)) {
+      for (const block of previous.content) {
+        if (isRunnerToolCallBlock(block) && hasNonEmptyString(block.id)) {
+          validToolUseIds.add(block.id.trim());
         }
       }
     }
 
     const nextContent = message.content.filter((block) => {
-      if (!block || typeof block !== "object") {
-        return true;
-      }
-      const typedBlock = block as AnthropicToolResultContentBlock;
-      if (typedBlock.type !== "toolResult" && typedBlock.type !== "tool") {
+      const typedBlock = asOptionalObjectRecord(block);
+      if (typedBlock?.type !== "toolResult" && typedBlock?.type !== "tool") {
         return true;
       }
       if (shouldStripEmbeddedToolResults) {
         changed = true;
         return false;
       }
-      const resultIds = extractAnthropicReplayToolResultIds(typedBlock);
+      const resultIds = normalizeUniqueTrimmedStringList([
+        typedBlock.toolUseId,
+        typedBlock.toolCallId,
+        typedBlock.tool_use_id,
+        typedBlock.tool_call_id,
+      ]);
       if (resultIds.length === 0) {
         changed = true;
         return false;
@@ -358,39 +279,35 @@ function sanitizeAnthropicReplayToolResults(
     }
 
     changed = true;
-    if (nextContent.length > 0) {
-      out.push({ ...message, content: nextContent });
-      continue;
-    }
-
     out.push({
       ...message,
-      content: [{ type: "text", text: "[tool results omitted]" }],
-    } as AgentMessage);
+      content:
+        nextContent.length > 0 ? nextContent : [{ type: "text", text: "[tool results omitted]" }],
+    });
   }
 
   return changed ? out : messages;
 }
 
-function assistantTurnHasReplayToolCall(message: AgentMessage): boolean {
+function assistantTurnHasReplayToolCall(
+  message: AgentMessage | undefined,
+): message is Extract<AgentMessage, { role: "assistant" }> {
   if (!message || typeof message !== "object" || message.role !== "assistant") {
     return false;
   }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((block) => isReplayToolCallBlock(block));
+  return Array.isArray(message.content) && message.content.some(isRunnerToolCallBlock);
 }
 
 function stripTrailingAssistantPrefillTurns(messages: AgentMessage[]): AgentMessage[] {
   let end = messages.length;
   while (end > 0) {
     const message = messages[end - 1];
-    if (!message || typeof message !== "object" || message.role !== "assistant") {
-      break;
-    }
-    if (assistantTurnHasReplayToolCall(message)) {
+    if (
+      !message ||
+      typeof message !== "object" ||
+      message.role !== "assistant" ||
+      assistantTurnHasReplayToolCall(message)
+    ) {
       break;
     }
     end -= 1;
@@ -404,7 +321,6 @@ type ReplayToolCallIdSanitizerDecision = {
   isOpenAIResponsesApi: boolean;
 };
 
-/** Returns whether replayed tool-call ids should be sanitized for non-Responses providers. */
 export function shouldApplyReplayToolCallIdSanitizer(
   params: ReplayToolCallIdSanitizerDecision,
 ): params is ReplayToolCallIdSanitizerDecision & { toolCallIdMode: ToolCallIdMode } {
@@ -413,7 +329,6 @@ export function shouldApplyReplayToolCallIdSanitizer(
   );
 }
 
-/** Rewrites replayed tool-call ids into provider-safe ids and optionally repairs result pairing. */
 export function sanitizeReplayToolCallIdsForStream(params: {
   messages: AgentMessage[];
   mode: ToolCallIdMode;
@@ -434,18 +349,11 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   });
 }
 
-/** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
   return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
 }
 
-/**
- * Sanitizes malformed replay tool calls before provider submission. The wrapper
- * drops invalid assistant tool calls, repairs adjacent tool results when needed,
- * strips trailing assistant prefill turns for strict providers, and revalidates
- * Anthropic/Gemini transcripts after mutations.
- */
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -464,7 +372,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
-    const modelApi = (model as { api?: unknown })?.api as string | null | undefined;
+    const modelApi = model.api;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi,
       provider,
@@ -475,14 +383,14 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       },
     });
     const sanitized = sanitizeReplayToolCallInputs(
-      messages as AgentMessage[],
+      messages,
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
     );
     const isOpenAIResponsesApi =
-      (model as { api?: unknown }).api === "openai-responses" ||
-      (model as { api?: unknown }).api === "openai-chatgpt-responses" ||
-      (model as { api?: unknown }).api === "azure-openai-responses";
+      modelApi === "openai-responses" ||
+      modelApi === "openai-chatgpt-responses" ||
+      modelApi === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = isOpenAIResponsesApi
       ? sanitizeToolUseResultPairingForModel(sanitized.messages, true)

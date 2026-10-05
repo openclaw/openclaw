@@ -5,10 +5,10 @@ import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-re
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveSessionLifecycleTimestamps,
   type SessionFreshness,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -21,10 +21,12 @@ import {
 } from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import {
+  mergeDeliveryContext,
+  normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
@@ -33,7 +35,7 @@ import {
   requestGroupMatchesTrusted,
   resolveTrustedGroupMetadata,
   type TrustedGroupMetadata,
-} from "./agent-task-tracking.js";
+} from "./agent-subagent-registration.js";
 
 export type AgentSessionPatchBuild = {
   patch: Partial<SessionEntry>;
@@ -65,9 +67,9 @@ type AgentSessionReuseInput = {
 };
 
 /** Re-evaluate the entry from each read; callers retain admission and concurrent-rotation fencing. */
-export function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
+export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
   const lifecycleTimestamps = params.freshEntry
-    ? resolveSessionLifecycleTimestamps({
+    ? await resolveSessionLifecycleTimestampsAsync({
         entry: params.freshEntry,
         storePath: params.storePath,
         agentId: params.sessionAgentId,
@@ -123,6 +125,7 @@ export function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
     (!canReuseSession && !usableRequestedSessionId) ||
     Boolean(usableRequestedSessionId && params.freshEntry?.sessionId !== usableRequestedSessionId);
   return {
+    lifecycleTimestamps,
     freshness,
     recoverableTerminalSession,
     canReuseSession,
@@ -132,7 +135,7 @@ export function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
   };
 }
 
-export function buildAgentSessionPatch(
+export async function buildAgentSessionPatch(
   params: AgentSessionReuseInput & {
     initialEntry: SessionEntry | undefined;
     normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
@@ -143,7 +146,8 @@ export function buildAgentSessionPatch(
     fallbackSessionId: string;
     touchInteraction: boolean;
   },
-): AgentSessionPatchBuild {
+): Promise<AgentSessionPatchBuild> {
+  const reuse = await evaluateAgentSessionReuse(params);
   const storedSpawnedBy = normalizeOptionalString(params.freshEntry?.spawnedBy);
   const freshSpawnedBy = storedSpawnedBy
     ? resolveSessionStoreKey({
@@ -231,7 +235,6 @@ export function buildAgentSessionPatch(
     params.freshEntry?.sessionId &&
     params.freshEntry.sessionId !== params.initialEntry.sessionId,
   );
-  const reuse = evaluateAgentSessionReuse(params);
   const freshSessionId = reuse.sessionId ?? params.fallbackSessionId;
   const freshRotatedSessionId = Boolean(
     params.freshEntry?.sessionId && params.freshEntry.sessionId !== freshSessionId,
@@ -253,7 +256,11 @@ export function buildAgentSessionPatch(
     updatedAt: params.now,
     ...(reuse.isNewSession && !freshSessionRotatedSinceLoad
       ? { sessionStartedAt: params.now }
-      : {}),
+      : params.freshEntry?.sessionStartedAt === undefined &&
+          patchSessionId === params.freshEntry?.sessionId &&
+          reuse.lifecycleTimestamps?.sessionStartedAt !== undefined
+        ? { sessionStartedAt: reuse.lifecycleTimestamps.sessionStartedAt }
+        : {}),
     ...(params.touchInteraction
       ? {
           lastInteractionAt: params.now,

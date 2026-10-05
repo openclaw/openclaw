@@ -17,8 +17,8 @@ import {
   withSqliteSessionImportStage,
   type SqliteSessionImportStage,
 } from "./session-accessor.sqlite-import-stage.js";
+import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
-  formatSqliteSessionReferenceForScope,
   getSessionKysely,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -31,6 +31,7 @@ import {
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 import type { SessionEntry } from "./types.js";
 
 /** Internal doctor/migration import target for one legacy session row. */
@@ -43,8 +44,9 @@ type SqliteSessionImportRowsParams = Pick<
   repairLegacyTranscript?: boolean;
   /** Doctor-discovered history cannot replace the current logical session or window owner. */
   historicalOnly?: boolean;
+  /** Unverified recovery history may only bootstrap an empty destination. */
+  requireEmptyStore?: boolean;
   preserveExactStoredKey?: boolean;
-  skipIfExists?: boolean;
   entry: SessionEntry;
   legacyAcpMigrationSource?: LegacyAcpMigrationSource;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
@@ -55,7 +57,6 @@ type SqliteSessionImportRowsParams = Pick<
 type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
-  skippedExisting?: true;
   recovery?: { complete: boolean; repaired: boolean; events: number };
   transcriptEvents: number;
 };
@@ -83,14 +84,6 @@ function importSqliteSessionRowsInTransaction(
   const currentEntry = readExactSessionEntryRowForCanonicalRepair(database, resolved.sessionKey, {
     allowMalformedRowRepair: params.allowMalformedRowRepair === true,
   })?.entry;
-  if (params.skipIfExists === true && currentEntry) {
-    return {
-      sessionId: params.entry.sessionId,
-      sessionKey: resolved.sessionKey,
-      skippedExisting: true,
-      transcriptEvents,
-    };
-  }
   assertSessionTranscriptHot(database.db, params.entry.sessionId);
   const preservedHarnessId =
     params.entry.agentHarnessId === undefined &&
@@ -103,10 +96,7 @@ function importSqliteSessionRowsInTransaction(
   const importedEntry = {
     ...params.entry,
     ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
-    sessionFile: formatSqliteSessionReferenceForScope({
-      ...resolved,
-      sessionId: params.entry.sessionId,
-    }),
+    sessionFile: resolved.sessionKey,
   };
   let preserveHistoricalNode = false;
   if (params.historicalOnly) {
@@ -135,6 +125,7 @@ function importSqliteSessionRowsInTransaction(
   }
   // Historical generations append under their existing node without changing its current pointer.
   if (!preserveHistoricalNode) {
+    invalidateSessionEntryMaintenanceAgeFact(database.db);
     writeSessionEntry(database, resolved.sessionKey, importedEntry, {
       allowStoredAliases: true,
       previousEntry: currentEntry ?? null,
@@ -155,7 +146,7 @@ function importSqliteSessionRowsInTransaction(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", params.entry.sessionId),
     )) {
       stage.addSeen(row.event_json);
@@ -168,7 +159,7 @@ function importSqliteSessionRowsInTransaction(
     );
     // Doctor imports run outside gateway requests and must finish with a complete projection.
     reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
-    publishSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database, { sessionKey: resolved.sessionKey });
   }
   if (params.transcriptMtimeMs !== undefined) {
     advanceTranscriptMutationAtInTransaction(
@@ -203,6 +194,7 @@ export async function importSqliteSessionRowsBatch(
     return [];
   }
   const prepared = params.map(resolveSqliteSessionImport);
+  const requireEmptyStore = params.some((row) => row.requireEmptyStore);
   const resolved = prepared[0]!.resolved;
   const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
   if (
@@ -242,8 +234,22 @@ export async function importSqliteSessionRowsBatch(
           importParams.beforePersistentApply?.();
         }
         return runOpenClawAgentWriteTransaction(
-          (database) =>
-            prepared.map((row, source) =>
+          (database) => {
+            if (
+              requireEmptyStore &&
+              executeSqliteQueryTakeFirstSync(
+                database.db,
+                getSessionKysely(database.db)
+                  .selectFrom("session_nodes")
+                  .select("session_key")
+                  .limit(1),
+              )
+            ) {
+              throw new Error(
+                "Session recovery history cannot be verified; SQLite destination is not empty",
+              );
+            }
+            return prepared.map((row, source) =>
               importSqliteSessionRowsInTransaction(
                 database,
                 row,
@@ -251,8 +257,10 @@ export async function importSqliteSessionRowsBatch(
                 source,
                 repairs.get(source),
               ),
-            ),
+            );
+          },
           toDatabaseOptions(resolved),
+          { operationLabel: "session.import.batch" },
         );
       }),
     "session.import.batch",

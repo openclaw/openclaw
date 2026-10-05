@@ -1,20 +1,15 @@
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
-import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
-import {
-  createContextEngineLogicalTurnLease,
-  selectContextEngineForTranscriptHost,
-} from "../harness/context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
+import type { FailoverReason } from "../failover/signal.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -30,18 +25,15 @@ import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { createAttemptCarryover } from "./run/attempt-result.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
+import { admitEmbeddedContextEngine } from "./run/context-engine-admission.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { createEmbeddedRunFailoverRetryController } from "./run/failover-retry-controller.js";
 import { buildErrorAgentMeta, resolveMaxRunRetryIterations } from "./run/helpers.js";
-import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
-import {
-  DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
-  DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-} from "./run/incomplete-turn-recovery.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
+import { createProviderReviewRun } from "./run/provider-review-run.js";
 import {
   beginRunAttempt,
   createRunRetryBudget,
@@ -68,7 +60,7 @@ export async function runPreparedEmbeddedLoop(
   refresh: EmbeddedPluginRuntimeRefresh,
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
-  let { runParams: params, provider, modelId } = input;
+  let { runParams: params, provider, modelId, preReplyGeneration } = input;
   const {
     agentDir,
     workspaceDir: resolvedWorkspace,
@@ -89,6 +81,7 @@ export async function runPreparedEmbeddedLoop(
     "runtime",
     () =>
       prepareEmbeddedRunRuntime({
+        assertCurrent: input.laneController.throwIfAborted,
         runParams: params,
         sessionAdmission: input.sessionAdmission,
         provider,
@@ -97,7 +90,12 @@ export async function runPreparedEmbeddedLoop(
         workspaceDir: resolvedWorkspace,
         globalLane,
         hookRunner,
-        hookContext: hookCtx,
+        hookContext: preReplyGeneration?.assertCurrent
+          ? withClaimingHookAdmission(
+              { ...hookCtx },
+              { assertCurrent: preReplyGeneration?.assertCurrent },
+            )
+          : hookCtx,
         markStartupStage: (stage) => startupStages.mark(stage),
         notifyExecutionPhase,
         fallbackConfigured,
@@ -105,15 +103,15 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
-  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
-  const abortSignal = params.abortSignal;
+  const abortSignal = input.laneController.abortSignal;
+  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext, abortSignal };
   const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     preparedRuntime.admittedRunContext,
     abortSignal,
   );
-  // Admission is resolved once before the retry loop. Carry that exact object through every
-  // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
+  // Admission and cancellation travel together: recovery must observe queue expiry
+  // after the physical attempt closes, even when the caller signal remains live.
   const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   ({ provider, modelId } = preparedRuntime);
   const {
@@ -126,29 +124,16 @@ export async function runPreparedEmbeddedLoop(
     maybeRefreshRuntimeAuthForAuthError,
     getApiKeyInfo,
   } = preparedRuntime;
-  let {
-    agentHarness,
-    pluginHarnessOwnsTransport,
-    effectiveModel,
-    outerContextTokenMeta,
-    thinkLevel,
-    lastProfileId,
-  } = preparedRuntime.snapshot();
-  const refreshPreparedRuntimeSnapshot = () => {
-    ({
-      agentHarness,
-      pluginHarnessOwnsTransport,
-      effectiveModel,
-      outerContextTokenMeta,
-      thinkLevel,
-      lastProfileId,
-    } = preparedRuntime.snapshot());
-  };
+  const initialHarness = preparedRuntime.snapshot().agentHarness;
   const traceAttempts: TraceAttempt[] = [];
+  // Same-model retry diagnostics inform exhaustion, not model-routing authority.
   const resolveRuntimeFallbackReason = (): string | null =>
     traceAttempts.findLast(
       (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
-    )?.reason ?? lastRetryFailoverReason;
+    )?.reason ??
+    (params.modelRoutingProvenance?.stage === "fallback"
+      ? (params.modelRoutingProvenance.fallbackReason ?? null)
+      : null);
   const { sessionKey, config, agentId } = params;
   const { sessionAgentId } = resolveSessionAgentIds({ sessionKey, config, agentId });
   const strictAgenticActive = isStrictAgenticExecutionContractActive({
@@ -171,13 +156,8 @@ export async function runPreparedEmbeddedLoop(
   let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
   let overloadProfileRotations = 0;
   const terminalRetryState = createEmbeddedRunTerminalRetryState();
-  // Cost-runaway breaker for #76293. State lives at the run-loop level
-  // on purpose so it survives across attempt boundaries and across
-  // profile/auth retries within this embedded run (a wrapper-local
-  // counter would reset on every iteration). The helper is pure and
-  // unit-tested in run/idle-timeout-breaker.test.ts; the run loop just
-  // feeds it the outcome of each attempt.
-  const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
+  // Keep the idle-timeout cost breaker across attempts and auth-profile retries.
+  const idleTimeoutBreakerState = { consecutiveIdleTimeoutsBeforeOutput: 0 };
   // Post-compaction loop guard for #77474. Armed at each compaction-success
   // site below; observed from the live tool-outcome path so it can abort
   // while the post-compaction prompt is still running.
@@ -208,11 +188,6 @@ export async function runPreparedEmbeddedLoop(
   };
   let lastRetryFailoverReason: FailoverReason | null = null;
   let codexAppServerRecoveryRetries = 0;
-  // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
-  // end a turn with stopReason="error" + zero output tokens, producing no
-  // user-visible text. This is an orthogonal, model-agnostic resubmission
-  // for errored turns; stopReason="stop" empty zero-token turns use the
-  // visible-answer retry instruction instead.
   let emptyErrorRetries = 0;
   const sessionPromptState = await createEmbeddedRunSessionPromptState({
     runParams: params,
@@ -221,6 +196,12 @@ export async function runPreparedEmbeddedLoop(
     lifecycleGeneration,
     onInterrupt: (reason) => input.laneController.laneTaskAbortController.abort(reason),
   });
+  const providerReview = createProviderReviewRun({
+    run: admittedRunInput,
+    runtime: preparedRuntime,
+    session: sessionPromptState,
+    assertCurrent: assertAdmittedActive,
+  });
   input.onInitialWriterPrepared(sessionPromptState);
   const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
   const durableCompactionAccounting =
@@ -228,7 +209,7 @@ export async function runPreparedEmbeddedLoop(
     !(params.sessionManager && !params.sessionManager.getSessionTarget());
   const permissionChanges = createEmbeddedRunPermissionChanges(params);
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { ...params, abortSignal: input.laneController.abortSignal },
+    runParams: params,
     provider,
     modelId,
     globalLane,
@@ -242,41 +223,12 @@ export async function runPreparedEmbeddedLoop(
     getApiKeyInfo,
     advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
   });
-  const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
-  const contextEngineLogicalTurnLease =
-    params.contextEngineLogicalTurnLease ??
-    (await measureEmbeddedAgentPreparation(
-      "context-engine",
-      () =>
-        createContextEngineLogicalTurnLease({
-          identity: params,
-          config: params.config,
-          agentDir,
-          workspaceDir: resolvedWorkspace,
-        }),
-      { config: params.config },
-    ));
-  selectContextEngineForTranscriptHost({
-    lease: contextEngineLogicalTurnLease,
-    host: {
-      id: `agent-harness:${agentHarness.id}`,
-      label: `agent harness "${agentHarness.id}"`,
-      capabilities: agentHarness.contextEngineHostCapabilities ?? [],
-    },
-    operation: "agent-run",
-    recorder: params.userTurnTranscriptRecorder,
-  });
-  await drainPendingContextEngineTurnsBeforeRun({
-    admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-    isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
-    lease: contextEngineLogicalTurnLease,
-    recorder: params.userTurnTranscriptRecorder,
-    sessionTarget: params.sessionTarget,
-  });
-  const contextEngine = contextEngineLogicalTurnLease.begin().engine;
+  const { contextEngine, contextEngineLogicalTurnLease, ownsContextEngineLogicalTurnLease } =
+    await admitEmbeddedContextEngine(admittedRunInput, initialHarness);
   startupStages.mark("context-engine");
   notifyExecutionPhase("context_engine", { provider, model: modelId });
   try {
+    await providerReview.admit();
     const compactionRuntime = createEmbeddedRunCompactionRuntime({
       runParams: params,
       contextEngine,
@@ -294,7 +246,16 @@ export async function runPreparedEmbeddedLoop(
         throw new Error("embedded run requires an active admitted run");
       }
       assertAdmittedActive();
-      refreshPreparedRuntimeSnapshot();
+      providerReview.beginAttempt();
+      const {
+        agentHarness,
+        pluginHarnessOwnsTransport,
+        effectiveModel,
+        outerContextTokenMeta,
+        lastProfileId,
+        thinkLevel: initialThinkLevel,
+      } = preparedRuntime.snapshot();
+      let thinkLevel = initialThinkLevel;
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
           `Exceeded retry limit after ${runRetryBudget.attemptsDispatched} attempts ` +
@@ -309,27 +270,33 @@ export async function runPreparedEmbeddedLoop(
           fallbackConfigured,
           failoverReason: lastRetryFailoverReason,
         });
-        return handleRetryLimitExhaustion({
-          message,
-          decision: retryLimitDecision,
-          provider,
-          model: modelId,
-          profileId: lastProfileId,
-          durationMs: Date.now() - started,
-          agentMeta: buildErrorAgentMeta({
-            sessionId: sessionPromptState.sessionId,
-            sessionFile: sessionPromptState.sessionFile,
-            ...(attemptCarryover.modelAttempt ?? { provider, model: model.id }),
-            ...outerContextTokenMeta,
-            usageAccumulator,
-            lastRunPromptUsage,
+        return providerReview.finish(
+          handleRetryLimitExhaustion({
+            message,
+            decision: retryLimitDecision,
+            provider,
+            model: modelId,
+            profileId: lastProfileId,
+            durationMs: Date.now() - started,
+            agentMeta: buildErrorAgentMeta({
+              sessionId: sessionPromptState.sessionId,
+              sessionFile: sessionPromptState.sessionFile,
+              ...(attemptCarryover.modelAttempt ?? { provider, model: model.id }),
+              ...outerContextTokenMeta,
+              usageAccumulator,
+              lastRunPromptUsage,
+            }),
+            replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+            livenessState: "blocked",
           }),
-          replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
-          livenessState: "blocked",
-        });
+        );
       }
       params.assistantErrorTranscript?.clear();
       beginRunAttempt(runRetryBudget);
+      // Attempt authority takes over before recovery may adopt a successor.
+      preReplyGeneration?.assertCurrent();
+      preReplyGeneration?.release();
+      preReplyGeneration = undefined;
       params.onAttemptStart?.();
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
@@ -394,6 +361,7 @@ export async function runPreparedEmbeddedLoop(
         );
       } catch (error) {
         acceptsRequestBudget = false;
+        providerReview.failure(error);
         const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
         if (!retryTrace) {
           throw error;
@@ -406,9 +374,8 @@ export async function runPreparedEmbeddedLoop(
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
-      failoverRetryController.setTransientRetryBudget(
-        dispatchedAttempt.rawAttempt.providerRetryMaxRetries,
-      );
+      const refusal = await providerReview.settle(dispatchedAttempt.rawAttempt);
+      failoverRetryController.observeAttempt(dispatchedAttempt.rawAttempt);
       attemptCarryover.apply(refresh.applyDeliveryState(dispatchedAttempt.rawAttempt));
       const normalization = {
         runInput: admittedRunInput,
@@ -433,23 +400,19 @@ export async function runPreparedEmbeddedLoop(
         turnTaintState.isTainted,
       );
       if (continuation) {
-        return continuation;
+        return providerReview.finish(continuation);
       }
       if (normalizedAttempt.action === "complete") {
-        return normalizedAttempt.result;
-      }
-      if (normalizedAttempt.action === "retry") {
-        bootstrapPromptWarningSignaturesSeen =
-          normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
-        lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
-        accumulatedReplayState = normalizedAttempt.replayState;
-        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
-        continue;
+        return providerReview.finish(normalizedAttempt.result);
       }
       bootstrapPromptWarningSignaturesSeen = normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
       lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
       accumulatedReplayState = normalizedAttempt.replayState;
-      if (permissionChanges.prepareRestart()) {
+      if (normalizedAttempt.action === "retry") {
+        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
+        continue;
+      }
+      if (refusal?.category !== "misalignment" && permissionChanges.prepareRestart()) {
         input.laneController.throwIfAborted();
         sessionPromptState.continueFromCurrentTranscript();
         // Operator-directed continuation is not a failed-model retry. The old
@@ -507,10 +470,9 @@ export async function runPreparedEmbeddedLoop(
         sessionAgentId,
       });
       if (recovery.action === "complete") {
-        return recovery.result;
+        return providerReview.finish(recovery.result);
       }
       if (recovery.action === "retry") {
-        thinkLevel = recovery.thinkLevel;
         authRetryPending = recovery.authRetryPending;
         codexAppServerRecoveryRetries = recovery.codexAppServerRecoveryRetries;
         lastRetryFailoverReason = recovery.lastRetryFailoverReason;
@@ -620,6 +582,7 @@ export async function runPreparedEmbeddedLoop(
         finalAssistantVisibleText,
         finalAssistantRawText,
         payloadsWithToolMedia,
+        replyDeliveryState,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         attemptToolSummary,
         failureSignal,
@@ -635,7 +598,7 @@ export async function runPreparedEmbeddedLoop(
         startedAtMs: started,
       });
       if (terminalTimeoutResult) {
-        return terminalTimeoutResult;
+        return providerReview.finish(terminalTimeoutResult);
       }
 
       const terminalAuthPlan = preparedRuntime.snapshot().activePreparedAuthPlan;
@@ -653,6 +616,7 @@ export async function runPreparedEmbeddedLoop(
         executionContract,
         terminalState: resolvedTerminalState,
         payloadsWithToolMedia,
+        replyDeliveryState,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         finalAssistantVisibleText,
         finalAssistantRawText,
@@ -660,17 +624,9 @@ export async function runPreparedEmbeddedLoop(
         attemptToolSummary,
         failureSignal,
         terminalToolFailure,
-        maxReasoningOnlyRetryAttempts: DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-        maxEmptyResponseRetryAttempts: DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
         attemptCompactionCount: terminalAttemptCompactionCount,
         replayState: accumulatedReplayState,
-        activePromptPersisted: sessionPromptState.activePrompt.persisted,
-        activateInternalPrompt: sessionPromptState.activateInternalPrompt,
-        activateCompactionContinuation: sessionPromptState.activateCompactionContinuation,
-        clearCompactionContinuation: sessionPromptState.clearCompactionContinuation,
-        setSuppressNextUserMessagePersistence: (value) => {
-          sessionPromptState.suppressNextUserMessagePersistence = value;
-        },
+        sessionPromptState,
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
         readTerminalToolPresentation: () => terminalToolPresentationText,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
@@ -694,15 +650,13 @@ export async function runPreparedEmbeddedLoop(
         pluginHarnessOwnsAuthBootstrap,
         reportedModelRef,
         traceAttempts,
-        traceAttemptUsesFallback: (traceAttempt) =>
-          traceAttempt.result === "rotate_profile" || traceAttempt.result === "fallback_model",
         thinkLevel,
         contextRecoveryState,
       });
       if (terminalResolution.action === "retry") {
         continue;
       }
-      return terminalResolution.result;
+      return providerReview.finish(terminalResolution.result);
     }
   } finally {
     // Successful registration already cleared the marker; every earlier exit

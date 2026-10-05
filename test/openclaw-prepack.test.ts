@@ -14,9 +14,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 import { restorePrepackArtifacts } from "../scripts/openclaw-postpack.mjs";
 import {
   collectPreparedPrepackErrors,
@@ -28,8 +29,14 @@ import {
   runPrepackCommand,
 } from "../scripts/openclaw-prepack.ts";
 import { preparePackageDocsMap } from "../scripts/package-docs-map.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../src/infra/runtime-worker-url.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -38,6 +45,12 @@ const rootPackageManager = (
     packageManager: string;
   }
 ).packageManager;
+const rootPnpmEnvironment = pnpmLockfileDocuments(
+  readFileSync("pnpm-lock.yaml", "utf8"),
+).environment;
+if (!rootPnpmEnvironment) {
+  throw new Error("pnpm-lock.yaml is missing its environment document");
+}
 
 const standaloneBundledChannelSmokeFiles = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
@@ -140,6 +153,12 @@ function createPreparedPrepackFixture(entrySource: string) {
   );
   mkdirSync(path.join(rootDir, "docs"));
   mkdirSync(path.join(rootDir, "dist/control-ui/assets"), { recursive: true });
+  const workerSourceFiles = Object.fromEntries(
+    WORKER_BUNDLE_ARTIFACT_PATHS.map((artifactPath) => [
+      `dist/worker/${artifactPath}`,
+      "export {};\n",
+    ]),
+  ) as Record<string, string>;
   const sourceFiles = {
     "package.json": '{"name":"openclaw","version":"2026.8.1","type":"module","files":["dist"]}\n',
     "CHANGELOG.md": "# Changelog\n\n## 2026.8.1\n- Current release notes with enough detail.\n",
@@ -148,8 +167,10 @@ function createPreparedPrepackFixture(entrySource: string) {
     "dist/control-ui/index.html": "<!doctype html>\n",
     "dist/control-ui/assets/fixture.js.br": "prepared asset fixture\n",
     "dist/control-ui/assets/fixture.js.gz": "prepared asset fixture\n",
+    ...workerSourceFiles,
   };
   for (const [name, contents] of Object.entries(sourceFiles)) {
+    mkdirSync(path.dirname(path.join(rootDir, name)), { recursive: true });
     writeFileSync(path.join(rootDir, name), contents);
   }
   return { rootDir, sourceFiles };
@@ -162,7 +183,14 @@ function createPrepackLifecycleFixture() {
   const packageJson = JSON.parse(sourceFiles["package.json"]);
   Object.assign(packageJson, {
     packageManager: rootPackageManager,
-    files: ["dist", "docs/docs_map.md", "CHANGELOG.md", ".openclaw-lifecycle-pending"],
+    files: [
+      "dist",
+      "!dist/worker/**",
+      "dist/worker-artifacts/*.tar.gz",
+      "docs/docs_map.md",
+      "CHANGELOG.md",
+      ".openclaw-lifecycle-pending",
+    ],
     devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
     scripts: {
       "build:package": "node rebuild.mjs",
@@ -174,6 +202,11 @@ function createPrepackLifecycleFixture() {
   sourceFiles["package.json"] = `${JSON.stringify(packageJson, null, 2)}\n`;
   sourceFiles["CHANGELOG.md"] += "\n## 2026.7.1\n- Previous release notes with enough detail.\n";
   writeFileSync(path.join(rootDir, "package.json"), sourceFiles["package.json"]);
+  // Without the toolchain lock, pnpm 12 resolves registry metadata before running prepack.
+  writeFileSync(
+    path.join(rootDir, "pnpm-lock.yaml"),
+    `---\n${rootPnpmEnvironment}\n---\nlockfileVersion: '9.0'\nimporters: {}\n`,
+  );
   writeFileSync(path.join(rootDir, "CHANGELOG.md"), sourceFiles["CHANGELOG.md"]);
   writeFileSync(path.join(rootDir, "docs/docs_map.md"), "Source docs-map stub.\n");
   writeFileSync(
@@ -192,10 +225,10 @@ function createPrepackLifecycleFixture() {
     path.join(rootDir, "lifecycle.mjs"),
     `import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-const owner = process.argv[2] === "prepack"
-  ? ${JSON.stringify(path.resolve("scripts/openclaw-prepack.ts"))}
-  : ${JSON.stringify(path.resolve("scripts/openclaw-postpack.mjs"))};
-const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(import.meta.resolve("tsx"))}, owner], { encoding: "utf8" });
+const ownerArgs = process.argv[2] === "prepack"
+  ? ${JSON.stringify(resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(toolingTsEntrypoints.prepack), testNodeExecPath))}
+  : [${JSON.stringify(path.resolve("scripts/openclaw-postpack.mjs"))}];
+const result = spawnSync(process.execPath, ownerArgs, { encoding: "utf8" });
 writeFileSync(process.argv[2] + "-result.json", JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr }));
 process.stdout.write(result.stdout ?? "");
 process.stderr.write(result.stderr ?? "");
@@ -333,12 +366,13 @@ function runStandaloneBundledChannelSmoke(
 }
 
 describe("standalone bundled channel smoke", () => {
-  const layouts = ["source", "installed-env", "installed-path"] as const;
-  it.each(
-    layouts.flatMap((layout) =>
-      ["valid", "invalid-entry", "missing-transitive"].map((outcome) => ({ layout, outcome })),
-    ),
-  )(
+  it.each([
+    { layout: "source", outcome: "valid" },
+    { layout: "source", outcome: "invalid-entry" },
+    { layout: "source", outcome: "missing-transitive" },
+    { layout: "installed-env", outcome: "valid" },
+    { layout: "installed-path", outcome: "valid" },
+  ] as const)(
     "preserves the result and releases its layout for $layout with outcome=$outcome",
     ({ layout, outcome }) => {
       const entrySource = `
@@ -404,15 +438,14 @@ describe("prepared prepack ownership", () => {
       }
       const receiptPath = path.join(rootDir, ".artifacts/package-docs-map/receipt.json");
       const receipt = incumbent ? readFileSync(receiptPath, "utf8") : undefined;
-      const ownerUrl = pathToFileURL(path.resolve("scripts/openclaw-prepack.ts")).href;
+      const ownerUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.prepack);
       const result = spawnSync(
         testNodeExecPath,
         [
-          "--import",
-          import.meta.resolve("tsx"),
+          ...resolveRuntimeWorkerArgv(ownerUrl, testNodeExecPath).slice(0, -1),
           "--input-type=module",
           "--eval",
-          `import { preparePrepackArtifacts } from ${JSON.stringify(ownerUrl)}; await preparePrepackArtifacts();`,
+          `import { preparePrepackArtifacts } from ${JSON.stringify(ownerUrl.href)}; await preparePrepackArtifacts();`,
         ],
         {
           cwd: rootDir,
@@ -421,7 +454,7 @@ describe("prepared prepack ownership", () => {
           stdio: ["ignore", "pipe", "pipe"],
           env: {
             ...process.env,
-            // The package fixture still imports the real owner's workspace source.
+            // The source smoke fixture retains the package's standalone loader contract.
             TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
           },
         },

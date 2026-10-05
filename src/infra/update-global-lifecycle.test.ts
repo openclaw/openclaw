@@ -5,14 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
-  globalInstallFallbackArgs,
   resolveGlobalInstallTarget,
-  resolveNpmGlobalPrefixLayoutFromPrefix,
-  type CommandRunner,
 } from "./update-global.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -20,15 +19,9 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 describe("npm global install lifecycle policy", () => {
-  it("applies an unflagged npm policy to primary and retry argv", () => {
+  it("applies an unflagged npm policy to install argv", () => {
     expect(
       globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).not.toContain("--allow-scripts=openclaw");
-    expect(
-      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).toEqual(expect.arrayContaining(["--omit=optional"]));
-    expect(
-      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
     ).not.toContain("--allow-scripts=openclaw");
   });
 
@@ -46,26 +39,6 @@ describe("npm global install lifecycle policy", () => {
       "--loglevel=error",
       "--min-release-age=0",
     ]);
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual([
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "--prefix",
-      "/tmp/stage",
-      "openclaw@latest",
-      "--omit=optional",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
-  });
-
-  it("omits npm's lifecycle allowlist before npm 11.16", () => {
-    expect(
-      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).not.toContain("--allow-scripts=openclaw");
   });
 
   it("allows only the resolved npm candidate lifecycle identity", () => {
@@ -107,21 +80,17 @@ describe("npm global install lifecycle policy", () => {
       const candidate = path.resolve(cwd, "../candidate.tgz");
       const protocol = form.startsWith("file:") ? "file:" : "";
       const spec = `${protocol}${form.endsWith("relative") ? "../candidate.tgz" : candidate}`;
-      for (const buildArgs of [globalInstallArgs, globalInstallFallbackArgs]) {
-        const args = buildArgs("npm", spec, null, null, cwd);
-        expect(args).toContain(`--allow-scripts=${protocol}${candidate}`);
-        expect(args).toContain(spec);
-      }
+      const args = globalInstallArgs("npm", spec, null, null, cwd);
+      expect(args).toContain(`--allow-scripts=${protocol}${candidate}`);
+      expect(args).toContain(spec);
     },
   );
 
   it("rejects comma tarball identities before building npm install commands", () => {
     const cwd = path.resolve("/tmp/build,cache");
-    for (const buildArgs of [globalInstallArgs, globalInstallFallbackArgs]) {
-      expect(() => buildArgs("npm", path.join(cwd, "candidate.tgz"), null, null, cwd)).toThrow(
-        "without commas",
-      );
-    }
+    expect(() =>
+      globalInstallArgs("npm", path.join(cwd, "candidate.tgz"), null, null, cwd),
+    ).toThrow("without commas");
   });
 
   it.each([
@@ -152,18 +121,16 @@ describe("npm global install lifecycle policy", () => {
 
   it("preserves npm 11 advisory comma-archive identity without changing npm policy", () => {
     const cwd = path.resolve("/tmp/build,cache");
-    for (const buildArgs of [globalInstallArgs, globalInstallFallbackArgs]) {
-      expect(
-        buildArgs(
-          "npm",
-          path.join(cwd, "candidate.tgz"),
-          null,
-          null,
-          cwd,
-          "allow-scripts-advisory",
-        ),
-      ).toContain("--allow-scripts=./candidate.tgz");
-    }
+    expect(
+      globalInstallArgs(
+        "npm",
+        path.join(cwd, "candidate.tgz"),
+        null,
+        null,
+        cwd,
+        "allow-scripts-advisory",
+      ),
+    ).toContain("--allow-scripts=./candidate.tgz");
   });
 });
 

@@ -1,5 +1,4 @@
 /** Parses, clones, verifies, and installs plugin packages from Git specs. */
-import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
@@ -10,11 +9,16 @@ import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import {
+  resolveInstallWorkTimeoutMs,
+  resolveTimedInstallModeOptions,
+} from "../infra/install-mode-options.js";
+import {
   installPackageDir,
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { withInstallWorkspace } from "../infra/install-source-utils.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -33,7 +37,7 @@ import {
   resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
-import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -48,11 +52,6 @@ import {
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
-
-type PluginInstallLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
 
 /** Resolved Git source metadata persisted into plugin install records. */
 type GitPluginResolution = {
@@ -194,38 +193,22 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
     return null;
   }
 
+  const localPath = base.startsWith("./") || base.startsWith("../") || base.startsWith("~/");
+  let normalized: { url: string; label: string };
   if (looksLikeGitHubRepoShorthand(base) || looksLikeGitHubHostPath(base)) {
-    const normalized = normalizeGitHubRepo(base);
-    return {
-      input: trimmed,
-      url: normalized.url,
-      ref: split.ref,
-      label: normalized.label,
-      normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `@${split.ref}` : ""}`,
-    };
+    normalized = normalizeGitHubRepo(base);
+  } else if (hasHttpUrlPrefix(base) || isGitUrl(base) || localPath) {
+    const url = localPath ? resolveUserPath(base) : base;
+    normalized = { url, label: normalizeGitLabel(url) };
+  } else {
+    return null;
   }
-
-  if (
-    hasHttpUrlPrefix(base) ||
-    isGitUrl(base) ||
-    base.startsWith("./") ||
-    base.startsWith("../") ||
-    base.startsWith("~/")
-  ) {
-    const url =
-      base.startsWith("./") || base.startsWith("../") || base.startsWith("~/")
-        ? resolveUserPath(base)
-        : base;
-    return {
-      input: trimmed,
-      url,
-      ref: split.ref,
-      label: normalizeGitLabel(url),
-      normalizedSpec: `${GIT_SPEC_PREFIX}${url}${split.ref ? `@${split.ref}` : ""}`,
-    };
-  }
-
-  return null;
+  return {
+    input: trimmed,
+    ...normalized,
+    ref: split.ref,
+    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `@${split.ref}` : ""}`,
+  };
 }
 
 function createGitCommandEnv(): NodeJS.ProcessEnv {
@@ -266,7 +249,7 @@ async function withGitStagingDir<T>(
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
-    await fs.mkdir(targetParent, { recursive: true });
+    await fs.mkdir(targetParent, { recursive: true, mode: 0o700 });
   } catch {
     return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
@@ -365,6 +348,7 @@ export async function installPluginFromGitSpec(
     extensionsDir?: string;
     gitDir?: string;
     timeoutMs?: number;
+    workTimeoutMs?: number | null;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -381,6 +365,7 @@ export async function installPluginFromGitSpec(
     };
   }
 
+  const { workTimeoutMs } = resolveTimedInstallModeOptions(params, {});
   const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
@@ -403,6 +388,7 @@ export async function installPluginFromGitSpec(
       repoDir,
       refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
+      workTimeoutMs,
       commandEnv: () => ({ env: createGitCommandEnv() }),
     });
     if (!acquired.ok) {
@@ -447,18 +433,18 @@ export async function installPluginFromGitSpec(
     if (!params.dryRun) {
       params.logger?.info?.("Installing plugin dependencies with npm…");
       const install = await runCommandWithTimeout(
-        [
-          "npm",
-          ...createSafeNpmInstallArgs({
-            omitDev: true,
-            loglevel: "error",
+        resolveNpmCommand(
+          createSafeNpmInstallArgs({
             noAudit: true,
             noFund: true,
           }),
-        ],
+        ),
         {
           cwd: repoDir,
-          timeoutMs: Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          timeoutMs: resolveInstallWorkTimeoutMs(
+            workTimeoutMs,
+            Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          ),
           env: createSafeNpmInstallEnv(process.env, {
             npmConfigCwd: repoDir,
             packageLock: true,
@@ -482,7 +468,6 @@ export async function installPluginFromGitSpec(
       expectedPluginId: params.expectedPluginId,
       logger: params.logger,
       mode: effectiveMode,
-      emitSuccessSecurityEvent: false,
       installPolicyRequest,
     });
     if (!result.ok) {

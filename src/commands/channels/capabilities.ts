@@ -1,20 +1,20 @@
-// Implements `openclaw channels capabilities` account capability/probe reporting.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
-  ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -35,7 +35,7 @@ import {
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
-export type ChannelsCapabilitiesOptions = {
+type ChannelsCapabilitiesOptions = {
   agent?: string;
   channel?: string;
   account?: string;
@@ -52,7 +52,7 @@ type ChannelCapabilitiesReport = {
   configured?: boolean;
   enabled?: boolean;
   support?: ChannelCapabilities;
-  actions?: string[];
+  actions: string[];
   probe?: unknown;
   diagnostics?: ChannelCapabilitiesDiagnostics;
 };
@@ -110,38 +110,22 @@ function formatSupport(capabilities?: ChannelCapabilities) {
   if (capabilities.chatTypes?.length) {
     bits.push(`chatTypes=${capabilities.chatTypes.join(",")}`);
   }
-  if (capabilities.polls) {
-    bits.push("polls");
-  }
-  if (capabilities.reactions) {
-    bits.push("reactions");
-  }
-  if (capabilities.edit) {
-    bits.push("edit");
-  }
-  if (capabilities.unsend) {
-    bits.push("unsend");
-  }
-  if (capabilities.reply) {
-    bits.push("reply");
-  }
-  if (capabilities.effects) {
-    bits.push("effects");
-  }
-  if (capabilities.groupManagement) {
-    bits.push("groupManagement");
-  }
-  if (capabilities.threads) {
-    bits.push("threads");
-  }
-  if (capabilities.media) {
-    bits.push("media");
-  }
-  if (capabilities.nativeCommands) {
-    bits.push("nativeCommands");
-  }
-  if (capabilities.blockStreaming) {
-    bits.push("blockStreaming");
+  for (const capability of [
+    "polls",
+    "reactions",
+    "edit",
+    "unsend",
+    "reply",
+    "effects",
+    "groupManagement",
+    "threads",
+    "media",
+    "nativeCommands",
+    "blockStreaming",
+  ] as const) {
+    if (capabilities[capability]) {
+      bits.push(capability);
+    }
   }
   return bits.length ? bits.join(" ") : "none";
 }
@@ -197,7 +181,7 @@ async function resolveChannelReports(params: {
   const reports: ChannelCapabilitiesReport[] = [];
 
   for (const accountId of accountIds) {
-    const resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+    const resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
     const configured = plugin.config.isConfigured
       ? await plugin.config.isConfigured(resolvedAccount, cfg)
       : Boolean(resolvedAccount);
@@ -240,9 +224,7 @@ async function resolveChannelReports(params: {
       }),
       includeActions: true,
     }).actions;
-    const actions = Array.from(
-      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
-    );
+    const actions = Array.from(new Set<string>(["send", "broadcast", ...discoveredActions]));
 
     reports.push({
       plugin,
@@ -304,34 +286,31 @@ export async function channelsCapabilitiesCommand(
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupFallbackPlugins: true,
   });
-  const selected =
-    !rawChannel || rawChannel === "all"
-      ? plugins
-      : await (async () => {
-          const resolved = await resolveInstallableChannelPlugin({
-            cfg: configSnapshot.sourceConfig,
-            runtime,
-            agentId: opts.agent,
-            rawChannel,
-            allowInstall: true,
-          });
-          if (resolved.configChanged) {
-            await persistChannelPluginConfig({
-              cfg: resolved.cfg,
-              pluginInstalled: resolved.pluginInstalled,
-              baseHash: configSnapshot.hash,
-              writeOptions: writeSnapshot?.writeOptions,
-              runtime,
-            });
-            // The writer refreshes the active runtime snapshot; probes must use that prepared
-            // view rather than the authored config that installation persisted.
-            cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
-          }
-          return resolved.plugin ? [resolved.plugin] : null;
-        })();
+  let selected = plugins;
+  if (canInstall) {
+    const resolved = await resolveInstallableChannelPlugin({
+      cfg: configSnapshot.sourceConfig,
+      runtime,
+      agentId: opts.agent,
+      rawChannel,
+      allowInstall: true,
+    });
+    if (resolved.configChanged) {
+      await persistChannelPluginConfig({
+        cfg: resolved.cfg,
+        pluginInstalled: resolved.pluginInstalled,
+        baseHash: configSnapshot.hash,
+        writeOptions: writeSnapshot?.writeOptions,
+        runtime,
+      });
+      // The writer refreshes the prepared view used by probes after installation.
+      cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
+    }
+    selected = resolved.plugin ? [resolved.plugin] : [];
+  }
 
-  if (!selected || selected.length === 0) {
-    if (!rawChannel || rawChannel === "all") {
+  if (selected.length === 0) {
+    if (!canInstall) {
       if (opts.json) {
         writeRuntimeJson(runtime, { channels: [] });
         return;
@@ -380,9 +359,7 @@ export async function channelsCapabilitiesCommand(
     });
     lines.push(theme.heading(label));
     lines.push(`Support: ${formatSupport(report.support)}`);
-    if (report.actions && report.actions.length > 0) {
-      lines.push(`Actions: ${report.actions.join(", ")}`);
-    }
+    lines.push(`Actions: ${report.actions.join(", ")}`);
     if (report.configured === false || report.enabled === false) {
       const configuredLabel = report.configured === false ? "not configured" : "configured";
       const enabledLabel = report.enabled === false ? "disabled" : "enabled";

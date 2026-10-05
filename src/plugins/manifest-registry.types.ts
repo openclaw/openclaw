@@ -1,3 +1,4 @@
+import type { ThemeDefinition } from "../../packages/gateway-protocol/src/theme.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -6,6 +7,7 @@ import type {
   PluginManifest,
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
+  PluginManifestContracts,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
@@ -14,27 +16,12 @@ import type {
 } from "./package-manifest.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginTrust } from "./plugin-trust.js";
-import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
-export type PluginManifestContractListKey =
-  | "speechProviders"
-  | "externalAuthProviders"
-  | "embeddingProviders"
-  | "mediaUnderstandingProviders"
-  | "transcriptSourceProviders"
-  | "documentExtractors"
-  | "realtimeVoiceProviders"
-  | "realtimeTranscriptionProviders"
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders"
-  | "webContentExtractors"
-  | "webFetchProviders"
-  | "webSearchProviders"
-  | "workerProviders"
-  | "usageProviders"
-  | "migrationProviders"
-  | "gatewayMethodDispatch";
+export type PluginManifestContractListKey = Exclude<
+  keyof PluginManifestContracts,
+  "embeddedExtensionFactories" | "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
+>;
 
 type PluginManifestRecordStatic = Omit<
   PluginManifest,
@@ -50,7 +37,18 @@ type PluginManifestRecordStatic = Omit<
   | "uiHints"
 >;
 
+export type PluginThemeArtwork = {
+  hats?: Record<string, { svg: string }>;
+  critters?: Record<string, { svg: string; title?: string; crossMs?: number }>;
+};
+
 export type PluginManifestRecord = PluginManifestRecordStatic & {
+  /** Validated palettes and artwork captured by the immutable metadata generation. */
+  themeDefinitions?: Array<{
+    id: string;
+    definition: ThemeDefinition;
+    artwork?: PluginThemeArtwork;
+  }>;
   /** Process-local source selection, never persisted in the installed index. */
   sourcePreferred?: true;
   iconPath?: string;
@@ -63,6 +61,8 @@ export type PluginManifestRecord = PluginManifestRecordStatic & {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
+  /** Packaged, plugin-relative setup skill; invoked only by an explicit user action. */
+  onboardingSkill?: string;
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;

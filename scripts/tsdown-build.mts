@@ -12,8 +12,9 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
-import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -29,7 +30,8 @@ import {
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
+import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -38,9 +40,9 @@ import {
 } from "./lib/tsdown-config-groups.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
+  TSDOWN_PACKAGES_CACHE_INPUT,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
-import { resolvePnpmRunner } from "./pnpm-runner.mts";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
@@ -54,22 +56,11 @@ const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 export const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const DOCKER_TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB";
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
-const DEFAULT_CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
-const DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH = "/sys/fs/cgroup/memory";
-const PROC_SELF_CGROUP_PATH = "/proc/self/cgroup";
-const PROC_SELF_LIMITS_PATH = "/proc/self/limits";
-const PROC_SELF_MOUNTINFO_PATH = "/proc/self/mountinfo";
-const PROC_SELF_STATUS_PATH = "/proc/self/status";
 const SERIALIZED_MAIN_CONFIG_GROUPS = [
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 ];
-// The v2 high limit throttles reclaim, so a heap sized above it can stall the build instead of
-// OOM-ing. Cgroup v1's soft limit is only advisory and must not reject an otherwise viable build.
-const CGROUP_V2_MEMORY_LIMIT_FILES = ["memory.max", "memory.high"];
-const CGROUP_V1_MEMORY_LIMIT_FILES = ["memory.limit_in_bytes"];
-const PROC_MEMINFO_PATH = "/proc/meminfo";
 const tsdownStdio = () => ["ignore", "pipe", "pipe"] satisfies ["ignore", "pipe", "pipe"];
 // Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
 const TERMINATION_GRACE_MS = 250;
@@ -81,21 +72,6 @@ const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
 export const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
-
-const TSDOWN_SOURCE_EXTENSIONS = [
-  ".cjs",
-  ".cts",
-  ".js",
-  ".json",
-  ".json5",
-  ".mjs",
-  ".mts",
-  ".sql",
-  ".ts",
-  ".tsx",
-  ".yaml",
-  ".yml",
-];
 
 export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
@@ -110,6 +86,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/direct-run.mjs",
   "scripts/lib/repo-root.mjs",
   "scripts/lib/local-check-runtime.mts",
+  "scripts/lib/process-memory.mts",
   "scripts/tsx.mjs",
   "scripts/lib/tsx-cli-shim.mjs",
   "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -125,11 +102,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/tsdown-output-roots.mts",
 ];
-export const TSDOWN_PACKAGES_CACHE_INPUT = {
-  path: "packages",
-  extensions: TSDOWN_SOURCE_EXTENSIONS,
-  excludeDirectories: ["dist", "node_modules"],
-};
+export { TSDOWN_PACKAGES_CACHE_INPUT };
 export const TSDOWN_UNIFIED_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
   ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
@@ -143,29 +116,11 @@ type OutputRootParams = {
   roots?: string[];
 };
 
-export type MemoryLimitParams = {
-  availableMemoryBytes?: number;
-  cgroupMemoryLimitBytes?: number;
-  cgroupMemoryLimitPaths?: string[];
-  constrainedMemoryBytes?: number;
-  env?: NodeJS.ProcessEnv;
-  fs?: { readFileSync(filePath: string, encoding: "utf8"): string };
-  physicalMemoryBytes?: number;
-  platform?: string;
-  processResidentMemoryBytes?: number;
-  procMeminfoPath?: string;
-  procMemTotalBytes?: number;
-};
-
-type CgroupMount = { mountPoint: string; observed: boolean; root: string };
-
 type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: number };
 
 type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
-  comSpec?: string;
   nodeExecPath?: string;
-  npmExecPath?: string;
 };
 
 type TsdownBuildResult = ReturnType<ReturnType<typeof createTsdownOutputScanner>["finish"]> & {
@@ -310,7 +265,8 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   for (const entry of entries) {
     const entryPath = path.join(rootPath, entry.name);
     const resolvedEntryPath = path.resolve(entryPath);
-    if (protectedPaths.has(resolvedEntryPath)) {
+    // scripts/ui.mts owns in-flight Control UI staging trees.
+    if (protectedPaths.has(resolvedEntryPath) || controlUiBuildSiblingPid(entry.name) !== null) {
       continue;
     }
     try {
@@ -478,24 +434,7 @@ function readForwardedOptions(args: string[], names: string[]) {
 const readForwardedOption = (args: string[], names: string[]) =>
   readForwardedOptions(args, names)[0];
 function readForwardedScalarOption(args: string[], names: string[], label: string) {
-  const values: string[] = [];
-  for (const [index, arg] of args.entries()) {
-    for (const name of names) {
-      if (arg === name) {
-        const value = args[index + 1];
-        if (!value || value.startsWith("-")) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      } else if (arg.startsWith(`${name}=`)) {
-        const value = arg.slice(name.length + 1);
-        if (!value) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      }
-    }
-  }
+  const values = readForwardedOptions(args, names);
   if (values.length > 1) {
     throw new Error(`tsdown build accepts only one ${label} value`);
   }
@@ -671,493 +610,6 @@ function parseNonNegativeIntegerEnv(value: string | undefined, name: string) {
   return parsed;
 }
 
-function parseCgroupMemoryLimitBytes(value: string) {
-  const trimmed = value.trim();
-  if (trimmed === "" || trimmed === "max" || !/^\d+$/u.test(trimmed)) {
-    return null;
-  }
-  const parsed = BigInt(trimmed);
-  if (parsed < 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
-    return null;
-  }
-  return Number(parsed);
-}
-
-function isMissingFileError(error: unknown) {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
-
-function readProcessRlimitMemoryBytes(params: MemoryLimitParams) {
-  if ((params.platform ?? process.platform) !== "linux") {
-    return null;
-  }
-  try {
-    const rawLimits = (params.fs ?? fs).readFileSync(PROC_SELF_LIMITS_PATH, "utf8");
-    let tightestLimitBytes: number | null = null;
-    for (const match of rawLimits.matchAll(
-      /^Max (?:address space|data size)\s+(?<soft>\d+|unlimited)\s+/gmu,
-    )) {
-      const softLimit = match.groups?.soft;
-      if (!softLimit || softLimit === "unlimited") {
-        continue;
-      }
-      const parsed = parseCgroupMemoryLimitBytes(softLimit);
-      if (parsed !== null && (tightestLimitBytes === null || parsed < tightestLimitBytes)) {
-        tightestLimitBytes = parsed;
-      }
-    }
-    return tightestLimitBytes;
-  } catch {
-    return null;
-  }
-}
-
-function parseCgroupInactiveFileBytes(value: string, isV1: boolean) {
-  const match = isV1
-    ? (value.match(/^total_inactive_file\s+(\d+)$/mu) ?? value.match(/^inactive_file\s+(\d+)$/mu))
-    : value.match(/^inactive_file\s+(\d+)$/mu);
-  return match?.[1] ? parseCgroupMemoryLimitBytes(match[1]) : 0;
-}
-
-function readProcessResidentMemoryBytes(params: MemoryLimitParams) {
-  const configured = params.processResidentMemoryBytes;
-  if (configured !== undefined && Number.isFinite(configured) && configured >= 0) {
-    return Math.trunc(configured);
-  }
-  try {
-    const match = (params.fs ?? fs)
-      .readFileSync(PROC_SELF_STATUS_PATH, "utf8")
-      .match(/^VmRSS:\s+(\d+)\s+kB$/mu);
-    const bytes = match?.[1] ? BigInt(match[1]) * 1024n : null;
-    return bytes !== null && bytes <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(bytes) : null;
-  } catch {
-    return null;
-  }
-}
-
-// Controller mount points are host layout, not constants: v1 controllers may be co-mounted at
-// the cgroup root instead of a per-controller directory. Read them where the kernel records
-// them so a slice budget is never missed because a path was assumed.
-function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
-  const fsImpl = params.fs ?? fs;
-  let rawMountinfo = "";
-  try {
-    rawMountinfo = fsImpl.readFileSync(PROC_SELF_MOUNTINFO_PATH, "utf8");
-  } catch {
-    // Unreadable off Linux; the documented defaults still apply.
-  }
-
-  // One hierarchy can be visible through several mounts, and only some of them expose a subtree
-  // containing this process, so every view is kept as a candidate rather than the last one seen.
-  const unified: CgroupMount[] = [];
-  const v1Memory: CgroupMount[] = [];
-  for (const line of rawMountinfo.split("\n")) {
-    // mountinfo separates its variable optional fields from the fstype with a lone "-".
-    const [fields, describe] = line.split(" - ");
-    // mountinfo fields 4 and 5 are the mount root and mount point.
-    const mountFields = (fields ?? "").split(" ");
-    const rawRoot = mountFields[3];
-    const rawMountPoint = mountFields[4];
-    const [fsType, , superOptions] = (describe ?? "").split(" ");
-    if (!rawMountPoint || !rawRoot) {
-      continue;
-    }
-    // The kernel escapes space, tab, newline, and backslash in these two fields, so
-    // matching them verbatim would miss any cgroup path containing one of them.
-    const root = decodeMountInfoPath(rawRoot);
-    const mountPoint = decodeMountInfoPath(rawMountPoint);
-    if (fsType === "cgroup2") {
-      unified.push({ mountPoint, observed: true, root });
-    } else if (fsType === "cgroup" && (superOptions ?? "").split(",").includes("memory")) {
-      v1Memory.push({ mountPoint, observed: true, root });
-    }
-  }
-  return {
-    unified:
-      unified.length > 0
-        ? unified
-        : [{ mountPoint: DEFAULT_CGROUP_V2_MOUNT_PATH, observed: false, root: "/" }],
-    v1Memory:
-      v1Memory.length > 0
-        ? v1Memory
-        : [{ mountPoint: DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH, observed: false, root: "/" }],
-  };
-}
-
-// mountinfo field 4 is the subtree a cgroupfs mount exposes, so /proc/self/cgroup records are
-// relative to it: under a container mount the visible leaf is the mount point itself, not the
-// host-absolute path. A record outside that subtree is not reachable through this mount, and
-// probing the mount root instead would size the build from an unrelated cgroup's limit.
-function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
-  if (cgroupPath.split("/").includes("..")) {
-    return null;
-  }
-  if (mountRoot === "/") {
-    return cgroupPath;
-  }
-  const mountRootSegments = mountRoot.split("/").filter(Boolean);
-  if (mountRootSegments.length > 0 && mountRootSegments.every((segment) => segment === "..")) {
-    // The visible root is an ancestor, but the process's hidden child name cannot be
-    // reconstructed. Treat it as unresolved instead of mistaking the parent for the leaf.
-    return null;
-  }
-  if (mountRootSegments.includes("..")) {
-    return null;
-  }
-  // A namespace-root record proves nothing about a mount rooted elsewhere: the kernel
-  // contract does not make "/" plus an arbitrary subtree a match, so adopting that pair
-  // could cap the heap from an unrelated cgroup. Fail closed to host sizing instead.
-  if (cgroupPath === "/") {
-    return null;
-  }
-  if (cgroupPath === mountRoot) {
-    return "/";
-  }
-  return cgroupPath.startsWith(`${mountRoot}/`) ? cgroupPath.slice(mountRoot.length) : null;
-}
-
-// A systemd slice budget lives on the process's own cgroup, never on a hierarchy root, so
-// probing only the root misses every limit outside a namespaced container. Legacy and hybrid
-// hosts publish that same budget through the v1 memory controller instead of the `0::` record,
-// so both hierarchies are walked leaf-to-root; depth 0 is the root probe.
-function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
-  const fsImpl = params.fs ?? fs;
-  let rawCgroup = "";
-  let cgroupRecordReadFailed = false;
-  try {
-    rawCgroup = fsImpl.readFileSync(PROC_SELF_CGROUP_PATH, "utf8");
-  } catch {
-    cgroupRecordReadFailed = (params.platform ?? process.platform) === "linux";
-  }
-
-  const paths: string[] = [];
-  const addHierarchy = (
-    mounts: CgroupMount[],
-    limitFiles: string[],
-    cgroupPath: string,
-    hierarchyFile?: string,
-  ) => {
-    const initialPathCount = paths.length;
-    let addedObservedPath = false;
-    let hierarchyMetadataUnreadable = false;
-    for (const mount of mounts) {
-      const mountInitialPathCount = paths.length;
-      const mountRootSegments = mount.root.split("/").filter(Boolean);
-      if (mountRootSegments.length > 0 && mountRootSegments.every((segment) => segment === "..")) {
-        continue;
-      }
-      const relative = relativeCgroupPath(mount.root, cgroupPath ?? mount.root);
-      if (relative === null) {
-        continue;
-      }
-      const segments = relative.split("/").filter(Boolean);
-      for (let depth = segments.length; depth >= 0; depth -= 1) {
-        if (hierarchyFile && depth < segments.length) {
-          try {
-            const hierarchyPath = path.join(
-              mount.mountPoint,
-              ...segments.slice(0, depth),
-              hierarchyFile,
-            );
-            const hierarchyMode = fsImpl.readFileSync(hierarchyPath, "utf8").trim();
-            if (hierarchyMode === "0") {
-              break;
-            }
-            if (hierarchyMode !== "1") {
-              hierarchyMetadataUnreadable = true;
-              break;
-            }
-          } catch {
-            hierarchyMetadataUnreadable = true;
-            break;
-          }
-        }
-        for (const limitFile of limitFiles) {
-          paths.push(path.join(mount.mountPoint, ...segments.slice(0, depth), limitFile));
-        }
-      }
-      addedObservedPath ||= mount.observed && paths.length > mountInitialPathCount;
-    }
-    return {
-      added: paths.length > initialPathCount,
-      addedObservedPath,
-      hierarchyMetadataUnreadable,
-    };
-  };
-
-  const mounts = resolveCgroupMountPoints(params);
-  let sawMemoryRecord = false;
-  let sawObservedV2Mapping = false;
-  let sawObservedV2Root = false;
-  let sawUnreadableV1HierarchyMetadata = false;
-  let sawV1MemoryRecord = false;
-  let sawRejectedCgroupMapping = false;
-  let sawUnresolvedCgroupLimit = false;
-  for (const line of rawCgroup.split("\n")) {
-    const record = /^\d+:([^:]*):(.*)$/u.exec(line);
-    if (!record) {
-      continue;
-    }
-    const controllers = record[1] ?? "";
-    if (controllers === "") {
-      sawMemoryRecord = true;
-      const cgroupPath = record[2] ?? "";
-      sawObservedV2Root ||=
-        cgroupPath === "/" && mounts.unified.some((mount) => mount.observed && mount.root === "/");
-      const resolved = addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, cgroupPath);
-      sawObservedV2Mapping ||= resolved.addedObservedPath;
-      sawRejectedCgroupMapping ||= !resolved.added;
-      sawUnresolvedCgroupLimit ||= !resolved.added;
-    } else if (controllers.split(",").includes("memory")) {
-      sawMemoryRecord = true;
-      sawV1MemoryRecord = true;
-      const resolved = addHierarchy(
-        mounts.v1Memory,
-        CGROUP_V1_MEMORY_LIMIT_FILES,
-        record[2] ?? "",
-        "memory.use_hierarchy",
-      );
-      sawUnreadableV1HierarchyMetadata ||= resolved.hierarchyMetadataUnreadable;
-      sawRejectedCgroupMapping ||= !resolved.added;
-      sawUnresolvedCgroupLimit ||= !resolved.added;
-    }
-  }
-  // Only probe the mounts blind when this process has no memory cgroup record at all; a record
-  // that no mount can represent means the limit is unreadable here, not that the root applies.
-  if (!sawMemoryRecord) {
-    for (const mount of mounts.unified) {
-      addHierarchy([mount], CGROUP_V2_MEMORY_LIMIT_FILES, mount.root);
-    }
-    for (const mount of mounts.v1Memory) {
-      addHierarchy([mount], CGROUP_V1_MEMORY_LIMIT_FILES, mount.root);
-    }
-  }
-  return {
-    paths,
-    cgroupRecordReadFailed,
-    sawMemoryRecord,
-    sawObservedV2Mapping,
-    sawObservedUnconstrainedV2Root: sawObservedV2Root && !sawV1MemoryRecord,
-    sawRejectedCgroupMapping,
-    sawUnresolvedCgroupLimit,
-    sawUnreadableV1HierarchyMetadata,
-    sawV1MemoryRecord,
-  };
-}
-
-function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
-  const configuredLimit = params.cgroupMemoryLimitBytes;
-  if (configuredLimit !== undefined && Number.isFinite(configuredLimit) && configuredLimit >= 0) {
-    return { limitBytes: Math.trunc(configuredLimit), unresolved: false, usageKnown: false };
-  }
-
-  const fsImpl = params.fs ?? fs;
-  const resolvedPaths = params.cgroupMemoryLimitPaths
-    ? {
-        cgroupRecordReadFailed: false,
-        paths: params.cgroupMemoryLimitPaths,
-        sawMemoryRecord: false,
-        sawObservedV2Mapping: false,
-        sawObservedUnconstrainedV2Root: false,
-        sawRejectedCgroupMapping: false,
-        sawUnresolvedCgroupLimit: false,
-        sawUnreadableV1HierarchyMetadata: false,
-        sawV1MemoryRecord: false,
-      }
-    : resolveCgroupMemoryLimitPaths(params);
-  // libuv folds cgroup v1's advisory soft limit into constrainedMemory(). Preserve its separate
-  // process rlimit candidate while the owner walk reads only authoritative cgroup hard limits.
-  const rlimitMemoryBytes = readProcessRlimitMemoryBytes(params);
-  const constrainedMemoryBytes =
-    resolvedPaths.sawV1MemoryRecord ||
-    resolvedPaths.sawRejectedCgroupMapping ||
-    resolvedPaths.sawUnresolvedCgroupLimit ||
-    resolvedPaths.sawUnreadableV1HierarchyMetadata
-      ? 0
-      : (params.constrainedMemoryBytes ??
-        (params.fs === undefined ? process.constrainedMemory() : 0));
-  // An ancestor may bound the leaf, so the tightest limit in the chain wins.
-  let tightestLimitBytes =
-    Number.isFinite(constrainedMemoryBytes) && constrainedMemoryBytes > 0
-      ? Math.trunc(constrainedMemoryBytes)
-      : null;
-  if (
-    rlimitMemoryBytes !== null &&
-    (tightestLimitBytes === null || rlimitMemoryBytes < tightestLimitBytes)
-  ) {
-    tightestLimitBytes = rlimitMemoryBytes;
-  }
-  const processResidentMemoryBytes = readProcessResidentMemoryBytes(params);
-  let readControllerLimit = false;
-  let readV1HardLimit = false;
-  let sawDisabledV2MemoryController = false;
-  let sawUnreadableControllerFile = false;
-  let usageKnown = true;
-  for (const limitPath of resolvedPaths.paths) {
-    try {
-      const rawLimit = fsImpl.readFileSync(limitPath, "utf8");
-      const trimmedLimit = rawLimit.trim();
-      readControllerLimit ||= trimmedLimit === "max" || /^\d+$/u.test(trimmedLimit);
-      // A controller cannot be bound to v1 and v2 simultaneously. Reading the v1 hard-limit
-      // file therefore resolves memory ownership even when its value is the unlimited sentinel.
-      if (path.basename(limitPath) === "memory.limit_in_bytes" && /^\d+$/u.test(trimmedLimit)) {
-        readV1HardLimit = true;
-      }
-      const limitBytes = parseCgroupMemoryLimitBytes(rawLimit);
-      if (limitBytes === null) {
-        continue;
-      }
-      let availableBytes = limitBytes;
-      try {
-        const isV1 = path.basename(limitPath) === "memory.limit_in_bytes";
-        const cgroupDir = path.dirname(limitPath);
-        const usageBytes = parseCgroupMemoryLimitBytes(
-          fsImpl.readFileSync(
-            path.join(cgroupDir, isV1 ? "memory.usage_in_bytes" : "memory.current"),
-            "utf8",
-          ),
-        );
-        usageKnown &&= usageBytes !== null;
-        if (usageBytes !== null) {
-          let inactiveFileBytes = 0;
-          try {
-            inactiveFileBytes =
-              parseCgroupInactiveFileBytes(
-                fsImpl.readFileSync(path.join(cgroupDir, "memory.stat"), "utf8"),
-                isV1,
-              ) ?? 0;
-          } catch {
-            // Missing stats make all charged usage non-reclaimable for admission.
-          }
-          // Total controller usage includes kernel and unreclaimable file charges. Credit only
-          // inactive file pages and this wrapper's resident set before sizing its child.
-          const competingBytes = Math.max(
-            0,
-            usageBytes -
-              Math.min(usageBytes, inactiveFileBytes) -
-              (processResidentMemoryBytes ?? 0),
-          );
-          availableBytes = Math.max(0, limitBytes - competingBytes);
-        }
-      } catch {
-        // Keep the serial heap cap, but an unobserved shared budget cannot admit overlap.
-        usageKnown = false;
-      }
-      if (tightestLimitBytes === null || availableBytes < tightestLimitBytes) {
-        tightestLimitBytes = availableBytes;
-      }
-    } catch (error) {
-      if (!isMissingFileError(error)) {
-        sawUnreadableControllerFile = true;
-        continue;
-      }
-      if (path.basename(limitPath) === "memory.limit_in_bytes") {
-        continue;
-      }
-      try {
-        const controllers = fsImpl
-          .readFileSync(path.join(path.dirname(limitPath), "cgroup.controllers"), "utf8")
-          .trim()
-          .split(/\s+/u)
-          .filter(Boolean);
-        sawDisabledV2MemoryController ||= !controllers.includes("memory");
-      } catch (controllerError) {
-        sawUnreadableControllerFile ||= !isMissingFileError(controllerError);
-      }
-    }
-  }
-
-  return {
-    limitBytes: tightestLimitBytes,
-    usageKnown,
-    unresolved:
-      resolvedPaths.cgroupRecordReadFailed ||
-      sawUnreadableControllerFile ||
-      resolvedPaths.sawUnreadableV1HierarchyMetadata ||
-      (resolvedPaths.sawUnresolvedCgroupLimit && !readV1HardLimit) ||
-      (resolvedPaths.sawMemoryRecord &&
-        !readControllerLimit &&
-        !resolvedPaths.sawObservedUnconstrainedV2Root &&
-        !(
-          resolvedPaths.sawObservedV2Mapping &&
-          sawDisabledV2MemoryController &&
-          !sawUnreadableControllerFile
-        )),
-  };
-}
-
-function parseProcMemoryBytes(value: string, field: "MemAvailable" | "MemTotal") {
-  const match = value.match(new RegExp(`^${field}:\\s+(\\d+)\\s+kB$`, "imu"));
-  const kibibytes = match?.[1];
-  if (!kibibytes) {
-    return null;
-  }
-  const parsed = BigInt(kibibytes) * 1024n;
-  if (parsed < 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
-    return null;
-  }
-  return Number(parsed);
-}
-
-function readProcMemTotalBytes(params: MemoryLimitParams = {}) {
-  const configuredTotal = params.procMemTotalBytes;
-  if (configuredTotal && Number.isFinite(configuredTotal) && configuredTotal > 0) {
-    return Math.trunc(configuredTotal);
-  }
-
-  const fsImpl = params.fs ?? fs;
-  try {
-    return parseProcMemoryBytes(
-      fsImpl.readFileSync(params.procMeminfoPath ?? PROC_MEMINFO_PATH, "utf8"),
-      "MemTotal",
-    );
-  } catch {
-    return null;
-  }
-}
-
-function readPhysicalMemoryTotalBytes(params: MemoryLimitParams = {}) {
-  const totalBytes = params.physicalMemoryBytes ?? os.totalmem();
-  return Number.isFinite(totalBytes) && totalBytes > 0 ? Math.trunc(totalBytes) : null;
-}
-
-function readHostAvailableMemoryBytes(params: MemoryLimitParams) {
-  if (params.availableMemoryBytes !== undefined) {
-    return Number.isFinite(params.availableMemoryBytes) && params.availableMemoryBytes >= 0
-      ? Math.trunc(params.availableMemoryBytes)
-      : null;
-  }
-  if ((params.platform ?? process.platform) === "linux") {
-    try {
-      return parseProcMemoryBytes(
-        (params.fs ?? fs).readFileSync(params.procMeminfoPath ?? PROC_MEMINFO_PATH, "utf8"),
-        "MemAvailable",
-      );
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function readTsdownMemoryCapacity(params: MemoryLimitParams) {
-  const cgroupMemory = readCgroupMemoryLimitBytes(params);
-  if (cgroupMemory.unresolved) {
-    return { ...cgroupMemory, limitBytes: null, availableBytes: null };
-  }
-  const physicalTotalBytes = readProcMemTotalBytes(params) ?? readPhysicalMemoryTotalBytes(params);
-  const hostAvailableBytes = readHostAvailableMemoryBytes(params);
-  const physicalLimitBytes =
-    hostAvailableBytes === null || physicalTotalBytes === null
-      ? (hostAvailableBytes ?? physicalTotalBytes)
-      : Math.min(hostAvailableBytes, physicalTotalBytes);
-  const limitBytes =
-    cgroupMemory.limitBytes === null || physicalLimitBytes === null
-      ? (cgroupMemory.limitBytes ?? physicalLimitBytes)
-      : Math.min(cgroupMemory.limitBytes, physicalLimitBytes);
-  return { ...cgroupMemory, limitBytes, availableBytes: hostAvailableBytes };
-}
-
 function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   if (params.resolvedMaxOldSpaceMb !== undefined) {
     return { maxOldSpaceMb: params.resolvedMaxOldSpaceMb, unresolvedCgroupMemory: false };
@@ -1173,7 +625,7 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   if (envOverride !== null) {
     return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false };
   }
-  const { limitBytes, unresolved } = readTsdownMemoryCapacity(params);
+  const { limitBytes, unresolved } = readProcessMemoryCapacity(params);
   if (unresolved) {
     return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true };
   }
@@ -1206,7 +658,7 @@ export function resolveStagedDeclarationConcurrency(
   }
   // Frozen or explicit per-child heaps do not establish available batch capacity.
   // Unknown available memory stays serial; retain native headroom for each child.
-  const capacity = readTsdownMemoryCapacity(params);
+  const capacity = readProcessMemoryCapacity(params);
   const requiredBytes = groups
     .map((group) => group.maxOldSpaceMb)
     .toSorted((left, right) => right - left)
@@ -1285,24 +737,6 @@ export function describeInsufficientTsdownHeap(
   };
 }
 
-function parseMaxOldSpaceSizeMb(value: unknown, fallbackMb: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallbackMb;
-  }
-  return Math.trunc(parsed);
-}
-
-function normalizeMaxOldSpaceSizeMb(value: unknown, maxOldSpaceMb: number) {
-  // Build wrappers may inherit smaller runner-level caps; tsdown needs the
-  // resolved build heap while still respecting cgroup-derived upper bounds.
-  const parsed = parseMaxOldSpaceSizeMb(value, maxOldSpaceMb);
-  if (parsed < maxOldSpaceMb) {
-    return maxOldSpaceMb;
-  }
-  return Math.min(parsed, maxOldSpaceMb);
-}
-
 function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
   const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
@@ -1317,16 +751,14 @@ function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryL
     const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
     if (inlineMatch) {
       foundMaxOldSpaceSize = true;
-      const value = normalizeMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       continue;
     }
 
     if (part === "--max-old-space-size") {
       foundMaxOldSpaceSize = true;
       const next = parts[index + 1];
-      const value = normalizeMaxOldSpaceSizeMb(next, maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       if (next !== undefined) {
         index += 1;
       }
@@ -1389,6 +821,7 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 
   function scanLines(text: string) {
     const combined = pendingLine + text;
+    hasIneffectiveDynamicImport ||= combined.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER);
     const lines = combined.split(/\r?\n/u);
     pendingLine = lines.pop() ?? "";
     for (const line of lines) {
@@ -1399,9 +832,6 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
   return {
     append(chunk: unknown) {
       const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      if (text.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER)) {
-        hasIneffectiveDynamicImport = true;
-      }
       scanLines(text);
       captured += text;
       if (captured.length > maxCaptureBytes) {
@@ -1430,44 +860,45 @@ export function resolveTsdownBuildInvocation(
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
     : args;
+  const explicitConcurrency = args.some(
+    (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
+  );
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const runtimeOnly =
+    !args.includes("--dts") &&
+    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    filters.length > 0 &&
+    filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
+    // Native declaration children retain entire compiler graphs. Let tsdown own
+    // config admission so preparation and trace drainage cannot overlap unboundedly.
+    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? ["--concurrency", "1"]
+      : []),
     ...forwardedArgs,
   ];
-  if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
-    return {
-      command: params.nodeExecPath ?? process.execPath,
-      args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
-      options: {
-        stdio: tsdownStdio(),
-        shell: false,
-        windowsVerbatimArguments: undefined,
-        env,
-      },
-    };
-  }
-  const runner = resolvePnpmRunner({
-    env,
-    pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
-    nodeExecPath: params.nodeExecPath ?? process.execPath,
-    npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec,
-    platform: (params.platform ?? process.platform) === "win32" ? "win32" : "linux",
-  });
+  // A package-manager bin shim can select a different runtime from PATH.
+  // Keep the compiler on the runtime chosen by its build owner.
   return {
-    command: runner.command,
-    args: runner.args,
+    command: params.nodeExecPath ?? process.execPath,
+    args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
     options: {
       stdio: tsdownStdio(),
-      shell: runner.shell,
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+      shell: false,
+      windowsVerbatimArguments: undefined,
       env,
     },
   };
+}
+
+function tsdownDeclarationsEnabled(args: string[], env: NodeJS.ProcessEnv) {
+  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
+  return dtsArg ? dtsArg === "--dts" : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
 }
 
 function selectsMainConfig(args: string[]) {
@@ -1518,10 +949,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     const previous = forwardedArgs[index - 1];
     return !isFilterArg(arg) && !isFilterFlag(previous);
   });
-  const dtsArg = aiArgs.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  const declarationsEnabled = dtsArg
-    ? dtsArg === "--dts"
-    : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  const declarationsEnabled = tsdownDeclarationsEnabled(aiArgs, env);
   const hasForwardedConfig = aiArgs.some(isConfigArg);
 
   const declarationEnv =
@@ -1737,12 +1165,15 @@ export async function runTsdownBuildInvocation(
     relayParentSignal("SIGHUP");
   }
 
-  const processTreeAlive = () =>
-    inspectManagedProcessGroup(child, {
+  let observedProcessState: ReturnType<typeof inspectManagedProcessGroup> | undefined;
+  const processTreeAlive = () => {
+    observedProcessState = inspectManagedProcessGroup(child, {
       errorPolicy: "alive-on-eperm",
       inspectLeaderWhenNoGroup: true,
       platform,
-    }) === "live";
+    });
+    return observedProcessState === "live";
+  };
   const waitForProcessTreeExit = (timeoutMsToWait: number) =>
     waitForManagedProcessGroupExit(child, timeoutMsToWait, {
       errorPolicy: "alive-on-eperm",
@@ -1808,12 +1239,16 @@ export async function runTsdownBuildInvocation(
         }, timeoutMs).unref()
       : null;
 
+  function stopObserving() {
+    settled = true;
+    cleanupParentSignalHandlers();
+    clearInterval(heartbeat ?? undefined);
+    clearTimeout(timeout ?? undefined);
+  }
+
   return new Promise<TsdownBuildResult>((resolve) => {
     child.once("error", (error) => {
-      settled = true;
-      cleanupParentSignalHandlers();
-      clearInterval(heartbeat ?? undefined);
-      clearTimeout(timeout ?? undefined);
+      stopObserving();
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
       resolve({
         status: 1,
@@ -1825,13 +1260,31 @@ export async function runTsdownBuildInvocation(
     });
     child.once("close", (status, signal) => {
       let exitStatus = status;
+      let cleanup = parentSignal ? "parent-signal" : timedOut ? "timeout" : "none";
+      const reportFailure = (finalStatus: number | null) => {
+        // Cleanup can reject a successful compiler. Preserve both outcomes so a
+        // failed build does not look like a compiler error with missing output.
+        stderr.write(
+          `[tsdown-build] child result${pidText}: ${JSON.stringify({
+            status,
+            signal,
+            parentSignal: parentSignal ?? null,
+            timedOut,
+            cleanup,
+            observedProcessState: observedProcessState ?? "not-observed",
+            observationScope: useProcessGroup ? "process-group" : "leader",
+            finalStatus,
+          })}\n`,
+        );
+      };
       function finish() {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
+        const finalStatus = parentSignal ? signalExitCode(parentSignal) : exitStatus;
+        if (finalStatus !== 0 || timedOut) {
+          reportFailure(finalStatus);
+        }
         resolve({
-          status: parentSignal ? signalExitCode(parentSignal) : exitStatus,
+          status: finalStatus,
           signal: parentSignal ?? signal,
           timedOut,
           error: null,
@@ -1843,6 +1296,7 @@ export async function runTsdownBuildInvocation(
         if (timedOut || parentSignal) {
           await finishTimedOutProcessTree();
         } else if (processTreeAlive()) {
+          cleanup = "remaining-descendants";
           signalChild("SIGKILL");
           await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
           exitStatus = 1;
@@ -1856,10 +1310,8 @@ export async function runTsdownBuildInvocation(
         }
         finish();
       })().catch((error: unknown) => {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
+        reportFailure(1);
         resolve({
           status: 1,
           signal,
@@ -1960,6 +1412,28 @@ export async function executeTsdownBuildPlan(
   return exitCode;
 }
 
+type LiveGatewayDistFenceFn = (
+  checkoutRoot: string,
+  deps?: { env?: NodeJS.ProcessEnv },
+) => Promise<{ refuse: true; message: string } | { refuse: false }>;
+
+async function loadDefaultLiveGatewayDistFence(): Promise<LiveGatewayDistFenceFn> {
+  try {
+    // Non-literal import: a static specifier would pull daemon service-layout into
+    // the plugin-sdk declaration generator through write-plugin-sdk-entry-dts.
+    const liveGatewayDistFenceHref = pathToFileURL(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "lib", "live-gateway-dist-fence.mts"),
+    ).href;
+    const loaded = (await import(liveGatewayDistFenceHref)) as {
+      resolveLiveManagedGatewayDistFence: LiveGatewayDistFenceFn;
+    };
+    return loaded.resolveLiveManagedGatewayDistFence;
+  } catch {
+    // Declaration fixtures and hosts without daemon sources still have to build.
+    return async () => ({ refuse: false });
+  }
+}
+
 export async function runTsdownBuild(
   argv: string[] = process.argv.slice(2),
   options: {
@@ -1972,6 +1446,15 @@ export async function runTsdownBuild(
     console.log(tsdownBuildUsage());
     return 0;
   }
+  // Shared destructive owner with build-all: refuse before cleanTsdownOutputRoots
+  // so a direct tsdown entry cannot wipe live managed Gateway modules either.
+  const resolveFence = await loadDefaultLiveGatewayDistFence();
+  const fence = await resolveFence(options.cwd ?? process.cwd(), { env: process.env });
+  if (fence.refuse) {
+    console.error(fence.message);
+    return 1;
+  }
+  await ensureKyselyTypes(options.cwd ?? process.cwd());
   let code: number;
   if (options.executeBuild) {
     code = await options.executeBuild(args.forwardedArgs);

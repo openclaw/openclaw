@@ -14,7 +14,8 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: "roboclaw",
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -43,7 +44,8 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: "roboclaw",
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       // A selection hello knows nothing about must not fetch the default's
@@ -69,7 +71,8 @@ describe("AppSidebar session catalog request errors", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -108,7 +111,8 @@ describe("AppSidebar session catalog request errors", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar, context } = await mountSidebar(
@@ -146,7 +150,8 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: "roboclaw",
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar, context } = await mountSidebar(
@@ -193,7 +198,8 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: null,
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -224,7 +230,8 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         suspensionPhase: "accepting",
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -237,7 +244,7 @@ describe("AppSidebar session catalog request errors", () => {
       const refresh = sidebar.sessionData.refreshSessionCatalogs();
       gateway.publish({ suspensionPhase: "draining" });
       gateway.publish({ suspensionPhase: "accepting" });
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(2);
       pending.reject(
         new GatewayRequestError({
@@ -249,6 +256,10 @@ describe("AppSidebar session catalog request errors", () => {
       );
       await refresh;
       await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
       await sidebar.updateComplete;
       expect(request).toHaveBeenCalledTimes(3);
       expect(sidebar.textContent).toContain("Recovered session");
@@ -280,7 +291,8 @@ describe("AppSidebar session catalog request errors", () => {
         gateway.publish({
           suspensionPhase: "accepting",
           hello: {
-            features: { methods: ["sessions.catalog.list"] },
+            auth: { role: "operator", scopes: ["operator.read"] },
+            features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
         const { sidebar } = await mountSidebar(
@@ -296,7 +308,7 @@ describe("AppSidebar session catalog request errors", () => {
           new GatewayRequestError({
             code,
             message,
-            retryable: true,
+            retryable: Boolean(reason),
             details: reason ? { reason, phase: "draining" } : undefined,
           }),
         );
@@ -320,7 +332,7 @@ describe("AppSidebar session catalog request errors", () => {
           catalogPage([{ threadId: "thread-one", name: "Recovered session" }]),
         );
         gateway.publish({ suspensionPhase: "accepting" });
-        await vi.advanceTimersByTimeAsync(49);
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(request).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(1);
         await sidebar.updateComplete;

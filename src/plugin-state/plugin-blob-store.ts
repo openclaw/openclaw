@@ -1,17 +1,8 @@
-// Public facade for plugin-scoped SQLite blob storage.
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   MAX_PLUGIN_BLOB_BYTES_PER_ENTRY,
   MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN,
   MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN,
-  pluginBlobClear,
-  pluginBlobDelete,
-  pluginBlobDeleteExpiredKey,
-  pluginBlobDeleteExpired,
-  pluginBlobEntries,
-  pluginBlobLookup,
-  pluginBlobRegister,
-  pluginBlobRegisterIfAbsent,
 } from "./plugin-blob-store.sqlite.js";
 import type {
   OpenBlobStoreOptions,
@@ -20,6 +11,16 @@ import type {
   PluginBlobStoreOperation,
 } from "./plugin-blob-store.types.js";
 import { PluginBlobStoreError } from "./plugin-blob-store.types.js";
+import {
+  clearPluginBlobsInWorker,
+  lookupPluginBlobInWorker,
+  listPluginBlobsInWorker,
+  deletePluginBlobInWorker,
+  deleteExpiredPluginBlobKeyInWorker,
+  deleteExpiredPluginBlobsInWorker,
+  registerPluginBlobInWorker,
+  registerPluginBlobIfAbsentInWorker,
+} from "./plugin-blob-worker-client.js";
 import {
   createPluginStoreOptionPolicy,
   serializePluginStoreJson,
@@ -44,13 +45,6 @@ type BlobStoreOptionSignature = {
   defaultTtlMs?: number;
 };
 
-type PreparedBlob = {
-  key: string;
-  bytes: Uint8Array;
-  metadataJson: string;
-  ttlMs?: number;
-};
-
 function invalidInput(
   message: string,
   operation: PluginBlobStoreOperation = "register",
@@ -68,16 +62,11 @@ function limitError(message: string): PluginBlobStoreError {
   });
 }
 
-const validationErrors = (operation: PluginBlobStoreOperation) => ({
-  invalid: (message: string) => invalidInput(message, operation),
-  limit: (message: string) => limitError(message),
-});
-
 function validateNamespace(value: string): string {
   return validatePluginStoreNamespace({
     value,
     label: "plugin blob",
-    errors: validationErrors("open"),
+    invalid: (message) => invalidInput(message, "open"),
   });
 }
 
@@ -85,7 +74,7 @@ function validateKey(value: string, operation: PluginBlobStoreOperation): string
   return validatePluginStoreKey({
     value,
     label: "plugin blob",
-    errors: validationErrors(operation),
+    invalid: (message) => invalidInput(message, operation),
   });
 }
 
@@ -93,7 +82,7 @@ function validatePositiveLimit(value: number, label: string, maximum: number): n
   const normalized = validatePluginStorePositiveInteger({
     value,
     label,
-    errors: validationErrors("open"),
+    invalid: (message) => invalidInput(message, "open"),
   });
   if (normalized > maximum) {
     throw invalidInput(`${label} must be <= ${maximum}`, "open");
@@ -113,39 +102,8 @@ function validateTtl(
   return validateOptionalPluginStoreTtlMs({
     value,
     label: "plugin blob ttlMs",
-    errors: validationErrors(operation),
+    invalid: (message) => invalidInput(message, operation),
   });
-}
-
-function prepareBlob(params: {
-  key: string;
-  bytes: Uint8Array;
-  metadata: unknown;
-  maxBytesPerEntry: number;
-  defaultTtlMs?: number;
-  opts?: { ttlMs?: number };
-}): PreparedBlob {
-  const key = validateKey(params.key, "register");
-  if (!(params.bytes instanceof Uint8Array)) {
-    throw invalidInput("plugin blob bytes must be a Uint8Array");
-  }
-  if (params.bytes.byteLength > params.maxBytesPerEntry) {
-    throw limitError(
-      `plugin blob entry exceeds the configured ${params.maxBytesPerEntry} byte limit`,
-    );
-  }
-  const metadataJson = serializePluginStoreJson({
-    value: params.metadata,
-    label: "plugin blob metadata",
-    errors: validationErrors("register"),
-  });
-  const ttlMs = validateTtl(params.opts?.ttlMs, "register") ?? params.defaultTtlMs;
-  return {
-    key,
-    bytes: Uint8Array.from(params.bytes),
-    metadataJson,
-    ...(ttlMs !== undefined ? { ttlMs } : {}),
-  };
 }
 
 function createPluginBlobStoreInternal<TMetadata>(
@@ -185,78 +143,72 @@ function createPluginBlobStoreInternal<TMetadata>(
     defaultTtlMs,
   });
 
-  const writeParams = (blob: PreparedBlob) => ({
-    pluginId,
-    namespace,
-    key: blob.key,
-    bytes: blob.bytes,
-    metadataJson: blob.metadataJson,
-    maxEntries,
-    maxBytesPerNamespace,
-    overflowPolicy,
-    ...(blob.ttlMs !== undefined ? { ttlMs: blob.ttlMs } : {}),
-    ...(env ? { env } : {}),
-  });
+  const scope = { pluginId, namespace, ...(env ? { env } : {}) };
+  const prepareWrite = (
+    key: string,
+    bytes: Uint8Array,
+    metadata: TMetadata,
+    opts?: { ttlMs?: number },
+  ) => {
+    const normalizedKey = validateKey(key, "register");
+    if (!(bytes instanceof Uint8Array)) {
+      throw invalidInput("plugin blob bytes must be a Uint8Array");
+    }
+    if (bytes.byteLength > maxBytesPerEntry) {
+      throw limitError(`plugin blob entry exceeds the configured ${maxBytesPerEntry} byte limit`);
+    }
+    const metadataJson = serializePluginStoreJson({
+      value: metadata,
+      label: "plugin blob metadata",
+      errors: { invalid: invalidInput, limit: limitError },
+    });
+    const ttlMs = validateTtl(opts?.ttlMs, "register") ?? defaultTtlMs;
+    return {
+      ...scope,
+      key: normalizedKey,
+      // Registration reserves broker capacity before copying, still before its first await.
+      bytes,
+      metadataJson,
+      ...(ttlMs !== undefined ? { ttlMs } : {}),
+      maxEntries,
+      maxBytesPerNamespace,
+      overflowPolicy,
+    };
+  };
 
   return {
     async register(key, bytes, metadata, opts) {
-      const blob = prepareBlob({
-        key,
-        bytes,
-        metadata,
-        maxBytesPerEntry,
-        defaultTtlMs,
-        opts,
-      });
-      pluginBlobRegister(writeParams(blob));
+      await registerPluginBlobInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async registerIfAbsent(key, bytes, metadata, opts) {
-      const blob = prepareBlob({
-        key,
-        bytes,
-        metadata,
-        maxBytesPerEntry,
-        defaultTtlMs,
-        opts,
-      });
-      return pluginBlobRegisterIfAbsent(writeParams(blob));
+      return registerPluginBlobIfAbsentInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async lookup(key) {
-      return pluginBlobLookup<TMetadata>({
-        pluginId,
-        namespace,
+      return lookupPluginBlobInWorker<TMetadata>({
+        ...scope,
         key: validateKey(key, "lookup"),
-        ...(env ? { env } : {}),
       });
     },
     async entries() {
-      return pluginBlobEntries<TMetadata>({ pluginId, namespace, ...(env ? { env } : {}) });
+      return listPluginBlobsInWorker<TMetadata>(scope);
     },
     async delete(key) {
-      return pluginBlobDelete({
-        pluginId,
-        namespace,
+      return deletePluginBlobInWorker({
+        ...scope,
         key: validateKey(key, "delete"),
-        ...(env ? { env } : {}),
       });
     },
     async deleteExpiredKey(key) {
-      return pluginBlobDeleteExpiredKey<TMetadata>({
-        pluginId,
-        namespace,
+      return deleteExpiredPluginBlobKeyInWorker<TMetadata>({
+        ...scope,
         key: validateKey(key, "sweep"),
-        ...(env ? { env } : {}),
       });
     },
     async deleteExpired() {
-      return pluginBlobDeleteExpired<TMetadata>({
-        pluginId,
-        namespace,
-        ...(env ? { env } : {}),
-      });
+      return deleteExpiredPluginBlobsInWorker<TMetadata>(scope);
     },
     async clear() {
-      pluginBlobClear({ pluginId, namespace, ...(env ? { env } : {}) });
+      await clearPluginBlobsInWorker(scope);
     },
   };
 }

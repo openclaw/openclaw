@@ -1,4 +1,3 @@
-// Feishu plugin module implements bot sender name behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
@@ -19,10 +18,6 @@ type SenderNameResult = {
   permissionError?: FeishuPermissionError;
 };
 
-type FeishuContactUserGetResponse = Awaited<
-  ReturnType<ReturnType<typeof createFeishuClient>["contact"]["user"]["get"]>
->;
-
 type FeishuLogger = (...args: unknown[]) => void;
 
 type FeishuApiError = {
@@ -34,29 +29,12 @@ type SenderNameCacheEntry =
   | { kind: "resolved"; name: string; expireAt: number }
   | { kind: "unavailable"; expireAt: number };
 
-const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
-const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
-  "contact:contact.base:readonly": "contact:user.base:readonly",
-};
+const STALE_CONTACT_SCOPE = "contact:contact.base:readonly";
 const FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE = 41050;
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const SENDER_NAME_NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const SENDER_NAME_CACHE_MAX_SIZE = 500;
 const senderNameCache = new Map<string, SenderNameCacheEntry>();
-
-function correctFeishuScopeInUrl(url: string): string {
-  let corrected = url;
-  for (const [wrong, right] of Object.entries(FEISHU_SCOPE_CORRECTIONS)) {
-    corrected = corrected.replaceAll(encodeURIComponent(wrong), encodeURIComponent(right));
-    corrected = corrected.replaceAll(wrong, right);
-  }
-  return corrected;
-}
-
-function shouldSuppressPermissionErrorNotice(permissionError: FeishuPermissionError): boolean {
-  const message = normalizeLowercaseStringOrEmpty(permissionError.message);
-  return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
-}
 
 function extractFeishuApiError(err: unknown): FeishuApiError | null {
   if (!err || typeof err !== "object") {
@@ -85,7 +63,12 @@ function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermiss
   return {
     code: feishuErr.code,
     message: feishuErr.message,
-    grantUrl: urlMatch?.[0] ? correctFeishuScopeInUrl(urlMatch[0]) : undefined,
+    grantUrl: urlMatch?.[0]
+      ?.replaceAll(
+        encodeURIComponent(STALE_CONTACT_SCOPE),
+        encodeURIComponent("contact:user.base:readonly"),
+      )
+      .replaceAll(STALE_CONTACT_SCOPE, "contact:user.base:readonly"),
   };
 }
 
@@ -135,7 +118,7 @@ export async function resolveFeishuSenderName(params: {
   try {
     const client = createFeishuClient(account);
     const userIdType = resolveSenderLookupIdType(normalizedSenderId);
-    const res: FeishuContactUserGetResponse = await client.contact.user.get({
+    const res = await client.contact.user.get({
       path: { user_id: normalizedSenderId },
       params: { user_id_type: userIdType },
     });
@@ -154,7 +137,7 @@ export async function resolveFeishuSenderName(params: {
     const feishuErr = extractFeishuApiError(err);
     const permErr = extractPermissionError(feishuErr);
     if (permErr) {
-      if (shouldSuppressPermissionErrorNotice(permErr)) {
+      if (normalizeLowercaseStringOrEmpty(permErr.message).includes(STALE_CONTACT_SCOPE)) {
         log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
         return {};
       }

@@ -87,6 +87,7 @@ export class CodexTranscriptCheckpoint {
           ? [
               projectAgentHarnessTranscriptMessageForDisplay({
                 hidden: this.params.trigger === "memory",
+                inputProvenance: this.params.inputProvenance,
                 message: applyCodexTranscriptTaint(message, taint),
               }),
             ]

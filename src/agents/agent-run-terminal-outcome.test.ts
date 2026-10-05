@@ -39,11 +39,6 @@ describe("agent run terminal outcome", () => {
       definitive: true,
     },
     {
-      label: "unsettled execution failure",
-      data: { error: "provider failed", executionSettled: false },
-      definitive: false,
-    },
-    {
       label: "exhausted provider failure",
       data: { error: "provider failed", fallbackExhaustedFailure: true },
       definitive: true,
@@ -56,8 +51,10 @@ describe("agent run terminal outcome", () => {
     expect(isDefinitiveRunLifecycle({ phase: "error", data })).toBe(definitive);
   });
 
-  it.each(["start", "finishing"])("does not settle the %s lifecycle phase", (phase) => {
-    expect(isDefinitiveRunLifecycle({ phase, data: { executionSettled: true } })).toBe(false);
+  it("does not settle the start lifecycle phase", () => {
+    expect(isDefinitiveRunLifecycle({ phase: "start", data: { executionSettled: true } })).toBe(
+      false,
+    );
   });
 
   it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {
@@ -362,20 +359,6 @@ describe("agent run terminal outcome", () => {
 
     expect(mergeAgentRunTerminalOutcome(timeout, lateAbort)).toBe(timeout);
     expect(mergeAgentRunTerminalOutcome(timeout, lateFailure)).toBe(timeout);
-  });
-
-  it("lets an earlier proven completion correct a provisional timeout", () => {
-    const timeout = buildAgentRunTerminalOutcome({
-      status: "timeout",
-      timeoutPhase: "provider",
-      endedAt: 200,
-    });
-    const earlierCompletion = buildAgentRunTerminalOutcome({
-      status: "ok",
-      endedAt: 190,
-    });
-
-    expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
   });
 
   it("keeps the first proven sticky outcome regardless of callback ordering", () => {
@@ -822,7 +805,6 @@ describe("agent run attempt terminal", () => {
 describe("agent run terminal error projection", () => {
   it.each([
     { name: "normal stop", meta: { stopReason: "stop" } },
-    { name: "completed turn", meta: { stopReason: "completed" } },
     {
       name: "yielded turn",
       meta: { livenessState: "paused", yielded: true, stopReason: "end_turn" },

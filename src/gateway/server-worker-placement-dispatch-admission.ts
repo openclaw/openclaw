@@ -1,6 +1,9 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
+import {
+  resolveWorkerPlacementSessionStoreTarget,
+  type WorkerPlacementSessionRuntime,
+} from "./server-worker-placement-session-target.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
@@ -13,13 +16,7 @@ export function createGatewayWorkerDispatchAdmission(
     callerSignal?.throwIfAborted();
     const runtime = await loadSessionRuntime();
     const resolve = () =>
-      runtime.resolveGatewaySessionStoreTargetWithStore({
-        cfg: getRuntimeConfig(),
-        key: request.sessionKey,
-        agentId: request.agentId,
-        clone: false,
-        exactRead: true,
-      });
+      resolveWorkerPlacementSessionStoreTarget(runtime, getRuntimeConfig(), request);
     const target = resolve();
     const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
     const revision = entry?.lifecycleRevision ?? null;

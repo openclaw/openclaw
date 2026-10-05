@@ -6,12 +6,11 @@ import {
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
-import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveManagedNpmInstallPlan } from "./install-managed-npm-state.js";
 import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
 import { resolveDefaultPluginNpmDir, safePluginInstallFileName } from "./install-paths.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   defaultLogger,
   emitSuccessfulPluginInstallSecurityEvent,
@@ -21,9 +20,8 @@ import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
-  type PluginInstallArtifactConsentHandler,
+  type PackageInstallCommonParams,
   type PluginInstallErrorCode,
-  type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 
@@ -46,9 +44,8 @@ function resolveTrustedNpmPackPackageName(packageName: string | undefined):
       code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
     };
   }
-  const specError = validateRegistryNpmSpec(packageName);
   const parsedSpec = parseRegistryNpmSpec(packageName);
-  if (specError || !parsedSpec || parsedSpec.selectorKind !== "none") {
+  if (!parsedSpec || parsedSpec.selectorKind !== "none") {
     return {
       ok: false,
       error: `unsupported npm pack package name: ${packageName}`,
@@ -81,24 +78,18 @@ async function stageNpmPackArchiveInManagedRoot(params: {
 }
 
 export async function installPluginFromNpmPackArchive(
-  params: InstallSafetyOverrides & {
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries" | "installPolicyRequest"
+  > & {
     archivePath: string;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
     signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult & { npmTarballName?: string }> {
   const runtime = await loadPluginInstallRuntime();
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -172,10 +163,10 @@ export async function installPluginFromNpmPackArchive(
         source: { kind: "archive", authority: "user", mutable: true, network: false },
       },
       policyPreflightSourcePath: metadataResult.archivePath,
-      policyPreflightSourcePathKind: "file",
       extensionsDir: params.extensionsDir,
       npmDir: npmBaseDir,
       timeoutMs,
+      workTimeoutMs,
       signal: params.signal,
       logger,
       mode,

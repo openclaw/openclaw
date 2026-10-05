@@ -1,8 +1,8 @@
-// Msteams plugin module implements monitor handler behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
+import { buildMSTeamsAdaptiveCardActivity } from "./message-activity.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
@@ -11,46 +11,18 @@ import type { MSTeamsIngressDispatchResult, MSTeamsIngressLifecycle } from "./ms
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
-export type MSTeamsActivityHandler = {
-  onMessage: (
-    handler: (
-      context: unknown,
-      next: () => Promise<void>,
-      turnAdoptionLifecycle?: MSTeamsIngressLifecycle,
-    ) => Promise<MSTeamsIngressDispatchResult | void>,
-  ) => MSTeamsActivityHandler;
-  onMembersAdded: (
-    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
-  ) => MSTeamsActivityHandler;
-  onReactionsAdded: (
-    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
-  ) => MSTeamsActivityHandler;
-  onReactionsRemoved: (
-    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
-  ) => MSTeamsActivityHandler;
-  run?: (
-    context: unknown,
-    turnAdoptionLifecycle?: MSTeamsIngressLifecycle,
-  ) => Promise<MSTeamsIngressDispatchResult | void>;
-};
-
-async function isInvokeAuthorized(params: {
-  context: MSTeamsTurnContext;
+export async function isMSTeamsInvokeAuthorized(params: {
+  context: Pick<MSTeamsTurnContext, "activity">;
   deps: MSTeamsMessageHandlerDeps;
-  deniedLogs: {
-    dm: string;
-    channel: string;
-    group: string;
-  };
-  includeInvokeName?: boolean;
+  invokeKind: "feedback" | "signin" | "card action";
 }): Promise<boolean> {
-  const { context, deps, deniedLogs, includeInvokeName = false } = params;
+  const { context, deps, invokeKind } = params;
   const resolved = await resolveMSTeamsSenderAccess({
     cfg: deps.cfg,
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
-  const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
+  const maybeInvokeName = invokeKind === "feedback" ? undefined : { name: context.activity.name };
 
   if (resolved.hasConflictingConversationScope) {
     deps.log.info("dropping invoke (conflicting conversation scope)", {
@@ -65,7 +37,7 @@ async function isInvokeAuthorized(params: {
   }
 
   if (isDirectMessage && resolved.senderAccess.decision !== "allow") {
-    deps.log.debug?.(deniedLogs.dm, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (dm sender not allowlisted)`, {
       sender: senderId,
       conversationId,
       ...maybeInvokeName,
@@ -78,7 +50,7 @@ async function isInvokeAuthorized(params: {
     resolved.channelGate.allowlistConfigured &&
     !resolved.channelGate.allowed
   ) {
-    deps.log.debug?.(deniedLogs.channel, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (not in team/channel allowlist)`, {
       conversationId,
       teamKey: resolved.channelGate.teamKey ?? "none",
       channelKey: resolved.channelGate.channelKey ?? "none",
@@ -88,7 +60,7 @@ async function isInvokeAuthorized(params: {
   }
 
   if (!isDirectMessage && !resolved.senderAccess.allowed) {
-    deps.log.debug?.(deniedLogs.group, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (group sender not allowlisted)`, {
       sender: senderId,
       conversationId,
       ...maybeInvokeName,
@@ -99,122 +71,11 @@ async function isInvokeAuthorized(params: {
   return true;
 }
 
-export async function isFeedbackInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    deniedLogs: {
-      dm: "dropping feedback invoke (dm sender not allowlisted)",
-      channel: "dropping feedback invoke (not in team/channel allowlist)",
-      group: "dropping feedback invoke (group sender not allowlisted)",
-    },
-  });
-}
-
-export async function isSigninInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    deniedLogs: {
-      dm: "dropping signin invoke (dm sender not allowlisted)",
-      channel: "dropping signin invoke (not in team/channel allowlist)",
-      group: "dropping signin invoke (group sender not allowlisted)",
-    },
-    includeInvokeName: true,
-  });
-}
-
-export async function isCardActionInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    deniedLogs: {
-      dm: "dropping card action invoke (dm sender not allowlisted)",
-      channel: "dropping card action invoke (not in team/channel allowlist)",
-      group: "dropping card action invoke (group sender not allowlisted)",
-    },
-    includeInvokeName: true,
-  });
-}
-
-export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
-  handler: T,
-  deps: MSTeamsMessageHandlerDeps,
-): T {
+export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
   const handleReaction = createMSTeamsReactionHandler(deps);
 
-  // Wrap the original run method to intercept invokes
-  const originalRun = handler.run;
-  if (originalRun) {
-    handler.run = async (context: unknown, turnAdoptionLifecycle?: MSTeamsIngressLifecycle) => {
-      const ctx = context as MSTeamsTurnContext;
-      // Non-poll adaptiveCard/action invokes get dispatched here as text so the
-      // agent can react. Poll votes are intercepted in monitor.ts's
-      // app.on("card.action") handler which returns the InvokeResponse to Teams.
-      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
-        if (await maybeHandleMSTeamsApprovalCardSubmit({ context: ctx, deps })) {
-          return;
-        }
-        const text = serializeMSTeamsAdaptiveCardActionValue(ctx.activity?.value);
-        if (text) {
-          return await handleTeamsMessage(
-            {
-              ...ctx,
-              activity: {
-                ...ctx.activity,
-                type: "message",
-                text,
-              },
-            },
-            turnAdoptionLifecycle,
-          );
-        }
-        return;
-      }
-
-      return originalRun.call(handler, context, turnAdoptionLifecycle);
-    };
-  }
-
-  handler.onMessage(async (context, next, turnAdoptionLifecycle) => {
-    let nextRan = false;
-    const runNext = async () => {
-      nextRan = true;
-      await next();
-    };
-    try {
-      const ctx = context as MSTeamsTurnContext;
-      if (await maybeHandleMSTeamsApprovalCardSubmit({ context: ctx, deps })) {
-        await runNext();
-        return undefined;
-      }
-      const result = await handleTeamsMessage(ctx, turnAdoptionLifecycle);
-      await runNext();
-      return result;
-    } catch (err) {
-      if (turnAdoptionLifecycle) {
-        throw err;
-      }
-      deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
-    }
-    if (!nextRan) {
-      await runNext();
-    }
-    return undefined;
-  });
-
-  handler.onMembersAdded(async (context, next) => {
-    const ctx = context as MSTeamsTurnContext;
+  const handleMembersAdded = async (ctx: MSTeamsTurnContext) => {
     const membersAdded = ctx.activity?.membersAdded ?? [];
     const botId = ctx.activity?.recipient?.id;
     const msteamsCfg = deps.cfg.channels?.msteams;
@@ -234,15 +95,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
             promptStarters: msteamsCfg?.promptStarters,
           });
           try {
-            await ctx.sendActivity({
-              type: "message",
-              attachments: [
-                {
-                  contentType: "application/vnd.microsoft.card.adaptive",
-                  content: card,
-                },
-              ],
-            });
+            await ctx.sendActivity(buildMSTeamsAdaptiveCardActivity(card));
             deps.log.info("sent welcome card");
           } catch (err) {
             deps.log.debug?.("failed to send welcome card", { error: formatUnknownError(err) });
@@ -262,26 +115,55 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         deps.log.debug?.("member added", { member: member.id });
       }
     }
-    await next();
-  });
+  };
 
-  handler.onReactionsAdded(async (context, next) => {
-    try {
-      await handleReaction(context as MSTeamsTurnContext, "added");
-    } catch (err) {
-      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
+  return async (
+    context: MSTeamsTurnContext,
+    turnAdoptionLifecycle?: MSTeamsIngressLifecycle,
+  ): Promise<MSTeamsIngressDispatchResult | void> => {
+    const activity = context.activity;
+    // Poll votes are intercepted by monitor.ts, which returns the HTTP invoke response.
+    if (activity?.type === "invoke" && activity.name === "adaptiveCard/action") {
+      if (await maybeHandleMSTeamsApprovalCardSubmit({ context, deps })) {
+        return;
+      }
+      const text = serializeMSTeamsAdaptiveCardActionValue(activity.value);
+      if (text) {
+        return handleTeamsMessage(
+          { ...context, activity: { ...activity, type: "message", text } },
+          turnAdoptionLifecycle,
+        );
+      }
+      return;
     }
-    await next();
-  });
 
-  handler.onReactionsRemoved(async (context, next) => {
-    try {
-      await handleReaction(context as MSTeamsTurnContext, "removed");
-    } catch (err) {
-      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
+    if (activity?.type === "message") {
+      try {
+        if (await maybeHandleMSTeamsApprovalCardSubmit({ context, deps })) {
+          return;
+        }
+        return await handleTeamsMessage(context, turnAdoptionLifecycle);
+      } catch (err) {
+        if (turnAdoptionLifecycle) {
+          throw err;
+        }
+        deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
+      }
+    } else if (activity?.type === "conversationUpdate") {
+      await handleMembersAdded(context);
+    } else if (activity?.type === "messageReaction") {
+      for (const direction of ["added", "removed"] as const) {
+        const reactions =
+          direction === "added" ? activity.reactionsAdded : activity.reactionsRemoved;
+        if (!reactions?.length) {
+          continue;
+        }
+        try {
+          await handleReaction(context, direction);
+        } catch (err) {
+          deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
+        }
+      }
     }
-    await next();
-  });
-
-  return handler;
+  };
 }

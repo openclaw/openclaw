@@ -32,3 +32,16 @@ export const UPDATE_RUN_STEP_STATUSES = [
   "failed",
   "skipped",
 ] as const;
+
+export const UPDATE_NPM_ERROR_CODES = [
+  "ETARGET",
+  "E404",
+  "EINTEGRITY",
+  "EACCES",
+  "ENOTEMPTY",
+  "ENOSPC",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EBUSY",
+  "unknown",
+] as const;

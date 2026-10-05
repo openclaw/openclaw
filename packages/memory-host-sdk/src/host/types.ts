@@ -124,14 +124,8 @@ type MemoryReadNotFoundResult = {
 export type MemoryReadResult = MemoryReadSuccessResult | MemoryReadNotFoundResult;
 
 /** Pre-status result accepted only from registered memory managers during migration. */
-export type LegacyMemoryReadResult = {
+export type LegacyMemoryReadResult = Omit<MemoryReadSuccessResult, "status"> & {
   status?: never;
-  text: string;
-  path: string;
-  truncated?: boolean;
-  from?: number;
-  lines?: number;
-  nextFrom?: number;
 };
 
 /** Aggregated memory backend status for CLI/UI diagnostics. */
@@ -211,6 +205,14 @@ export type MemoryIndexIdentityState =
       | {
           code: "provenance_version" | "chunking_version";
           owner: "openclaw";
+          // Older-chunking corpus marker: set only when every configuration-owned
+          // constraint (sources, scope hash, chunk settings, FTS tokenizer) still
+          // matches, so a pending OpenClaw chunking upgrade cannot mask a narrowed
+          // scope. It excludes embedding identity — provider, model, provider
+          // settings, and vector dims may differ — and does not establish keyword
+          // retrieval availability; consumers must still check usable FTS before
+          // treating the index as servable.
+          chunkingVersionOnly?: boolean;
         }
       | {
           code:
@@ -261,7 +263,17 @@ export function resolveMemoryIndexIdentityDiagnostic(
     identity.owner === "openclaw" &&
     (identity.code === "provenance_version" || identity.code === "chunking_version")
   ) {
-    return { status: "mismatched", reason, code: identity.code, owner: "openclaw" };
+    return {
+      status: "mismatched",
+      reason,
+      code: identity.code,
+      owner: "openclaw",
+      ...(identity.code === "chunking_version" &&
+      identity.chunkingVersionOnly === true &&
+      identity.versionOrder !== "newer"
+        ? { chunkingVersionOnly: true }
+        : {}),
+    };
   }
   if (
     identity.owner === "configuration" &&

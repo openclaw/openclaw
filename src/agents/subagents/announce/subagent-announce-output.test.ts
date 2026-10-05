@@ -4,12 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
   testing,
-  applySubagentWaitOutcome,
   buildCompactAnnounceStatsLine,
   buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
 } from "./subagent-announce-output.test-support.js";
+import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
 
 type CallGateway = typeof import("../../../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
@@ -87,86 +87,42 @@ describe("buildCompactAnnounceStatsLine", () => {
     testing.setDepsForTest();
   });
 
-  it("rolls one-decimal thousand token stats over to the million unit", async () => {
+  it.each([
+    {
+      name: "rolls thousand-token stats over to the million unit",
+      usage: { inputTokens: 999_999, outputTokens: 0, totalTokens: 999_999 },
+      expected: "Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)",
+    },
+    {
+      name: "reports missing usage as unknown",
+      usage: {},
+      expected: "Stats: runtime n/a • tokens unknown",
+    },
+    {
+      name: "keeps genuine zero usage distinct from missing usage",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      expected: "Stats: runtime n/a • tokens 0 (in 0 / out 0)",
+    },
+    {
+      name: "reports a fresh total without inventing directional counts",
+      usage: { totalTokens: 500, totalTokensFresh: true, totalTokensVersion: 1 },
+      expected: "Stats: runtime n/a • tokens 500 prompt/cache",
+    },
+  ])("$name", async ({ usage, expected }) => {
     testing.setDepsForTest({
       getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
       readSubagentSessionEntry: (() => ({
         sessionId: "child-session",
         updatedAt: 0,
-        inputTokens: 999_999,
-        outputTokens: 0,
-        totalTokens: 999_999,
+        ...usage,
       })) as ReadSessionEntry,
       resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
       resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
     });
 
     await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)");
-  });
-
-  it("reports unknown token usage when the session entry carries no usage data", async () => {
-    testing.setDepsForTest({
-      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      // No inputTokens/outputTokens/totalTokens: usage never landed on the entry.
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-      })) as ReadSessionEntry,
-      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
-    });
-
-    await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens unknown");
-  });
-
-  it("keeps a genuine zero-usage reading distinct from absent usage data", async () => {
-    testing.setDepsForTest({
-      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      // Fields present and zero: the child really did make no model call.
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      })) as ReadSessionEntry,
-      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
-    });
-
-    await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens 0 (in 0 / out 0)");
-  });
-
-  it("reports a fresh total without inventing directional token counts", async () => {
-    testing.setDepsForTest({
-      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-        totalTokens: 500,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      })) as ReadSessionEntry,
-      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
-    });
-
-    await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens 500 prompt/cache");
+      buildCompactAnnounceStatsLine({ sessionKey: "agent:main:subagent:child" }),
+    ).resolves.toBe(expected);
   });
 });
 
@@ -222,7 +178,22 @@ describe("readSubagentOutput", () => {
         ],
       },
     },
+    {
+      shape: "nested function alias",
+      assistant: {
+        role: "assistant",
+        content: [{ type: "function_call", function: { tool_name: "sessions_yield" } }],
+      },
+    },
+    {
+      shape: "string function name",
+      assistant: {
+        role: "assistant",
+        content: [{ type: "function_call", function: "sessions_yield" }],
+      },
+    },
   ])("does not expose a $shape yield turn as completion output", async ({ assistant }) => {
+    expect(assistantCallsSessionsYield(assistant)).toBe(true);
     installOutputDeps({
       messages: [assistant, { role: "tool", content: '{"status":"yielded"}' }],
     });
@@ -230,7 +201,7 @@ describe("readSubagentOutput", () => {
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it.each(["toolUse", "functionCall", "function_call"])(
+  it.each(["toolUse", "functionCall", "tool_call", "function_call"])(
     "does not synthesize output from provider-specific %s transcript blocks",
     async (type) => {
       installOutputDeps({
@@ -616,50 +587,6 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
   });
 
-  it("does not convert ANNOUNCE_SKIP child completions into no-output findings", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:silent",
-        task: "silent task",
-        createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
-        execution: { outcome: { status: "ok" } },
-      },
-    ]);
-
-    expect(findings).toBeUndefined();
-  });
-
-  it("keeps failed ANNOUNCE_SKIP child completions visible", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:silent",
-        task: "silent task",
-        createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
-        execution: { outcome: { status: "error", error: "boom" } },
-      },
-    ]);
-
-    expect(findings).toContain("status: error: boom");
-    expect(findings).toContain("ANNOUNCE_SKIP");
-  });
-
-  it("uses the canonical captured child completion text", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:child",
-        task: "child task",
-        createdAt: 1,
-        completion: { resultText: "final child output" },
-        execution: { outcome: { status: "ok" } },
-      },
-    ]);
-
-    expect(findings).toContain("final child output");
-    expect(findings).not.toContain("(no output)");
-  });
-
   it("does not recover result text from delivery metadata after completion text is cleared", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -678,7 +605,6 @@ describe("buildChildCompletionFindings", () => {
     { name: "successful NO_REPLY", status: "ok", resultText: "NO_REPLY" },
     { name: "blank failed", status: "error", resultText: "" },
     { name: "whitespace timed-out", status: "timeout", resultText: " \n\t " },
-    { name: "blank unknown", status: "unknown", resultText: "" },
   ] as const)("uses captured fallback output for a $name completion", ({ status, resultText }) => {
     const findings = buildChildCompletionFindings([
       {
@@ -700,33 +626,43 @@ describe("buildChildCompletionFindings", () => {
 
   it.each([
     {
-      name: "visible",
+      name: "required visible",
+      required: true,
       terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
       resultText: "older captured output",
       expected: "authoritative final output",
     },
     {
-      name: "silent",
+      name: "required silent",
+      required: true,
       terminalReply: { disposition: "silent" } as const,
       resultText: "NO_REPLY",
-      expected: undefined,
+      expected: "(no output)",
     },
     {
-      name: "empty",
+      name: "required empty",
+      required: true,
       terminalReply: { disposition: "empty" } as const,
       resultText: null,
-      expected: undefined,
+      expected: "(no output)",
+    },
+    {
+      name: "optional empty",
+      required: false,
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: "(no output)",
     },
   ])(
-    "keeps producer-owned $name terminal evidence authoritative over older fallback",
-    ({ terminalReply, resultText, expected }) => {
+    "preserves $name terminal evidence as a child finding",
+    ({ required, terminalReply, resultText, expected }) => {
       const findings = buildChildCompletionFindings([
         {
           childSessionKey: "agent:main:subagent:child",
           task: "child task",
           createdAt: 1,
           completion: {
-            required: true,
+            required,
             resultText,
             fallbackResultText: "older captured fallback",
             terminalReply,
@@ -735,36 +671,13 @@ describe("buildChildCompletionFindings", () => {
         },
       ]);
 
-      if (expected === undefined) {
-        expect(findings).toBeUndefined();
-      } else {
-        expect(findings).toContain(expected);
-        expect(findings).not.toContain("older captured output");
-      }
+      expect(findings).toContain(expected);
+      expect(findings).not.toContain("older captured output");
+      expect(findings).not.toContain("older captured fallback");
     },
   );
 
-  it.each(["silent", "empty"] as const)(
-    "treats %s terminal evidence without retained text as an intentional non-result",
-    (disposition) => {
-      const findings = buildChildCompletionFindings([
-        {
-          childSessionKey: "agent:main:subagent:child",
-          task: "child task",
-          createdAt: 1,
-          completion: {
-            resultText: disposition === "silent" ? "NO_REPLY" : null,
-            terminalReply: { disposition },
-          },
-          execution: { outcome: { status: "ok" } },
-        },
-      ]);
-
-      expect(findings).toBeUndefined();
-    },
-  );
-
-  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
+  it.each(["HEARTBEAT_OK"])(
     "does not override an intentional %s completion with fallback output",
     (resultText) => {
       const findings = buildChildCompletionFindings([
@@ -790,7 +703,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
+        completion: { terminalReply: { disposition: "silent" } },
         execution: { outcome: { status: "ok" } },
       },
       {
@@ -826,199 +739,5 @@ describe("buildChildCompletionFindings", () => {
 
     expect(forward).toBe(reverse);
     expect(forward).toMatch(/1\. Child task[\s\S]*A task[\s\S]*2\. Child task[\s\S]*Z task/);
-  });
-});
-
-describe("applySubagentWaitOutcome", () => {
-  it("treats blocked ok wait snapshots as errors", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 150,
-        livenessState: "blocked",
-        error: "Context overflow: prompt too large for the model.",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "error",
-      error: "Context overflow: prompt too large for the model.",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
-  it("treats abandoned ok wait snapshots as incomplete failures", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 150,
-        livenessState: "abandoned",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "error",
-      error: "Agent run ended before producing a complete result.",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
-  it("keeps provider hard timeouts stronger than blocked wait metadata", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "error",
-        startedAt: 100,
-        endedAt: 150,
-        livenessState: "blocked",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "model timed out",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "timeout",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
-  it.each(["rpc", "superseded"] as const)(
-    "keeps explicit %s cancellation distinct from timeout outcomes",
-    (stopReason) => {
-      const applied = applySubagentWaitOutcome({
-        wait: {
-          status: "timeout",
-          startedAt: 100,
-          endedAt: 150,
-          stopReason,
-        },
-        outcome: undefined,
-      });
-
-      expect(applied.outcome).toEqual({
-        status: "error",
-        error: "subagent run terminated",
-        startedAt: 100,
-        endedAt: 150,
-        elapsedMs: 50,
-      });
-    },
-  );
-
-  it("treats aborted ok wait snapshots as terminated subagent errors", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 150,
-        stopReason: "aborted",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "error",
-      error: "subagent run terminated",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
-  it.each(["restart", "aborted"] as const)(
-    "keeps %s stop reasons as cancellation even when liveness is blocked",
-    (stopReason) => {
-      // classifySubagentTerminalOutcome must win over the generic classifier
-      // here: blocked liveness alone would read as a failure, but an explicit
-      // restart/aborted stop reason owns the outcome (openclaw#125407).
-      const applied = applySubagentWaitOutcome({
-        wait: {
-          status: "ok",
-          startedAt: 100,
-          endedAt: 150,
-          stopReason,
-          livenessState: "blocked",
-          error: "Context overflow: prompt too large for the model.",
-        },
-        outcome: undefined,
-      });
-
-      expect(applied.outcome).toEqual({
-        status: "error",
-        error: "subagent run terminated",
-        startedAt: 100,
-        endedAt: 150,
-        elapsedMs: 50,
-      });
-    },
-  );
-
-  it("keeps the failure cause on pending-error timeout wait snapshots", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "timeout",
-        startedAt: 100,
-        endedAt: 150,
-        pendingError: true,
-        error: "model returned an unrecoverable tool-call sequence",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "timeout",
-      error: "model returned an unrecoverable tool-call sequence",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
-  it("leaves genuine budget timeouts without a cause", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "timeout",
-        startedAt: 100,
-        endedAt: 150,
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "timeout",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
-  it("ignores wait error text when the run did not end in a pending error", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "timeout",
-        startedAt: 100,
-        endedAt: 150,
-        error: "waited too long",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "timeout",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
   });
 });

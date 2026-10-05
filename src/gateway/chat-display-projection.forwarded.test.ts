@@ -1,76 +1,102 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
+import { projectForwardedMessages } from "./chat-display-projection.history.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 
-describe("forwarded session attribution", () => {
-  it.each([
+it.each([
+  [
+    "agent:main:main",
     {
-      name: "structured provenance before prompt metadata",
-      sourceSessionKey: "agent:main:main",
-      promptSessionKey: "agent:other:main",
-      senderSession: { sessionKey: "agent:main:main", agentId: "main" },
       senderLabel: "Forwarded from main",
+      senderSession: { sessionKey: "agent:main:main", agentId: "main" },
     },
-    {
-      name: "a session key without a parseable agent",
-      sourceSessionKey: "legacy-session",
-      promptSessionKey: undefined,
-      senderSession: { sessionKey: "legacy-session" },
-      senderLabel: "Forwarded agent message",
-    },
-    {
-      name: "no source metadata",
-      sourceSessionKey: undefined,
-      promptSessionKey: undefined,
-      senderSession: undefined,
-      senderLabel: "Forwarded agent message",
-    },
-  ])("preserves $name in display history", (testCase) => {
+  ],
+  [
+    "legacy-session",
+    { senderLabel: "Forwarded agent message", senderSession: { sessionKey: "legacy-session" } },
+  ],
+  [undefined, { senderLabel: "Forwarded agent message" }],
+] as const)(
+  "uses structured forwarding provenance and preserves indentation: %s",
+  (sourceSessionKey, sender) => {
     const provenance = {
       kind: "inter_session" as const,
       sourceTool: "sessions_send",
-      ...(testCase.sourceSessionKey ? { sourceSessionKey: testCase.sourceSessionKey } : {}),
+      ...(sourceSessionKey ? { sourceSessionKey } : {}),
     };
+    const body = "\n    indented body\n\n";
     const message = {
       role: "user",
       provenance,
-      content: annotateInterSessionPromptText("Forwarded status update", {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-        sourceSessionKey: testCase.promptSessionKey,
+      content: annotateInterSessionPromptText(body, {
+        ...provenance,
+        sourceSessionKey: "agent:other:main",
       }),
     };
-
     expect(projectChatDisplayMessages([message])).toStrictEqual([
-      {
-        role: "assistant",
-        provenance,
-        content: "Forwarded status update",
-        senderLabel: testCase.senderLabel,
-        ...(testCase.senderSession ? { senderSession: testCase.senderSession } : {}),
-      },
+      { ...message, role: "assistant", content: body, ...sender },
     ]);
-  });
-  it("retains forwarded code indentation in display history", () => {
-    const body = "\n    indented body\n\n";
-    const provenance = {
-      kind: "inter_session" as const,
-      sourceTool: "sessions_send",
-      sourceSessionKey: "agent:helper:main",
-    };
+  },
+);
+
+const jobId = "11111111-1111-4111-8111-111111111111";
+const runId = "22222222-2222-4222-8222-222222222222";
+const sessionKey = `agent:main:cron:${jobId}:run:${runId}`;
+const provenance = {
+  kind: "internal_system",
+  sourceTool: "cron",
+  jobId,
+  runId,
+  sourceSessionKey: sessionKey,
+  sourcePromptPrefix: `[cron:${jobId} Old report]`,
+};
+
+it("projects only recorded cron envelopes and current labels without changing model input", () => {
+  const body = "Check the queue.\n    Keep indentation.";
+  const renamedPrefix = `[cron:${jobId} Daily\nreport]]`;
+  const retry = "[cron:literal example] Continue from the last result.";
+  for (const [prefix, content, label, expected] of [
+    [renamedPrefix, `${renamedPrefix} ${body}`, "Renamed report", body],
+    [provenance.sourcePromptPrefix, retry, "Daily report", retry],
+    [
+      provenance.sourcePromptPrefix,
+      [{ type: "text", text: `${provenance.sourcePromptPrefix} ${body}` }],
+      undefined,
+      [{ type: "text", text: body }],
+    ],
+  ] as const) {
     const message = {
       role: "user",
-      provenance,
-      content: annotateInterSessionPromptText(body, provenance),
+      provenance: { ...provenance, sourcePromptPrefix: prefix },
+      content,
     };
-    expect(projectChatDisplayMessages([message])).toStrictEqual([
+    const original = structuredClone(message);
+    expect(
+      projectChatDisplayMessages([message], { resolveCronJobName: () => label }),
+    ).toMatchObject([
       {
         role: "assistant",
-        provenance,
-        content: body,
-        senderLabel: "Forwarded from helper",
-        senderSession: { sessionKey: "agent:helper:main", agentId: "helper" },
+        senderSession: { sessionKey, agentId: "main", label: label ?? "Automation" },
+        content: expected,
       },
     ]);
+    expect(message).toEqual(original);
+  }
+});
+
+it("refreshes only the sender label of an already projected automation", () => {
+  const message = {
+    role: "assistant",
+    content: "[cron:literal header] Keep this literal example.",
+    provenance: {
+      kind: "inter_session",
+      sourceTool: "sessions_send",
+      sourceSessionKey: sessionKey,
+    },
+    senderSession: { sessionKey, agentId: "main", label: "Old name" },
+  };
+  expect(projectForwardedMessages([message], () => "New name")[0]).toMatchObject({
+    content: message.content,
+    senderSession: { label: "New name" },
   });
 });

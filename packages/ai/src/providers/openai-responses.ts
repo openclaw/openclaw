@@ -1,4 +1,3 @@
-// OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
@@ -8,20 +7,23 @@ import type { OpenAIResponsesRequestParams } from "../transports/openai-response
 import { resolveProviderSimpleCompletionHeaders } from "../transports/provider-transport-turn-state.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
 import {
   clampOpenAIPromptCacheKey,
   resolveOpenAIPromptCacheParams,
 } from "./openai-prompt-cache.js";
 import { createOpenAIProviderClient } from "./openai-provider-client.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
+import {
+  resolveOpenAISimpleReasoningEffort,
+  type OpenAIRequestReasoningEffort,
+} from "./openai-request-reasoning.js";
 import {
   applyCommonResponsesParams,
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
   createResponsesAssistantOutput,
-  resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -35,9 +37,8 @@ function getCompat(model: Model<"openai-responses">) {
   };
 }
 
-// OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -48,9 +49,6 @@ type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
   replayResponsesItemIds?: boolean;
 };
 
-/**
- * Generate function for OpenAI Responses API
- */
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
   model: Model<"openai-responses">,
   context: Context,
@@ -59,7 +57,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model);
 
-  // Start async processing
   void runResponsesStreamLifecycle({
     stream,
     model,
@@ -92,10 +89,7 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   "openai-responses",
   SimpleStreamOptions
 > = (model: Model<"openai-responses">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const replayOptions = options as OpenAIResponsesReplayOptions | undefined;
@@ -103,7 +97,7 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
-    reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);
 };
@@ -122,12 +116,7 @@ function createClient(
   const compat = getCompat(model);
   const headers = { ...model.headers };
   if (model.provider === "github-copilot") {
-    const hasImages = hasCopilotVisionInput(context.messages);
-    const copilotHeaders = buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages,
-    });
-    Object.assign(headers, copilotHeaders);
+    Object.assign(headers, buildCopilotDynamicHeaders(context.messages));
   }
 
   if (sessionId) {
@@ -166,14 +155,6 @@ function buildParams(
     ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
     store: false,
   };
-
-  if (options?.maxTokens) {
-    params.max_output_tokens = options?.maxTokens;
-  }
-
-  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
-    params.temperature = options?.temperature;
-  }
 
   if (options?.serviceTier !== undefined) {
     params.service_tier = options.serviceTier;

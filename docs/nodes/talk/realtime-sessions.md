@@ -11,8 +11,8 @@ sidebarTitle: "Realtime sessions"
 ## Choose a Talk voice from chat
 
 During an active browser, iOS, or Android realtime Talk call, ask the assistant
-to list the available voices or switch to one. Browser Talk also offers a voice
-picker beside the call controls. The `talk_voice`
+to list the available voices or switch to one. The browser composer keeps only
+call controls; choose the default voice in **Settings → Talk**. The `talk_voice`
 tool lists the current provider, model, voice,
 and supported voice IDs for the call in the current conversation. Setting a
 voice reconnects that call while preserving its chat and captions. The replacement
@@ -85,6 +85,11 @@ partial answer, empty-result fallback, or failed-task retry prompt. Timeouts
 remain failures rather than being silently treated as cancellations.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
+
+Speech finalized while an accepted consult is starting remains visible in history
+and does not prevent the agent from adopting that consult's recorded input.
+Completed agent answers and newly admitted tasks still close the older input;
+speech records do not reopen it.
 
 Gateway-controlled native WebRTC calls receive shared-session history as quoted
 historical background in their instructions, not as the new call's own user or

@@ -31,7 +31,6 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
   resolution?: TResolution;
   capabilities?: MediaGeometryCapabilities<TResolution>;
   fallbackSizes?: readonly string[];
-  resolutionOrder?: readonly TResolution[];
   reportUnrecognizedOverrides?: boolean;
   useAspectRatioForRequestedSize?: boolean;
 }): {
@@ -116,7 +115,6 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
     const normalizedResolution = resolveClosestResolution({
       requestedResolution: resolution,
       supportedResolutions: caps.resolutions,
-      order: params.resolutionOrder,
     });
     if (normalizedResolution && normalizedResolution !== resolution) {
       normalization.resolution = { requested: resolution, applied: normalizedResolution };
@@ -127,29 +125,6 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
   } else if (resolution && !caps.supportsResolution) {
     ignoredOverrides.push({ key: "resolution", value: resolution });
     resolution = undefined;
-  }
-
-  if (!normalization.size && size && params.size && params.size !== size) {
-    normalization.size = { requested: params.size, applied: size };
-  }
-  if (
-    !normalization.aspectRatio &&
-    aspectRatio &&
-    ((!params.aspectRatio && params.size) || params.aspectRatio !== aspectRatio)
-  ) {
-    normalization.aspectRatio = {
-      applied: aspectRatio,
-      ...(params.aspectRatio ? { requested: params.aspectRatio } : {}),
-      ...(!params.aspectRatio && params.size ? { derivedFrom: "size" } : {}),
-    };
-  }
-  if (
-    !normalization.resolution &&
-    resolution &&
-    params.resolution &&
-    params.resolution !== resolution
-  ) {
-    normalization.resolution = { requested: params.resolution, applied: resolution };
   }
 
   return { size, aspectRatio, resolution, ignoredOverrides, normalization };

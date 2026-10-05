@@ -23,14 +23,14 @@ openclaw daemon uninstall
 
 ## Subcommands and options
 
-| Subcommand  | Options                                                                                                    |
-| ----------- | ---------------------------------------------------------------------------------------------------------- |
-| `status`    | `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json` |
-| `install`   | `--port`, `--runtime <node\|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`                      |
-| `uninstall` | `--json`                                                                                                   |
-| `start`     | `--json`                                                                                                   |
-| `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)             |
-| `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                                      |
+| Subcommand  | Options                                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------- |
+| `status`    | `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`     |
+| `install`   | `--port`, `--runtime <node\|bun>`, `--runtime-path <path>`, `--token`, `--wrapper <path>`, `--force`, `--json` |
+| `uninstall` | `--json`                                                                                                       |
+| `start`     | `--json`                                                                                                       |
+| `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)                 |
+| `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                                          |
 
 `--json` is accepted before or after every subcommand (for example, `daemon --json status` and `daemon status --json`).
 

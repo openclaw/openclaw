@@ -1,4 +1,4 @@
-import { expect, vi } from "vitest";
+import { expect, type Mock, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronJobCreate } from "./types.js";
@@ -8,6 +8,7 @@ type RunIsolatedAgentJob = NonNullable<CronServiceParams["runIsolatedAgentJob"]>
 type IsolatedAgentRunResult = Awaited<ReturnType<RunIsolatedAgentJob>>;
 type FailureAlertConfig = NonNullable<CronServiceParams["cronConfig"]>["failureAlert"];
 type SendCronFailureAlert = NonNullable<CronServiceParams["sendCronFailureAlert"]>;
+type RunCronFailureRepair = NonNullable<CronServiceParams["runCronFailureRepair"]>;
 
 export function createTelegramDelivery(): NonNullable<CronJobCreate["delivery"]> {
   return { mode: "announce", channel: "telegram", to: "19098680" };
@@ -36,6 +37,7 @@ export function setupFailureAlertSuite() {
 
   async function withFailureAlertCron(
     params: {
+      scheduler: CronServiceParams["scheduler"];
       failureAlert?: FailureAlertConfig;
       runResult?: IsolatedAgentRunResult;
       useFallback?: boolean;
@@ -45,6 +47,7 @@ export function setupFailureAlertSuite() {
       enqueueSystemEvent: ReturnType<typeof vi.fn>;
       requestHeartbeat: ReturnType<typeof vi.fn>;
       sendCronFailureAlert: ReturnType<typeof vi.fn<SendCronFailureAlert>>;
+      runCronFailureRepair: Mock<RunCronFailureRepair>;
       runIsolatedAgentJob: ReturnType<typeof vi.fn<RunIsolatedAgentJob>>;
       addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
     }) => Promise<void>,
@@ -53,12 +56,15 @@ export function setupFailureAlertSuite() {
     const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
+    const runCronFailureRepair = vi.fn<RunCronFailureRepair>(async () => undefined);
     const runResult = params.runResult ?? {
       status: "error",
       error: "temporary upstream error",
     };
     const runIsolatedAgentJob = vi.fn<RunIsolatedAgentJob>(async () => runResult);
     const cron = new CronService({
+      scheduler: params.scheduler,
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       ...(params.failureAlert === undefined
@@ -68,6 +74,7 @@ export function setupFailureAlertSuite() {
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob,
+      runCronFailureRepair,
       ...(params.useFallback ? {} : { sendCronFailureAlert }),
     });
 
@@ -78,6 +85,7 @@ export function setupFailureAlertSuite() {
         enqueueSystemEvent,
         requestHeartbeat,
         sendCronFailureAlert,
+        runCronFailureRepair,
         runIsolatedAgentJob,
         addJob: async (name, overrides) => await cron.add(createFailureAlertJob(name, overrides)),
       });

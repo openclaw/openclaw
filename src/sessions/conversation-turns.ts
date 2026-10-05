@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ConversationTurnReply = {
@@ -64,15 +65,11 @@ function pendingTurnKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
 }
 
-function outboundMessageKey(agentId: string, outboundMessageId: string): string {
-  return JSON.stringify([agentId, outboundMessageId]);
-}
-
 function removePendingOutboundMembership(pending: PendingConversationTurn): void {
   if (!pending.outboundMessageId) {
     return;
   }
-  const key = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+  const key = pendingTurnKey(pending.agentId, pending.outboundMessageId);
   const bucket = pendingTurnsByOutboundId.get(key);
   bucket?.delete(pending);
   if (bucket?.size === 0) {
@@ -102,22 +99,10 @@ export function registerPendingConversationTurn(params: {
   const createdAt = Date.now();
   const timeoutMs = Math.max(0, params.timeoutMs);
   let settled = false;
-  let resolvePromise: (reply: ConversationTurnReply | undefined) => void = () => undefined;
-  const promise = new Promise<ConversationTurnReply | undefined>((resolve) => {
-    resolvePromise = resolve;
-  });
-  let resolveCorrelationReady: () => void = () => undefined;
-  const correlationReady = new Promise<void>((resolve) => {
-    resolveCorrelationReady = resolve;
-  });
-  let correlationReadySettled = false;
-  const markCorrelationReady = () => {
-    if (correlationReadySettled) {
-      return;
-    }
-    correlationReadySettled = true;
-    resolveCorrelationReady();
-  };
+  const { promise, resolve: resolvePromise } = createDeferredCore<
+    ConversationTurnReply | undefined
+  >();
+  const { promise: correlationReady, resolve: markCorrelationReady } = createDeferredCore();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopTimeout = () => {
     if (timer) {
@@ -172,7 +157,7 @@ export function registerPendingConversationTurn(params: {
         pending.settle(undefined);
         return;
       }
-      const outboundKey = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+      const outboundKey = pendingTurnKey(pending.agentId, pending.outboundMessageId);
       const bucket = pendingTurnsByOutboundId.get(outboundKey) ?? new Set();
       bucket.add(pending);
       pendingTurnsByOutboundId.set(outboundKey, bucket);
@@ -227,7 +212,7 @@ export async function claimPendingConversationTurnReply(params: {
     return undefined;
   }
   let pending: PendingConversationTurn | undefined;
-  const candidates = pendingTurnsByOutboundId.get(outboundMessageKey(agentId, replyToId));
+  const candidates = pendingTurnsByOutboundId.get(pendingTurnKey(agentId, replyToId));
   for (const candidate of candidates ?? []) {
     if (
       candidate.claimed ||
@@ -266,7 +251,7 @@ export async function claimPendingConversationTurnReply(params: {
   const reply: ConversationTurnReply = {
     conversationRef: params.conversationRef,
     messageId: params.messageId,
-    ...(replyToId ? { replyToId } : {}),
+    replyToId,
     ...(threadId ? { threadId } : {}),
     text: params.text,
     timestamp: params.timestamp ?? Date.now(),

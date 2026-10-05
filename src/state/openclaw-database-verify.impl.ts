@@ -1,15 +1,15 @@
 import { fork, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { parseSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import type { SqliteIntegrityConfirmation } from "../infra/sqlite-integrity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   confirmOpenClawAgentDatabaseIntegrity,
-  listOpenClawRegisteredAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import type {
@@ -21,24 +21,18 @@ import {
   confirmOpenClawStateDatabaseIntegrity,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-export const OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS = 5 * 60_000;
-export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
-function isVerifyResult(value: unknown): value is OpenClawDatabaseVerifyResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const result = value as Record<string, unknown>;
+function isVerifyResult(result: unknown): result is OpenClawDatabaseVerifyResult {
   return (
+    isRecord(result) &&
     typeof result.path === "string" &&
     typeof result.ok === "boolean" &&
     (result.error === undefined || typeof result.error === "string") &&
-    (result.terminal === undefined || typeof result.terminal === "boolean")
+    (result.terminal === undefined || typeof result.terminal === "boolean") &&
+    (result.generation === undefined || typeof result.generation === "string")
   );
 }
 
@@ -48,6 +42,11 @@ type DatabaseVerifyWorkerLifecycle = {
   requestTermination: () => void;
 };
 const workerLifecycles = new WeakMap<ChildProcess, DatabaseVerifyWorkerLifecycle>();
+
+export type DatabaseVerifyWorkerLifetime = {
+  onWorker?: (worker: ChildProcess | undefined) => void;
+  assertCurrent?: () => void;
+};
 
 function ownDatabaseVerifyWorker(worker: ChildProcess): DatabaseVerifyWorkerLifecycle {
   let terminationRequested = false;
@@ -122,15 +121,16 @@ function ownDatabaseVerifyWorker(worker: ChildProcess): DatabaseVerifyWorkerLife
 
 export function runDatabaseVerifyWorker(
   targets: readonly OpenClawDatabaseVerifyTarget[],
-  options: { onWorker?: (worker: ChildProcess | undefined) => void; workerUrl?: URL } = {},
+  options: DatabaseVerifyWorkerLifetime & { workerUrl?: URL } = {},
 ): Promise<OpenClawDatabaseVerifyResult[]> {
+  options.assertCurrent?.();
   const workerUrl =
     options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   let worker: ChildProcess;
   try {
-    // Snapshot preparation opens and closes raw source descriptors. Isolate it
-    // because POSIX close() can release the Gateway's process-owned SQLite locks.
+    // Closing a source reader can release the Gateway's process-owned SQLite
+    // locks, so verification keeps its own process.
     worker = fork(fileURLToPath(workerUrl), [DATABASE_VERIFY_CHILD_ARG], {
       execArgv,
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -202,35 +202,29 @@ export async function terminateDatabaseVerifyWorker(worker: ChildProcess): Promi
   await lifecycle.settled;
 }
 
-/** Resolve the state database and current registered agent database paths. */
-export function collectOpenClawDatabaseVerifyTargets(options: {
-  env: NodeJS.ProcessEnv;
-}): OpenClawDatabaseVerifyTarget[] {
-  const targets = new Map<string, OpenClawDatabaseVerifyTarget>();
-  const statePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
-  if (existsSync(statePath)) {
-    targets.set(statePath, { kind: "state", label: "OpenClaw state database", path: statePath });
+/** The caller drains its owners; the child binds full confirmation to file generations. */
+export async function confirmDatabaseVerifyWorker(
+  target: Omit<OpenClawDatabaseVerifyTarget, "check" | "confirm">,
+  lifetime: DatabaseVerifyWorkerLifetime = {},
+): Promise<SqliteIntegrityConfirmation> {
+  const [result] = await runDatabaseVerifyWorker(
+    [{ ...target, check: "full", confirm: true }],
+    lifetime,
+  );
+  lifetime.assertCurrent?.();
+  if (!result || result.path !== target.path) {
+    throw new Error("database verification worker returned no confirmation");
   }
-  let registeredDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases> = [];
-  try {
-    registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
-  } catch (error) {
-    log.warn("failed to collect registered agent databases for integrity verification", {
-      error: String(error),
-    });
+  const generation = result.generation ? parseSqliteFileGeneration(result.generation) : undefined;
+  if (result.ok && generation) {
+    return { status: "healthy", generation };
   }
-  for (const registered of registeredDatabases) {
-    const agentPath = path.resolve(registered.path);
-    if (!existsSync(agentPath) || targets.has(agentPath)) {
-      continue;
-    }
-    targets.set(agentPath, {
-      kind: "agent",
-      label: `OpenClaw agent database ${registered.agentId}`,
-      path: agentPath,
-    });
+  const error = new Error(result.error ?? "database integrity confirmation was unbound");
+  if (result.terminal && generation) {
+    error.name = "SqliteIntegrityError";
+    return { status: "failed", error, terminal: true, generation };
   }
-  return [...targets.values()];
+  return { status: "failed", error, terminal: false };
 }
 
 /** Reconfirm worker failures on live owners before quarantine and latching. */
@@ -238,70 +232,55 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
   results: readonly OpenClawDatabaseVerifyResult[];
   targets: readonly OpenClawDatabaseVerifyTarget[];
+  workerLifetime?: DatabaseVerifyWorkerLifetime;
 }): Promise<void> {
   const targetByPath = new Map(options.targets.map((target) => [target.path, target]));
 
   for (const result of options.results) {
+    options.workerLifetime?.assertCurrent?.();
     const target = targetByPath.get(result.path);
     if (!target) {
       continue;
     }
+    const details = {
+      kind: target.kind,
+      label: target.label,
+      path: result.path,
+      check: target.check,
+    };
     if (result.ok) {
-      log.info("database integrity verification passed", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
-      });
+      log.info("database integrity verification passed", details);
       continue;
     }
     if (!result.terminal) {
       log.warn("database integrity verification was inconclusive", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
+        ...details,
         error: result.error,
       });
       continue;
     }
-    const confirmation =
-      target.kind === "state"
-        ? await confirmOpenClawStateDatabaseIntegrity(result.path)
-        : await confirmOpenClawAgentDatabaseIntegrity(result.path);
+    const confirmation = await (target.kind === "state"
+      ? confirmOpenClawStateDatabaseIntegrity(result.path)
+      : confirmOpenClawAgentDatabaseIntegrity(result.path, options.workerLifetime));
+    options.workerLifetime?.assertCurrent?.();
     if (confirmation.status === "healthy") {
-      log.info("discarding stale database integrity verification result", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
-      });
+      log.info("discarding stale database integrity verification result", details);
       continue;
     }
     if (!confirmation.terminal) {
       log.warn("database integrity verification was inconclusive", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
+        ...details,
         error: confirmation.error.message,
       });
       continue;
     }
-    const latched =
+    const recordFailure =
       target.kind === "state"
-        ? recordOpenClawStateDatabaseOpenFailure(
-            result.path,
-            confirmation.error,
-            confirmation.generation,
-          )
-        : recordOpenClawAgentDatabaseOpenFailure(
-            result.path,
-            confirmation.error,
-            confirmation.generation,
-          );
+        ? recordOpenClawStateDatabaseOpenFailure
+        : recordOpenClawAgentDatabaseOpenFailure;
+    const latched = recordFailure(result.path, confirmation.error, confirmation.generation);
     if (!latched) {
-      log.info("discarding database integrity result after database generation changed", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
-      });
+      log.info("discarding database integrity result after database generation changed", details);
       continue;
     }
     if (target.kind === "agent") {
@@ -316,16 +295,13 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
       reason: confirmation.error.message,
     });
     if (!recorded) {
-      // Store unavailable. Daily verification retries persistence.
       log.error("failed to persist database quarantine; quarantine is process-local", {
         kind: target.kind,
         path: result.path,
       });
     }
     log.error("database integrity verification failed", {
-      kind: target.kind,
-      label: target.label,
-      path: result.path,
+      ...details,
       error: confirmation.error.message,
     });
   }

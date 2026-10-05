@@ -20,6 +20,18 @@ struct GatewayEndpoint {
     let mode: String
 }
 
+func resolvedCredential(
+    _ explicit: String?,
+    mode: String,
+    local: String?,
+    remote: String?,
+    inheritConfigCredentials: Bool = true) -> String?
+{
+    if let explicit, !explicit.isEmpty { return explicit }
+    guard inheritConfigCredentials else { return nil }
+    return mode == "remote" ? remote : local
+}
+
 /// Keep standalone CLI reads and configure-remote writes on the same profile.
 /// An explicit config path wins; otherwise the selected state directory owns openclaw.json.
 func resolveOpenClawConfigURL(
@@ -48,24 +60,19 @@ func loadGatewayConfig(from configURL: URL) -> GatewayConfig {
         return GatewayConfig()
     }
 
-    var cfg = GatewayConfig()
-    if let gateway = json["gateway"] as? [String: Any] {
-        cfg.mode = gateway["mode"] as? String
-        cfg.bind = gateway["bind"] as? String
-        cfg.port = gateway["port"] as? Int ?? parseInt(gateway["port"])
-
-        if let auth = gateway["auth"] as? [String: Any] {
-            cfg.token = auth["token"] as? String
-            cfg.password = auth["password"] as? String
-        }
-        if let remote = gateway["remote"] as? [String: Any] {
-            cfg.remoteUrl = remote["url"] as? String
-            cfg.remotePort = remote["remotePort"] as? Int ?? parseInt(remote["remotePort"])
-            cfg.remoteToken = remote["token"] as? String
-            cfg.remotePassword = remote["password"] as? String
-        }
-    }
-    return cfg
+    let gateway = json["gateway"] as? [String: Any] ?? [:]
+    let auth = gateway["auth"] as? [String: Any] ?? [:]
+    let remote = gateway["remote"] as? [String: Any] ?? [:]
+    return GatewayConfig(
+        mode: gateway["mode"] as? String,
+        bind: gateway["bind"] as? String,
+        port: parseInt(gateway["port"]),
+        remoteUrl: remote["url"] as? String,
+        remotePort: parseInt(remote["remotePort"]),
+        token: auth["token"] as? String,
+        password: auth["password"] as? String,
+        remoteToken: remote["token"] as? String,
+        remotePassword: remote["password"] as? String)
 }
 
 func parseInt(_ value: Any?) -> Int? {

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements session contract behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function extractLegacyWhatsAppGroupId(key: string): string | null {

@@ -1,7 +1,8 @@
 ---
-summary: "Control-plane tools, node execution, skills, plugins, sandboxing, and per-agent access profiles"
+summary: "Cross-provider messaging, control-plane tools, node execution, plugins, sandboxing, and per-agent access profiles"
 read_when:
   - Deciding which tools an agent may call
+  - Restricting messaging across conversations or channel providers
   - Sandboxing an agent or a delegated sub-agent run
   - Giving several agents different levels of access on one Gateway
 title: "Tool and agent permissions"
@@ -27,7 +28,32 @@ For any agent/surface handling untrusted content, deny these by default:
 }
 ```
 
-`commands.restart=false` disables `/restart` and external `SIGUSR1` restart requests. The `gateway` agent tool has no restart action.
+`commands.restart=false` disables `/restart` and external `SIGUSR2` restart requests. The `gateway` agent tool has no restart action.
+
+## Cross-provider messaging
+
+Agents with message-tool access can send across conversations and channel providers by default. For example, a WebChat session can send to a configured Discord channel without opting in to cross-provider delivery. Tool access, message-action allowlists, channel/account policy, and the provider's own permissions still apply.
+
+`tools.message.crossContext.allowAcrossProviders` defaults to `true`. Upgrades adopt this default when the setting is omitted; an explicit `false` continues to block guarded message actions from crossing the bound source provider. Set it to `false` if your deployment relies on that restriction.
+
+`allowWithinProvider` also defaults to `true` and independently controls actions targeting another conversation on the same provider. To confine guarded message actions to the current bound conversation, set both options to `false`:
+
+```json5
+{
+  tools: {
+    message: {
+      crossContext: {
+        allowWithinProvider: false,
+        allowAcrossProviders: false,
+      },
+    },
+  },
+}
+```
+
+To apply this policy to one agent, put the same `message` block under `agents.entries.<agentId>.tools`. Per-agent values override the matching global settings; omitted fields inherit them.
+
+These controls guard message mutations such as sends, replies, edits, deletes, and thread creation. They do not restrict every channel action: reads and administrative actions have separate permissions. They also do not confine CLI calls without a bound source conversation or replace filesystem, shell, or sandbox restrictions. See [Tool policy](/gateway/config-tools/tool-policy) and [Per-agent access profiles](/gateway/security/tool-permissions#per-agent-access-profiles-multi-agent) for the related controls.
 
 ## Node execution (`system.run`)
 
@@ -110,6 +136,13 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 
 Tool profiles do not narrow session-tool reach, and sandboxing only clamps the sandboxed caller to its spawn tree; an unsandboxed agent can still read a sandboxed agent's sessions. Session visibility is Gateway-wide and agent-to-agent messaging is on by default, so pair persona profiles with `tools.sessions.visibility` and `tools.agentToAgent` when agents on one Gateway should not see or message each other (see the last example below).
 
+To allow requests without cross-agent history access, keep visibility narrow and
+set the requester's `agents.entries.<agentId>.tools.agentToAgent.send` to selected
+target IDs or `*` patterns. This grants only `sessions_send` and the authorized
+turn's reply, not read, status, session-control, or otherwise hidden watch access.
+It does not override global agent-to-agent restrictions or sandbox spawned-only
+clamps. See the [send-only example and trust limits](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
+
 ### Full access (no sandbox)
 
 ```json5
@@ -117,7 +150,6 @@ Tool profiles do not narrow session-tool reach, and sandboxing only clamps the s
   agents: {
     entries: {
       personal: {
-        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: { mode: "off" },
       },
@@ -133,7 +165,6 @@ Tool profiles do not narrow session-tool reach, and sandboxing only clamps the s
   agents: {
     entries: {
       family: {
-        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -157,7 +188,6 @@ Tool profiles do not narrow session-tool reach, and sandboxing only clamps the s
   agents: {
     entries: {
       public: {
-        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {

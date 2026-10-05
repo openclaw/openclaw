@@ -28,7 +28,7 @@ async function runComputerHost(): Promise<void> {
     process.stdout.write(`${JSON.stringify(message)}\n`);
   const log = (message: string) => process.stderr.write(`${message}\n`);
   let startup: Promise<void> | undefined;
-  let stopWatching: (() => void) | undefined;
+  let stopWatching: ReturnType<typeof watchRegisteredNodeHostCommandAvailability> | undefined;
   let stopping: Promise<void> | undefined;
   let stopped = false;
 
@@ -36,30 +36,43 @@ async function runComputerHost(): Promise<void> {
     if (stopping) {
       return stopping;
     }
+    stopping = completion.promise;
     stopped = true;
     if (!execution) {
       for (const request of requests.values()) {
         request.abort(new Error("Computer host is stopping"));
       }
     }
-    stopping = (async () => {
+    void (async () => {
       await startup?.catch(() => {});
       await Promise.allSettled(operations);
       try {
-        if (execution) {
-          await invokeRegisteredNodeHostCommand(
-            "computer.act",
-            JSON.stringify({ action: "__close_execution", ...execution }),
-          );
+        const results = await Promise.allSettled([
+          (async () => {
+            if (execution) {
+              await invokeRegisteredNodeHostCommand(
+                "computer.act",
+                JSON.stringify({ action: "__close_execution", ...execution }),
+              );
+            }
+            await notifyRegisteredNodeHostCommandDisconnect();
+          })(),
+          Promise.resolve().then(() => stopWatching?.()),
+        ]);
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length === 1) {
+          throw failures[0];
         }
-        await notifyRegisteredNodeHostCommandDisconnect();
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "Computer host cleanup failed");
+        }
       } finally {
-        stopWatching?.();
         input.close();
         requestExitAfterOneShotOutput();
       }
-    })();
-    void stopping.then(completion.resolve, completion.reject);
+    })().then(completion.resolve, completion.reject);
     return stopping;
   };
   const stopAfterError = (error: unknown) => {

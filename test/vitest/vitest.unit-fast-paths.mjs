@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { isAgentsCoreIsolatedTestFile } from "./vitest.agents-paths.mjs";
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "./vitest.commands-light-paths.mjs";
 import { isDatabaseWorkerCoreTestFile } from "./vitest.database-worker-core-paths.mjs";
@@ -59,7 +60,6 @@ const unitFastCandidatePatterns = prepareGlobPatterns(
     "src/sessions/**/*.test.ts",
     "src/shared/**/*.test.ts",
     "src/test-utils/**/*.test.ts",
-    "src/tasks/**/*.test.ts",
     "src/tts/**/*.test.ts",
     "src/utils/**/*.test.ts",
     "src/video-generation/**/*.test.ts",
@@ -75,12 +75,10 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts",
   "packages/memory-host-sdk/src/host/internal.test.ts",
   "packages/memory-host-sdk/src/host/post-json.test.ts",
-  "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
   "src/acp/control-plane/manager.failover.test.ts",
   "src/acp/control-plane/manager.runtime-config.test.ts",
   "src/acp/control-plane/manager.runtime-handles.test.ts",
-  "src/acp/control-plane/manager.test.ts",
   "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
@@ -90,20 +88,13 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.final-snapshots.test.ts",
   "src/acp/translator.prompt-size.test.ts",
   "src/acp/translator.session-config.test.ts",
-  "src/acp/translator.session-rate-limit.test.ts",
   "src/acp/translator.session-setup.test.ts",
-  "src/acp/translator.session-snapshot.test.ts",
-  "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
-  "src/system-agent/audit.test.ts",
   "src/system-agent/assistant.configured.test.ts",
   "src/system-agent/system-agent.test.ts",
-  "src/system-agent/operations.test.ts",
-  "src/system-agent/rescue-message.test.ts",
   "src/system-agent/tui-backend.test.ts",
   "src/flows/channel-setup.status.test.ts",
   "src/flows/provider-flow.test.ts",
-  "src/context-engine/context-engine.test.ts",
   "src/entry.compile-cache.test.ts",
   "src/entry.respawn.test.ts",
   "src/entry.version-fast-path.test.ts",
@@ -117,11 +108,9 @@ export const forcedUnitFastTestFiles = [
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
-  "src/node-host/invoke-system-run.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
-  "src/proxy-capture/proxy-server.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
   "src/talk/agent-consult-runtime.test.ts",
   "src/security/audit-config-basics.test.ts",
@@ -139,10 +128,8 @@ export const forcedUnitFastTestFiles = [
   "src/realtime-transcription/websocket-session.test.ts",
   "src/routing/resolve-route.test.ts",
   "src/status/status-message.test.ts",
-  "src/trajectory/cleanup.test.ts",
   "src/trajectory/export.test.ts",
   "src/trajectory/metadata.test.ts",
-  "src/trajectory/runtime.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
   "src/tts/tts.test.ts",
   "src/tts/status-config.test.ts",
@@ -166,22 +153,49 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
 const ownerRoutedUnitTestPatterns = [
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
-  // Real Git process-tree fixtures stay in serial tooling even when their
+  // Planner inventory proofs retain their tooling timing and worker policy
+  // when their source and fixtures are split across ownership files.
+  "test/scripts/ci-changed-node-test-plan.test.ts",
+  "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
+  "test/scripts/ci-changed-node-test-plan.policy.test.ts",
+  "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
+  "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
+  // Real Git process-tree fixtures stay in tooling even when their
   // subprocess harness moves into shared test support.
   "test/scripts/ci-git-owner.test.ts",
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
   "test/scripts/plugin-release-git-lifecycle.test.ts",
   "test/scripts/release-workflow-git-lifecycle.test.ts",
+  // Release orchestration executes real CLI subprocesses through shared fixtures.
+  "test/scripts/release-stable.test.ts",
+  "test/scripts/release-stable-post.test.ts",
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
+  // Detached handoff and service-manager fixtures retain their infra owner when shared.
+  "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+  "src/infra/update-managed-service-handoff-native-lifecycle.test.ts",
+  "src/infra/update-managed-service-handoff-recovery-systemd.test.ts",
+  "src/infra/update-managed-service-handoff-recovery-launchd.test.ts",
+  "src/infra/update-managed-service-handoff-terminal-result.test.ts",
+  "src/infra/update-managed-service-handoff-triage.test.ts",
   // Command compaction tests need the scoped runtime registry even when their
   // mocks live in a shared helper.
+  // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
+  "src/agents/agent-harness-completion-delivery.test.ts",
+  "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  // Source plugin workers retain the agent runtime owner after test extraction.
+  "src/agents/code-mode-quickjs.integration.test.ts",
+  "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
+  // Split transport suites install module mocks through their shared harness.
+  "src/agents/provider-transport-fetch.*.test.ts",
   "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
@@ -217,7 +231,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",
     "test/helpers/stt-live-audio.test.ts",
-    "test/vitest-extensions-config.test.ts",
     "test/vitest-unit-paths.test.ts",
     ...boundaryTestFiles,
   ],
@@ -372,9 +385,9 @@ function collectRepoTestFilesFromGit(cwd) {
       "packages",
       "test",
     ],
-    { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
   );
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
     return null;
   }
   return result.stdout
@@ -518,6 +531,8 @@ function analyzeUnitFastTestFile(cwd, file) {
   let analysis;
   if (isDatabaseWorkerCoreTestFile(file) || gatewayDatabaseWorkerTestFiles.includes(file)) {
     analysis = { file, unitFast: false, reasons: ["database-worker-owner"] };
+  } else if (isAgentsCoreIsolatedTestFile(file)) {
+    analysis = { file, unitFast: false, reasons: ["agents-core-isolated-owner"] };
   } else if (isToolingIsolatedTestFile(file)) {
     // Explicit project ownership wins over inferred eligibility so full-suite
     // configs cannot run the same stateful tooling test in two worker pools.

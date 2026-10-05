@@ -4,13 +4,13 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.MainViewModel.GatewayAdditionRequest
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.formatGatewayAuthority
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -42,7 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -86,7 +85,7 @@ internal fun GatewayAdditionDialog(
   var token by remember(request) { mutableStateOf("") }
   var password by remember(request) { mutableStateOf("") }
   var cameraAllowed by remember {
-    mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    mutableStateOf(context.hasPermission(Manifest.permission.CAMERA))
   }
   val scanner =
     remember(request) {
@@ -145,7 +144,8 @@ internal fun GatewayAdditionDialog(
       if (config != null) {
         GatewayAdditionStep.Review(config, previous)
       } else {
-        val message = gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, GatewayEndpointInputSource.QR_SCAN)
+        val source = if (previous is GatewayAdditionStep.Code) GatewayEndpointInputSource.SETUP_CODE else GatewayEndpointInputSource.QR_SCAN
+        val message = gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
         if (previous is GatewayAdditionStep.Code) GatewayAdditionStep.Code(message) else GatewayAdditionStep.ScanError(message)
       }
   }
@@ -236,15 +236,52 @@ internal fun GatewayAdditionDialog(
           }
 
           is GatewayAdditionStep.Code -> {
-            ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"), secret = true, modifier = Modifier.testTag("gateway-add-code"))
+            ClawTextField(
+              value = setupCode,
+              onValueChange = {
+                setupCode = it
+                step = GatewayAdditionStep.Code()
+              },
+              placeholder = "",
+              label = nativeString("Setup code"),
+              secret = true,
+              modifier = Modifier.testTag("gateway-add-code"),
+            )
             current.error?.let { Text(it, color = ClawTheme.colors.warning) }
             ClawPrimaryButton(text = nativeString("Continue"), onClick = { stageCode(setupCode, GatewayAdditionStep.Code()) }, modifier = Modifier.fillMaxWidth())
           }
 
           is GatewayAdditionStep.Manual -> {
-            ClawTextField(value = address, onValueChange = { address = it }, placeholder = nativeString("Gateway URL"), modifier = Modifier.testTag("gateway-add-address"))
-            ClawTextField(value = token, onValueChange = { token = it }, placeholder = nativeString("Token (optional)"), secret = true)
-            ClawTextField(value = password, onValueChange = { password = it }, placeholder = nativeString("Password (optional)"), secret = true)
+            ClawTextField(
+              value = address,
+              onValueChange = {
+                address = it
+                step = GatewayAdditionStep.Manual()
+              },
+              placeholder = "",
+              label = nativeString("Gateway URL"),
+              modifier = Modifier.testTag("gateway-add-address"),
+            )
+            ClawTextField(
+              value = token,
+              onValueChange = {
+                token = it
+                step = GatewayAdditionStep.Manual()
+              },
+              placeholder = "",
+              label = nativeString("Token (optional)"),
+              secret = true,
+            )
+            ClawTextField(
+              value = password,
+              onValueChange = {
+                password = it
+                step = GatewayAdditionStep.Manual()
+              },
+              placeholder = "",
+              label = nativeString("Password (optional)"),
+              secret = true,
+            )
             current.error?.let { Text(it, color = ClawTheme.colors.warning) }
             ClawPrimaryButton(text = nativeString("Continue"), onClick = ::stageManual, modifier = Modifier.fillMaxWidth())
           }

@@ -152,7 +152,7 @@ describe("ModelProvidersPage profile actions", () => {
   });
 
   it("discards a detached page's queued order before a replacement page saves", async () => {
-    const { context, request, snapshot } = createHarness("main");
+    const { context, request, snapshot, publishEvent } = createHarness("main");
     snapshot.hello = {
       ...snapshot.hello,
       type: "hello-ok",
@@ -165,6 +165,7 @@ describe("ModelProvidersPage profile actions", () => {
     request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "models.authOrderSet") {
         savedOrder = [...((params as ModelsAuthOrderSetParams).profileIds ?? [])];
+        publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
         return requestCount(request, method) === 1 ? firstSave.promise : {};
       }
       if (method === "models.authStatus") {

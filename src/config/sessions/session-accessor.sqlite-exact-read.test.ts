@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -17,11 +17,11 @@ import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
-  recordSessionParticipant,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
-import { loadExactSessionEntryCandidates } from "./session-accessor.sqlite-exact-read.js";
+import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -36,9 +36,79 @@ afterEach(() => {
 });
 
 describe("exact SQLite session batches", () => {
-  it.each(["cold", "warm", "policy", "receipt"] as const)(
-    "uses an admission snapshot only when the exact reader requires it (%s)",
-    (admission) => {
+  it.each([
+    { projection: "full", cohort: false },
+    { projection: "list", cohort: false },
+    { projection: "full", cohort: true },
+    { projection: "list", cohort: true },
+  ] as const)(
+    "decodes a selected $projection row once for its entry and canonical validation (cohort=$cohort)",
+    ({ projection, cohort }) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-decode-") };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:decode-once" };
+      const skillsSnapshot = { prompt: "saved prompt", skills: [] };
+      const sessionDiffBaseline = {
+        version: 1 as const,
+        sessionId: "decode-once",
+        root: "/synthetic/workspace",
+        files: [{ path: "fixture.ts", fingerprint: "x".repeat(32_768) }],
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: "decode-once",
+        updatedAt: 1,
+        skillsSnapshot,
+        sessionDiffBaseline,
+      });
+      assignSessionOwner(scope, {
+        owner: { type: "agent", id: "column-owner" },
+        assignedBy: { type: "agent", id: "assigner" },
+        assignedAt: 2,
+      });
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id: "participant" },
+        promptedAt: 3,
+      });
+      loadExactSessionEntryReadOnly({ ...scope, projection });
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        const selected = cohort
+          ? prepareExactSessionEntryRowReads(
+              openOpenClawAgentDatabase(scope),
+              [scope.sessionKey],
+              projection,
+              "canonical",
+            )(scope.sessionKey)
+          : loadExactSessionEntryReadOnly({ ...scope, projection });
+        expect(selected?.entry).toMatchObject({
+          sessionId: "decode-once",
+          updatedAt: 1,
+          owner: { actor: { type: "agent", id: "column-owner" } },
+          participants: [{ identity: { type: "profile", id: "participant" } }],
+          participantCount: 1,
+        });
+        expect(selected?.entry.skillsSnapshot).toEqual(
+          projection === "full" ? skillsSnapshot : undefined,
+        );
+        expect(selected?.entry.sessionDiffBaseline).toEqual(
+          projection === "full" ? sessionDiffBaseline : undefined,
+        );
+        expect(parse.mock.calls.filter(([text]) => text.includes('"updatedAt":1'))).toHaveLength(1);
+      } finally {
+        parse.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { reader: "single", admission: "cold" },
+    { reader: "single", admission: "warm" },
+    { reader: "batch", admission: "cold" },
+    { reader: "batch", admission: "warm" },
+    { reader: "batch", admission: "policy" },
+    { reader: "batch", admission: "receipt" },
+  ])(
+    "keeps the $reader exact lookup coherent across a concurrent commit ($admission)",
+    ({ reader, admission }) => {
       const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-snapshot-") };
       const scope = { agentId: "main", env, sessionKey: "agent:main:snapshot" };
       const entry = { sessionId: "snapshot", updatedAt: 1, label: "before" };
@@ -46,8 +116,20 @@ describe("exact SQLite session batches", () => {
       const original = openOpenClawAgentDatabase(scope);
       closeOpenClawAgentDatabaseByPath(original.path);
       const database = openOpenClawAgentDatabase(scope);
+      const read = () => {
+        if (reader === "single") {
+          return loadExactSessionEntryReadOnly(scope);
+        }
+        const result = loadExactSessionEntryCandidatesReadOnlyBatch([
+          { ...scope, sessionKeys: [scope.sessionKey] },
+        ])[0]!;
+        if (!result.ok) {
+          throw result.error;
+        }
+        return result.value[0];
+      };
       if (admission !== "cold") {
-        expect(loadExactSessionEntryReadOnly(scope)?.entry.label).toBe("before");
+        expect(read()?.entry.label).toBe("before");
       }
       if (admission === "policy") {
         setCanonicalSqliteSessionMainKey(database, "custom");
@@ -55,14 +137,15 @@ describe("exact SQLite session batches", () => {
         invalidateOpenClawAgentDatabaseValidation(database.path);
       }
       const external = new DatabaseSync(database.path);
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
+      sqliteQueries.clearNodeSqliteKyselyCacheForDatabase(database.db);
       const prepare = database.db.prepare.bind(database.db);
       let selectedInTransaction: boolean | undefined;
       const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
         if (
           selectedInTransaction === undefined &&
-          /^select \* from "session_nodes" where "session_key" = /i.test(sql)
+          /from "session_nodes"/i.test(sql) &&
+          /where (?:"session_nodes"\.)?"session_key" (?:=|in) /i.test(sql)
         ) {
           selectedInTransaction = database.db.isTransaction;
           external
@@ -77,12 +160,12 @@ describe("exact SQLite session batches", () => {
         return statement;
       });
       try {
-        expect(loadExactSessionEntryReadOnly(scope)?.entry.label).toBe(
-          admission === "warm" ? "after" : "before",
-        );
-        expect(selectedInTransaction).toBe(admission !== "warm");
+        // Single-row validation shares the selected statement; only batch admission pins earlier.
+        const pinnedBeforeSelection = reader === "batch" && admission !== "warm";
+        expect(read()?.entry.label).toBe(pinnedBeforeSelection ? "before" : "after");
+        expect(selectedInTransaction).toBe(pinnedBeforeSelection);
         expect(database.db.isTransaction).toBe(false);
-        expect(loadExactSessionEntryReadOnly(scope)?.entry.label).toBe("after");
+        expect(read()?.entry.label).toBe("after");
       } finally {
         prepareSpy.mockRestore();
         external.close();
@@ -90,24 +173,26 @@ describe("exact SQLite session batches", () => {
     },
   );
 
-  it("rolls back failed cold admission and restores its private snapshot scope", () => {
-    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-failed-admission-") };
+  it("rolls back failed cold batch admission and restores its private snapshot scope", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-failed-admission-"),
+    };
     const scope = { agentId: "main", env, sessionKey: "agent:main:snapshot" };
     replaceSessionEntrySync(scope, { sessionId: "snapshot", updatedAt: 1 });
     const original = openOpenClawAgentDatabase(scope);
     closeOpenClawAgentDatabaseByPath(original.path);
     const database = openOpenClawAgentDatabase(scope);
     const failure = new Error("read source callback failed");
-    expect(() =>
-      loadExactSessionEntryCandidates({
-        ...scope,
-        readOnly: true,
-        sessionKeys: [scope.sessionKey],
-        onReadSource: () => {
-          throw failure;
-        },
-      }),
-    ).toThrow(failure);
+    const request = {
+      ...scope,
+      sessionKeys: [scope.sessionKey],
+      onReadSource: () => {
+        throw failure;
+      },
+    };
+    expect(loadExactSessionEntryCandidatesReadOnlyBatch([request])).toEqual([
+      { ok: false, error: failure },
+    ]);
     expect(database.db.isTransaction).toBe(false);
     database.db
       .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
@@ -160,10 +245,10 @@ describe("exact SQLite session batches", () => {
         return /from\s+"session_participants"/i.test(sql) ? "participants" : null;
       },
     );
-    const read = () =>
+    const read = (clone = true) =>
       loadExactSessionEntryCandidatesReadOnlyBatch([
-        { ...scope, projection: "list", sessionKeys: [keys[2]!, keys[0]!, keys[2]!] },
-        { ...scope, projection: "list", sessionKeys: [keys[1]!] },
+        { ...scope, projection: "list", clone, sessionKeys: [keys[2]!, keys[0]!, keys[2]!] },
+        { ...scope, projection: "list", clone, sessionKeys: [keys[1]!] },
       ]);
     try {
       const first = read();
@@ -178,6 +263,19 @@ describe("exact SQLite session batches", () => {
       expect(queries.counts.payload).toBe(0);
       expect(queries.counts.participants).toBe(0);
       expect(queries.rowCounts.identity).toBe(3);
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      try {
+        const borrowed = read(false)[0];
+        expect(clone).not.toHaveBeenCalled();
+        if (!borrowed?.ok) {
+          throw new Error("Expected borrowed exact entries");
+        }
+        expect(() => {
+          borrowed.value[0]!.entry.participants![0]!.identity.id = "changed";
+        }).toThrow(TypeError);
+      } finally {
+        clone.mockRestore();
+      }
       const selected = first[0];
       if (!selected?.ok) {
         throw new Error("Expected cached exact entries");
@@ -215,6 +313,13 @@ describe("exact SQLite session batches", () => {
           },
         ]),
       });
+      const borrowedAfterCommit = read(false)[0];
+      if (!borrowedAfterCommit?.ok) {
+        throw new Error("Expected committed exact entries");
+      }
+      expect(() => {
+        borrowedAfterCommit.value[0]!.entry.owner!.actor.id = "changed";
+      }).toThrow(TypeError);
     } finally {
       queries.restore();
     }
@@ -297,7 +402,7 @@ describe("exact SQLite session batches", () => {
     }
   });
 
-  it.each(["current_session_id", "updated_at", "malformed", "delivery"] as const)(
+  it.each(["current_session_id", "updated_at", "malformed", "delivery", "lineage"] as const)(
     "keeps per-key %s errors after an intervening list reload",
     (corruption) => {
       const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-identity-") };
@@ -309,6 +414,20 @@ describe("exact SQLite session batches", () => {
       }
       listSessionEntriesReadOnly(scope);
       const database = openOpenClawAgentDatabase(scope);
+      if (corruption === "lineage") {
+        database.db
+          .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+          .run("agent:main:divergent", broken);
+        const readRow = prepareExactSessionEntryRowReads(
+          database,
+          [healthy, broken],
+          "list",
+          "canonical",
+        );
+        expect(readRow(healthy)?.entry.sessionId).toBe(healthy);
+        expect(() => readRow(broken)).toThrow("invalid persisted session row");
+        return;
+      }
       if (corruption === "current_session_id" || corruption === "updated_at") {
         database.db
           .prepare(`UPDATE session_nodes SET ${corruption} = ? WHERE session_key = ?`)
@@ -347,19 +466,15 @@ describe("exact SQLite session batches", () => {
         originalError = error;
       }
       expect(originalError).toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
-      expect(
-        loadExactSessionEntryCandidatesReadOnlyBatch(
-          [[healthy], [broken]].map((sessionKeys) => ({
-            agentId: scope.agentId,
-            env,
-            projection: scope.projection,
-            sessionKeys,
-          })),
-        ),
-      ).toMatchObject([
-        { ok: true, value: [{ sessionKey: healthy }] },
-        { ok: false, error: originalError },
-      ]);
+      const readRow = prepareExactSessionEntryRowReads(
+        database,
+        [healthy, broken, "agent:main:missing"],
+        "list",
+        "canonical",
+      );
+      expect(readRow(healthy)?.entry.sessionId).toBe(healthy);
+      expect(readRow("agent:main:missing")).toBeUndefined();
+      expect(() => readRow(broken)).toThrow(originalError);
       expect(
         loadExactSessionEntryCandidatesReadOnlyBatch(
           [[healthy], [broken], ["agent:main:missing"], [healthy, broken]].map((sessionKeys) => ({
@@ -378,39 +493,34 @@ describe("exact SQLite session batches", () => {
     },
   );
 
-  it.each([false, true])(
-    "reads only the target without a listing cache (retained read: %s)",
-    (retained) => {
-      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-uncached-") };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
-      replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1 });
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:unrelated" },
-        { sessionId: "unrelated", updatedAt: 1, label: "unrelated payload ".repeat(1024) },
-      );
-      loadExactSessionEntryReadOnly({ ...scope, projection: "list" });
-      const database = openOpenClawAgentDatabase(scope);
-      const held = retained ? captureSessionEntryRead(database, scope.sessionKey) : undefined;
-      const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-        /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
-      );
-      try {
-        expect(
-          loadExactSessionEntryCandidatesReadOnlyBatch([
-            { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
-          ]),
-        ).toMatchObject([{ ok: true, value: [{ entry: { sessionId: "target" } }] }]);
-        expect(queries.rowCounts.entries).toBe(1);
-        expect(queries.textBytes.entries).toBeLessThan(1024);
-        if (held) {
-          expect(held.isCurrent()).toBe(true);
-        }
-      } finally {
-        queries.restore();
-        held?.release();
-      }
-    },
-  );
+  it("reads only the retained target without a listing cache", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-uncached-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+    replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1 });
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: "agent:main:unrelated" },
+      { sessionId: "unrelated", updatedAt: 1, label: "unrelated payload ".repeat(1024) },
+    );
+    loadExactSessionEntryReadOnly({ ...scope, projection: "list" });
+    const database = openOpenClawAgentDatabase(scope);
+    const held = captureSessionEntryRead(database, scope.sessionKey);
+    const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
+      /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
+    );
+    try {
+      expect(
+        loadExactSessionEntryCandidatesReadOnlyBatch([
+          { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
+        ]),
+      ).toMatchObject([{ ok: true, value: [{ entry: { sessionId: "target" } }] }]);
+      expect(queries.rowCounts.entries).toBe(1);
+      expect(queries.textBytes.entries).toBeLessThan(1024);
+      expect(held.isCurrent()).toBe(true);
+    } finally {
+      queries.restore();
+      held.release();
+    }
+  });
 
   it("reads committed entries through the companion while the cached writer has a transaction", () => {
     const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-committed-") };
@@ -618,6 +728,16 @@ describe("exact SQLite session batches", () => {
           originalError = error;
         }
         expect(originalError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+        const readRow = prepareExactSessionEntryRowReads(
+          database,
+          [...keys, retained],
+          projection,
+          "canonical",
+        );
+        expect(readRow(keys[0])?.entry.sessionId).toBe(keys[0]);
+        expect(() => readRow(keys[1])).toThrow(originalError);
+        expect(readRow(keys[2])?.entry.sessionId).toBe(keys[2]);
+        expect(readRow(retained)).toBeUndefined();
         const entry = (sessionKey: string) => ({
           sessionKey,
           entry: { sessionId: sessionKey, participantCount: 1 },
@@ -634,6 +754,110 @@ describe("exact SQLite session batches", () => {
       }
     },
   );
+
+  it("uses lineage indexes for direct child discovery with stale clustered statistics", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-child-query-plan-") };
+    const scope = { agentId: "main", env };
+    const parent = "agent:main:indexed-parent";
+    const olderParent = (index: number) => `agent:main:older-parent-${index}`;
+    const otherParent = olderParent(0);
+    const childKey = (name: string) => `agent:main:child-${name}`;
+    const seedEntry = (
+      sessionId: string,
+      lineage: { parentSessionKey?: string; spawnedBy?: string } = {},
+    ) =>
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: `agent:main:${sessionId}` },
+        { sessionId, updatedAt: 1, ...lineage },
+      );
+    runOpenClawAgentWriteTransaction(() => {
+      for (let index = 0; index < 8; index += 1) {
+        seedEntry(`older-parent-${index}`);
+      }
+      for (let index = 0; index < 438; index += 1) {
+        seedEntry(`older-child-${index}`, {
+          parentSessionKey: olderParent(index % 8),
+          ...(index < 73 ? { spawnedBy: olderParent(index % 7) } : {}),
+        });
+      }
+    }, scope);
+    const database = openOpenClawAgentDatabase(scope);
+    // Retained sessions cluster under a few parents. Analyze 446 rows before
+    // new collectors and unrelated writes grow the store to 555 rows.
+    database.db.exec("ANALYZE");
+    const children = [
+      ["z-parent", { parentSessionKey: parent, spawnedBy: otherParent }],
+      ["a-spawn", { parentSessionKey: otherParent, spawnedBy: parent }],
+      ["m-both", { parentSessionKey: parent, spawnedBy: parent }],
+      ["b-parent", { parentSessionKey: parent }],
+      ["y-spawn", { parentSessionKey: otherParent, spawnedBy: parent }],
+      ["c-parent", { parentSessionKey: parent }],
+      ["x-spawn", { parentSessionKey: otherParent, spawnedBy: parent }],
+      ["d-parent", { parentSessionKey: parent }],
+      ["w-spawn", { parentSessionKey: otherParent, spawnedBy: parent }],
+    ] as const;
+    runOpenClawAgentWriteTransaction(() => {
+      seedEntry("indexed-parent", { parentSessionKey: parent, spawnedBy: parent });
+      for (const [name, lineage] of children) {
+        replaceSessionEntrySync(
+          { ...scope, sessionKey: childKey(name) },
+          { sessionId: name, updatedAt: 1, ...lineage },
+        );
+      }
+      for (let index = 0; index < 99; index += 1) {
+        seedEntry(`later-unrelated-${index}`, {
+          ...(index < 96 ? { parentSessionKey: olderParent(index % 8) } : {}),
+          ...(index < 3 ? { spawnedBy: olderParent(index) } : {}),
+        });
+      }
+    }, scope);
+    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    try {
+      const result = listSessionChildEntriesReadOnly({ ...scope, sessionKey: parent });
+      const names = [
+        "a-spawn",
+        "b-parent",
+        "c-parent",
+        "d-parent",
+        "m-both",
+        "w-spawn",
+        "x-spawn",
+        "y-spawn",
+        "z-parent",
+      ];
+      expect(
+        result.map(({ sessionKey, entry }) => ({ sessionKey, sessionId: entry.sessionId })),
+      ).toEqual(names.map((name) => ({ sessionKey: childKey(name), sessionId: name })));
+      const childQueries = queries.mock.calls
+        .map(([readDatabase, query]) => ({ readDatabase, ...query.compile() }))
+        .filter(
+          ({ sql }) => /"parent_session_key"\s*=/u.test(sql) && /"spawned_by"\s*=/u.test(sql),
+        );
+      expect(childQueries).toHaveLength(1);
+      const childQuery = childQueries[0]!;
+      const parameters = childQuery.parameters.map((parameter) => {
+        if (typeof parameter !== "string") {
+          throw new Error("Expected a string child-query binding");
+        }
+        return parameter;
+      });
+      const plan = childQuery.readDatabase
+        .prepare(`EXPLAIN QUERY PLAN ${childQuery.sql}`)
+        .all(...parameters)
+        .map(({ detail }) => detail);
+      expect(plan).not.toContainEqual(expect.stringMatching(/\bSCAN session_nodes\b/u));
+      for (const index of [
+        "idx_agent_session_nodes_parent_session_key",
+        "idx_agent_session_nodes_spawned_by",
+      ]) {
+        expect(plan).toContainEqual(
+          expect.stringMatching(new RegExp(`\\bSEARCH\\b.*\\b${index}\\b`, "u")),
+        );
+      }
+    } finally {
+      queries.mockRestore();
+    }
+  });
 
   it.each(["full", "list"] as const)(
     "does not read malformed placeholder participants in %s exact and child reads",
@@ -674,6 +898,14 @@ describe("exact SQLite session batches", () => {
         )
         .run(retained, "invalid namespace", "unused", 9007199254740993n);
       expect(read([retained])).toEqual([{ ok: true, value: [] }]);
+      const readRow = prepareExactSessionEntryRowReads(
+        database,
+        [retained, healthy],
+        projection,
+        "canonical",
+      );
+      expect(readRow(retained)).toBeUndefined();
+      expect(readRow(healthy)?.entry.sessionId).toBe(healthy);
       expect.soft(read([healthy, retained])).toMatchObject([
         { ok: true, value: [{ sessionKey: healthy, entry: { sessionId: healthy } }] },
         { ok: true, value: [] },

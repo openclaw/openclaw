@@ -1,4 +1,3 @@
-// Zalouser plugin owns raw zca-js message admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressError,
@@ -38,12 +37,6 @@ type ZalouserIngressDispatch = (
   message: ZaloInboundMessage,
   lifecycle: ZalouserIngressLifecycle,
 ) => Promise<void> | void;
-
-type ZalouserIngressMonitor = {
-  receive: (message: Message) => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
 
 const ZalouserIngressPayloadError = createChannelIngressError("ZalouserIngressPayloadError");
 
@@ -130,7 +123,7 @@ export function createZalouserIngressMonitor(options: {
   queue?: ChannelIngressQueue<ZalouserIngressPayload>;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
-}): ZalouserIngressMonitor {
+}) {
   const monitor = createChannelIngressMonitor<
     Message,
     { receivedAt: number; rawMessage: string },
@@ -209,7 +202,7 @@ export function createZalouserIngressMonitor(options: {
   monitor.start();
 
   return {
-    receive: async (message) => {
+    receive: async (message: Message) => {
       if (monitor.isStopped()) {
         throw new Error("Zalouser ingress monitor is stopped.");
       }

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../audit/execution-identity-admission.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
@@ -12,7 +13,10 @@ import {
   resolveInboundReplyHookTarget,
 } from "../../hooks/message-hook-mappers.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { applyMessageSendingHook } from "../../infra/outbound/deliver-hooks.js";
+import {
+  applyMessageSendingHook,
+  type ReplyPayloadSuppressedObserver,
+} from "../../infra/outbound/deliver-hooks.js";
 import { normalizeEmptyPayloadForDelivery } from "../../infra/outbound/deliver-payload.js";
 import {
   isPlatformMessageNotDispatchedError,
@@ -23,7 +27,11 @@ import {
   createMessageSentEmitter,
   type MessageSentEvent,
 } from "../../infra/outbound/message-sent-hook.js";
-import { summarizeOutboundPayloadForTransport } from "../../infra/outbound/payloads.js";
+import {
+  createStructuredOutboundPayloadPlan,
+  summarizeOutboundPayloadForTransport,
+} from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
@@ -40,8 +48,10 @@ import {
 } from "./direct-delivery-custody.js";
 import {
   deliverInboundReplyWithMessageSendContextCore,
+  deliverStructuredInboundReplyWithMessageSendContextCore,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
+  type DurableInboundReplyDeliveryParams,
 } from "./durable-delivery.js";
 import { runPreparedChannelTurnCore } from "./execution.js";
 import { applyRouteDmScope } from "./route-dm-scope.js";
@@ -68,6 +78,24 @@ type RoutedAssembledChannelTurn = Omit<
 
 type AnyChannelDeliveryAdapter = ChannelEventDeliveryAdapter | ChannelTurnDeliveryAdapter;
 
+type ChannelDeliveryOperation<T extends { payload: ReplyPayload }> = {
+  prepare: (payload: ReplyPayload) => T | null;
+  deliver?: (
+    value: T,
+    info: Parameters<ChannelEventDeliveryAdapter["deliver"]>[1],
+  ) => Promise<ChannelDeliveryResult | void>;
+  deliverWithProviderMessageSending?: (
+    value: T,
+    info: Parameters<
+      ChannelProviderOwnedMessageSendingDeliveryAdapter["deliverWithProviderMessageSending"]
+    >[1],
+  ) => Promise<ChannelDeliveryResult | void>;
+  deliverDurable: (
+    value: T,
+    params: Omit<DurableInboundReplyDeliveryParams, "payload">,
+  ) => ReturnType<typeof deliverInboundReplyWithMessageSendContextCore>;
+};
+
 type PendingChannelDeliveryAttempt = {
   payload: ReplyPayload;
   info: ChannelDeliveryInfo;
@@ -76,12 +104,6 @@ type PendingChannelDeliveryAttempt = {
   | { state: "fulfilled"; result: ChannelDeliveryResult | void }
   | { state: "rejected"; error: unknown }
 );
-
-function resolvePartialChannelDeliveryResult(
-  error: unknown,
-): (ChannelDeliveryOutcome & { visibleReplySent: true }) | undefined {
-  return isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-}
 
 export function assembleResolvedChannelTurn<
   TDispatchResult,
@@ -92,27 +114,17 @@ export function assembleResolvedChannelTurn<
   if (!("route" in value)) {
     return value;
   }
-  if ("runDispatch" in value) {
-    const { cfg, route, ...turn } = value;
-    return {
-      ...turn,
-      ctxPayload: applyRouteDmScope(turn.ctxPayload, route.dmScope),
-      routeSessionKey: route.sessionKey,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: route.agentId }),
-      recordInboundSession,
-    };
-  }
   const { cfg, route, ...turn } = value;
-  const assembled: RoutedAssembledChannelTurn = {
-    ...turn,
-    ctxPayload: applyRouteDmScope(turn.ctxPayload, route.dmScope),
-    cfg,
-    agentId: route.agentId,
+  const routing = {
+    ctxPayload: applyRouteDmScope(value.ctxPayload, route.dmScope),
     routeSessionKey: route.sessionKey,
     storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: route.agentId }),
     recordInboundSession,
   };
-  return assembled;
+  if ("runDispatch" in turn) {
+    return { ...turn, ...routing };
+  }
+  return { ...turn, ...routing, cfg, agentId: route.agentId };
 }
 
 function resolveAssembledReplyPipeline(
@@ -152,17 +164,8 @@ function resolveAssembledReplyPipeline(
   };
 }
 
-function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    !Array.isArray(result) &&
-    (result as { visibleReplySent?: unknown }).visibleReplySent === false
-  );
-}
-
 function markChannelDeliveryErrorVisible(error: unknown): unknown {
-  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+  if (isRecord(error)) {
     try {
       Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
       return error;
@@ -187,7 +190,7 @@ async function runChannelDeliveryObserver(params: {
   try {
     await params.onDelivered(params.payload, params.info, params.result);
   } catch (error: unknown) {
-    throw isExplicitlyNonVisibleChannelDelivery(params.result)
+    throw params.result?.visibleReplySent === false
       ? error
       : markChannelDeliveryErrorVisible(error);
   }
@@ -201,31 +204,24 @@ function resolveChannelDeliveryMessageId(
     : result?.messageIds?.find((messageId) => messageId.trim());
 }
 
-async function settleChannelDeliveryAttempts(params: {
-  attempts: readonly PendingChannelDeliveryAttempt[];
-  delivery: AnyChannelDeliveryAdapter;
-  onSettled?: (info: ChannelDeliveryInfo, result: ChannelDeliveryResult | undefined) => void;
-}): Promise<void> {
+async function settleChannelDeliveryAttempts(
+  attempts: readonly PendingChannelDeliveryAttempt[],
+  delivery: AnyChannelDeliveryAdapter,
+): Promise<void> {
   let preferredSettlementError: unknown;
 
-  for (const attempt of params.attempts) {
+  for (const attempt of attempts) {
     try {
-      const finalized = await settleChannelDeliveryAttempt({
-        attempt,
-        onDelivered: params.delivery.onDelivered,
-        onFinalizationError: async (error) => {
-          await Promise.resolve(params.delivery.onError?.(error, attempt.info));
-        },
-        emitMessageSent: attempt.emitMessageSent,
-      });
-      params.onSettled?.(attempt.info, finalized);
+      await settleChannelDeliveryAttempt(attempt, delivery.onDelivered, (error) =>
+        delivery.onError?.(error, attempt.info),
+      );
     } catch (error: unknown) {
       // Any visible partial outcome must win over an earlier generic failure so callers
       // retain provider identity and do not retry an already-visible logical payload.
       if (
         preferredSettlementError === undefined ||
-        (resolvePartialChannelDeliveryResult(error) !== undefined &&
-          resolvePartialChannelDeliveryResult(preferredSettlementError) === undefined)
+        (isChannelPartialDeliveryError(error) &&
+          !isChannelPartialDeliveryError(preferredSettlementError))
       ) {
         preferredSettlementError = error;
       }
@@ -256,56 +252,47 @@ async function settleFailedPendingFinalDelivery(
   }
 }
 
-async function settleChannelDeliveryAttempt(params: {
-  attempt: PendingChannelDeliveryAttempt;
-  onDelivered: AnyChannelDeliveryAdapter["onDelivered"] | undefined;
-  onFinalizationError?: (error: unknown) => Promise<void> | void;
-  emitMessageSent?: ReturnType<typeof createMessageSentEmitter>["emitMessageSent"];
-}): Promise<ChannelDeliveryResult | undefined> {
-  const { attempt } = params;
-  if (attempt.state === "rejected") {
-    const partial = resolvePartialChannelDeliveryResult(attempt.error);
-    if (!isPlatformMessageNotDispatchedError(attempt.error)) {
-      params.emitMessageSent?.({
-        success: false,
-        content: partial?.content ?? attempt.payload.text ?? "",
-        error: formatErrorMessage(attempt.error),
-        messageId: resolveChannelDeliveryMessageId(partial),
-      });
-    }
-    return undefined;
-  }
-
-  let finalized: ChannelDeliveryResult | undefined;
-  try {
-    const result = attempt.result;
-    finalized = result
-      ? result.finalization
-        ? { ...result, ...(await result.finalization), finalization: undefined }
-        : result
-      : undefined;
-  } catch (error: unknown) {
-    try {
-      await params.onFinalizationError?.(error);
-    } catch {
-      // Error observers are best-effort and must not replace the native settlement failure.
-    }
-    await settleFailedPendingFinalDelivery(attempt.payload, error);
-    const partial = resolvePartialChannelDeliveryResult(error);
+async function settleChannelDeliveryAttempt(
+  attempt: PendingChannelDeliveryAttempt,
+  onDelivered: AnyChannelDeliveryAdapter["onDelivered"] | undefined,
+  onFinalizationError?: (error: unknown) => Promise<void> | void,
+): Promise<void> {
+  const emitFailure = (error: unknown): void => {
+    const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
     if (!isPlatformMessageNotDispatchedError(error)) {
-      params.emitMessageSent?.({
+      attempt.emitMessageSent?.({
         success: false,
         content: partial?.content ?? attempt.payload.text ?? "",
         error: formatErrorMessage(error),
         messageId: resolveChannelDeliveryMessageId(partial),
       });
     }
+  };
+  if (attempt.state === "rejected") {
+    emitFailure(attempt.error);
+    return;
+  }
+
+  let finalized: ChannelDeliveryResult | undefined;
+  try {
+    finalized = attempt.result || undefined;
+    if (finalized?.finalization) {
+      finalized = { ...finalized, ...(await finalized.finalization), finalization: undefined };
+    }
+  } catch (error: unknown) {
+    try {
+      await onFinalizationError?.(error);
+    } catch {
+      // Error observers are best-effort and must not replace the native settlement failure.
+    }
+    await settleFailedPendingFinalDelivery(attempt.payload, error);
+    emitFailure(error);
     throw toErrorObject(error, "channel delivery finalization failed");
   }
 
   const pending = isReplyDispatchDeliveryPending(finalized);
-  if (!pending && !isExplicitlyNonVisibleChannelDelivery(finalized)) {
-    params.emitMessageSent?.({
+  if (!pending && finalized?.visibleReplySent !== false) {
+    attempt.emitMessageSent?.({
       success: true,
       content: finalized?.content ?? attempt.payload.text ?? "",
       messageId: resolveChannelDeliveryMessageId(finalized),
@@ -315,20 +302,15 @@ async function settleChannelDeliveryAttempt(params: {
   if (completion) {
     await settlePendingFinalDelivery(
       completion,
-      pending
-        ? "unknown"
-        : isExplicitlyNonVisibleChannelDelivery(finalized)
-          ? "suppressed"
-          : "delivered",
+      pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
     );
   }
   await runChannelDeliveryObserver({
-    onDelivered: params.onDelivered,
+    onDelivered,
     payload: attempt.payload,
     info: attempt.info,
     result: finalized,
   });
-  return finalized;
 }
 
 async function applyRoutedDirectMessageSending(params: {
@@ -394,8 +376,8 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
-  const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
-  const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
+  const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
+  const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
   const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
@@ -433,6 +415,176 @@ async function dispatchChannelTurnWithDeliveryOwner(
     }
     return emitter;
   };
+  const suppressReply = async (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+    reason: NonNullable<ChannelDeliveryResult["suppression"]>["reason"],
+  ): Promise<ChannelDeliveryResult> => {
+    const result = createSuppressedChannelDeliveryResult({ reason });
+    await suppressPendingFinalDelivery(payload);
+    await runChannelDeliveryObserver({ onDelivered: delivery.onDelivered, payload, info, result });
+    return result;
+  };
+  const onReplySuppressed: ReplyPayloadSuppressedObserver = async (payload, info, reason) => {
+    await suppressReply(payload, info, reason);
+  };
+  const rawDeliver = delivery.deliver?.bind(delivery);
+  const rawProviderDeliver =
+    "deliverWithProviderMessageSending" in delivery
+      ? delivery.deliverWithProviderMessageSending?.bind(delivery)
+      : undefined;
+  const preparedDeliver = delivery.deliverPrepared?.bind(delivery);
+  const preparedProviderDeliver =
+    "deliverPreparedWithProviderMessageSending" in delivery
+      ? delivery.deliverPreparedWithProviderMessageSending?.bind(delivery)
+      : undefined;
+  const rawOperation: ChannelDeliveryOperation<{ payload: ReplyPayload }> = {
+    prepare: (payload) => ({ payload }),
+    deliver: rawDeliver ? (value, info) => rawDeliver(value.payload, info) : undefined,
+    deliverWithProviderMessageSending: rawProviderDeliver
+      ? (value, info) => rawProviderDeliver(value.payload, info)
+      : undefined,
+    deliverDurable: (value, context) =>
+      deliverInboundReplyWithMessageSendContextCore({ ...context, payload: value.payload }),
+  };
+  async function deliverReply<T extends { payload: ReplyPayload }>(
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+    operation: ChannelDeliveryOperation<T>,
+  ): Promise<ChannelDeliveryResult | void> {
+    const preparedPayloadResult = delivery.preparePayload
+      ? await delivery.preparePayload(payload, info)
+      : payload;
+    const preparedValue =
+      preparedPayloadResult === null
+        ? null
+        : operation.prepare(copyReplyPayloadMetadata(payload, preparedPayloadResult));
+    if (preparedValue === null) {
+      return await suppressReply(payload, info, "no_visible_payload");
+    }
+    const preparedPayload = preparedValue.payload;
+    const declaredDurable = "durable" in delivery ? delivery.durable : undefined;
+    const durableOptions =
+      typeof declaredDurable === "function"
+        ? await declaredDurable(preparedPayload, info)
+        : declaredDurable;
+    if (durableOptions) {
+      const durable = await operation.deliverDurable(preparedValue, {
+        cfg: params.cfg,
+        channel: params.channel,
+        accountId: params.accountId,
+        agentId: params.agentId,
+        ctxPayload: params.ctxPayload,
+        info,
+        executionIdentityToken: agentRun[1],
+        ...durableOptions,
+      });
+      if (durable.status === "failed" && isPlatformMessageNotDispatchedError(durable.error)) {
+        await settleFailedPendingFinalDelivery(preparedPayload, durable.error);
+      }
+      throwIfDurableInboundReplyDeliveryFailed(durable);
+      if (isDurableInboundReplyDeliveryHandled(durable)) {
+        // Durable sends emit canonical message_sent after outbound hooks settle.
+        await runChannelDeliveryObserver({
+          onDelivered: delivery.onDelivered,
+          payload: preparedPayload,
+          info,
+          result: durable.delivery,
+        });
+        return durable.delivery;
+      }
+    }
+    let effectiveValue = preparedValue;
+    let effectivePayload = preparedPayload;
+    let result: ChannelDeliveryResult | void = undefined;
+    let directInfo: ChannelDeliveryInfo = info;
+    // Provider finalization may outlive the participant's async context.
+    const emitMessageSentForDelivery = delivery.observeMessageSent
+      ? getGroupThreadDispatchContext()
+        ? getMessageSentEmitter()?.emitMessageSent
+        : (event: MessageSentEvent) => getMessageSentEmitter()?.emitMessageSent(event)
+      : undefined;
+    try {
+      if (ownership === "routed-delivery" && operation.deliverWithProviderMessageSending) {
+        const providerInfo = {
+          ...info,
+          ...(createDirectPendingFinalCustody(effectivePayload, params.storePath) ??
+            NO_PENDING_FINAL_CUSTODY),
+        };
+        directInfo = providerInfo;
+        result = await operation.deliverWithProviderMessageSending(effectiveValue, providerInfo);
+      } else {
+        if (ownership === "routed-delivery" && params.admission?.kind !== "observeOnly") {
+          const hook = await applyRoutedDirectMessageSending({
+            turn: params as RoutedAssembledChannelTurn,
+            payload: effectivePayload,
+          });
+          effectivePayload = hook.payload;
+          if (hook.suppression) {
+            result = hook.suppression;
+          } else {
+            const nextValue = operation.prepare(effectivePayload);
+            if (nextValue) {
+              effectiveValue = nextValue;
+              effectivePayload = nextValue.payload;
+            } else {
+              result = createSuppressedChannelDeliveryResult({ reason: "no_visible_payload" });
+            }
+          }
+        }
+        if (!result) {
+          if (!operation.deliver) {
+            throw new Error("channel delivery adapter is missing a direct deliverer");
+          }
+          const custody = createDirectPendingFinalCustody(effectivePayload, params.storePath);
+          await custody?.onPlatformSendDispatch();
+          result = await operation.deliver(effectiveValue, toCoreManagedDeliveryInfo(info));
+        }
+      }
+    } catch (error: unknown) {
+      await settleFailedPendingFinalDelivery(effectivePayload, error);
+      if (delivery.observeMessageSent) {
+        await settleChannelDeliveryAttempt(
+          {
+            state: "rejected",
+            payload: effectivePayload,
+            info: directInfo,
+            error,
+            emitMessageSent: emitMessageSentForDelivery,
+          },
+          delivery.onDelivered,
+        );
+      }
+      throw error;
+    }
+    const attempt: PendingChannelDeliveryAttempt = {
+      state: "fulfilled",
+      payload: effectivePayload,
+      info: directInfo,
+      result,
+      emitMessageSent: emitMessageSentForDelivery,
+    };
+    if (result?.finalization) {
+      // Observe rejection while the dispatcher unwinds; settlement awaits the same promise.
+      void result.finalization.catch(() => undefined);
+      pendingAttempts.push(attempt);
+    } else {
+      await settleChannelDeliveryAttempt(attempt, delivery.onDelivered);
+    }
+    return result;
+  }
+  const deliverPrepared = (plan: OutboundPayloadPlan, info: ChannelDeliveryInfo) =>
+    deliverReply<OutboundPayloadPlan>(plan.payload, info, {
+      prepare: (payload) => {
+        const [entry] = createStructuredOutboundPayloadPlan([payload]);
+        return entry ? { ...entry, sourceIndex: plan.sourceIndex } : null;
+      },
+      deliver: preparedDeliver ?? rawOperation.deliver,
+      deliverWithProviderMessageSending:
+        preparedProviderDeliver ?? rawOperation.deliverWithProviderMessageSending,
+      deliverDurable: (value, context) =>
+        deliverStructuredInboundReplyWithMessageSendContextCore({ ...context, plan: value }),
+    });
   return await runPreparedChannelTurnCore(
     {
       channel: params.channel,
@@ -475,21 +627,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       ...(params.admission?.kind === "observeOnly"
                         ? { suppressOutboundHooks: true as const }
                         : {}),
-                      onReplyPayloadSuppressed: async (
-                        payload: ReplyPayload,
-                        info: ChannelDeliveryInfo,
-                        reason:
-                          | "cancelled_by_reply_payload_sending_hook"
-                          | "empty_after_reply_payload_sending_hook",
-                      ) => {
-                        await suppressPendingFinalDelivery(payload);
-                        await runChannelDeliveryObserver({
-                          onDelivered: delivery.onDelivered,
-                          payload,
-                          info,
-                          result: createSuppressedChannelDeliveryResult({ reason }),
-                        });
-                      },
+                      onReplyPayloadSuppressed: onReplySuppressed,
                     }
                   : {}),
                 dispatcherOptions: {
@@ -500,160 +638,16 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       return;
                     }
                     const { reason: _reason, ...deliveryInfo } = info;
-                    normalizationSuppressionAttempts.push({
+                    suppressedAttempts.push({
                       state: "fulfilled",
                       payload,
                       info: deliveryInfo,
                       result: createSuppressedChannelDeliveryResult({ reason: info.reason }),
                     });
                   },
-                  deliver: async (payload: ReplyPayload, info: ChannelDeliveryInfo) => {
-                    const preparedPayloadResult = delivery.preparePayload
-                      ? await delivery.preparePayload(payload, info)
-                      : payload;
-                    const preparedPayload =
-                      preparedPayloadResult === null
-                        ? null
-                        : copyReplyPayloadMetadata(payload, preparedPayloadResult);
-                    if (preparedPayload === null) {
-                      const suppression = createSuppressedChannelDeliveryResult({
-                        reason: "no_visible_payload",
-                      });
-                      await suppressPendingFinalDelivery(payload);
-                      await runChannelDeliveryObserver({
-                        onDelivered: delivery.onDelivered,
-                        payload,
-                        info,
-                        result: suppression,
-                      });
-                      return suppression;
-                    }
-                    const declaredDurable = "durable" in delivery ? delivery.durable : undefined;
-                    const durableOptions =
-                      typeof declaredDurable === "function"
-                        ? await declaredDurable(preparedPayload, info)
-                        : declaredDurable;
-                    if (durableOptions) {
-                      const durable = await deliverInboundReplyWithMessageSendContextCore({
-                        cfg: params.cfg,
-                        channel: params.channel,
-                        accountId: params.accountId,
-                        agentId: params.agentId,
-                        ctxPayload: params.ctxPayload,
-                        payload: preparedPayload,
-                        info,
-                        executionIdentityToken: agentRun[1],
-                        ...durableOptions,
-                      });
-                      throwIfDurableInboundReplyDeliveryFailed(durable);
-                      if (isDurableInboundReplyDeliveryHandled(durable)) {
-                        // Durable sends emit canonical message_sent after outbound hooks settle.
-                        await runChannelDeliveryObserver({
-                          onDelivered: delivery.onDelivered,
-                          payload: preparedPayload,
-                          info,
-                          result: durable.delivery,
-                        });
-                        return durable.delivery;
-                      }
-                    }
-                    let effectivePayload = preparedPayload;
-                    let result: ChannelDeliveryResult | void = undefined;
-                    let directInfo: ChannelDeliveryInfo = info;
-                    // Provider finalization may outlive the participant's async context.
-                    const emitMessageSentForDelivery = delivery.observeMessageSent
-                      ? getGroupThreadDispatchContext()
-                        ? getMessageSentEmitter()?.emitMessageSent
-                        : (event: MessageSentEvent) =>
-                            getMessageSentEmitter()?.emitMessageSent(event)
-                      : undefined;
-                    try {
-                      if (
-                        ownership === "routed-delivery" &&
-                        "deliverWithProviderMessageSending" in delivery &&
-                        delivery.deliverWithProviderMessageSending
-                      ) {
-                        const providerInfo = {
-                          ...info,
-                          ...(createDirectPendingFinalCustody(effectivePayload, params.storePath) ??
-                            NO_PENDING_FINAL_CUSTODY),
-                        };
-                        directInfo = providerInfo;
-                        result = await delivery.deliverWithProviderMessageSending(
-                          effectivePayload,
-                          providerInfo,
-                        );
-                      } else {
-                        if (
-                          ownership === "routed-delivery" &&
-                          params.admission?.kind !== "observeOnly"
-                        ) {
-                          const hook = await applyRoutedDirectMessageSending({
-                            turn: params as RoutedAssembledChannelTurn,
-                            payload: effectivePayload,
-                          });
-                          effectivePayload = hook.payload;
-                          if (hook.suppression) {
-                            result = hook.suppression;
-                          }
-                        }
-                        if (!result) {
-                          if (!("deliver" in delivery) || !delivery.deliver) {
-                            throw new Error(
-                              "channel delivery adapter is missing a direct deliverer",
-                            );
-                          }
-                          const custody = createDirectPendingFinalCustody(
-                            effectivePayload,
-                            params.storePath,
-                          );
-                          await custody?.onPlatformSendDispatch();
-                          result = await delivery.deliver(
-                            effectivePayload,
-                            toCoreManagedDeliveryInfo(info),
-                          );
-                        }
-                      }
-                    } catch (error: unknown) {
-                      await settleFailedPendingFinalDelivery(effectivePayload, error);
-                      if (delivery.observeMessageSent) {
-                        await settleChannelDeliveryAttempt({
-                          attempt: {
-                            state: "rejected",
-                            payload: effectivePayload,
-                            info: directInfo,
-                            error,
-                          },
-                          onDelivered: delivery.onDelivered,
-                          emitMessageSent: emitMessageSentForDelivery,
-                        });
-                      }
-                      throw error;
-                    }
-                    if (result?.finalization) {
-                      // Observe rejection while the dispatcher unwinds; settlement awaits the same promise.
-                      void result.finalization.catch(() => undefined);
-                      pendingDeliveryAttempts.push({
-                        state: "fulfilled",
-                        payload: effectivePayload,
-                        info: directInfo,
-                        result,
-                        emitMessageSent: emitMessageSentForDelivery,
-                      });
-                    } else {
-                      await settleChannelDeliveryAttempt({
-                        attempt: {
-                          state: "fulfilled",
-                          payload: effectivePayload,
-                          info: directInfo,
-                          result,
-                        },
-                        onDelivered: delivery.onDelivered,
-                        emitMessageSent: emitMessageSentForDelivery,
-                      });
-                    }
-                    return result;
-                  },
+                  deliver: (payload: ReplyPayload, info: ChannelDeliveryInfo) =>
+                    deliverReply(payload, info, rawOperation),
+                  deliverPrepared,
                   onError: delivery.onError,
                 },
                 dispatchReplyFromConfig: params.dispatchReplyFromConfig,
@@ -675,22 +669,15 @@ async function dispatchChannelTurnWithDeliveryOwner(
 
         let settlementError: unknown;
         try {
-          await settleChannelDeliveryAttempts({
-            attempts: normalizationSuppressionAttempts,
+          await settleChannelDeliveryAttempts(
+            [...suppressedAttempts, ...pendingAttempts],
             delivery,
-          });
-          await settleChannelDeliveryAttempts({
-            attempts: pendingDeliveryAttempts,
-            delivery,
-          });
+          );
         } catch (error: unknown) {
           settlementError = error;
         }
         // Preserve deferred provider receipts so callers do not retry an accepted send.
-        if (
-          settlementError !== undefined &&
-          resolvePartialChannelDeliveryResult(settlementError) !== undefined
-        ) {
+        if (settlementError !== undefined && isChannelPartialDeliveryError(settlementError)) {
           throw toErrorObject(settlementError, "channel delivery settlement failed");
         }
         if (dispatchError !== undefined) {

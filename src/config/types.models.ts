@@ -1,10 +1,5 @@
-// Defines model selection and provider configuration types.
-
 import type { z } from "zod";
-import type {
-  ModelDataImageInputConfig,
-  ModelDataMediaInputConfig,
-} from "../../packages/llm-core/src/model-data.js";
+import type { ModelDataMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
 import type { OpenAICompletionsCompat, RawModelCostConfig } from "../llm/types.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
@@ -31,8 +26,6 @@ export type ModelCompatConfig = Omit<
   "openRouterRouting" | "vercelGatewayRouting"
 > &
   Pick<OpenAICompletionsCompat, "openRouterRouting" | "vercelGatewayRouting">;
-
-export type ModelImageInputConfig = ModelDataImageInputConfig;
 
 export type ModelMediaInputConfig = ModelDataMediaInputConfig;
 
@@ -83,9 +76,7 @@ export type ModelProviderConfig = Omit<
 export type ModelProviderDeclarationConfig = ModelProviderConfig;
 
 /** User config input shape before provider defaults/models are materialized. */
-export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
-};
+export type ModelProviderConfigInput = Partial<ModelProviderConfig>;
 
 export type BedrockDiscoveryConfig = {
   /** Enable AWS Bedrock model discovery. */
@@ -101,13 +92,6 @@ export type BedrockDiscoveryConfig = {
   /** Max output tokens applied when discovery cannot infer one. */
   defaultMaxTokens?: number;
 };
-
-export type DiscoveryToggleConfig = {
-  /** Enables the named discovery source. */
-  enabled?: boolean;
-};
-
-export type ModelCatalogRefreshConfig = NonNullable<ModelsSchemaInput["catalogRefresh"]>;
 
 export type ModelsConfig = Omit<ModelsSchemaInput, "providers"> & {
   /** Configured provider catalog keyed by provider id. */

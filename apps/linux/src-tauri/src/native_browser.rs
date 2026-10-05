@@ -1,4 +1,4 @@
-use crate::native_browser_platform as platform;
+use crate::native_browser_platform::{self as platform, Navigation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -95,54 +95,47 @@ struct Presentation {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 enum Request {
-    #[serde(rename_all = "camelCase")]
     Open {
         tab_id: String,
         url: String,
         session_key: String,
     },
-    #[serde(rename_all = "camelCase")]
     Navigate {
         tab_id: String,
         url: String,
     },
-    #[serde(rename_all = "camelCase")]
     Back {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Forward {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Reload {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Stop {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Close {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Snapshot {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Inspect {
         tab_id: String,
         x: f64,
         y: f64,
     },
-    #[serde(rename_all = "camelCase")]
     Download {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Present {
         scope: String,
         tab_id: Option<String>,
@@ -206,7 +199,11 @@ impl BrowserHost {
         let state = json!({ "revision": self.revision, "tabs": self.tabs });
         if let (Some(view), Some(script)) = (
             app.get_webview("main"),
-            crate::native_browser_bridge::publication_script(app, &state.to_string()),
+            crate::native_browser_bridge::publication_script(
+                app,
+                &state.to_string(),
+                crate::native_browser_bridge::Publication::Browser,
+            ),
         ) {
             let _ = view.eval(script);
         }
@@ -671,14 +668,18 @@ impl NativeBrowserState {
                     tab.initial_alias = None;
                 }
             }
-            Request::Back { tab_id } => platform::go_back(&host.view(app, &tab_id)?).await?,
-            Request::Forward { tab_id } => platform::go_forward(&host.view(app, &tab_id)?).await?,
+            Request::Back { tab_id } => {
+                platform::navigate(&host.view(app, &tab_id)?, Navigation::Back).await?
+            }
+            Request::Forward { tab_id } => {
+                platform::navigate(&host.view(app, &tab_id)?, Navigation::Forward).await?
+            }
             Request::Reload { tab_id } => host
                 .view(app, &tab_id)?
                 .reload()
                 .map_err(|error| error.to_string())?,
             Request::Stop { tab_id } => {
-                platform::stop(&host.view(app, &tab_id)?).await?;
+                platform::navigate(&host.view(app, &tab_id)?, Navigation::Stop).await?;
                 if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                     tab.loading = false;
                     tab.initial_alias = None;

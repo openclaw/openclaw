@@ -9,12 +9,12 @@ export const PROGRESS_DISCLOSURE = {
   scrollSettleMs: 300,
 } as const;
 
+type ProgressDisclosureChoice = boolean | number;
+
 export type ProgressDisclosureState = Readonly<{
   open: boolean;
-  manualOpen: boolean | undefined;
+  manualOpen: ProgressDisclosureChoice | undefined;
   manualReopens: number;
-  activeRunId: string | null;
-  completedRunId: string | null;
   readingHistory: boolean;
   gestures: number;
   distancePx: number;
@@ -24,24 +24,21 @@ export type ProgressDisclosureEvent =
   | {
       type: "mount";
       open: boolean;
-      manualOpen?: boolean;
-      activeRunId: string | null;
-      completedRunId: string | null;
+      manualOpen?: ProgressDisclosureChoice;
       readingHistory: boolean;
     }
-  | { type: "run"; runId: string; open: boolean }
-  | { type: "complete"; runId: string }
   | { type: "history"; readingHistory: boolean }
   | { type: "gesture"; distancePx: number }
   | { type: "settle" }
+  | { type: "takeover" }
+  | { type: "extent"; extent: number }
+  | { type: "clamp"; limit: number }
   | { type: "click"; open: boolean };
 
 const INITIAL_STATE: ProgressDisclosureState = {
   open: false,
   manualOpen: undefined,
   manualReopens: 0,
-  activeRunId: null,
-  completedRunId: null,
   readingHistory: false,
   gestures: 0,
   distancePx: 0,
@@ -56,32 +53,10 @@ export function resolveProgressDisclosure(
     case "mount":
       return {
         ...INITIAL_STATE,
-        open: event.manualOpen ?? event.open,
+        open: event.manualOpen === undefined ? event.open : Boolean(event.manualOpen),
         manualOpen: event.manualOpen,
-        activeRunId: event.activeRunId,
-        completedRunId: event.completedRunId,
         readingHistory: event.readingHistory,
       };
-    case "run":
-      return event.runId === state.activeRunId
-        ? state
-        : {
-            ...state,
-            activeRunId: event.runId,
-            completedRunId: null,
-            open: state.manualOpen ?? event.open,
-            manualReopens: 0,
-            gestures: 0,
-            distancePx: 0,
-          };
-    case "complete":
-      return event.runId !== state.activeRunId || event.runId === state.completedRunId
-        ? state
-        : {
-            ...state,
-            completedRunId: event.runId,
-            open: state.manualOpen ?? (state.readingHistory ? state.open : true),
-          };
     case "history":
       return {
         ...state,
@@ -113,16 +88,26 @@ export function resolveProgressDisclosure(
       }
       return { ...state, open: false, manualOpen: undefined, gestures: 0, distancePx: 0 };
     }
-    case "click":
+    case "takeover":
+      return { ...state, gestures: 0, distancePx: 0 };
+    case "extent":
+    case "click": {
+      const open = event.type === "click" ? event.open : event.extent > 0;
+      const manualOpen =
+        event.type === "click" ? event.open : event.extent === 0 ? false : event.extent;
       return {
         ...state,
-        open: event.open,
-        manualOpen: event.open,
-        manualReopens: state.manualReopens + Number(event.open),
+        open,
+        manualOpen,
+        manualReopens: state.manualReopens + Number(!state.open && open),
         gestures: 0,
         distancePx: 0,
       };
+    }
+    case "clamp":
+      return typeof state.manualOpen === "number" && state.manualOpen > event.limit
+        ? { ...state, manualOpen: event.limit, open: event.limit > 0 }
+        : state;
   }
-  const unreachable: never = event;
-  return unreachable;
+  return event satisfies never;
 }

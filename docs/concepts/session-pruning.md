@@ -77,8 +77,9 @@ on both a time check and a context-size check:
 5. Record each changed result as a session projection and reset the pruning TTL clock. Follow-up requests reuse the same projected bytes, including tool-loop continuations and later turns.
 
 The TTL gates new pruning rounds, not replay of previous projections. Projections
-survive Gateway restarts and eviction from the in-memory session cache through
-the transcript marker. Ordinary tool-result trims and the already-sent boundary
+survive Gateway restarts and idle-session unloading through the transcript
+marker. The last active attempt releases its prompt projections after cleanup;
+the next attempt restores them from the active transcript. Ordinary tool-result trims and the already-sent boundary
 are also saved before model requests when the projection changes, even with TTL
 pruning off. Unchanged projections add no new marker; restart restores the latest
 marker on the active branch. Old results retain their projected bytes through
@@ -134,6 +135,12 @@ Pruning is off by default for non-Anthropic providers. To enable:
 To stop new pruning, set `mode: "off"`. Existing client-side projections keep
 replaying, including after a Gateway restart, until compaction removes their
 results or the session is reset.
+
+For a custom OpenAI-compatible provider, set the model's
+`compat.supportsPromptCacheKey` to `true` as well. This opts configured models using
+`openai-responses`, `openai-completions`, or `openai-chatgpt-responses` into
+cache-TTL pruning even when their provider ID is not `openai`. Provider plugins
+with their own cache-TTL policy still control eligibility.
 
 ## Pruning vs compaction
 

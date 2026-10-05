@@ -1,9 +1,10 @@
 import type { LocationMessageEventContent } from "../sdk.js";
+import { RelationType } from "../send/types.js";
 import { hasBundledMatrixReplacementRelation } from "./handler-helpers.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
-import { EventType, RelationType } from "./types.js";
+import { EventType } from "./types.js";
 import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 
 type ReplayClaimHandle = import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle;
@@ -15,7 +16,6 @@ type MatrixIngressPrefixConfig = {
   eventTs?: number;
   eventAge?: number;
   startupMs: number;
-  startupGraceMs: number;
   event: MatrixRawEvent;
   eventType: string;
   eventId: string;
@@ -40,7 +40,6 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     eventTs,
     eventAge,
     startupMs,
-    startupGraceMs,
     event,
     eventType,
     eventId,
@@ -55,10 +54,10 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     return undefined;
   }
   if (dropPreStartupMessages) {
-    if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
+    if (typeof eventTs === "number" && eventTs < startupMs) {
       return undefined;
     }
-    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > startupGraceMs) {
+    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > 0) {
       return undefined;
     }
   }

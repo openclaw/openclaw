@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createWorkerPlacementInitialRecovery,
@@ -26,7 +29,10 @@ describe("worker placement shutdown replay", () => {
   it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     });
     const interrupted = createDeferredCore<never>();
     const provisionStarted = createDeferredCore();
@@ -143,13 +149,17 @@ describe("worker placement shutdown replay", () => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const environments = support.createService(support.createProvider());
       const intent = deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`);
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         ...intent,
         providerId: "fake",
         profileId: "development",
         profileSnapshot: { settings: { region: "test" } },
       });
-      const owner = seedProvisioningPlacement(placements, intent.environmentId, "remote-exec");
+      const owner = await seedProvisioningPlacement(
+        placements,
+        intent.environmentId,
+        "remote-exec",
+      );
       if (owner.state !== "provisioning") {
         throw new Error("recovery fixture requires provisioning");
       }
@@ -194,7 +204,7 @@ describe("worker placement shutdown replay", () => {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });
-    const owner = harness.placements.seedProvisioning();
+    const owner = await harness.placements.seedProvisioning();
     if (owner.state !== "provisioning") {
       throw new Error("recovery fixture requires provisioning");
     }
@@ -226,7 +236,7 @@ describe("worker placement shutdown replay", () => {
             .list()
             .find((record) => record.provisionOperationId === operationId)!;
           if (destroyRequested) {
-            support.testState.store.requestDestroy({
+            await support.testState.store.requestDestroy({
               environmentId: environment.environmentId,
               state: environment.state,
             });

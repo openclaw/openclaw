@@ -11,8 +11,11 @@ const PROCESS_DUP_HANDLE = 0x0040;
 const SYNCHRONIZE = 0x0010_0000;
 const WAIT_TIMEOUT = 258;
 
-/** Bind a generated WScript -> CMD -> supervisor launch to its actual, still-live WScript owner. */
-export function bindWindowsTaskLauncher(koffi: typeof import("koffi").default): void {
+/** Bind the generated launch to its verified, still-live Task Scheduler process. */
+export function bindWindowsTaskLauncher(
+  koffi: typeof import("koffi").default,
+  launcherKind: "wscript" | "cmd" = "wscript",
+): void {
   const bindings = createWindowsJobBindings(koffi);
   bindings.assertLayouts();
   const kernel32 = koffi.load("kernel32.dll");
@@ -95,12 +98,21 @@ export function bindWindowsTaskLauncher(koffi: typeof import("koffi").default): 
   let launcher: NativeHandle | undefined;
   try {
     cmd = bindings.requireHandle(
-      OpenProcess(parentAccess, 0, supervisor.parentPid),
+      OpenProcess(
+        parentAccess | (launcherKind === "cmd" ? PROCESS_DUP_HANDLE : 0),
+        0,
+        supervisor.parentPid,
+      ),
       "OpenProcess(CMD)",
     );
     const command = identity(cmd, supervisor.parentPid, "CMD");
     if (command.image !== "cmd.exe" || command.created > supervisor.created) {
       throw new Error("Windows task supervisor lost its original CMD launcher");
+    }
+    if (launcherKind === "cmd") {
+      requireLive(cmd, "CMD launcher");
+      bindWindowsProcessJobToOwner(bindings, cmd);
+      return;
     }
     launcher = bindings.requireHandle(
       OpenProcess(parentAccess | PROCESS_DUP_HANDLE, 0, command.parentPid),

@@ -2,18 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
 import {
   deleteTestEnvValue,
   setTestEnvValue,
   withEnv,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { OpenClawStateExternalOwnershipError } from "../sqlite-lifecycle-errors.js";
 import { ackDelivery, retireUnsentDelivery } from "./delivery-queue-ack.js";
 import {
   createDeliveryQueueMediaRetention,
@@ -27,6 +28,7 @@ import {
   enqueuePreparedDeliveryOnce,
   failDeliveryAfterPlatformSend,
   findDeliveryIntentOwner,
+  findDeliveryIntentOwners,
   loadPendingDelivery,
   markDeliveryPlatformSendDispatched,
   reserveDeliveryAttempt,
@@ -124,15 +126,23 @@ describe("captured delivery queue state", () => {
           { expectedPlatformSendAttemptId: claim.producerClaimId },
           context,
         );
-        expect(findDeliveryIntentOwner(id, undefined, context)).toMatchObject({
-          status: "completed",
-        });
+        const mainSql = observeMainThreadSql();
+        try {
+          expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
+            expect.objectContaining({ status: "completed" }),
+            null,
+            expect.objectContaining({ status: "completed" }),
+          ]);
+          mainSql.expectIdle();
+        } finally {
+          mainSql.restore();
+        }
         await expect(fs.stat(otherState)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );
   });
 
-  it.each(["read", "ack"] as const)(
+  it.each(["read", "owners", "ack"] as const)(
     "does not gain external ownership from later ambient mode during %s",
     async (operation) => {
       const external = claimState();
@@ -149,7 +159,9 @@ describe("captured delivery queue state", () => {
         const result =
           operation === "read"
             ? loadPendingDelivery(id, undefined, captured)
-            : ackDelivery(id, undefined, undefined, captured);
+            : operation === "owners"
+              ? findDeliveryIntentOwner(id, undefined, captured)
+              : ackDelivery(id, undefined, undefined, captured);
         await expect(result).rejects.toBeInstanceOf(OpenClawStateExternalOwnershipError);
         expect(await loadPendingDelivery(id, undefined, external)).not.toBeNull();
       });
@@ -223,10 +235,9 @@ describe("captured delivery queue state", () => {
     );
     await fs.mkdir(path.dirname(artifact), { recursive: true });
     await fs.writeFile(artifact, "synthetic audio");
-    const stage = createDeliveryQueueMediaRetention(
+    const stage = await createDeliveryQueueMediaRetention(
       [artifact],
       "outbound-media-stage",
-      undefined,
       undefined,
       context,
     );
@@ -242,7 +253,10 @@ describe("captured delivery queue state", () => {
       stage,
       context,
     );
-    const release = retireUnsentDelivery({ id, producerClaimId: claim.producerClaimId }, context);
+    const release = await retireUnsentDelivery(
+      { id, producerClaimId: claim.producerClaimId },
+      context,
+    );
     expect(release).toBeTypeOf("function");
     expect(await fs.readFile(artifact, "utf8")).toBe("synthetic audio");
     await withEnvAsync(
@@ -254,7 +268,8 @@ describe("captured delivery queue state", () => {
         await release?.();
         expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
         expect(
-          loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context).stagedArtifacts,
+          (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context))
+            .stagedArtifacts,
         ).toEqual([]);
         await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
       },

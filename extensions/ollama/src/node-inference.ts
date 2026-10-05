@@ -313,12 +313,14 @@ export function createOllamaNodeHostCommands(options?: {
     {
       command: OLLAMA_MODELS_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
+      hasActiveWork: () => false,
       handle: async (_paramsJSON, _io, context) =>
         JSON.stringify(await discoverOllamaNodeModels(baseUrl, context?.signal)),
     },
     {
       command: OLLAMA_CHAT_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
+      hasActiveWork: () => false,
       handle: async (paramsJSON, _io, context) => {
         const params = readNodeCommandParams(paramsJSON);
         const model = readStringParam(params, "model", { required: true });

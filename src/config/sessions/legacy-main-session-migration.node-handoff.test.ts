@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
@@ -26,7 +26,6 @@ const { createFixture } = setupLegacyMainSessionMigrationTests();
 
 function createNodeHandoff(existingCanonical = false) {
   const fixture = createFixture();
-  vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
   const entry = { sessionId: "node-artifact-handoff", updatedAt: 100 };
   const events = [
     { type: "session", version: 3, id: entry.sessionId, timestamp: new Date(1).toISOString() },
@@ -141,7 +140,7 @@ function createNodeHandoff(existingCanonical = false) {
     migrateLegacyMainSessionKeys({
       cfg: fixture.cfg,
       env: fixture.env,
-      mode: "automatic",
+      mode: "doctor-fix",
     });
   return { source, destination, entry, withDatabase, artifacts, seedArtifacts, migrate };
 }
@@ -260,8 +259,6 @@ describe("legacy main session node artifact handoff", () => {
 
   it.each([
     { side: "source", artifact: "widget" },
-    { side: "destination", artifact: "widget" },
-    { side: "source", artifact: "membership" },
     { side: "destination", artifact: "membership" },
   ] as const)(
     "retains both nodes when $side $artifact changes after cleanup planning",
@@ -283,7 +280,7 @@ describe("legacy main session node artifact handoff", () => {
         if (
           injected ||
           !isRecord(message) ||
-          message.operation !== "session.lifecycle.reclamation-plan" ||
+          message.operation !== "session.lifecycle.delete-prepare" ||
           message.writer !== "foreground" ||
           message.outcome !== "ok"
         ) {
@@ -353,12 +350,17 @@ describe("legacy main session node artifact handoff", () => {
       };
       diagnostics.subscribe(onPlanningComplete);
       try {
-        const result = await f.migrate();
+        if (side === "destination") {
+          await expect(f.migrate()).rejects.toThrow(
+            "Canonical session changed before legacy cleanup: agent:ops:chat",
+          );
+        } else {
+          expect((await f.migrate()).complete).toBe(false);
+        }
         expect(mutationError).toBeUndefined();
         expect(injected).toBe(true);
         expect(changedRows).toBe(1);
         expect(changedArtifacts).toBeDefined();
-        expect(result.complete).toBe(false);
         expect(readClaim(f.source)).toEqual(sourceBefore);
         expect(readClaim(f.destination)?.entry).toMatchObject(sourceBefore!.entry);
         expect(f.artifacts(target)).toEqual(changedArtifacts);

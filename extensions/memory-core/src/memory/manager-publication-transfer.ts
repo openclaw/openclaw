@@ -1,4 +1,7 @@
-import type { MemoryPublicationFragment } from "./manager-publication-task.js";
+import type {
+  MemoryEmbeddingCacheEntry,
+  MemoryPublicationFragment,
+} from "./manager-publication-task.js";
 import type {
   MemorySourceIndexReplacement,
   MemorySourceIndexRow,
@@ -6,10 +9,12 @@ import type {
 
 const FRAGMENT_CHARS = 16 * 1024;
 const BATCH_BYTES = 512 * 1024;
+// Numeric JSON uses fewer than 32 characters per item, including its separator.
+const NUMERIC_PART_ITEMS = 512;
 
 // Encode at most one bounded string slice at a time. A single oversized record
 // must not turn v8.serialize/JSON.stringify into a source-sized host operation.
-function* jsonParts(value: unknown): Generator<string> {
+function* jsonParts(value: unknown, preserveNegativeZero: boolean): Generator<string> {
   if (typeof value === "string") {
     yield '"';
     for (let offset = 0; offset < value.length; offset += FRAGMENT_CHARS) {
@@ -22,7 +27,24 @@ function* jsonParts(value: unknown): Generator<string> {
       if (index) {
         yield ",";
       }
-      yield* jsonParts(value[index] ?? null);
+      const item: unknown = value[index] ?? null;
+      if (typeof item === "number") {
+        const limit = Math.min(value.length, index + NUMERIC_PART_ITEMS);
+        let end = index + 1;
+        while (end < limit && typeof value[end] === "number") {
+          end++;
+        }
+        const numbers = value.slice(index, end);
+        // Cache vectors preserve their binary values; source rows retain JSON normalization.
+        yield preserveNegativeZero
+          ? numbers
+              .map((number) => (Object.is(number, -0) ? "-0" : JSON.stringify(number)))
+              .join(",")
+          : JSON.stringify(numbers).slice(1, -1);
+        index = end - 1;
+      } else {
+        yield* jsonParts(item, preserveNegativeZero);
+      }
     }
     yield "]";
   } else if (value && typeof value === "object") {
@@ -37,7 +59,7 @@ function* jsonParts(value: unknown): Generator<string> {
       }
       first = false;
       yield JSON.stringify(key) + ":";
-      yield* jsonParts(item);
+      yield* jsonParts(item, preserveNegativeZero);
     }
     yield "}";
   } else {
@@ -45,9 +67,12 @@ function* jsonParts(value: unknown): Generator<string> {
   }
 }
 
-function* rowFragments(value: MemorySourceIndexRow): Generator<string> {
+function* rowFragments(
+  value: MemorySourceIndexRow | MemoryEmbeddingCacheEntry,
+  preserveNegativeZero: boolean,
+): Generator<string> {
   let pending = "";
-  for (const part of jsonParts(value)) {
+  for (const part of jsonParts(value, preserveNegativeZero)) {
     pending += part;
     while (pending.length >= FRAGMENT_CHARS) {
       let end = FRAGMENT_CHARS;
@@ -70,22 +95,41 @@ function* rowFragments(value: MemorySourceIndexRow): Generator<string> {
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
+  function* rows(): Generator<MemorySourceIndexRow> {
+    for (const [row, chunk] of replacement.chunks.entries()) {
+      yield {
+        chunk: {
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          text: chunk.text,
+          hash: chunk.hash,
+          importance: chunk.importance,
+          triggers: chunk.triggers,
+          projectKey: chunk.projectKey,
+          ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
+        },
+        embedding: replacement.embeddings[row] ?? [],
+      };
+    }
+  }
+  yield* publicationBatches(rows());
+}
+
+export function* memoryEmbeddingCacheBatches(
+  entries: readonly MemoryEmbeddingCacheEntry[],
+): Generator<MemoryPublicationFragment[]> {
+  yield* publicationBatches(entries, true);
+}
+
+function* publicationBatches(
+  rows: Iterable<MemorySourceIndexRow | MemoryEmbeddingCacheEntry>,
+  preserveNegativeZero = false,
+): Generator<MemoryPublicationFragment[]> {
   let batch: MemoryPublicationFragment[] = [];
   let bytes = 0;
-  for (const [row, chunk] of replacement.chunks.entries()) {
-    const fragments = rowFragments({
-      chunk: {
-        startLine: chunk.startLine,
-        endLine: chunk.endLine,
-        text: chunk.text,
-        hash: chunk.hash,
-        importance: chunk.importance,
-        triggers: chunk.triggers,
-        projectKey: chunk.projectKey,
-        ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
-      },
-      embedding: replacement.embeddings[row] ?? [],
-    });
+  let row = 0;
+  for (const value of rows) {
+    const fragments = rowFragments(value, preserveNegativeZero);
     let current = fragments.next();
     let part = 0;
     while (!current.done) {
@@ -100,6 +144,7 @@ export function* memoryPublicationBatches(
       bytes += cost;
       current = next;
     }
+    row++;
   }
   if (batch.length) {
     yield batch;

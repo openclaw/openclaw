@@ -3,6 +3,7 @@ import "./suite-run-isolated.test-mocks.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { projectQaEvidenceScenarioOutcomes } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -16,16 +17,15 @@ import {
 } from "./suite-run-isolated.test-support.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteRunner, QaSuiteScenarioResult, QaSuiteScenarioRunner } from "./suite-types.js";
 import * as suite from "./suite.js";
 
 describe("isolated QA suite nested publication", () => {
-  it.each(
-    (["full", "slim"] as const).flatMap((evidenceMode) =>
-      (["pass", "skip"] as const).map((status) => ({ evidenceMode, status })),
-    ),
-  )(
+  it.each([
+    { evidenceMode: "full", status: "pass" },
+    { evidenceMode: "slim", status: "skip" },
+  ] as const)(
     "continues completed parent history through a real isolated $status child in $evidenceMode mode",
     async ({ evidenceMode, status }) => {
       const context = createCleanupTestContext();
@@ -148,7 +148,11 @@ describe("isolated QA suite nested publication", () => {
         reportPath: "",
         summaryPath: "",
         report: "",
-        scenarios: [{ name: "same", status: calls === 1 ? "fail" : "pass", steps: [] }],
+        ...recordQaSuiteTestResults(
+          params,
+          [makeQaSuiteTestScenario("same")],
+          [{ name: "same", status: calls === 1 ? "fail" : "pass", steps: [] }],
+        ),
         startedScenarioIds: ["same"],
         watchUrl: lab.baseUrl,
       };
@@ -174,18 +178,9 @@ describe("isolated QA suite nested publication", () => {
     const lab = createCleanupTestLab();
     let activeWorkers = 0;
     let maxActiveWorkers = 0;
-    let releaseWorkers!: () => void;
-    const bothWorkersStarted = new Promise<void>((resolve) => {
-      releaseWorkers = resolve;
-    });
-    let releaseFirstScenario!: () => void;
-    const firstScenarioStarted = new Promise<void>((resolve) => {
-      releaseFirstScenario = resolve;
-    });
-    let releaseScenarioExecutions!: () => void;
-    const bothScenarioExecutionsStarted = new Promise<void>((resolve) => {
-      releaseScenarioExecutions = resolve;
-    });
+    const bothWorkersStarted = createDeferred<void>();
+    const firstScenarioStarted = createDeferred<void>();
+    const bothScenarioExecutionsStarted = createDeferred<void>();
     const context = createCleanupTestContext();
     context.repoRoot = await tempDirs.makeTempDir("qa-nested-workers-");
     context.outputDir = path.join(context.repoRoot, "output");
@@ -200,10 +195,10 @@ describe("isolated QA suite nested publication", () => {
       .fn<QaSuiteScenarioRunner>()
       .mockImplementation(async (_env, scenario) => {
         if (scenario.id === "first-crabline-scenario") {
-          releaseFirstScenario();
-          await bothScenarioExecutionsStarted;
+          firstScenarioStarted.resolve();
+          await bothScenarioExecutionsStarted.promise;
         } else {
-          releaseScenarioExecutions();
+          bothScenarioExecutionsStarted.resolve();
         }
         return {
           name: scenario.title,
@@ -224,12 +219,12 @@ describe("isolated QA suite nested publication", () => {
       activeWorkers += 1;
       maxActiveWorkers = Math.max(maxActiveWorkers, activeWorkers);
       if (activeWorkers === 2) {
-        releaseWorkers();
+        bothWorkersStarted.resolve();
       }
-      await bothWorkersStarted;
+      await bothWorkersStarted.promise;
       const scenarioId = params?.scenarioIds?.[0] ?? "missing-scenario";
       if (scenarioId === "second-crabline-scenario") {
-        await firstScenarioStarted;
+        await firstScenarioStarted.promise;
       }
       try {
         return await runQaFlowSuiteFromRuntime(params);
@@ -265,17 +260,22 @@ describe("isolated QA suite nested publication", () => {
     expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(5);
     for (const [nonFinalArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
       expect(nonFinalArtifacts).toMatchObject({ channel: "telegram", channelDriver: "crabline" });
-      expect(nonFinalArtifacts.publishTransportArtifacts).not.toBe(true);
+      expect(nonFinalArtifacts.transportArtifacts).toBeUndefined();
     }
     const finalArtifacts = mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0];
     expect(finalArtifacts).toMatchObject({
       channel: "telegram",
       channelDriver: "crabline",
-      publishTransportArtifacts: true,
+      transportArtifacts: {
+        artifacts: [
+          { kind: "channel-capability-matrix", path: "capabilities.json" },
+          { kind: "channel-driver-smoke", path: "readiness.json" },
+        ],
+      },
     });
   });
 
-  it.each(["pass", "skip", "failed step", "failure details"] as const)(
+  it.each(["skip", "failed step", "failure details"] as const)(
     "prints bounded failure progress before artifacts for a nested standard %s result",
     async (outcome) => {
       const parentLab = createCleanupTestLab();
@@ -291,7 +291,7 @@ describe("isolated QA suite nested publication", () => {
       if (scenario.execution.kind === "flow") {
         scenario.execution.retryCount = 0;
       }
-      const scenarioStatus = outcome === "pass" || outcome === "skip" ? outcome : "fail";
+      const scenarioStatus = outcome === "skip" ? "skip" : "fail";
       const secret = "synthetic-secret-".repeat(60);
       const details = `verification refused\napiKey="${secret}"\r::error::fixture\n${"🦞".repeat(400)}`;
       const scenarioResult = {
@@ -349,10 +349,10 @@ describe("isolated QA suite nested publication", () => {
           expect(Buffer.from(line).toString("utf8")).toBe(line);
         }
       };
-      mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+      mocks.writeQaSuiteArtifacts.mockImplementationOnce(async (params) => {
         assertScenarioProgress(1);
         return {
-          evidence: undefined,
+          evidence: params.recordedEvidence,
           evidencePath: "/qa-output/qa-evidence.json",
           report: "",
           reportPath: "/qa-output/qa-suite-report.md",

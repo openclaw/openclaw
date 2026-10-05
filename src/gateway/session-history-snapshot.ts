@@ -1,10 +1,24 @@
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import type {
+  ChatHistoryPageParams,
   PaginatedSessionHistory,
   SessionHistoryMessage,
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
-import { projectChatDisplayMessagesWithState } from "./chat-display-projection.core.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import type {
+  IncognitoHistoryOperations,
+  IncognitoHistoryTarget,
+} from "../config/sessions/session-incognito-history-contract.js";
+import type { PendingInputHistoryQuery } from "../config/sessions/session-pending-input-history.types.js";
+import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
+import {
+  projectChatDisplayMessagesWithState,
+  type ChatDisplayProjectionOptions,
+} from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
@@ -12,21 +26,18 @@ import {
   readChatHistoryMessageSeq as resolveMessageSeq,
   readIncrementalChatHistoryTail,
 } from "./session-history-tail.js";
-import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type {
+  SessionTranscriptReader,
+  SubagentCoordinationDisplayResolver,
+} from "./session-transcript-read.types.js";
+import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
 
 type SessionHistorySnapshotOptions = {
   readers: SessionTranscriptReader;
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
-};
-
-type SessionHistoryRawSnapshot = {
-  projection?: ReturnType<typeof projectChatDisplayMessagesWithState>;
-  rawMessages: unknown[];
-  rawTranscriptSeq?: number;
-  totalRawMessages?: number;
-  transcriptPath?: string;
+  resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
 };
 
 /** Keep raw scan context inside the worker; only the completed page crosses isolates. */
@@ -34,43 +45,75 @@ export async function readSessionHistorySnapshotKernel(
   params: SessionHistoryReadParams,
   options: SessionHistorySnapshotOptions,
 ): Promise<SessionHistorySnapshot> {
-  const raw = await readSessionHistoryRawSnapshot(params, options);
-  return {
-    ...buildSessionHistorySnapshot({ ...params, ...raw }, options),
-    transcriptPath: raw.transcriptPath,
-  };
-}
-
-async function readSessionHistoryRawSnapshot(
-  params: SessionHistoryReadParams,
-  options: SessionHistorySnapshotOptions,
-): Promise<SessionHistoryRawSnapshot> {
+  let rawMessages: unknown[];
+  let windowReset = false;
+  let totalRawMessages: number | undefined;
+  let transcriptPath: string | undefined;
+  let projected: ReturnType<typeof projectChatDisplayMessagesWithState>;
   if (typeof params.limit !== "number") {
-    const snapshot = await options.readers.readSessionMessagesWithSourceAsync(params.target, {
-      mode: "full",
-      reason: "session history cursor pagination",
-      allowResetArchiveFallback: true,
-      readOnly: options.readOnly,
+    rawMessages = [];
+    for await (const page of iterateSessionTranscriptSourcePages(
+      options.readers.readSessionMessagesWithSourceAsync.bind(options.readers),
+      params.target,
+      {
+        allowResetArchiveFallback: true,
+        readOnly: options.readOnly,
+      },
+    )) {
+      rawMessages.push(...page.messages);
+      transcriptPath = page.transcriptPath;
+    }
+    projected = projectChatDisplayMessagesWithState(rawMessages, {
+      subagentCoordination: options.readers.subagentCoordination,
+      includeCommentaryFallbacks: true,
+      maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      resolveCronJobName: options.resolveCronJobName,
+      ...(options.deferProfileDisplay
+        ? {}
+        : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
     });
-    return { rawMessages: snapshot.messages, transcriptPath: snapshot.transcriptPath };
+  } else {
+    const cursorSeq = resolveCursorSeq(params.cursor);
+    const tail = await readIncrementalChatHistoryTail({
+      entry: params.target.sessionEntry,
+      readScope: params.target,
+      effectiveMaxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      max: params.limit,
+      maxBytes: getMaxChatHistoryMessagesBytes(),
+      ...(cursorSeq === undefined ? {} : { beforeSeq: cursorSeq }),
+      preserveProjectionContext: true,
+      ...options,
+    });
+    windowReset = tail.windowReset ?? false;
+    projected = tail.projection;
+    rawMessages = tail.rawMessages;
+    totalRawMessages = tail.readPage.totalMessages;
+    transcriptPath = tail.readPage.transcriptPath;
   }
-  const cursorSeq = resolveCursorSeq(params.cursor);
-  const tail = await readIncrementalChatHistoryTail({
-    entry: params.target.sessionEntry,
-    readScope: params.target,
-    effectiveMaxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-    max: params.limit,
-    maxBytes: getMaxChatHistoryMessagesBytes(),
-    ...(cursorSeq === undefined ? {} : { beforeSeq: cursorSeq }),
-    preserveProjectionContext: true,
-    ...options,
-  });
+  const rawHistoryMessages = rawMessages.filter(isRecord);
+  const history = paginateSessionMessages(
+    projected.messages,
+    params.limit,
+    windowReset ? undefined : params.cursor,
+  );
+  if (
+    typeof totalRawMessages === "number" &&
+    totalRawMessages > rawMessages.length &&
+    (!params.cursor || (resolveMessageSeq(rawHistoryMessages[0]) ?? 0) > 1)
+  ) {
+    const firstSeq = resolveMessageSeq(history.messages[0] ?? rawHistoryMessages[0]);
+    history.hasMore = true;
+    if (typeof firstSeq === "number") {
+      history.nextCursor = String(firstSeq);
+    }
+  }
   return {
-    projection: tail.projection,
-    rawMessages: tail.rawMessages,
-    rawTranscriptSeq: tail.readPage.totalMessages,
-    totalRawMessages: tail.readPage.totalMessages,
-    transcriptPath: tail.readPage.transcriptPath,
+    history: { ...history, ...(windowReset ? { windowReset: true } : {}) },
+    rawTranscriptSeq:
+      totalRawMessages ?? resolveMessageSeq(rawHistoryMessages.at(-1)) ?? rawHistoryMessages.length,
+    turnBoundaryPending: projected.turnBoundaryPending,
+    assistantErrorPending: projected.assistantErrorPending,
+    transcriptPath,
   };
 }
 
@@ -84,13 +127,6 @@ export function resolveCursorSeq(cursor: string | undefined): number | undefined
   }
   const value = Number(normalized);
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
-  return messages.filter(
-    (message): message is SessionHistoryMessage =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
 }
 
 export function buildPaginatedSessionHistory(params: {
@@ -156,49 +192,167 @@ function paginateSessionMessages(
   });
 }
 
-/** Builds the display history snapshot and raw transcript sequence watermark. */
-function buildSessionHistorySnapshot(
-  params: {
-    projection?: ReturnType<typeof projectChatDisplayMessagesWithState>;
-    rawMessages: unknown[];
-    maxChars?: number;
-    limit?: number;
-    cursor?: string;
-    rawTranscriptSeq?: number;
-    totalRawMessages?: number;
-  },
-  options: SessionHistorySnapshotOptions,
-): SessionHistorySnapshot {
-  const projected =
-    params.projection ??
-    projectChatDisplayMessagesWithState(params.rawMessages, {
-      includeCommentaryFallbacks: true,
-      maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-      ...(options.deferProfileDisplay
-        ? {}
-        : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
-    });
-  const visibleMessages = projected.messages;
-  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
-  const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
-  if (
-    typeof params.totalRawMessages === "number" &&
-    params.totalRawMessages > params.rawMessages.length &&
-    (!params.cursor || (resolveMessageSeq(rawHistoryMessages[0]) ?? 0) > 1)
-  ) {
-    const firstSeq = resolveMessageSeq(history.messages[0] ?? rawHistoryMessages[0]);
-    history.hasMore = true;
-    if (typeof firstSeq === "number") {
-      history.nextCursor = String(firstSeq);
+/** Retain the actor across lazy adapter loading without expanding shared execution imports. */
+export function createIncognitoSessionComputeReader(
+  params: Parameters<
+    typeof import("../config/sessions/session-incognito-compute-read.js").bindIncognitoSessionComputeReader
+  >[0],
+) {
+  const { actor, authority, signal } = params;
+  const target = structuredClone(params.target);
+  signal?.throwIfAborted();
+  return actor.sessions.withCompute(
+    authority,
+    target,
+    async () => {
+      const { bindIncognitoSessionComputeReader } =
+        await import("../config/sessions/session-incognito-compute-read.js");
+      signal?.throwIfAborted();
+      return bindIncognitoSessionComputeReader({ actor, authority, target, signal });
+    },
+    signal,
+  );
+}
+
+/** Inactive composition: callers retain the actor and supply already-prepared display facts. */
+export function createIncognitoSessionHistoryReader(params: {
+  actor: Pick<IncognitoAgentDatabaseExecution, "path" | "sessions" | "assertCurrent">;
+  authority: IncognitoSessionAuthority;
+  target: IncognitoHistoryTarget & { agentId: string; storePath: string };
+  subagentCoordination: SubagentCoordinationDisplayResolver;
+  resolveCurrentUserProfileDisplay: CurrentUserProfileDisplayResolver;
+  resolveCronJobName?: (jobId: string) => string | undefined;
+  signal?: AbortSignal;
+}) {
+  const { actor, authority, signal, subagentCoordination } = params;
+  authority.assertCurrent();
+  actor.assertCurrent();
+  const { agentId, storePath, ...target } = structuredClone(params.target);
+  const capturedStorePath = path.resolve(storePath);
+  const claim = actor.sessions.captureCurrent(target.sessionKey);
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    actor.assertCurrent();
+    authority.assertCurrent();
+    claim.assertCurrent();
+    subagentCoordination.assertCurrent?.();
+  };
+  const assertScope = (scope: Partial<SessionTranscriptReadScope>) => {
+    assertCurrent();
+    if (
+      scope.sessionId !== target.sessionId ||
+      (scope.sessionKey !== undefined && scope.sessionKey !== target.sessionKey) ||
+      (scope.agentId !== undefined && scope.agentId !== agentId) ||
+      (scope.storePath !== undefined && path.resolve(scope.storePath) !== capturedStorePath) ||
+      (scope.sessionEntry?.sessionId !== undefined &&
+        scope.sessionEntry.sessionId !== target.sessionId)
+    ) {
+      throw new Error("Incognito history request belongs to another session or store");
     }
-  }
+  };
+  const disclose = <T>(value: T): T => {
+    assertCurrent();
+    claim.authorize(authority, "commit");
+    assertCurrent();
+    return value;
+  };
+  const read = async <Key extends keyof IncognitoHistoryOperations>(
+    scope: SessionTranscriptReadScope,
+    command: { type: Key; input: IncognitoHistoryOperations[Key]["input"] },
+  ): Promise<IncognitoHistoryOperations[Key]["output"]> => {
+    assertScope(scope);
+    return disclose(await actor.sessions.history(authority, command, signal));
+  };
+  const readers: SessionTranscriptReader = {
+    subagentCoordination,
+    readSessionMessageCountAsync: (scope) =>
+      read(scope, { type: "session.history.count", input: target }),
+    readRecentSessionMessagesWithStatsAsync: (scope, options) =>
+      read(scope, { type: "session.history.recent", input: { ...target, options } }),
+    readSessionMessagesPageWithStatsAsync: (scope, options) =>
+      read(scope, { type: "session.history.page", input: { ...target, options } }),
+    readSessionMessagesAroundIdWithStatsAsync: (scope, options) =>
+      read(scope, { type: "session.history.around-id", input: { ...target, options } }),
+    readSessionMessageByIdAsync: async (scope, messageId, options) => {
+      const { filterSessionMessageHistoryVisibility } =
+        await import("./session-transcript-read-kernel.js");
+      return disclose(
+        await filterSessionMessageHistoryVisibility(
+          await read(scope, {
+            type: "session.history.by-id",
+            input: { ...target, messageId, options },
+          }),
+          scope,
+          messageId,
+          options?.historyVisibility,
+          readers,
+        ),
+      );
+    },
+    async readSessionMessagesWithSourceAsync(scope, options) {
+      return read(scope, {
+        type: "session.history.source",
+        input: { ...target, options },
+      });
+    },
+    async readSessionMessagesMatchingIdAsync(scope, messageId) {
+      return disclose(
+        (
+          await read(scope, {
+            type: "session.history.lookup",
+            input: { ...target, messageId },
+          })
+        ).messages,
+      );
+    },
+  };
+  const options = {
+    readers,
+    readOnly: true,
+    resolveCurrentUserProfileDisplay: params.resolveCurrentUserProfileDisplay,
+    resolveCronJobName: params.resolveCronJobName ?? (() => undefined),
+  };
+  const pendingInputs = async () => {
+    const { createIncognitoPendingInputHistoryReader } =
+      await import("../config/sessions/session-pending-input-history.js");
+    assertCurrent();
+    return createIncognitoPendingInputHistoryReader({ actor, authority, target });
+  };
   return {
-    history,
-    rawTranscriptSeq:
-      params.rawTranscriptSeq ??
-      resolveMessageSeq(rawHistoryMessages.at(-1)) ??
-      rawHistoryMessages.length,
-    turnBoundaryPending: projected.turnBoundaryPending,
-    assistantErrorPending: projected.assistantErrorPending,
+    readers,
+    listPendingInputs(query: Pick<PendingInputHistoryQuery, "limit" | "before"> = {}) {
+      const captured = { ...query };
+      assertCurrent();
+      return actor.sessions.withSharedState(async () =>
+        disclose(await (await pendingInputs()).list(captured)),
+      );
+    },
+    readPendingInput(id: string) {
+      assertCurrent();
+      return actor.sessions.withSharedState(async () =>
+        disclose(await (await pendingInputs()).read(id)),
+      );
+    },
+    async rpc(request: ChatHistoryPageParams) {
+      const captured = structuredClone(request);
+      assertScope({
+        agentId: captured.sessionAgentId,
+        sessionId: captured.sessionId,
+        sessionKey: captured.canonicalKey,
+        storePath: captured.storePath,
+        sessionEntry: captured.entry,
+      });
+      const [{ readChatHistoryPageKernel }, { encodeChatHistoryResponsePage }] = await Promise.all([
+        import("./server-methods/chat-history-page-kernel.js"),
+        import("./server-methods/chat-history-response-page.js"),
+      ]);
+      const page = await readChatHistoryPageKernel(captured, options);
+      return disclose(encodeChatHistoryResponsePage(page, captured));
+    },
+    async http(request: SessionHistoryReadParams) {
+      const captured = structuredClone(request);
+      assertScope(captured.target);
+      return disclose(await readSessionHistorySnapshotKernel(captured, options));
+    },
   };
 }

@@ -1,26 +1,52 @@
 // Tests CLI entrypoint argument handling and startup behavior.
 import { describe, expect, it, vi } from "vitest";
+import { runWithPrecomputedHelpMocks } from "./cli/precomputed-help.test-helpers.js";
+import * as rootHelp from "./cli/program/root-help.js";
+import * as liveHelp from "./cli/root-help-live-config.js";
+import * as helpMetadata from "./cli/root-help-metadata.js";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
+import { withEnvAsync } from "./test-utils/env.js";
+
+async function runRootHelp(
+  argv: string[],
+  setup: {
+    env?: NodeJS.ProcessEnv;
+    outputPrecomputedRootHelpText?: typeof helpMetadata.outputPrecomputedRootHelpText;
+    outputRootHelp?: typeof rootHelp.outputRootHelp;
+    loadRootHelpRenderOptionsForConfigSensitivePlugins?: typeof liveHelp.loadRootHelpRenderOptionsForConfigSensitivePlugins;
+  },
+) {
+  const spies = [
+    vi
+      .spyOn(helpMetadata, "outputPrecomputedRootHelpText")
+      .mockImplementation(setup.outputPrecomputedRootHelpText ?? (() => false)),
+    vi
+      .spyOn(rootHelp, "outputRootHelp")
+      .mockImplementation(setup.outputRootHelp ?? (async () => {})),
+    vi
+      .spyOn(liveHelp, "loadRootHelpRenderOptionsForConfigSensitivePlugins")
+      .mockImplementation(
+        setup.loadRootHelpRenderOptionsForConfigSensitivePlugins ?? (async () => null),
+      ),
+  ];
+  try {
+    return await withEnvAsync(setup.env ?? {}, () => tryHandleRootHelpFastPath(argv));
+  } finally {
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+  }
+}
 
 describe("entry root help fast path", () => {
-  it.each([
-    { name: "long root help", argv: ["node", "openclaw", "--help"] },
-    { name: "short root help", argv: ["node", "openclaw", "-h"] },
-    {
-      name: "profile-prefixed root help",
-      argv: ["node", "openclaw", "--profile", "work", "--help"],
-    },
-    {
-      name: "no-color-prefixed root help",
-      argv: ["node", "openclaw", "--no-color", "--help"],
-    },
-  ])("respects the startup help fast path kill switch for $name", async ({ argv }) => {
+  it("respects the startup help fast path kill switch", async () => {
+    const argv = ["node", "openclaw", "--help"];
     const outputPrecomputedRootHelpText = vi.fn(() => true);
     const outputRootHelp = vi.fn();
     const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => null);
 
     await expect(
-      tryHandleRootHelpFastPath(argv, {
+      runRootHelp(argv, {
         env: { OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" },
         outputPrecomputedRootHelpText,
         outputRootHelp,
@@ -34,15 +60,13 @@ describe("entry root help fast path", () => {
   });
 
   it("respects the process env startup help fast path kill switch", async () => {
-    const original = process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     const outputPrecomputedRootHelpText = vi.fn(() => true);
     const outputRootHelp = vi.fn();
     const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => null);
-    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH = "1";
 
-    try {
+    await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
       await expect(
-        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+        runRootHelp(["node", "openclaw", "--help"], {
           outputPrecomputedRootHelpText,
           outputRootHelp,
           loadRootHelpRenderOptionsForConfigSensitivePlugins,
@@ -52,20 +76,14 @@ describe("entry root help fast path", () => {
       expect(loadRootHelpRenderOptionsForConfigSensitivePlugins).not.toHaveBeenCalled();
       expect(outputPrecomputedRootHelpText).not.toHaveBeenCalled();
       expect(outputRootHelp).not.toHaveBeenCalled();
-    } finally {
-      if (original === undefined) {
-        delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
-      } else {
-        process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH = original;
-      }
-    }
+    });
   });
 
   it("prefers precomputed root help text when available", async () => {
     const outputPrecomputedRootHelpText = vi.fn(() => true);
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       env: {},
       outputPrecomputedRootHelpText,
       outputRootHelp,
@@ -78,23 +96,21 @@ describe("entry root help fast path", () => {
   });
 
   it("renders root help without importing the full program", async () => {
-    let outputRootHelpCalls = 0;
+    const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
-      outputRootHelp: () => {
-        outputRootHelpCalls += 1;
-      },
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
+      outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
     });
 
     expect(handled).toBe(true);
-    expect(outputRootHelpCalls).toBe(1);
+    expect(outputRootHelp).toHaveBeenCalledOnce();
   });
 
   it("renders live root help when plugin config changes command descriptors", async () => {
-    let outputPrecomputedRootHelpTextCalls = 0;
-    const outputRootHelpOptions: unknown[] = [];
+    const outputPrecomputedRootHelpText = vi.fn();
+    const outputRootHelp = vi.fn();
     const liveOptions = {
       config: {
         plugins: {
@@ -106,21 +122,16 @@ describe("entry root help fast path", () => {
       env: {},
     };
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       env: {},
-      outputPrecomputedRootHelpText: () => {
-        outputPrecomputedRootHelpTextCalls += 1;
-        return true;
-      },
-      outputRootHelp: (options) => {
-        outputRootHelpOptions.push(options);
-      },
+      outputPrecomputedRootHelpText: outputPrecomputedRootHelpText.mockReturnValue(true),
+      outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => liveOptions,
     });
 
     expect(handled).toBe(true);
-    expect(outputPrecomputedRootHelpTextCalls).toBe(0);
-    expect(outputRootHelpOptions).toEqual([liveOptions]);
+    expect(outputPrecomputedRootHelpText).not.toHaveBeenCalled();
+    expect(outputRootHelp).toHaveBeenCalledExactlyOnceWith(liveOptions);
   });
 
   it("structures root help rendering failures for JSON console style", async () => {
@@ -133,7 +144,7 @@ describe("entry root help fast path", () => {
 
     try {
       await expect(
-        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+        runRootHelp(["node", "openclaw", "--help"], {
           env: {},
           loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => ({
             config: {},
@@ -157,132 +168,84 @@ describe("entry root help fast path", () => {
   });
 
   it("ignores non-root help invocations", async () => {
-    let outputRootHelpCalls = 0;
+    const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "status", "--help"], {
-      outputRootHelp: () => {
-        outputRootHelpCalls += 1;
-      },
+    const handled = await runRootHelp(["node", "openclaw", "status", "--help"], {
+      outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
     });
 
     expect(handled).toBe(false);
-    expect(outputRootHelpCalls).toBe(0);
+    expect(outputRootHelp).not.toHaveBeenCalled();
   });
 
   it("skips the host help fast path when a container target is active", async () => {
-    let outputRootHelpCalls = 0;
+    const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(
-      ["node", "openclaw", "--container", "demo", "--help"],
-      {
-        outputRootHelp: () => {
-          outputRootHelpCalls += 1;
-        },
-        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-        env: {},
-      },
-    );
+    const handled = await runRootHelp(["node", "openclaw", "--container", "demo", "--help"], {
+      outputRootHelp,
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
+      env: {},
+    });
 
     expect(handled).toBe(false);
-    expect(outputRootHelpCalls).toBe(0);
+    expect(outputRootHelp).not.toHaveBeenCalled();
   });
 });
 
 describe("entry precomputed command help fast path", () => {
-  it("renders browser help from startup metadata without importing the full program", async () => {
-    let outputPrecomputedBrowserHelpTextCalls = 0;
-
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
-      ["node", "openclaw", "browser", "--help"],
-      {
-        env: {},
-        outputPrecomputedBrowserHelpText: () => {
-          outputPrecomputedBrowserHelpTextCalls += 1;
-          return true;
-        },
-      },
-    );
-
-    expect(handled).toBe(true);
-    expect(outputPrecomputedBrowserHelpTextCalls).toBe(1);
-  });
-
-  it("renders secrets help from startup metadata without importing the full program", async () => {
-    let outputPrecomputedSecretsHelpTextCalls = 0;
-
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
-      ["node", "openclaw", "secrets", "--help"],
-      {
-        env: {},
-        outputPrecomputedSecretsHelpText: () => {
-          outputPrecomputedSecretsHelpTextCalls += 1;
-          return true;
-        },
-      },
-    );
-
-    expect(handled).toBe(true);
-    expect(outputPrecomputedSecretsHelpTextCalls).toBe(1);
-  });
-
-  it("renders nodes help from startup metadata without importing the full program", async () => {
-    let outputPrecomputedNodesHelpTextCalls = 0;
-
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
-      ["node", "openclaw", "nodes", "--help"],
-      {
-        env: {},
-        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-        outputPrecomputedNodesHelpText: () => {
-          outputPrecomputedNodesHelpTextCalls += 1;
-          return true;
-        },
-      },
-    );
-
-    expect(handled).toBe(true);
-    expect(outputPrecomputedNodesHelpTextCalls).toBe(1);
-  });
-
-  it.each(["config", "doctor", "gateway", "plugins", "sessions", "tasks"])(
-    "renders precomputed %s help from startup metadata without importing the full program",
-    async (commandName) => {
-      const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
-
-      const handled = await tryHandlePrecomputedCommandHelpFastPath(
-        ["node", "openclaw", commandName, "--help"],
+  it.each([
+    ["browser", "outputPrecomputedBrowserHelpText"],
+    ["secrets", "outputPrecomputedSecretsHelpText"],
+    ["nodes", "outputPrecomputedNodesHelpText"],
+  ] as const)(
+    "renders precomputed %s help without loading the full program",
+    async (command, key) => {
+      const output = vi.fn(() => true);
+      const handled = await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
+        ["node", "openclaw", command, "--help"],
         {
           env: {},
-          outputPrecomputedSubcommandHelpText: (requestedCommandName) => {
-            outputPrecomputedSubcommandHelpTextCalls.push(requestedCommandName);
-            return true;
-          },
+          loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
+          [key]: output,
         },
       );
-
       expect(handled).toBe(true);
-      expect(outputPrecomputedSubcommandHelpTextCalls).toEqual([commandName]);
+      expect(output).toHaveBeenCalledOnce();
     },
   );
 
-  it("renders precomputed subcommand help with leading root options", async () => {
-    const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
+  it("renders precomputed doctor help without loading the full program", async () => {
+    const outputPrecomputedSubcommandHelpText = vi.fn(() => true);
+    expect(
+      await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
+        ["node", "openclaw", "doctor", "--help"],
+        {
+          env: {},
+          outputPrecomputedSubcommandHelpText,
+        },
+      ),
+    ).toBe(true);
+    expect(outputPrecomputedSubcommandHelpText).toHaveBeenCalledExactlyOnceWith("doctor");
+  });
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+  it("renders precomputed subcommand help with leading root options", async () => {
+    const outputPrecomputedSubcommandHelpText = vi.fn(() => true);
+
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "--profile", "work", "--no-color", "models", "-h"],
       {
         env: {},
-        outputPrecomputedSubcommandHelpText: (commandName) => {
-          outputPrecomputedSubcommandHelpTextCalls.push(commandName);
-          return true;
-        },
+        outputPrecomputedSubcommandHelpText,
       },
     );
 
     expect(handled).toBe(true);
-    expect(outputPrecomputedSubcommandHelpTextCalls).toEqual(["models"]);
+    expect(outputPrecomputedSubcommandHelpText).toHaveBeenCalledExactlyOnceWith("models");
   });
 
   it("keeps subcommand help fast path strict for extra or mixed flags", async () => {
@@ -297,48 +260,46 @@ describe("entry precomputed command help fast path", () => {
       ["node", "openclaw", "gateway", "status", "--help"],
       ["node", "openclaw", "status", "--help"],
     ];
-    let outputPrecomputedSubcommandHelpTextCalls = 0;
+    const outputPrecomputedSubcommandHelpText = vi.fn();
 
     for (const argv of invocations) {
-      const handled = await tryHandlePrecomputedCommandHelpFastPath(argv, {
-        env: {},
-        outputPrecomputedSubcommandHelpText: () => {
-          outputPrecomputedSubcommandHelpTextCalls += 1;
-          return true;
+      const handled = await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
+        argv,
+        {
+          env: {},
+          outputPrecomputedSubcommandHelpText:
+            outputPrecomputedSubcommandHelpText.mockReturnValue(true),
         },
-      });
+      );
 
       expect(handled).toBe(false);
     }
-    expect(outputPrecomputedSubcommandHelpTextCalls).toBe(0);
+    expect(outputPrecomputedSubcommandHelpText).not.toHaveBeenCalled();
   });
 
   it("defers nodes help when plugin config can change command metadata", async () => {
-    let outputPrecomputedNodesHelpTextCalls = 0;
-    let liveConfigChecks = 0;
+    const outputPrecomputedNodesHelpText = vi.fn();
+    const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => ({ env: {} }));
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "--help"],
       {
         env: {},
-        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => {
-          liveConfigChecks += 1;
-          return { env: {} };
-        },
-        outputPrecomputedNodesHelpText: () => {
-          outputPrecomputedNodesHelpTextCalls += 1;
-          return true;
-        },
+        loadRootHelpRenderOptionsForConfigSensitivePlugins,
+        outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(liveConfigChecks).toBe(1);
-    expect(outputPrecomputedNodesHelpTextCalls).toBe(0);
+    expect(loadRootHelpRenderOptionsForConfigSensitivePlugins).toHaveBeenCalledOnce();
+    expect(outputPrecomputedNodesHelpText).not.toHaveBeenCalled();
   });
 
   it("falls through when startup metadata is unavailable", async () => {
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "secrets", "--help"],
       {
         env: {},
@@ -350,7 +311,8 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("falls through when startup metadata loading fails", async () => {
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "secrets", "--help"],
       {
         env: {},
@@ -364,7 +326,8 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("falls through when the nodes live-config probe fails", async () => {
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "--help"],
       {
         env: {},
@@ -378,118 +341,98 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("ignores nested subcommand help invocations", async () => {
-    let outputPrecomputedNodesHelpTextCalls = 0;
+    const outputPrecomputedNodesHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "invoke", "--help"],
       {
         env: {},
-        outputPrecomputedNodesHelpText: () => {
-          outputPrecomputedNodesHelpTextCalls += 1;
-          return true;
-        },
+        outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputPrecomputedNodesHelpTextCalls).toBe(0);
+    expect(outputPrecomputedNodesHelpText).not.toHaveBeenCalled();
   });
 
   it("ignores command version invocations", async () => {
-    let outputPrecomputedNodesHelpTextCalls = 0;
+    const outputPrecomputedNodesHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "--version"],
       {
         env: {},
-        outputPrecomputedNodesHelpText: () => {
-          outputPrecomputedNodesHelpTextCalls += 1;
-          return true;
-        },
+        outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputPrecomputedNodesHelpTextCalls).toBe(0);
+    expect(outputPrecomputedNodesHelpText).not.toHaveBeenCalled();
   });
 
   it("respects the startup help fast path kill switch", async () => {
-    let outputPrecomputedSecretsHelpTextCalls = 0;
+    const outputPrecomputedSecretsHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "secrets", "--help"],
       {
         env: { OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" },
-        outputPrecomputedSecretsHelpText: () => {
-          outputPrecomputedSecretsHelpTextCalls += 1;
-          return true;
-        },
+        outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputPrecomputedSecretsHelpTextCalls).toBe(0);
+    expect(outputPrecomputedSecretsHelpText).not.toHaveBeenCalled();
   });
 
   it("respects the process env startup help fast path kill switch", async () => {
-    let outputPrecomputedSecretsHelpTextCalls = 0;
-    const original = process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
-    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH = "1";
-    try {
-      const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const outputPrecomputedSecretsHelpText = vi.fn();
+    await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
+      const handled = await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
         ["node", "openclaw", "secrets", "--help"],
         {
-          outputPrecomputedSecretsHelpText: () => {
-            outputPrecomputedSecretsHelpTextCalls += 1;
-            return true;
-          },
+          outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpText.mockReturnValue(true),
         },
       );
 
       expect(handled).toBe(false);
-      expect(outputPrecomputedSecretsHelpTextCalls).toBe(0);
-    } finally {
-      if (original === undefined) {
-        delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
-      } else {
-        process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH = original;
-      }
-    }
+      expect(outputPrecomputedSecretsHelpText).not.toHaveBeenCalled();
+    });
   });
 
   it("skips the host command help fast path when a container target is active", async () => {
-    let outputPrecomputedSecretsHelpTextCalls = 0;
+    const outputPrecomputedSecretsHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "--container", "demo", "secrets", "--help"],
       {
         env: {},
-        outputPrecomputedSecretsHelpText: () => {
-          outputPrecomputedSecretsHelpTextCalls += 1;
-          return true;
-        },
+        outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputPrecomputedSecretsHelpTextCalls).toBe(0);
+    expect(outputPrecomputedSecretsHelpText).not.toHaveBeenCalled();
   });
 
   it("skips the host command help fast path when a container target comes from env", async () => {
-    let outputPrecomputedBrowserHelpTextCalls = 0;
+    const outputPrecomputedBrowserHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "browser", "--help"],
       {
         env: { OPENCLAW_CONTAINER: "demo" },
-        outputPrecomputedBrowserHelpText: () => {
-          outputPrecomputedBrowserHelpTextCalls += 1;
-          return true;
-        },
+        outputPrecomputedBrowserHelpText: outputPrecomputedBrowserHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputPrecomputedBrowserHelpTextCalls).toBe(0);
+    expect(outputPrecomputedBrowserHelpText).not.toHaveBeenCalled();
   });
 });

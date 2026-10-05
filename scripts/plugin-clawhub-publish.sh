@@ -6,6 +6,14 @@ fi
 
 set -euo pipefail
 
+# Convert only absolute native paths; drive-relative CLI overrides must still fail.
+shell_path() {
+  case "${OSTYPE}:$1" in
+    msys*:[a-zA-Z]:[\\/]*|cygwin*:[a-zA-Z]:[\\/]*|msys*:\\\\*|cygwin*:\\\\*) cygpath -u "$1" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
 usage() {
   echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir> [--metadata-root <trusted-checkout>]"
   echo "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>"
@@ -17,7 +25,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 mode="${1:-}"
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd "$(dirname "$(shell_path "${BASH_SOURCE[0]}")")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 invocation_root="$(pwd)"
 
@@ -48,7 +56,7 @@ if [[ "${1:-}" == "--metadata-root" ]]; then
     echo "--metadata-root requires a trusted checkout and an unpacked package mode" >&2
     exit 2
   fi
-  metadata_root="$(cd "$2" && pwd)"
+  metadata_root="$(cd "$(shell_path "$2")" && pwd)"
   shift 2
 fi
 if [[ "$#" -gt 0 ]]; then
@@ -64,6 +72,7 @@ fi
 package_dir="${PACKAGE_DIR:-}"
 clawpack_path=""
 if [[ "${packed_mode}" == "true" ]]; then
+  input_path="$(shell_path "${input_path}")"
   clawpack_path="$(cd "$(dirname "${input_path}")" && pwd)/$(basename "${input_path}")"
 else
   package_dir="${input_path}"
@@ -85,7 +94,7 @@ if [[ "${packed_mode}" == "true" && ! -f "${clawpack_path}" ]]; then
   exit 2
 fi
 
-clawhub_cli="${OPENCLAW_CLAWHUB_CLI:-}"
+clawhub_cli="$(shell_path "${OPENCLAW_CLAWHUB_CLI:-}")"
 if [[ -n "${clawhub_cli}" ]]; then
   if [[ "${clawhub_cli}" != /* || ! -x "${clawhub_cli}" ]]; then
     echo "OPENCLAW_CLAWHUB_CLI must be an absolute executable path" >&2
@@ -140,7 +149,7 @@ if [[ "${release_binding_count}" == "3" ]]; then
   fi
 fi
 
-pack_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-clawhub-pack.XXXXXX")"
+pack_dir="$(mktemp -d "$(shell_path "${RUNNER_TEMP:-/tmp}")/openclaw-clawhub-pack.XXXXXX")"
 cleanup() {
   rm -rf "${pack_dir}"
 }
@@ -191,10 +200,11 @@ if [[ "${packed_mode}" == "false" ]]; then
     metadata_args=(--clawhub-metadata "${metadata_root}/${package_dir}")
   fi
   # Bash 3.2 treats an empty array as unset under nounset; metadata is optional.
+  # Preserve Bash's executable/shebang contract across the native Node wrapper.
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
     node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" ${metadata_args[@]+"${metadata_args[@]}"} -- \
-    "${pack_cmd[@]}" > "${pack_json}"
+    "${BASH}" -c 'exec "$@"' clawhub-pack "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
   printf '%s\n' "${pack_output}"
 
@@ -217,6 +227,7 @@ if (!parsed || typeof parsed.path !== "string" || parsed.path.trim() === "") {
 console.log(resolve(parsed.path));
 EOF
   )"
+  pack_path="$(shell_path "${pack_path}")"
 
   if [[ ! -f "${pack_path}" ]]; then
     echo "ClawPack tarball not found: ${pack_path}" >&2
@@ -229,7 +240,7 @@ fi
 echo "Resolved ClawPack: ${clawpack_path}"
 
 if [[ "${mode}" == "--pack" ]]; then
-  output_dir="${OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR:-}"
+  output_dir="$(shell_path "${OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR:-}")"
   if [[ -z "${output_dir}" ]]; then
     echo "OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR is required for --pack" >&2
     exit 2
@@ -380,6 +391,7 @@ if [[ ! "${publish_retry_delay}" =~ ^[1-9][0-9]*$ || "${publish_retry_delay}" -g
 fi
 
 publish_log="${pack_dir}/publish.log"
+publish_sleep_total=0
 verify_release_tag_target() {
   if [[ "${release_binding_count}" == "0" ]]; then
     return 0
@@ -396,6 +408,9 @@ verify_release_tag_target() {
 
 for attempt in $(seq 1 "${publish_attempts}"); do
   verify_release_tag_target
+  if [[ "${packed_mode}" == "true" ]]; then
+    verify_packed_identity
+  fi
   set +e
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     "${clawhub_timeout[@]}" "${publish_cmd[@]}" 2>&1 | tee "${publish_log}"
@@ -410,13 +425,38 @@ for attempt in $(seq 1 "${publish_attempts}"); do
   if [[ "${publish_status}" == "0" ]]; then
     exit 0
   fi
+  # Timeouts stay retryable: replaying verified identical bytes against an
+  # immutable version can at worst fail as a conflict, never publish different bytes.
   if [[ "${publish_status}" != "124" && "${publish_status}" != "137" ]] &&
     ! grep -Eqi "rate limit|too many requests|\\b(408|425|429|5[0-9]{2})\\b|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up|network error|temporarily unavailable" "${publish_log}"; then
     exit 1
   fi
+  if [[ "${packed_mode}" != "true" ]]; then
+    echo "ClawHub publish has no caller-bound artifact identity; reconcile before retrying with --publish-packed." >&2
+    exit 1
+  fi
   if [[ "${attempt}" -lt "${publish_attempts}" ]]; then
-    echo "ClawHub publish hit a transient failure; retrying (${attempt}/${publish_attempts})." >&2
-    sleep "${publish_retry_delay}"
+    # Both npm 0.23.3 and the source CLI render Retry-After as "retry in Ns".
+    # Old curl transports may lose headers; use exponential backoff in that case.
+    server_delay="$(node --input-type=module - "${publish_log}" <<'NODE'
+import { readFileSync } from "node:fs";
+const output = readFileSync(process.argv[2], "utf8");
+const delays = [...output.matchAll(/\b(?:retry|reset) in (\d+)s\b/giu)];
+console.log(delays.reduce((max, match) => Math.max(max, Math.min(300, Number(match[1]))), 0));
+NODE
+    )"
+    delay="${publish_retry_delay}"
+    if ((server_delay > delay)); then delay="${server_delay}"; fi
+    if ((delay > 300)); then delay=300; fi
+    if ((publish_sleep_total + delay > 900)); then
+      echo "ClawHub publish retry sleep budget exhausted (900s); reconcile before recovery." >&2
+      exit 1
+    fi
+    echo "ClawHub publish retry in ${delay}s (${attempt}/${publish_attempts}; backoff=${publish_retry_delay}s, server delay=${server_delay}s, cap=300s, sleep budget remaining=$((900 - publish_sleep_total))s)." >&2
+    sleep "${delay}"
+    publish_sleep_total=$((publish_sleep_total + delay))
+    publish_retry_delay=$((publish_retry_delay * 2))
+    if ((publish_retry_delay > 300)); then publish_retry_delay=300; fi
   fi
 done
 

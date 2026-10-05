@@ -16,7 +16,11 @@ export type PluginInstanceAdmission = {
 };
 
 /** Known disposal faults are reported outcomes, never new-call admission failures. */
-export type PluginInstanceDisposalResult = { errors: readonly unknown[] };
+export type PluginInstanceDisposalResult = {
+  errors: readonly unknown[];
+  /** Errors seen only in host cleanup, eligible for its named-hook reporting. */
+  hostCleanupErrors?: readonly unknown[];
+};
 
 /** A host-owned logical consumer retains only its exact instance's admitted operations. */
 export type PluginInstanceConsumer = {
@@ -30,15 +34,6 @@ export type PluginInstanceConsumer = {
 export type PluginInstanceCallLease = {
   token: object;
   release: () => void | Promise<unknown>;
-};
-
-/** An iterator keeps the admission that owns its pending protocol operations. */
-export type PluginIteratorAdmission = {
-  readonly done: boolean;
-  readonly active: boolean;
-  invoke: <T>(run: () => T) => T;
-  close: () => void;
-  call: (key: PropertyKey, method: Function | undefined, args: unknown[]) => Promise<unknown>;
 };
 
 /** Inventory custody owns retirement without depending on registry contributions. */
@@ -58,7 +53,7 @@ export type PluginModuleLoaderRecovery = {
 export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginInstanceAdmission {
   controlPlaneInitialized: boolean;
   sourceDigest?: string;
-  onModuleDispose(cleanup: () => Promise<void>): void;
+  onModuleDispose(cleanup: () => void | Promise<void>): void;
   bindModuleLoader(
     load: (source: string) => unknown,
     hasSource?: (source: string) => boolean,
@@ -71,6 +66,10 @@ export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginI
 
 /** Current-call helpers retain the instance itself, not a registry or plugin-id lookup. */
 export interface PluginInvocationInstance extends PluginModuleLoaderOwner {
+  /** The current invocation's call or retained-consumer token is still admitted. */
+  readonly hasActiveCall: boolean;
+  /** This instance's replacement is reserved and still joins the given live token. */
+  holdsPendingReplacement(token: object): boolean;
   readonly slots: Map<string | symbol, { runtime: unknown }>;
   wrap<T>(value: T): T;
 }

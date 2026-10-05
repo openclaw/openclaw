@@ -1,13 +1,11 @@
 import { randomBytes } from "node:crypto";
-import type {
-  QuestionAnswers,
-  QuestionRequestQuestion,
-  QuestionWaitAnswerResult,
-} from "../../../packages/gateway-protocol/src/schema/questions.js";
+import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
 import {
   createQuestionPromptLifetime,
   isTerminalQuestionResolveError,
@@ -15,8 +13,12 @@ import {
   type GatewayQuestionCall,
 } from "../tools/gateway-question-lifecycle.js";
 import {
+  buildAgentQuestionAnswers,
+  buildAgentQuestionRequestQuestions,
+  PreparedQuestionAnswerRefusedError,
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
+  QuestionDispatchUnsupportedError,
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
@@ -33,8 +35,8 @@ import {
   deliverAgentHarnessQuestionPrompt,
   deliverAgentHarnessUserInputPrompt,
   type AgentHarnessUserInputPromptOptions,
-  type AgentHarnessUserInputQuestion,
 } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 const QUESTION_RPC_GRACE_MS = 10_000;
 
@@ -86,15 +88,6 @@ type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () 
 
 /** One reservation owns both dispatch refusal and the prompt's release notification. */
 function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionInputAuthority) {
-  if (
-    state.kind === "gateway" &&
-    authority?.kind === "source-bound" &&
-    !state.supportsSourceBound
-  ) {
-    throw new QuestionDispatchRefusedError(
-      "source-bound question input requires the default or a version 2 dispatcher",
-    );
-  }
   let refused = false;
   const assertCurrent = () => {
     try {
@@ -113,6 +106,15 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
     }
   };
   assertCurrent();
+  if (
+    state.kind === "gateway" &&
+    authority?.kind === "source-bound" &&
+    !state.supportsSourceBound
+  ) {
+    throw new QuestionDispatchUnsupportedError(
+      "source-bound question input requires the default or a version 2 dispatcher",
+    );
+  }
   state.resolving = true;
   let finish: (() => void) | undefined;
   if (state.kind === "gateway") {
@@ -150,6 +152,7 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
 export function registerPendingAgentQuestion(params: {
   questionId: string;
   sessionKey: string;
+  agentId?: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
   answer?: Promise<QuestionWaitAnswerResult>;
@@ -168,12 +171,11 @@ export function registerPendingAgentQuestion(params: {
   if (existing) {
     throw new Error(`session already has a pending agent input request: ${sessionKey}`);
   }
-  let resolveRegistration!: (value: unknown) => void;
-  let rejectRegistration!: (error: unknown) => void;
-  const registration = new Promise<unknown>((resolve, reject) => {
-    resolveRegistration = resolve;
-    rejectRegistration = reject;
-  });
+  const {
+    promise: registration,
+    resolve: resolveRegistration,
+    reject: rejectRegistration,
+  } = createDeferredCore<unknown>();
   void registration.catch(() => undefined);
   let registrationAttached = false;
   const state: PendingAgentQuestion = {
@@ -195,6 +197,7 @@ export function registerPendingAgentQuestion(params: {
     cancelRequested: false,
     resolving: false,
   };
+  const releaseFormResources = reserveMcpFormQuestion({ ...params, sessionKey });
   pendingAgentQuestions.set(sessionKey, state);
   return {
     attachRegistration: state.attachRegistration,
@@ -212,6 +215,7 @@ export function registerPendingAgentQuestion(params: {
     isCancellationRequested: () => state.cancelRequested,
     isResolving: () => state.cancelRequested || state.resolving,
     dispose: () => {
+      releaseFormResources();
       if (pendingAgentQuestions.get(sessionKey) === state) {
         pendingAgentQuestions.delete(sessionKey);
       }
@@ -278,9 +282,18 @@ export async function claimPendingAgentQuestionAnswer(params: {
   return claimQuestionAnswer(params);
 }
 
+/** Core ingress revalidates its prepared route after question and source preparation. */
+export async function claimPreparedPendingAgentQuestionAnswer(
+  params: Parameters<typeof claimPendingAgentQuestionAnswer>[0],
+  assertPreparedCurrent: () => Promise<void>,
+): Promise<boolean> {
+  return claimQuestionAnswer(params, undefined, assertPreparedCurrent);
+}
+
 async function claimQuestionAnswer(
   params: Parameters<typeof claimPendingAgentQuestionAnswer>[0],
   onAnswerProcessed?: () => void,
+  assertPreparedCurrent?: () => Promise<void>,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
@@ -328,18 +341,23 @@ async function claimQuestionAnswer(
         await params.persist?.();
       }
     }
-    reservation.assertCurrent();
+    if (assertPreparedCurrent) {
+      try {
+        await assertPreparedCurrent();
+        reservation.assertCurrent();
+      } catch (error) {
+        throw new PreparedQuestionAnswerRefusedError(error);
+      }
+    } else {
+      reservation.assertCurrent();
+    }
     if (state.kind === "secret") {
       consumed = state.settle(params.text);
       return consumed;
     }
     state.answerAuthority?.admitTranscriptAnswer?.(sourceRecorder);
     const parsed = buildAgentHarnessUserInputAnswers(state.questions, params.text);
-    const answers: QuestionAnswers = {
-      answers: Object.fromEntries(
-        Object.entries(parsed.answers).map(([id, answer]) => [id, answer.answers]),
-      ),
-    };
+    const answers = buildAgentQuestionAnswers(parsed);
     const resolutionId = randomBytes(16).toString("hex");
     try {
       await state.gatewayCall(
@@ -416,7 +434,12 @@ export async function cancelPendingAgentQuestionForSession(params: {
   state.cancelRequested = !sourceBound;
   try {
     if (sourceBound && !state.answer) {
-      await state.registration;
+      try {
+        await state.registration;
+      } catch {
+        // Registration failed before cancellation dispatch; leave the input unclaimed.
+        return false;
+      }
     }
     reservation.assertCurrent();
     try {
@@ -439,20 +462,9 @@ export async function cancelPendingAgentQuestionForSession(params: {
   }
 }
 
-type RunAgentHarnessSecretInputParams = {
-  questions: readonly AgentHarnessUserInputQuestion[];
-  sessionKey: string;
-  timeoutMs: number;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
-    hostCapabilities?: AgentHarnessHostCapabilities;
-  };
-  promptOptions?: AgentHarnessUserInputPromptOptions;
-  signal?: AbortSignal;
-};
-
 /** Presents one warned secret prompt and keeps its answer out of durable question records. */
 function runAgentHarnessSecretInput(
-  params: RunAgentHarnessSecretInputParams,
+  params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<string | undefined> {
   params.signal?.throwIfAborted();
   const sessionKey = params.sessionKey.trim();
@@ -529,40 +541,26 @@ async function runScopedAgentHarnessQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
   if (params.questions.some((question) => question.isSecret)) {
-    const text = await runAgentHarnessSecretInput({
-      questions: params.questions,
-      sessionKey: params.sessionKey,
-      timeoutMs: params.timeoutMs,
-      delivery: params.delivery,
-      promptOptions: params.promptOptions,
-      signal: params.signal,
-    });
+    const text = await runAgentHarnessSecretInput(params);
     if (text === undefined) {
       return { status: "cancelled" };
     }
     const parsed = buildAgentHarnessUserInputAnswers(params.questions, text);
     return {
       status: "answered",
-      answers: {
-        answers: Object.fromEntries(
-          Object.entries(parsed.answers).map(([id, answer]) => [id, answer.answers]),
-        ),
-      },
+      answers: buildAgentQuestionAnswers(parsed),
     };
   }
   const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
-  const questions: QuestionRequestQuestion[] = params.questions.map(({ id, ...question }) => ({
-    ...question,
-    questionId: id,
-    options: [...(question.options ?? [])],
-  }));
+  const questions = buildAgentQuestionRequestQuestions(params.questions);
   let aborted = false;
   params.signal?.throwIfAborted();
   using prompt = createQuestionPromptLifetime(params.signal);
   const claim = registerPendingAgentQuestion({
     questionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     questions: params.questions,
     gatewayCall: params.gatewayCall,
     onCancel: prompt.close,
@@ -649,7 +647,11 @@ async function runScopedAgentHarnessQuestion(
       (result) => ({ kind: "answer" as const, result }),
       (error: unknown) => ({ kind: "answer-error" as const, error }),
     );
-    const finishAnswer = async (result: QuestionWaitAnswerResult) => {
+    const finishAnswer = async (outcome: Awaited<typeof answerOutcome>) => {
+      if (outcome.kind === "answer-error") {
+        throw outcome.error;
+      }
+      const { result } = outcome;
       const terminal =
         result.status === "pending"
           ? ((await cancel("wait-timeout")) ?? ({ status: "cancelled" } as const))
@@ -665,11 +667,8 @@ async function runScopedAgentHarnessQuestion(
         setTimeout(() => resolve({ kind: "delivery-ready" }), 0);
       }),
     ]);
-    if (beforeDelivery.kind === "answer") {
-      return await finishAnswer(beforeDelivery.result);
-    }
-    if (beforeDelivery.kind === "answer-error") {
-      throw beforeDelivery.error;
+    if (beforeDelivery.kind !== "delivery-ready") {
+      return await finishAnswer(beforeDelivery);
     }
     let consumed: boolean;
     do {
@@ -677,11 +676,7 @@ async function runScopedAgentHarnessQuestion(
     } while (!consumed && claim.isResolving());
     if (consumed) {
       // A completed registration-time claim must not expose a stale prompt.
-      const outcome = await answerOutcome;
-      if (outcome.kind === "answer-error") {
-        throw outcome.error;
-      }
-      return await finishAnswer(outcome.result);
+      return await finishAnswer(await answerOutcome);
     }
     const delivery = deliverAgentHarnessQuestionPrompt(
       params.delivery,
@@ -695,11 +690,8 @@ async function runScopedAgentHarnessQuestion(
       (error: unknown) => ({ kind: "delivery-error" as const, error }),
     );
     const first = await Promise.race([answerOutcome, deliveryOutcome]);
-    if (first.kind === "answer") {
-      return await finishAnswer(first.result);
-    }
-    if (first.kind === "answer-error") {
-      throw first.error;
+    if (first.kind === "answer" || first.kind === "answer-error") {
+      return await finishAnswer(first);
     }
     if (first.kind === "delivery-error") {
       const terminal = await cancel("prompt-delivery-failed");
@@ -708,11 +700,7 @@ async function runScopedAgentHarnessQuestion(
       }
       throw new Error("harness question prompt delivery failed", { cause: first.error });
     }
-    const terminal = await answerOutcome;
-    if (terminal.kind === "answer-error") {
-      throw terminal.error;
-    }
-    return await finishAnswer(terminal.result);
+    return await finishAnswer(await answerOutcome);
   } catch (error) {
     try {
       const terminal = await cancel(params.signal?.aborted ? "run-abort" : "harness-error");

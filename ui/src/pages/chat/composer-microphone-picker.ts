@@ -9,15 +9,8 @@ import {
 
 export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
 
-/**
- * Device list behind a composer's microphone control, owned per composer.
- *
- * Discovery, the `devicechange` subscription and the in-flight request token
- * belong together: the subscription only lives while the picker is open, and a
- * late discovery must not overwrite a newer one. Keeping them in one owner is
- * what lets a second composer surface offer the same control without repeating
- * the sequencing, and gives the watch a single release point.
- */
+// Each composer owns discovery and the devicechange subscription; delayed results
+// cannot overwrite newer discovery, and only an open picker watches devices.
 export class ComposerMicrophonePicker {
   private devicesValue: RealtimeTalkInputDevice[] = [];
   private loadingValue = false;

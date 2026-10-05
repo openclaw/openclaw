@@ -1,13 +1,11 @@
-// Msteams plugin module implements shared behavior.
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
-  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -15,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MSTeamsMonitorLogger } from "../monitor-types.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
@@ -96,7 +95,6 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
-export { isRecord };
 
 /**
  * Host suffixes for SharePoint/OneDrive shared links that must be fetched via
@@ -117,16 +115,9 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
   "onedrive.com",
 ] as const;
 
-/**
- * Returns true when the URL points at a SharePoint or OneDrive host whose
- * shared-link content must be fetched through the Graph shares API rather
- * than directly.
- */
 function isGraphSharedLinkUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return false;
   }
   const host = normalizeLowercaseStringOrEmpty(parsed.hostname);
@@ -145,39 +136,14 @@ function isGraphSharedLinkUrl(url: string): boolean {
  * https://learn.microsoft.com/en-us/graph/api/shares-get#encoding-sharing-urls
  */
 export function encodeGraphShareId(url: string): string {
-  // Buffer.from(...).toString("base64url") already returns base64url without
-  // padding, matching the Graph spec exactly.
   return `u!${Buffer.from(url, "utf8").toString("base64url")}`;
 }
 
-/**
- * When `url` is a SharePoint/OneDrive shared link, return the matching
- * `GET /shares/{shareId}/driveItem/content` URL that actually yields the file
- * bytes. Returns `undefined` for non-shared-link URLs so callers can fall
- * through to the existing fetch path.
- */
 export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undefined {
   if (!isGraphSharedLinkUrl(url)) {
     return undefined;
   }
   return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
-}
-
-export function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
-    return input.url;
-  }
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return "";
-  }
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
@@ -236,14 +202,9 @@ export function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
   return false;
 }
 
-/**
- * Returns true if the attachment can be downloaded (any file type).
- * Used when downloading all files, not just images.
- */
 export function isDownloadableAttachment(att: MSTeamsAttachmentLike): boolean {
   const contentType = normalizeContentType(att.contentType) ?? "";
 
-  // Teams file download info always has a downloadUrl
   if (
     contentType === "application/vnd.microsoft.teams.file.download.info" &&
     isRecord(att.content) &&
@@ -252,12 +213,7 @@ export function isDownloadableAttachment(att: MSTeamsAttachmentLike): boolean {
     return true;
   }
 
-  // Any attachment with a contentUrl can be downloaded
-  if (typeof att.contentUrl === "string" && att.contentUrl.trim()) {
-    return true;
-  }
-
-  return false;
+  return typeof att.contentUrl === "string" && Boolean(att.contentUrl.trim());
 }
 
 export function isAdvertisedFileAttachment(attachment: MSTeamsAttachmentLike): boolean {
@@ -277,13 +233,8 @@ export function isAdvertisedFileAttachment(attachment: MSTeamsAttachmentLike): b
   );
 }
 
-function isHtmlAttachment(att: MSTeamsAttachmentLike): boolean {
-  const contentType = normalizeContentType(att.contentType) ?? "";
-  return contentType.startsWith("text/html");
-}
-
 export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | undefined {
-  if (!isHtmlAttachment(att)) {
+  if (!normalizeContentType(att.contentType)?.startsWith("text/html")) {
     return undefined;
   }
   if (typeof att.content === "string") {
@@ -292,25 +243,17 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   if (!isRecord(att.content)) {
     return undefined;
   }
-  const text =
-    typeof att.content.text === "string"
-      ? att.content.text
-      : typeof att.content.body === "string"
-        ? att.content.body
-        : typeof att.content.content === "string"
-          ? att.content.content
-          : undefined;
-  return text;
+  return typeof att.content.text === "string"
+    ? att.content.text
+    : typeof att.content.body === "string"
+      ? att.content.body
+      : typeof att.content.content === "string"
+        ? att.content.content
+        : undefined;
 }
 
 function fileHintFromUrl(src: string): string | undefined {
-  try {
-    const url = new URL(src);
-    const name = url.pathname.split("/").pop();
-    return name || undefined;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(src)?.pathname.split("/").pop() || undefined;
 }
 
 export function extractInlineImageReferences(
@@ -330,8 +273,7 @@ export function extractInlineImageReferences(
       continue;
     }
     IMG_SRC_RE.lastIndex = 0;
-    let match: RegExpExecArray | null = IMG_SRC_RE.exec(html);
-    while (match) {
+    for (const match of html.matchAll(IMG_SRC_RE)) {
       const src = match[1]?.trim();
       if (src) {
         if (src.startsWith("data:")) {
@@ -343,7 +285,6 @@ export function extractInlineImageReferences(
             if (!sourceId || !representedAttachmentIds.has(sourceId)) {
               out.push({ kind: "unavailable", sourceId });
             }
-            match = IMG_SRC_RE.exec(html);
             continue;
           }
           out.push({
@@ -354,26 +295,14 @@ export function extractInlineImageReferences(
           });
         }
       }
-      match = IMG_SRC_RE.exec(html);
     }
   }
   return out;
 }
 
 export function safeHostForUrl(url: string): string {
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-  } catch {
-    return "invalid-url";
-  }
-}
-
-function resolveAllowedHosts(input?: string[]): string[] {
-  return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_HOST_ALLOWLIST);
-}
-
-function resolveAuthAllowedHosts(input?: string[]): string[] {
-  return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
+  const parsed = URL.parse(url);
+  return parsed ? normalizeLowercaseStringOrEmpty(parsed.hostname) : "invalid-url";
 }
 
 export type MSTeamsAttachmentFetchPolicy = {
@@ -381,17 +310,9 @@ export type MSTeamsAttachmentFetchPolicy = {
   authAllowHosts: string[];
 };
 
-/**
- * Logger surface for attachment download errors. Structured so callers can
- * pass `MSTeamsMonitorLogger` directly without adapters. Optional methods
- * prevent silent swallowing of fetch failures — see issue
- * #63396 where empty `catch {}` blocks hid a Node 24+ undici incompatibility.
- */
-export type MSTeamsAttachmentDownloadLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  warn?: (message: string, meta?: Record<string, unknown>) => void;
-  error?: (message: string, meta?: Record<string, unknown>) => void;
-};
+export type MSTeamsAttachmentDownloadLogger = Partial<
+  Pick<MSTeamsMonitorLogger, "debug" | "warn" | "error">
+>;
 
 export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 
@@ -437,13 +358,12 @@ export function resolveAttachmentFetchPolicy(params?: {
   authAllowHosts?: string[];
 }): MSTeamsAttachmentFetchPolicy {
   return {
-    allowHosts: resolveAllowedHosts(params?.allowHosts),
-    authAllowHosts: resolveAuthAllowedHosts(params?.authAllowHosts),
+    allowHosts: normalizeHostnameSuffixAllowlist(params?.allowHosts, DEFAULT_MEDIA_HOST_ALLOWLIST),
+    authAllowHosts: normalizeHostnameSuffixAllowlist(
+      params?.authAllowHosts,
+      DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST,
+    ),
   };
-}
-
-export function isUrlAllowed(url: string, allowlist: string[]): boolean {
-  return isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist);
 }
 
 export function applyAuthorizationHeaderForUrl(params: {
@@ -452,39 +372,17 @@ export function applyAuthorizationHeaderForUrl(params: {
   authAllowHosts: string[];
   bearerToken?: string;
 }): void {
-  if (!params.bearerToken) {
-    params.headers.delete("Authorization");
-    return;
-  }
-  if (isUrlAllowed(params.url, params.authAllowHosts)) {
+  if (params.bearerToken && isUrlAllowed(params.url, params.authAllowHosts)) {
     params.headers.set("Authorization", `Bearer ${params.bearerToken}`);
-    return;
+  } else {
+    params.headers.delete("Authorization");
   }
-  params.headers.delete("Authorization");
 }
 
-export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
-  return buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
-}
-
-/**
- * Returns true if the given IPv4 or IPv6 address is in a private, loopback,
- * or link-local range that must never be reached from media downloads.
- *
- * Delegates to the SDK's `isPrivateIpAddress` which handles IPv4-mapped IPv6,
- * expanded notation, NAT64, 6to4, Teredo, octal IPv4, and fails closed on
- * parse errors.
- */
-const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
-
-/**
- * Resolve a hostname via DNS and reject private/reserved IPs.
- * Throws if the resolved IP is private or resolution fails.
- */
 async function resolveAndValidateIP(
   hostname: string,
   resolveFn?: MSTeamsAttachmentResolveFn,
-): Promise<string> {
+): Promise<void> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
   try {
@@ -492,13 +390,11 @@ async function resolveAndValidateIP(
   } catch {
     throw new Error(`DNS resolution failed for "${hostname}"`);
   }
-  if (isPrivateOrReservedIP(resolved.address)) {
+  if (isPrivateIpAddress(resolved.address)) {
     throw new Error(`Hostname "${hostname}" resolves to private/reserved IP (${resolved.address})`);
   }
-  return resolved.address;
 }
 
-/** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
 export function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -512,41 +408,28 @@ export function isRedirectStatus(status: number): boolean {
  * - Auto-following redirects to non-allowlisted hosts
  * - DNS rebinding attacks when a lookup function is provided
  */
-async function safeFetch(params: {
+export async function safeFetchWithPolicy(params: {
   url: string;
-  allowHosts: string[];
-  /**
-   * Optional allowlist for forwarding Authorization across redirects.
-   * When set, Authorization is stripped before following redirects to hosts
-   * outside this list.
-   */
-  authorizationAllowHosts?: string[];
+  policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
   timeoutMs?: number;
 }): Promise<Response> {
+  const { allowHosts, authAllowHosts } = params.policy;
   const resolveFn = params.resolveFn ?? lookup;
-  const hasDispatcher = Boolean(
-    params.requestInit &&
-    typeof params.requestInit === "object" &&
-    "dispatcher" in (params.requestInit as Record<string, unknown>),
-  );
+  const hasDispatcher = params.requestInit && "dispatcher" in params.requestInit;
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 
-  if (!isUrlAllowed(currentUrl, params.allowHosts)) {
+  if (!isUrlAllowed(currentUrl, allowHosts)) {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
   // Authorization is only allowed on explicitly auth-allowlisted hosts, including
   // the first hop. Redirect hops apply the same rule below or in fetchWithSsrFGuard.
-  if (
-    currentHeaders.has("authorization") &&
-    params.authorizationAllowHosts &&
-    !isUrlAllowed(currentUrl, params.authorizationAllowHosts)
-  ) {
+  if (currentHeaders.has("authorization") && !isUrlAllowed(currentUrl, authAllowHosts)) {
     currentHeaders.delete("authorization");
   }
 
@@ -567,10 +450,10 @@ async function safeFetch(params: {
       },
       maxRedirects: MAX_SAFE_REDIRECTS,
       requireHttps: true,
-      policy: resolveMediaSsrfPolicy(params.allowHosts),
+      policy: resolveMediaSsrfPolicy(allowHosts),
       lookupFn,
       retainAuthorizationRedirectHostnameAllowlist:
-        resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
+        resolveRetainedAuthorizationRedirectHostnameAllowlist(authAllowHosts),
       auditContext: "msteams.attachment",
       timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
     });
@@ -599,50 +482,22 @@ async function safeFetch(params: {
     return res;
   }
 
-  let redirectUrl: string;
-  try {
-    redirectUrl = new URL(location, currentUrl).toString();
-  } catch {
+  const redirectUrl = URL.parse(location, currentUrl)?.toString();
+  if (!redirectUrl) {
     throw new Error(`Invalid redirect URL: ${location}`);
   }
 
-  // Validate redirect target against hostname allowlist
-  if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+  if (!isUrlAllowed(redirectUrl, allowHosts)) {
     throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
   }
 
   // Prevent credential bleed: only keep Authorization on redirect hops that
   // are explicitly auth-allowlisted.
-  if (
-    currentHeaders.has("authorization") &&
-    params.authorizationAllowHosts &&
-    !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
-  ) {
+  if (currentHeaders.has("authorization") && !isUrlAllowed(redirectUrl, authAllowHosts)) {
     currentHeaders.delete("authorization");
   }
 
   // A pinned dispatcher is already injected by an upstream guard; let it own
   // redirect handling after this allowlist validation step.
   return res;
-}
-
-export async function safeFetchWithPolicy(params: {
-  url: string;
-  policy: MSTeamsAttachmentFetchPolicy;
-  fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
-  requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
-  timeoutMs?: number;
-}): Promise<Response> {
-  return await safeFetch({
-    url: params.url,
-    allowHosts: params.policy.allowHosts,
-    authorizationAllowHosts: params.policy.authAllowHosts,
-    fetchFn: params.fetchFn,
-    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
-    requestInit: params.requestInit,
-    resolveFn: params.resolveFn,
-    timeoutMs: params.timeoutMs,
-  });
 }

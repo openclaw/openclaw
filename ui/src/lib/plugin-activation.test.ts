@@ -2,6 +2,12 @@
 import { describe, expect, it } from "vitest";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 
+function isWikiEnabled(plugins: Record<string, unknown>): boolean {
+  return isPluginEnabledInConfigSnapshot({ hash: "hash-1", config: { plugins } }, "memory-wiki", {
+    enabledByDefault: false,
+  });
+}
+
 describe("isPluginEnabledInConfigSnapshot", () => {
   it("uses the supplied default when config has not loaded yet", () => {
     expect(
@@ -12,62 +18,19 @@ describe("isPluginEnabledInConfigSnapshot", () => {
   });
 
   it("treats bundled default-off plugins as disabled when config is present but silent", () => {
-    expect(
-      isPluginEnabledInConfigSnapshot(
-        {
-          hash: "hash-1",
-          config: {
-            plugins: {},
-          },
-        },
-        "memory-wiki",
-        {
-          enabledByDefault: false,
-        },
-      ),
-    ).toBe(false);
+    expect(isWikiEnabled({})).toBe(false);
   });
 
   it("returns true when the plugin is explicitly enabled", () => {
-    expect(
-      isPluginEnabledInConfigSnapshot(
-        {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              entries: {
-                "memory-wiki": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-        "memory-wiki",
-        { enabledByDefault: false },
-      ),
-    ).toBe(true);
+    expect(isWikiEnabled({ entries: { "memory-wiki": { enabled: true } } })).toBe(true);
   });
 
   it("returns false when plugins.allow excludes the plugin", () => {
     expect(
-      isPluginEnabledInConfigSnapshot(
-        {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              allow: ["memory-core"],
-              entries: {
-                "memory-wiki": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-        "memory-wiki",
-        { enabledByDefault: false },
-      ),
+      isWikiEnabled({
+        allow: ["memory-core"],
+        entries: { "memory-wiki": { enabled: true } },
+      }),
     ).toBe(false);
   });
 

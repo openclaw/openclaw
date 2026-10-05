@@ -51,20 +51,90 @@ function setup(
     }
     return response;
   });
-  const onEntriesChanged = vi.fn();
   const controller = new PluginDiscoveryController(host, {
     getClient: () => client,
     isConnected: () => true,
-    onEntriesChanged,
   });
-  return { controller, onEntriesChanged, request };
+  return { controller, request };
 }
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
-it("populates the grouped home page from one overview response", async () => {
+it("loads category navigation without waiting for catalog cards", async () => {
+  const browse = createDeferred<PluginDiscoveryResult>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller, request } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : browse.promise,
+  );
+  const loading = controller.refresh();
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledWith("plugins.catalog.categories", {}, expect.anything());
+  expect(controller.categories).toEqual(categories);
+  expect(controller.loading).toBe(true);
+  browse.resolve({ items: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("settles empty categories, deduplicates warm loads, and retries errors explicitly", async () => {
+  let fail = true;
+  const { controller, request } = setup([], async () => {
+    if (fail) {
+      throw new Error("Categories unavailable");
+    }
+    return { categories: [] };
+  });
+  await controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categoriesError).toContain("Categories unavailable");
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledOnce();
+  fail = false;
+  await controller.ensureCategories(true);
+  expect(controller.categoriesError).toBeNull();
+  expect(controller.categoriesLoading).toBe(false);
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("uses overview categories when they arrive first without accepting a late category reply", async () => {
+  const pending = createDeferred<{ categories: never[] }>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? pending.promise : { items: [], categories },
+  );
+  const loading = controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(true);
+  await controller.refresh();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categories).toEqual(categories);
+  pending.resolve({ categories: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("discards category navigation and late responses across connection invalidation", async () => {
+  const pending = createDeferred<{
+    categories: { slug: string; label: string; description: string; icon: string; order: number }[];
+  }>();
+  const { controller } = setup([], async () => pending.promise);
+  const loading = controller.ensureCategories();
+  controller.invalidate();
+  pending.resolve({
+    categories: [{ slug: "old", label: "Old", description: "Old", icon: "brain", order: 0 }],
+  });
+  await loading;
+  expect(controller.categories).toEqual([]);
+  expect(controller.categoriesLoading).toBe(false);
+});
+
+it("populates the grouped home page and keeps it visible during a refresh", async () => {
   const featured = entry(1);
   featured.catalog.featured = true;
   featured.catalog.featuredRank = 0;
@@ -76,7 +146,11 @@ it("populates the grouped home page from one overview response", async () => {
   const categories = [
     { slug: "memory", label: "Memory", description: "Memory", icon: "database", order: 0 },
   ];
-  const { controller, request } = setup([{ items: [featured, trending, category], categories }]);
+  const refresh = createDeferred<PluginDiscoveryResult>();
+  const { controller, request } = setup([
+    { items: [featured, trending, category], categories },
+    refresh.promise,
+  ]);
 
   await controller.refresh();
 
@@ -89,26 +163,16 @@ it("populates the grouped home page from one overview response", async () => {
     { intent: "all", pageSize: 100 },
     expect.anything(),
   );
-});
 
-it("switches filtered tabs to All when starting a unified search", async () => {
-  vi.useFakeTimers();
-  const { controller, request } = setup([{ items: [] }]);
-  controller.intent = "official";
-
-  controller.updateQuery("memory");
-  await vi.runAllTimersAsync();
-
-  expect(controller.intent).toBe("all");
-  expect(request).toHaveBeenCalledWith(
-    "plugins.catalog.browse",
-    expect.objectContaining({
-      intent: "all",
-      query: "memory",
-      searchSource: "openclaw-control-ui",
-    }),
-    expect.anything(),
-  );
+  const loading = controller.refresh();
+  expect(controller.loading).toBe(false);
+  expect(controller.featured).toEqual([featured]);
+  expect(controller.trending).toEqual([trending]);
+  refresh.resolve({ items: [category], categories });
+  await loading;
+  expect(controller.result?.items).toEqual([category]);
+  expect(controller.featured).toEqual([]);
+  expect(controller.trending).toEqual([]);
 });
 
 it("preserves home navigation when a category completes during the search debounce", async () => {
@@ -121,28 +185,36 @@ it("preserves home navigation when a category completes during the search deboun
     { slug: "channels", label: "Channels", description: "Channels", icon: "globe", order: 0 },
   ];
   const category = createDeferred<PluginDiscoveryResult>();
+  const search = createDeferred<PluginDiscoveryResult>();
   const categoryItems = [entry(3)];
   const searchItems = [entry(4)];
   const { controller, request } = setup([
     { items: [featured, trending], categories },
     category.promise,
-    { items: searchItems },
+    search.promise,
   ]);
   await controller.refresh();
   controller.selectCategory("channels");
+  expect(controller.loading).toBe(true);
   controller.updateQuery("calendar");
+  expect(controller.loading).toBe(true);
 
   category.resolve({ items: categoryItems });
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(2);
   expect(request.mock.lastCall?.[1]).toMatchObject({ category: "channels" });
   expect(controller.result?.items).toEqual(categoryItems);
+  expect(controller.loading).toBe(true);
   expect.soft(controller.categories).toEqual(categories);
   expect.soft(controller.featured).toEqual([featured]);
   expect.soft(controller.trending).toEqual([trending]);
 
   await vi.advanceTimersByTimeAsync(250);
   expect(request.mock.lastCall?.[1]).toMatchObject({ query: "calendar" });
+  expect(controller.loading).toBe(true);
+  search.resolve({ items: searchItems });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.loading).toBe(false);
   expect(controller.result?.items).toEqual(searchItems);
   expect.soft(controller.categories).toEqual(categories);
   expect.soft(controller.featured).toEqual([featured]);
@@ -162,7 +234,9 @@ it("does not expose continuation for search results", async () => {
 it("counts only settled manual searches across refresh, filters and connection invalidation", async () => {
   vi.useFakeTimers();
   const { controller, request } = setup([], async () => ({ items: [entry(1)] }));
+  controller.intent = "official";
   controller.updateQuery("m");
+  expect(controller.intent).toBe("all");
   await vi.advanceTimersByTimeAsync(250);
   expect(request.mock.lastCall?.[1]).not.toHaveProperty("searchSource");
   request.mockClear();
@@ -186,7 +260,7 @@ it("counts only settled manual searches across refresh, filters and connection i
     request.mockClear();
     controller.updateQuery(query);
     await vi.advanceTimersByTimeAsync(250);
-    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "memory", pageSize: 100 });
+    expect(request).not.toHaveBeenCalled();
     expect(controller.result?.items).toEqual([entry(1)]);
   }
 
@@ -207,7 +281,7 @@ it("counts only settled manual searches across refresh, filters and connection i
   controller.invalidate();
   await vi.advanceTimersByTimeAsync(250);
   expect(request).not.toHaveBeenCalled();
-  controller.ensureInitial();
+  await controller.refresh();
   await vi.advanceTimersByTimeAsync(0);
   expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "calendar", pageSize: 100 });
   request.mockClear();
@@ -215,6 +289,126 @@ it("counts only settled manual searches across refresh, filters and connection i
   controller.disconnect();
   await vi.advanceTimersByTimeAsync(250);
   expect(request).not.toHaveBeenCalled();
+});
+
+it("restores the loaded overview immediately when clearing search and retires late results", async () => {
+  vi.useFakeTimers();
+  const overview = entry(1);
+  overview.catalog.featured = true;
+  overview.catalog.trending = true;
+  const lateSearch = createDeferred<PluginDiscoveryResult>();
+  const { controller, request } = setup([
+    { items: [overview] },
+    { items: [entry(2)] },
+    lateSearch.promise,
+  ]);
+  await controller.refresh();
+  controller.updateQuery("test");
+  await vi.advanceTimersByTimeAsync(250);
+  controller.updateQuery("memory");
+  await vi.advanceTimersByTimeAsync(250);
+  controller.updateQuery("");
+
+  expect(controller.loading).toBe(false);
+  expect(controller.result?.items).toEqual([overview]);
+  lateSearch.resolve({ items: [entry(3)] });
+  await vi.advanceTimersByTimeAsync(250);
+  expect(controller.result?.items).toEqual([overview]);
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it.each(["category", "featured"] as const)(
+  "restores All when clearing a search before debounce from %s",
+  async (filter) => {
+    vi.useFakeTimers();
+    const { controller, request } = setup([{ items: [entry(2)] }, { items: [entry(1)] }]);
+    if (filter === "category") {
+      controller.category = "memory";
+    } else {
+      controller.intent = filter;
+    }
+    await controller.refresh();
+    controller.updateQuery("test");
+    controller.updateQuery("");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(controller.intent).toBe("all");
+    expect(controller.category).toBeNull();
+    expect(controller.result?.items).toEqual([entry(1)]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", pageSize: 100 });
+  },
+);
+
+it.each(["refresh", "disconnect", "invalidate"] as const)(
+  "reloads overview installation facts after %s while searching",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const available = entry(1);
+    available.catalog.featured = true;
+    available.catalog.trending = true;
+    const installed: PluginDiscoveryEntry = {
+      ...available,
+      local: {
+        ...available.local,
+        installed: true,
+        enabled: true,
+        state: "enabled",
+        action: "manage",
+      },
+    };
+    const search = { items: [entry(2)] };
+    const freshOverview = createDeferred<PluginDiscoveryResult>();
+    const { controller, request } = setup([
+      { items: [available] },
+      search,
+      ...(boundary === "refresh" ? [search] : []),
+      freshOverview.promise,
+    ]);
+    await controller.refresh();
+    controller.updateQuery("memory");
+    await vi.advanceTimersByTimeAsync(250);
+
+    await controller[boundary]();
+    request.mockClear();
+    controller.updateQuery("");
+
+    expect(controller.loading).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", pageSize: 100 });
+    freshOverview.resolve({ items: [installed] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.result?.items).toEqual([installed]);
+    expect(controller.featured).toEqual([installed]);
+    expect(controller.trending).toEqual([installed]);
+    expect(controller.loading).toBe(false);
+  },
+);
+
+it("retries a degraded overview when returning from search", async () => {
+  vi.useFakeTimers();
+  const incomplete = entry(1);
+  const recovered = entry(2);
+  const recovery = createDeferred<PluginDiscoveryResult>();
+  const { controller, request } = setup([
+    { items: [incomplete], remoteError: "Catalog unavailable" },
+    { items: [entry(3)] },
+    recovery.promise,
+  ]);
+  await controller.refresh();
+  expect(controller.remoteError).toBe("Catalog unavailable");
+  controller.updateQuery("memory");
+  await vi.advanceTimersByTimeAsync(250);
+  request.mockClear();
+  controller.updateQuery("");
+
+  expect(controller.loading).toBe(true);
+  expect(request).toHaveBeenCalledOnce();
+  recovery.resolve({ items: [incomplete, recovered] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.result?.items).toEqual([incomplete, recovered]);
+  expect(controller.remoteError).toBeNull();
+  expect(controller.loading).toBe(false);
 });
 
 it("loads one bounded page initially and continues only after explicit expansion", async () => {
@@ -249,10 +443,12 @@ it("loads one bounded page initially and continues only after explicit expansion
   );
 });
 
-it("replaces a first-page local placeholder with later published metadata", async () => {
+it("replaces a first-page local placeholder with later published Media metadata", async () => {
   const placeholder = entry(1);
   delete placeholder.catalog.family;
+  placeholder.catalog.categories = ["models", "media"];
   const published = entry(1);
+  published.catalog.categories = [...placeholder.catalog.categories];
   published.catalog.author = "openclaw";
   published.catalog.official = true;
   published.catalog.downloads = 10_000;
@@ -260,7 +456,7 @@ it("replaces a first-page local placeholder with later published metadata", asyn
     { items: [placeholder], nextCursor: "catalog-page-2" },
     { items: [published] },
   ]);
-  controller.category = "tools";
+  controller.category = "media";
 
   await controller.refresh();
   await controller.loadMore();
@@ -299,27 +495,6 @@ it("keeps unranked overview members after ranked entries", async () => {
   expect(controller.featured.map((item) => item.id)).toEqual([ranked.id, unranked.id]);
 });
 
-it("sorts a selected category within its bounded page", async () => {
-  const installed = entry(0);
-  installed.catalog.name = "Installed placeholder";
-  delete installed.catalog.family;
-  installed.local.installed = true;
-  installed.local.action = "manage";
-  const popular = entry(1);
-  popular.catalog.name = "Popular official plugin";
-  popular.catalog.official = true;
-  popular.catalog.downloads = 10_000;
-  const { controller } = setup([{ items: [installed, popular] }]);
-
-  controller.category = "models";
-  await controller.refresh();
-
-  expect(controller.result?.items.map((item) => item.catalog.name)).toEqual([
-    "Popular official plugin",
-    "Installed placeholder",
-  ]);
-});
-
 it("preserves category navigation when a filtered view reconnects", async () => {
   const categories = [
     {
@@ -330,22 +505,39 @@ it("preserves category navigation when a filtered view reconnects", async () => 
       order: 0,
     },
   ];
-  const { controller } = setup([{ items: [entry(1)], categories }, { items: [entry(2)] }]);
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : { items: [entry(1)], categories },
+  );
 
   await controller.refresh();
   controller.category = "channels";
   controller.invalidate();
+  expect(controller.categories).toEqual([]);
+  await controller.ensureCategories();
   await controller.refresh();
 
   expect(controller.categories).toEqual(categories);
 });
 
-it("surfaces a partial ClawHub failure once for the overview", async () => {
+it("sorts category pins before downloads on the first page and after pagination", async () => {
+  const pinned = entry(1);
+  pinned.catalog.categoryRanks = { models: 0 };
+  const official = entry(2);
+  official.catalog.official = true;
+  official.catalog.downloads = 10;
+  const popular = entry(3);
+  popular.catalog.downloads = 100;
   const { controller } = setup([
-    { items: [], remoteError: "ClawHub is unavailable; local plugins remain available." },
+    { items: [official, pinned], nextCursor: "next" },
+    { items: [popular] },
   ]);
-
+  controller.category = "models";
   await controller.refresh();
-
-  expect(controller.remoteError).toBe("ClawHub is unavailable; local plugins remain available.");
+  expect(controller.result?.items.map((item) => item.id)).toEqual([pinned.id, official.id]);
+  await controller.loadMore();
+  expect(controller.result?.items.map((item) => item.id)).toEqual([
+    pinned.id,
+    popular.id,
+    official.id,
+  ]);
 });

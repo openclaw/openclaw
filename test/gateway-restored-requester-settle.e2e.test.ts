@@ -2,15 +2,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import { resolvePhysicalSessionStorePath } from "../src/config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { redactSensitiveText } from "../src/logging/redact.js";
 import type { Deferred } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
@@ -23,7 +23,7 @@ import { createDeferred } from "./helpers/promise.js";
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "restored-settle/restored-settle";
 const PROBE_MARKER = "restored wake ordering probe";
-const RESTORED_WAKE_MARKER = "Every subagent spawned from this session has now settled";
+const RESTORED_WAKE_MARKER = "Every subagent in this batch has now settled";
 
 type HeldModelServer = {
   active: () => number;
@@ -45,8 +45,29 @@ afterEach(async () => {
   for (const server of modelServers) {
     server.releaseAll();
   }
-  await Promise.allSettled(instances.splice(0).map((instance) => instance.cleanup()));
-  await Promise.allSettled(modelServers.splice(0).map((server) => server.close()));
+  const ownedInstances = instances.splice(0);
+  const gatewayCleanup = await Promise.allSettled(
+    ownedInstances.map((instance) => instance.cleanup()),
+  );
+  const modelCleanup = await Promise.allSettled(
+    modelServers.splice(0).map((server) => server.close()),
+  );
+  console.info(
+    "[restored-requester] cleanup",
+    JSON.stringify({
+      gateways: ownedInstances.map((instance, index) => ({
+        name: instance.name,
+        status: gatewayCleanup[index]?.status ?? "unavailable",
+      })),
+      modelServers: modelCleanup.map((result) => result.status),
+    }),
+  );
+  const cleanupErrors = [...gatewayCleanup, ...modelCleanup].flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, "Restored requester fixture cleanup failed");
+  }
 });
 
 describe("Gateway restored requester settlement", () => {
@@ -66,7 +87,7 @@ describe("Gateway restored requester settlement", () => {
         env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       });
       instances.push(instance);
-      await seedRestoredRequesters(instance, 1);
+      await seedRestoredRequesters(instance, 1, cfg);
       await instance.startGateway();
       const client = await connectGatewayClient({
         url: instance.url,
@@ -78,7 +99,11 @@ describe("Gateway restored requester settlement", () => {
           await client.request<SessionsListResult>("sessions.list", { agentId: "main" })
         ).sessions.find((row) => row.key === sessionKey);
       try {
-        await vi.waitFor(() => expect(modelServer.requestCount()).toBe(1), { timeout: 30_000 });
+        await vi
+          .waitFor(() => expect(modelServer.requestCount()).toBe(1), { timeout: 30_000 })
+          .catch((error: unknown) => {
+            throw gatewayDiagnosticError(instance, error);
+          });
         const initial = await session();
         expect(initial).toMatchObject({ status: "running", hasActiveRun: true });
         // This elapsed wait is the regression itself: the real model socket must
@@ -159,9 +184,10 @@ describe("Gateway restored requester settlement", () => {
     async () => {
       const modelServer = await startHeldModelServer();
       modelServers.push(modelServer);
+      const cfg = createTestConfig(modelServer.url);
       const instance = await createOpenClawTestInstance({
         name: "gateway-restored-requester-settle",
-        config: createTestConfig(modelServer.url),
+        config: cfg,
         env: {
           OPENCLAW_SKIP_PROVIDERS: undefined,
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -169,13 +195,17 @@ describe("Gateway restored requester settlement", () => {
       });
       instances.push(instance);
 
-      await seedRestoredRequesters(instance, 3);
+      await seedRestoredRequesters(instance, 3, cfg);
 
       await instance.startGateway();
-      await vi.waitFor(
-        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2),
-        { interval: 20, timeout: 30_000 },
-      );
+      await vi
+        .waitFor(() => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2), {
+          interval: 20,
+          timeout: 30_000,
+        })
+        .catch((error: unknown) => {
+          throw gatewayDiagnosticError(instance, error);
+        });
       expect(modelServer.active(), instance.logs()).toBe(2);
       expect(modelServer.peakRestored(), instance.logs()).toBe(2);
 
@@ -198,16 +228,51 @@ describe("Gateway restored requester settlement", () => {
   );
 });
 
-async function seedRestoredRequesters(instance: OpenClawTestInstance, count: number) {
+function gatewayDiagnosticError(instance: OpenClawTestInstance, cause: unknown): Error {
+  const readiness = instance.readiness.map(
+    ({ outcome, elapsedMs, attempts, lastProbe, child }) => ({
+      outcome,
+      elapsedMs,
+      attempts,
+      lastProbe,
+      child,
+    }),
+  );
+  // Snapshot the existing bounded child buffers before normal fixture cleanup removes state.
+  let diagnostic = redactSensitiveText(
+    `${instance.name}\n${JSON.stringify({ readiness })}\n${instance.logs()}`,
+    { mode: "tools" },
+  );
+  for (const token of [instance.gatewayToken, instance.hookToken]) {
+    if (token) {
+      diagnostic = diagnostic.replaceAll(token, "[fixture token]");
+    }
+  }
+  return new Error(diagnostic, { cause });
+}
+
+async function seedRestoredRequesters(
+  instance: OpenClawTestInstance,
+  count: number,
+  cfg: OpenClawConfig,
+) {
   instance.state.applyEnv();
   try {
     const endedAt = Date.now();
     const restoredRuns = Array.from({ length: count }, (_, index): SubagentRunRecord => {
       const runId = `run-gateway-restored-settle-${index}`;
+      const requesterSessionKey = `agent:main:gateway-restored-requester-${index}`;
+      const requesterStorePath = resolvePhysicalSessionStorePath(
+        { sessionKey: requesterSessionKey, agentId: "main", env: instance.env },
+        cfg,
+      );
       return {
         runId,
         childSessionKey: `agent:main:subagent:gateway-restored-settle-${index}`,
-        requesterSessionKey: `agent:main:gateway-restored-requester-${index}`,
+        requesterSessionKey,
+        requesterAgentId: "main",
+        requesterStorePath,
+        controllerStorePath: requesterStorePath,
         requesterDisplayKey: `gateway-restored-requester-${index}`,
         task: "resume a durable requester wake through the Gateway CLI",
         cleanup: "keep",
@@ -244,6 +309,19 @@ async function seedRestoredRequesters(instance: OpenClawTestInstance, count: num
         sessionKey: entry.requesterSessionKey,
         sessionId: `gateway-restored-requester-${index}`,
         defaultSessionId: `gateway-restored-requester-${index}`,
+      });
+    }
+    const persistedRuns = loadSubagentRegistryFromSqlite();
+    for (const entry of restoredRuns) {
+      // Direct SQLite fixtures must preserve the physical identity stamped by normal launch.
+      const storePath = resolvePhysicalSessionStorePath(
+        { sessionKey: entry.requesterSessionKey, agentId: "main", env: instance.env },
+        cfg,
+      );
+      expect(persistedRuns.get(entry.runId)).toMatchObject({
+        requesterAgentId: "main",
+        requesterStorePath: storePath,
+        controllerStorePath: storePath,
       });
     }
   } finally {

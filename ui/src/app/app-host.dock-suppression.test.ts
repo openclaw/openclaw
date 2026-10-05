@@ -23,7 +23,8 @@ type ShellRenderState = {
   render: () => TemplateResult;
 };
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   resetAppHostTestGlobals();
 });
 

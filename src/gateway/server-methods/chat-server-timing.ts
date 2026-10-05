@@ -34,13 +34,6 @@ export function chatSendAckServerTimingAttributes(
   };
 }
 
-export function shouldIncludeChatSendAckServerTiming(client?: {
-  id?: string | null;
-  mode?: string | null;
-}): boolean {
-  return isOperatorUiClient(client);
-}
-
 const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
 
 export function resolveControlUiReconnectResumeParams(
@@ -73,10 +66,7 @@ export function emitOperatorChatSendServerTiming(params: {
   dispatchStartedAtMs?: number;
   extra?: Record<string, string | number>;
 }) {
-  const connId =
-    typeof params.client?.connId === "string" && params.client.connId.trim()
-      ? params.client.connId.trim()
-      : undefined;
+  const connId = params.client?.connId?.trim();
   if (!connId || !isOperatorUiClient(params.client?.connect?.client)) {
     return;
   }

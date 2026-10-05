@@ -1,4 +1,3 @@
-// Control UI view renders dreaming screen content.
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing } from "lit";
@@ -12,13 +11,17 @@ import { i18n, t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
 import "../../../styles/dreams.css";
-import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
+import type {
+  DreamingEntry,
+  WikiImportInsights,
+  WikiOverview,
+  WikiPagePreview,
+} from "./dreaming.ts";
 
 registerSettingsEnglish();
 registerDreamingEnglish();
-
-// ── Diary entry parser ─────────────────────────────────────────────────
 
 type DiaryEntry = {
   date: string;
@@ -33,7 +36,6 @@ const DIARY_START_RE = /<!--\s*openclaw:dreaming:diary:start\s*-->/;
 const DIARY_END_RE = /<!--\s*openclaw:dreaming:diary:end\s*-->/;
 
 function parseDiaryEntries(raw: string): DiaryEntry[] {
-  // Extract content between diary markers, or use full content.
   let content = raw;
   const startMatch = DIARY_START_RE.exec(raw);
   const endMatch = DIARY_END_RE.exec(raw);
@@ -42,7 +44,6 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
   }
 
   const entries: DiaryEntry[] = [];
-  // Split on --- separators.
   const blocks = content.split(/\n---\n/).filter((b) => b.trim().length > 0);
 
   for (const block of blocks) {
@@ -57,7 +58,6 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
         date = trimmed.slice(1, -1);
         continue;
       }
-      // Skip heading lines and HTML comments.
       if (trimmed.startsWith("#") || trimmed.startsWith("<!--")) {
         continue;
       }
@@ -74,13 +74,9 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
   return entries;
 }
 
-function parseDiaryTimestamp(date: string): number | null {
-  return parseDateStringTimestampMs(date) ?? null;
-}
-
 function formatDiaryChipLabel(date: string): string {
-  const parsed = parseDiaryTimestamp(date);
-  if (parsed === null) {
+  const parsed = parseDateStringTimestampMs(date);
+  if (parsed === undefined) {
     return date;
   }
   const value = new Date(parsed);
@@ -114,7 +110,6 @@ type DreamingProps = {
   };
   shortTermEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
-  dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
   statusError: string | null;
@@ -136,14 +131,7 @@ type DreamingProps = {
   onRefreshImports: () => void;
   onRefreshWikiOverview: () => void;
   onOpenConfig: () => void;
-  onOpenWikiPage: (lookup: string) => Promise<{
-    title: string;
-    path: string;
-    content: string;
-    totalLines?: number;
-    truncated?: boolean;
-    updatedAt?: string;
-  } | null>;
+  onOpenWikiPage: (lookup: string) => Promise<WikiPagePreview | null>;
   onBackfillDiary: () => void;
   onCopyDreamingArchivePath: () => void;
   onDedupeDreamDiary: () => void;
@@ -180,8 +168,6 @@ const DREAM_PHASE_LABEL_KEYS = {
 } as const;
 
 const DREAM_SWAP_MS = 6_000;
-
-// ── Sub-tab state ─────────────────────────────────────────────────────
 
 export type DreamingViewState = {
   dreamIndex: number;
@@ -274,11 +260,10 @@ function renderDreamsCameo(agentId: string) {
 export function renderDreaming(props: DreamingProps) {
   const state = props.viewState;
   const idle = !props.active;
-  const dreamText = props.dreamingOf ?? currentDreamPhrase(state);
+  const dreamText = currentDreamPhrase(state);
 
   return html`
     <div class="dreams-page">
-      <!-- ── Sub-tab bar ── -->
       <div class="dreams__topbar">
         ${renderHubTabs({
           id: "dreams",
@@ -315,8 +300,6 @@ export function renderDreaming(props: DreamingProps) {
     </div>
   `;
 }
-
-// ── Scene renderer ────────────────────────────────────────────────────
 
 // Strip source citations like [memory/2026-04-09.md:9] and section headings,
 // flatten structured diary entries into plain paragraphs.
@@ -418,7 +401,6 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
         </div>
       </div>
 
-      <!-- Sleep phases -->
       <div class="dreams__phases">
         ${(Object.keys(DREAM_PHASE_LABEL_KEYS) as (keyof typeof DREAM_PHASE_LABEL_KEYS)[]).map(
           (phaseId) => {
@@ -465,37 +447,11 @@ function formatCompactDateTime(value: string): string {
   });
 }
 
-function basename(value: string): string {
-  const normalized = value.replace(/\\/g, "/");
-  return normalized.split("/").findLast(Boolean) ?? value;
-}
-
-function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "report"): string {
-  return t(`dreaming.wiki.pageTypes.${kind}`);
-}
-
-function formatPageCount(count: number): string {
-  return count === 1
-    ? t("dreaming.wiki.counts.pageOne", { count: String(count) })
-    : t("dreaming.wiki.counts.pages", { count: String(count) });
-}
-
-function formatClaimRowCount(count: number): string {
-  return count === 1
-    ? t("dreaming.wiki.counts.claimRowOne", { count: String(count) })
-    : t("dreaming.wiki.counts.claimRows", { count: String(count) });
-}
-
-function formatOpenQuestionCount(count: number): string {
-  return count === 1
-    ? t("dreaming.wiki.counts.openQuestionOne", { count: String(count) })
-    : t("dreaming.wiki.counts.openQuestions", { count: String(count) });
-}
-
-function formatContradictionCount(count: number): string {
-  return count === 1
-    ? t("dreaming.wiki.counts.contradictionOne", { count: String(count) })
-    : t("dreaming.wiki.counts.contradictions", { count: String(count) });
+function formatWikiCount(
+  kind: "page" | "claimRow" | "openQuestion" | "contradiction",
+  count: number,
+): string {
+  return t(`dreaming.wiki.counts.${kind}${count === 1 ? "One" : "s"}`, { count: String(count) });
 }
 
 const WIKI_OVERVIEW_PAGE_GROUPS = [
@@ -512,7 +468,7 @@ function formatWikiOverviewPageBreakdown(pageCounts: WikiOverview["pageCounts"])
     return count > 0
       ? t("dreaming.wiki.pageGroupSummary", {
           label: t(`dreaming.wiki.pageGroups.${group}`),
-          count: formatPageCount(count),
+          count: formatWikiCount("page", count),
         })
       : null;
   }).filter((entry): entry is string => entry !== null);
@@ -523,26 +479,26 @@ function formatWikiOverviewClusterSummary(cluster: WikiOverview["clusters"][numb
   const parts = [
     t("dreaming.wiki.sectionPageSummary", {
       label: cluster.label,
-      count: formatPageCount(cluster.itemCount),
+      count: formatWikiCount("page", cluster.itemCount),
     }),
   ];
   if (cluster.claimCount > 0) {
-    parts.push(formatClaimRowCount(cluster.claimCount));
+    parts.push(formatWikiCount("claimRow", cluster.claimCount));
   }
   if (cluster.questionCount > 0) {
     const questionPageCount = cluster.items.filter((item) => item.questionCount > 0).length;
-    const questionCount = formatOpenQuestionCount(cluster.questionCount);
+    const questionCount = formatWikiCount("openQuestion", cluster.questionCount);
     parts.push(
       questionPageCount > 0
         ? t("dreaming.wiki.questionCountOnPages", {
             questionCount,
-            pageCount: formatPageCount(questionPageCount),
+            pageCount: formatWikiCount("page", questionPageCount),
           })
         : questionCount,
     );
   }
   if (cluster.contradictionCount > 0) {
-    parts.push(formatContradictionCount(cluster.contradictionCount));
+    parts.push(formatWikiCount("contradiction", cluster.contradictionCount));
   }
   return parts.join(" · ");
 }
@@ -569,16 +525,12 @@ function toggleExpandedCard(bucket: Set<string>, key: string, onChange: () => vo
 
 async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
   const state = props.viewState;
-  const requestId = ++state.wikiPreviewRequestId;
+  resetWikiPreview(state);
+  const requestId = state.wikiPreviewRequestId;
   state.wikiPreviewOpen = true;
   state.wikiPreviewLoading = true;
-  state.wikiPreviewTitle = basename(lookup);
+  state.wikiPreviewTitle = pathDisplayName(lookup);
   state.wikiPreviewPath = lookup;
-  state.wikiPreviewUpdatedAt = null;
-  state.wikiPreviewContent = "";
-  state.wikiPreviewTotalLines = null;
-  state.wikiPreviewTruncated = false;
-  state.wikiPreviewError = null;
   props.onViewStateChange();
   try {
     const preview = await props.onOpenWikiPage(lookup);
@@ -691,18 +643,6 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
   `;
 }
 
-function renderDiarySubtabExplainer(activeDiarySubTab: DreamingViewState["activeDiarySubTab"]) {
-  switch (activeDiarySubTab) {
-    case "dreams":
-      return html` <p class="dreams-diary__explainer">${t("dreaming.wiki.dreamsExplainer")}</p> `;
-    case "insights":
-      return html` <p class="dreams-diary__explainer">${t("dreaming.wiki.insightsExplainer")}</p> `;
-    case "wiki":
-      return html` <p class="dreams-diary__explainer">${t("dreaming.wiki.wikiExplainer")}</p> `;
-  }
-  return nothing;
-}
-
 function parseSortableTimestamp(value?: string): number {
   return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
@@ -727,15 +667,6 @@ function compareWaitingEntryBySignals(a: DreamingEntry, b: DreamingEntry): numbe
     return b.phaseHitCount - a.phaseHitCount;
   }
   return compareWaitingEntryByRecency(a, b);
-}
-
-function sortWaitingEntries(
-  entries: DreamingEntry[],
-  sort: DreamingViewState["advancedWaitingSort"],
-): DreamingEntry[] {
-  return sort === "signals"
-    ? entries.toSorted(compareWaitingEntryBySignals)
-    : entries.toSorted(compareWaitingEntryByRecency);
 }
 
 function describeWaitingEntryOrigin(entry: DreamingEntry): string {
@@ -776,19 +707,11 @@ function renderAdvancedEntryList(params: {
           ? html`<div class="dreams-advanced__empty">${t(params.emptyKey)}</div>`
           : html`
               <div class="dreams-advanced__list">
-                ${params.entries.map(
-                  (entry) => html`
+                ${params.entries.map((entry) => {
+                  const badge = params.badge?.(entry);
+                  return html`
                     <article class="dreams-advanced__item" data-entry-key=${entry.key}>
-                      ${
-                        params.badge
-                          ? (() => {
-                              const label = params.badge?.(entry);
-                              return label
-                                ? html`<span class="dreams-advanced__badge">${label}</span>`
-                                : nothing;
-                            })()
-                          : nothing
-                      }
+                      ${badge ? html`<span class="dreams-advanced__badge">${badge}</span>` : nothing}
                       <div class="dreams-advanced__snippet">${entry.snippet}</div>
                       <div class="dreams-advanced__source">
                         ${formatRange(entry.path, entry.startLine, entry.endLine)}
@@ -800,8 +723,8 @@ function renderAdvancedEntryList(params: {
                           .join(" · ")}
                       </div>
                     </article>
-                  `,
-                )}
+                  `;
+                })}
               </div>
             `
       }
@@ -812,7 +735,11 @@ function renderAdvancedEntryList(params: {
 function renderAdvancedSection(props: DreamingProps) {
   const state = props.viewState;
   const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
-  const waitingEntries = sortWaitingEntries(props.shortTermEntries, state.advancedWaitingSort);
+  const waitingEntries = props.shortTermEntries.toSorted(
+    state.advancedWaitingSort === "signals"
+      ? compareWaitingEntryBySignals
+      : compareWaitingEntryByRecency,
+  );
   const description = t("dreaming.advanced.description");
   const summary = [
     `${groundedEntries.length} ${t("dreaming.advanced.summaryFromDailyLog")}`,
@@ -940,31 +867,29 @@ function renderAdvancedSection(props: DreamingProps) {
           entries: waitingEntries,
           controls: html`
             <div class="dreams-advanced__sort">
-              <button
-                class="dreams-advanced__sort-btn ${
-                  state.advancedWaitingSort === "recent" ? "dreams-advanced__sort-btn--active" : ""
-                }"
-                @click=${() => {
-                  state.advancedWaitingSort = "recent";
-                  props.onViewStateChange();
-                }}
-              >
-                ${t("dreaming.advanced.sortRecent")}
-              </button>
-              <button
-                class="dreams-advanced__sort-btn ${
-                  state.advancedWaitingSort === "signals" ? "dreams-advanced__sort-btn--active" : ""
-                }"
-                @click=${() => {
-                  state.advancedWaitingSort = "signals";
-                  props.onViewStateChange();
-                }}
-              >
-                ${t("dreaming.advanced.sortSignals")}
-              </button>
+              ${(
+                [
+                  ["recent", "dreaming.advanced.sortRecent"],
+                  ["signals", "dreaming.advanced.sortSignals"],
+                ] as const
+              ).map(
+                ([sort, label]) => html`
+                  <button
+                    class="dreams-advanced__sort-btn ${
+                      state.advancedWaitingSort === sort ? "dreams-advanced__sort-btn--active" : ""
+                    }"
+                    @click=${() => {
+                      state.advancedWaitingSort = sort;
+                      props.onViewStateChange();
+                    }}
+                  >
+                    ${t(label)}
+                  </button>
+                `,
+              )}
             </div>
           `,
-          badge: (entry) => describeWaitingEntryOrigin(entry),
+          badge: describeWaitingEntryOrigin,
           meta: (entry) => [
             `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`,
             entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
@@ -980,7 +905,7 @@ function renderAdvancedSection(props: DreamingProps) {
           descriptionKey: "dreaming.advanced.promotedDescription",
           emptyKey: "dreaming.advanced.emptyPromoted",
           entries: props.promotedEntries,
-          badge: (entry) => describeWaitingEntryOrigin(entry),
+          badge: describeWaitingEntryOrigin,
           meta: (entry) => [
             entry.promotedAt
               ? `${t("dreaming.advanced.updatedPrefix")} ${formatCompactDateTime(entry.promotedAt)}`
@@ -1105,7 +1030,9 @@ function renderWikiInsightCard(props: DreamingProps, card: WikiInsightCard) {
   const expanded = expandedCards.has(item.pagePath);
   const badgeClass = card.kind === "import" ? card.item.riskLevel : "wiki";
   const badgeLabel =
-    card.kind === "import" ? formatImportBadge(card.item) : formatKindLabel(card.item.kind);
+    card.kind === "import"
+      ? formatImportBadge(card.item)
+      : t(`dreaming.wiki.pageTypes.${card.item.kind}`);
   const metadata =
     card.kind === "import"
       ? card.item.activeBranchMessages > 0
@@ -1136,7 +1063,7 @@ function renderWikiInsightCard(props: DreamingProps, card: WikiInsightCard) {
       </div>
       <div class="dreams-diary__insight-meta">
         ${
-          item.updatedAt ? formatCompactDateTime(item.updatedAt) : basename(item.pagePath)
+          item.updatedAt ? formatCompactDateTime(item.updatedAt) : pathDisplayName(item.pagePath)
         }${metadata}
       </div>
       ${renderWikiInsightBody(card, expanded)}
@@ -1319,13 +1246,15 @@ function renderWikiOverviewSection(props: DreamingProps) {
     emptyHintKey: "dreaming.wiki.emptyWikiHint",
     date: () => {
       const metadata = [
-        formatPageCount(overview?.totalPages ?? 0),
-        ...((overview?.totalClaims ?? 0) > 0 ? [formatClaimRowCount(overview!.totalClaims)] : []),
+        formatWikiCount("page", overview?.totalPages ?? 0),
+        ...((overview?.totalClaims ?? 0) > 0
+          ? [formatWikiCount("claimRow", overview!.totalClaims)]
+          : []),
         ...((overview?.totalQuestions ?? 0) > 0
-          ? [formatOpenQuestionCount(overview!.totalQuestions)]
+          ? [formatWikiCount("openQuestion", overview!.totalQuestions)]
           : []),
         ...((overview?.totalContradictions ?? 0) > 0
-          ? [formatContradictionCount(overview!.totalContradictions)]
+          ? [formatWikiCount("contradiction", overview!.totalContradictions)]
           : []),
       ];
       return `${t("dreaming.wiki.vault")} · ${metadata.join(" · ")}`;
@@ -1409,33 +1338,42 @@ function renderDreamDiaryEntries(props: DreamingProps): DiaryPanel {
   };
 }
 
-// ── Diary section renderer ────────────────────────────────────────────
-
 function renderDiarySection(props: DreamingProps) {
   const state = props.viewState;
   const activeDiarySubTab = state.activeDiarySubTab;
-  const wikiTabSelected = activeDiarySubTab === "insights" || activeDiarySubTab === "wiki";
-  const memoryWikiUnavailable = wikiTabSelected && !props.memoryWikiEnabled;
-  const diaryError =
-    activeDiarySubTab === "dreams"
-      ? props.dreamDiaryError
-      : activeDiarySubTab === "insights"
-        ? props.wikiImportInsightsError
-        : props.wikiOverviewError;
-  if (diaryError && !memoryWikiUnavailable) {
+  const diary = {
+    dreams: {
+      error: props.dreamDiaryError,
+      loading: props.dreamDiaryLoading,
+      refresh: props.onRefreshDiary,
+      render: renderDreamDiaryEntries,
+      explainer: "dreaming.wiki.dreamsExplainer",
+    },
+    insights: {
+      error: props.wikiImportInsightsError,
+      loading: props.wikiImportInsightsLoading,
+      refresh: props.onRefreshImports,
+      render: renderDiaryImportsSection,
+      explainer: "dreaming.wiki.insightsExplainer",
+    },
+    wiki: {
+      error: props.wikiOverviewError,
+      loading: props.wikiOverviewLoading,
+      refresh: props.onRefreshWikiOverview,
+      render: renderWikiOverviewSection,
+      explainer: "dreaming.wiki.wikiExplainer",
+    },
+  }[activeDiarySubTab];
+  const memoryWikiUnavailable = activeDiarySubTab !== "dreams" && !props.memoryWikiEnabled;
+  if (diary.error && !memoryWikiUnavailable) {
     return html`
       <section class="dreams-diary">
-        <div class="dreams-diary__error">${diaryError}</div>
+        <div class="dreams-diary__error">${diary.error}</div>
       </section>
     `;
   }
 
-  const diaryPanel =
-    activeDiarySubTab === "dreams"
-      ? renderDreamDiaryEntries(props)
-      : activeDiarySubTab === "insights"
-        ? renderDiaryImportsSection(props)
-        : renderWikiOverviewSection(props);
+  const diaryPanel = diary.render(props);
   const diaryNavigation = "navigation" in diaryPanel ? diaryPanel.navigation : nothing;
   const diaryContent = "content" in diaryPanel ? diaryPanel.content : diaryPanel;
 
@@ -1467,23 +1405,14 @@ function renderDiarySection(props: DreamingProps) {
             ?disabled=${
               memoryWikiUnavailable
                 ? !props.access.canOpenConfig
-                : props.modeSaving ||
-                  (activeDiarySubTab === "dreams"
-                    ? props.dreamDiaryLoading
-                    : activeDiarySubTab === "insights"
-                      ? props.wikiImportInsightsLoading
-                      : props.wikiOverviewLoading)
+                : props.modeSaving || diary.loading
             }
             @click=${() => {
               state.diaryPage = 0;
               if (memoryWikiUnavailable) {
                 props.onOpenConfig();
-              } else if (activeDiarySubTab === "dreams") {
-                props.onRefreshDiary();
-              } else if (activeDiarySubTab === "insights") {
-                props.onRefreshImports();
               } else {
-                props.onRefreshWikiOverview();
+                diary.refresh();
               }
             }}
           >
@@ -1491,20 +1420,16 @@ function renderDiarySection(props: DreamingProps) {
               memoryWikiUnavailable
                 ? t("dreaming.wiki.howToEnable")
                 : activeDiarySubTab === "dreams"
-                  ? props.dreamDiaryLoading
+                  ? diary.loading
                     ? t("dreaming.diary.reloading")
                     : t("dreaming.diary.reload")
-                  : activeDiarySubTab === "insights"
-                    ? props.wikiImportInsightsLoading
-                      ? "Reloading…"
-                      : "Reload"
-                    : props.wikiOverviewLoading
-                      ? "Reloading…"
-                      : "Reload"
+                  : diary.loading
+                    ? "Reloading…"
+                    : "Reload"
             }
           </button>
         </div>
-        ${renderDiarySubtabExplainer(activeDiarySubTab)}
+        <p class="dreams-diary__explainer">${t(diary.explainer)}</p>
         ${memoryWikiUnavailable ? nothing : diaryNavigation}
       </div>
 

@@ -13,7 +13,10 @@ import type { ReplyPayload as AgentRuntimeReplyPayload } from "../../shared/repl
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { AgentTool } from "../runtime/index.js";
+import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
+import type { TranscriptPolicy } from "../transcript-policy.types.js";
 
 /** Runtime transport selected for one model attempt. */
 export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";
@@ -31,9 +34,6 @@ type AgentRuntimeThinkLevel =
 
 /** System prompt rendering mode selected for one attempt. */
 type AgentRuntimePromptMode = "full" | "minimal" | "none";
-/** Trigger source that can alter provider system prompt contributions. */
-type AgentRuntimePromptTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
-
 /** Provider model descriptor consumed by runtime-plan hooks. */
 type AgentRuntimeModel = {
   id?: string;
@@ -82,16 +82,6 @@ type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
   prepared: true;
 };
 
-/** Stable section IDs for provider system prompt overrides. */
-type AgentRuntimeSystemPromptSectionId = "interaction_style" | "tool_call_style" | "execution_bias";
-
-/** Provider-owned system prompt contribution and section overrides. */
-type AgentRuntimeSystemPromptContribution = {
-  stablePrefix?: string;
-  dynamicSuffix?: string;
-  sectionOverrides?: Partial<Record<AgentRuntimeSystemPromptSectionId, string>>;
-};
-
 /** Context passed when resolving provider system prompt contributions. */
 type AgentRuntimeSystemPromptContributionContext = {
   config?: unknown;
@@ -103,37 +93,13 @@ type AgentRuntimeSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
-  trigger?: AgentRuntimePromptTrigger;
+  trigger?: EmbeddedRunTrigger;
 };
 
 /** Provider fallback route decision for follow-up delivery. */
 type AgentRuntimeFollowupFallbackRouteResult = {
   route?: "origin" | "dispatcher" | "drop";
   reason?: string;
-};
-
-/** Tool-call id sanitizer mode for provider transcript policy. */
-type AgentRuntimeToolCallIdMode = "strict" | "strict9";
-
-/** Provider transcript sanitation, repair, and validation policy. */
-type AgentRuntimeTranscriptPolicy = {
-  sanitizeMode: "full" | "images-only";
-  sanitizeToolCallIds: boolean;
-  toolCallIdMode?: AgentRuntimeToolCallIdMode;
-  duplicateToolCallIdStyle?: "openai";
-  preserveNativeAnthropicToolUseIds: boolean;
-  repairToolUseResultPairing: boolean;
-  preserveSignatures: boolean;
-  sanitizeThoughtSignatures?: {
-    allowBase64Only?: boolean;
-    includeCamelCase?: boolean;
-  };
-  dropThinkingBlocks: boolean;
-  dropReasoningFromHistory?: boolean;
-  applyGoogleTurnOrdering: boolean;
-  validateGeminiTurns: boolean;
-  validateAnthropicTurns: boolean;
-  allowSyntheticToolResults: boolean;
 };
 
 /** Runtime hook that classifies run results for model fallback. */
@@ -196,6 +162,7 @@ export type AgentRuntimeAuthPlan = {
   forwardedAuthProfileCandidateIds?: string[];
   /** Exact selected credential/config mode; secret-free route materialization input. */
   selectedAuthMode?: string;
+  selectedAuthFlow?: string;
   /** Concrete provider-owned route selected before runtime dispatch. */
   modelRoute?: AgentRuntimeAuthModelRoute;
   /** Secret-free support shared by every route deferred to harness-owned auth. */
@@ -211,7 +178,7 @@ type AgentRuntimePromptPlan = {
   textTransforms?: AgentRuntimeTextTransforms;
   resolveSystemPromptContribution(
     context: AgentRuntimeSystemPromptContributionContext,
-  ): AgentRuntimeSystemPromptContribution | undefined;
+  ): ProviderSystemPromptContribution | undefined;
   transformSystemPrompt(
     context: AgentRuntimeSystemPromptContributionContext & {
       systemPrompt: string;
@@ -227,25 +194,20 @@ type PreparedOpenClawToolPlanning = {
   metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
 };
 
+type AgentRuntimeModelOverrides = {
+  workspaceDir?: string;
+  modelApi?: string;
+  model?: AgentRuntimeModel;
+};
+
 /** Tool normalization and diagnostics hooks for one runtime attempt. */
 type AgentRuntimeToolPlan = {
   preparedPlanning?: PreparedOpenClawToolPlanning;
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
     tools: AgentTool<TSchemaType, TResult>[],
-    params?: {
-      workspaceDir?: string;
-      modelApi?: string;
-      model?: AgentRuntimeModel;
-    },
+    params?: AgentRuntimeModelOverrides,
   ): AgentTool<TSchemaType, TResult>[];
-  logDiagnostics(
-    tools: AgentTool[],
-    params?: {
-      workspaceDir?: string;
-      modelApi?: string;
-      model?: AgentRuntimeModel;
-    },
-  ): void;
+  logDiagnostics(tools: AgentTool[], params?: AgentRuntimeModelOverrides): void;
 };
 
 /** Delivery behavior hooks for one runtime attempt. */
@@ -263,11 +225,6 @@ export type AgentRuntimeDeliveryPlan = {
     originRoutable: boolean;
     dispatcherAvailable: boolean;
   }): AgentRuntimeFollowupFallbackRouteResult | undefined;
-};
-
-/** Outcome classification hooks for one runtime attempt. */
-export type AgentRuntimeOutcomePlan = {
-  classifyRunResult: AgentRuntimeOutcomeClassifier;
 };
 
 /** Extra transport parameter plan for one runtime attempt. */
@@ -291,24 +248,17 @@ export type AgentRuntimePlan = {
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
   transcript: {
-    policy: AgentRuntimeTranscriptPolicy;
-    resolvePolicy(params?: {
-      workspaceDir?: string;
-      modelApi?: string;
-      model?: AgentRuntimeModel;
-    }): AgentRuntimeTranscriptPolicy;
+    policy: TranscriptPolicy;
+    resolvePolicy(
+      params?: AgentRuntimeModelOverrides & { directApiKey?: boolean },
+    ): TranscriptPolicy;
   };
   delivery: AgentRuntimeDeliveryPlan;
-  outcome: AgentRuntimeOutcomePlan;
+  outcome: { classifyRunResult: AgentRuntimeOutcomeClassifier };
   transport: AgentRuntimeTransportPlan;
-  observability: {
+  observability: AgentRuntimeResolvedRef & {
     resolvedRef: string;
-    provider: string;
-    modelId: string;
-    modelApi?: string;
-    harnessId?: string;
     authProfileId?: string;
-    transport?: AgentRuntimeTransport;
   };
 };
 
@@ -323,12 +273,7 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
 };
 
 /** Inputs needed to build the full prepared runtime plan. */
-export type BuildAgentRuntimePlanParams = {
-  config?: unknown;
-  workspaceDir?: string;
-  agentDir?: string;
-  provider: string;
-  modelId: string;
+export type BuildAgentRuntimePlanParams = BuildAgentRuntimeDeliveryPlanParams & {
   model?: AgentRuntimeModel;
   modelApi?: string | null;
   harnessId?: string;

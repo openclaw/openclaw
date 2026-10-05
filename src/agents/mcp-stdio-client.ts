@@ -8,6 +8,7 @@ import {
   type Request,
   type Result,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { connectMcpClient, disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
 import { McpStdioFrameDecoder, McpStdioFrameError } from "./mcp-stdio-frame-decoder.js";
@@ -36,6 +37,7 @@ export type McpStdioClientParams = {
 
 export type McpStdioClient = {
   isAvailable(): boolean;
+  readonly cleanupResult?: ProcessCleanupResult;
   request(
     method: string,
     params: Record<string, unknown>,
@@ -227,6 +229,9 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
 
   return {
     isAvailable: () => available && !failure && !stopped,
+    get cleanupResult() {
+      return transport.cleanupResult;
+    },
     async request(method, requestParams, options) {
       await startup;
       return request(method, requestParams, options);

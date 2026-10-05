@@ -1,15 +1,16 @@
 // Covers platform browser-open command resolution.
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 type DetectBinary = typeof import("./detect-binary.js").detectBinary;
 
-const { detectBinaryMock, getWindowsInstallRootsMock, readFileMock, runCommandWithTimeoutMock } =
-  vi.hoisted(() => ({
+const { detectBinaryMock, execFileSyncMock, readFileMock, runCommandWithTimeoutMock } = vi.hoisted(
+  () => ({
     detectBinaryMock: vi.fn<DetectBinary>(async () => false),
-    getWindowsInstallRootsMock: vi.fn(() => ({ systemRoot: "C:\\Windows" })),
+    execFileSyncMock: vi.fn<(file: string, args: readonly string[]) => string>(() => ""),
     readFileMock: vi.fn(async () => "6.8.0-generic"),
     runCommandWithTimeoutMock: vi.fn<() => Promise<SpawnResult>>(async () => ({
       stdout: "",
@@ -19,17 +20,16 @@ const { detectBinaryMock, getWindowsInstallRootsMock, readFileMock, runCommandWi
       killed: false,
       termination: "exit",
     })),
-  }));
+  }),
+);
 
 vi.mock("./detect-binary.js", () => ({
   detectBinary: detectBinaryMock,
 }));
 
-vi.mock("./windows-install-roots.js", async () => {
-  const actual = await vi.importActual<typeof import("./windows-install-roots.js")>(
-    "./windows-install-roots.js",
-  );
-  return { ...actual, getWindowsInstallRoots: getWindowsInstallRootsMock };
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, execFileSync: execFileSyncMock };
 });
 
 vi.mock("../process/exec.js", () => ({
@@ -45,15 +45,21 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
-import { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand } from "./browser-open.js";
-import { resetWSLStateForTests } from "./wsl.js";
+let detectBrowserOpenSupport: typeof import("./browser-open.js").detectBrowserOpenSupport;
+let openUrl: typeof import("./browser-open.js").openUrl;
+let resolveBrowserOpenCommand: typeof import("./browser-open.js").resolveBrowserOpenCommand;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand } =
+    await import("./browser-open.js"));
+});
 
 afterEach(() => {
-  resetWSLStateForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   detectBinaryMock.mockReset().mockResolvedValue(false);
-  getWindowsInstallRootsMock.mockReset().mockReturnValue({ systemRoot: "C:\\Windows" });
+  execFileSyncMock.mockReset().mockReturnValue("");
   readFileMock.mockReset().mockResolvedValue("6.8.0-generic");
   runCommandWithTimeoutMock.mockReset().mockResolvedValue({
     stdout: "",
@@ -139,7 +145,13 @@ describe("resolveBrowserOpenCommand", () => {
         platform: "linux",
         env: { WSL_DISTRO_NAME: "Ubuntu" },
       }),
-    ).resolves.toEqual({ ok: true, command: "wslview" });
+    ).resolves.toEqual({ ok: true });
+
+    const resolved = await resolveBrowserOpenCommand({
+      platform: "linux",
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+    });
+    expect(resolved.argv).toEqual(["wslview"]);
 
     detectBinaryMock.mockResolvedValue(false);
     await expect(
@@ -150,28 +162,20 @@ describe("resolveBrowserOpenCommand", () => {
     ).resolves.toEqual({ ok: false, reason: "wsl-no-wslview" });
   });
 
-  it("does not resolve Windows browser launching through a relative SystemRoot", async () => {
-    mockProcessPlatform("win32");
-    vi.stubEnv("SystemRoot", ".\\fake-root");
-    vi.stubEnv("windir", ".\\fake-windir");
-
-    const resolved = await resolveBrowserOpenCommand();
-
-    const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
-    expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
-    expect(resolved.command).toBe(rundll32);
-  });
-
   it("prefers the registry-backed Windows system root over process env", async () => {
-    getWindowsInstallRootsMock.mockReturnValue({ systemRoot: "D:\\Windows" });
+    vi.resetModules();
+    const { resolveBrowserOpenCommand: resolveCommand } = await import("./browser-open.js");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    execFileSyncMock.mockImplementation((_file: string, args: readonly string[]) =>
+      args[3] === "SystemRoot" ? "SystemRoot    REG_SZ    D:\\Windows\r\n" : "",
+    );
     mockProcessPlatform("win32");
     vi.stubEnv("SystemRoot", "C:\\PoisonedWindows");
 
-    const resolved = await resolveBrowserOpenCommand();
+    const resolved = await resolveCommand();
 
     const rundll32 = path.win32.join("D:\\Windows", "System32", "rundll32.exe");
     expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
-    expect(resolved.command).toBe(rundll32);
   });
 
   it("resolves macOS open even when SSH environment variables are present", async () => {
@@ -182,7 +186,7 @@ describe("resolveBrowserOpenCommand", () => {
     const resolved = await resolveBrowserOpenCommand();
 
     expect(detectBinaryMock).toHaveBeenCalledWith("open");
-    expect(resolved).toEqual({ argv: ["open"], command: "open" });
+    expect(resolved).toEqual({ argv: ["open"] });
   });
 
   it("still refuses browser launch over Linux SSH without a display", async () => {
@@ -205,6 +209,6 @@ describe("resolveBrowserOpenCommand", () => {
       },
     });
 
-    expect(resolved).toEqual({ argv: ["xdg-open"], command: "xdg-open" });
+    expect(resolved).toEqual({ argv: ["xdg-open"] });
   });
 });

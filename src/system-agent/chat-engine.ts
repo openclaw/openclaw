@@ -3,6 +3,7 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../packages/gateway-protocol/src/index.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   cleanupSystemAgentSession,
@@ -120,7 +121,7 @@ export class SystemAgentChatEngine {
     beforePersistentApply?: () => void,
     terminalStatus?: "expired" | "cancelled",
   ): Promise<SystemAgentChatReply | null> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       const reply = await this.router.resolveOperatorApproval(
         decision,
         proposalHash,
@@ -137,8 +138,6 @@ export class SystemAgentChatEngine {
       }
       return reply;
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   noteAssistantMessage(text: string): void {
@@ -177,7 +176,7 @@ export class SystemAgentChatEngine {
   }
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       await this.requireVerifiedInference();
       const sensitiveTurn = this.wizard.sensitiveInputPending;
       const reply = await this.router.resolveTurn(text, options);
@@ -186,27 +185,27 @@ export class SystemAgentChatEngine {
         sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
       );
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   async answerWizard(answer: WizardAnswer): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       await this.requireVerifiedInference();
       const result = await this.router.answerWizard(this.wizard.answer(answer));
       return this.completeTurn({ text: result.text, action: "none" }, result.userHistoryText);
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   async cancelWizard(cancel: SystemAgentWizardCancel): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       const result = await this.router.answerWizard(this.wizard.cancel(cancel));
       return this.completeTurn({ text: result.text, action: "none" }, result.userHistoryText);
     });
+  }
+
+  private enqueueTurn<T>(run: () => Promise<T>): Promise<T> {
+    const turn = this.turnQueue.then(run);
     this.turnQueue = turn.catch(() => undefined);
-    return await turn;
+    return turn;
   }
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
@@ -223,7 +222,9 @@ export class SystemAgentChatEngine {
     const overview = await (this.options.deps?.loadOverview ?? loadSystemAgentOverview)({
       agentId: route.agentId,
     });
-    return { ...overview, defaultModel: route.modelLabel };
+    return route.modelTarget === "utility"
+      ? { ...overview, setupModel: route.modelLabel }
+      : { ...overview, defaultModel: route.modelLabel };
   }
 
   async planGreeting(params: {
@@ -231,16 +232,23 @@ export class SystemAgentChatEngine {
     facts: SystemAgentGreetingFacts;
     timeoutMs: number;
   }): Promise<SystemAgentGreetingPlan | null> {
-    const planner = this.options.planGreeting;
-    const plan = planner
-      ? await planner(params)
-      : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
-          planSystemAgentGreetingWithConfiguredModel({
-            ...params,
-            verifiedInference: this.verifiedInference,
-            deps: this.options.deps,
-          }),
-        );
+    const runPlanner = async () => {
+      const planner = this.options.planGreeting;
+      return planner
+        ? await planner(params)
+        : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
+            planSystemAgentGreetingWithConfiguredModel({
+              ...params,
+              verifiedInference: this.verifiedInference,
+              deps: this.options.deps,
+            }),
+          );
+    };
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    const plan =
+      requesterAgentId && requesterAgentId !== this.verifiedInference.execution.agentId
+        ? await runOutsidePreparedModelRuntimePluginGenerationScope(runPlanner)
+        : await runPlanner();
     if (plan) {
       await this.requireVerifiedInference();
     }

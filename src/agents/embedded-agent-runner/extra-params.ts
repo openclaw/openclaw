@@ -8,9 +8,6 @@ import {
   type NativeWebSearchToolPolicyParams,
   isNativeWebSearchAllowedByToolPolicy,
 } from "../../agents/codex-native-web-search-core.js";
-/**
- * Resolves model extra parameters and transport overrides for embedded agents.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
@@ -37,11 +34,13 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { resolveModelExtraParamSources } from "../model-extra-params.js";
+import type { ProviderPrepareExtraParamsContext } from "../../plugins/provider-runtime.types.js";
 import {
-  getModelProviderRequestRouteFacts,
-  resolveProviderRequestPolicyConfig,
-} from "../provider-request-config.js";
+  resolveAliasedParamValue,
+  resolveModelExtraParamSources,
+  sanitizeExtraParamsRecord,
+} from "../model-extra-params.js";
+import { createOpenAICompletionsPayloadPolicyWrapper } from "../openai-completions-payload-policy.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
@@ -64,15 +63,6 @@ const GPT_PARALLEL_TOOL_CALLS_APIS = new Set([
   "azure-openai-responses",
 ]);
 
-/** True when a provider API accepts GPT parallel-tool-call payload settings. */
-function supportsGptParallelToolCallsPayload(api: unknown): boolean {
-  return typeof api === "string" && GPT_PARALLEL_TOOL_CALLS_APIS.has(api);
-}
-
-/**
- * Resolve provider-specific extra params from model config.
- * Used to pass through stream params like temperature/maxTokens.
- */
 export function resolveExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -88,49 +78,20 @@ export function resolveExtraParams(params: {
     });
   const sources = [defaultParams, modelParams, agentModelParams, agentParams];
   const merged = Object.assign({}, ...sources);
-  const resolvedParallelToolCalls = resolveAliasedParamValue(
-    sources,
-    "parallel_tool_calls",
-    "parallelToolCalls",
-  );
-  if (resolvedParallelToolCalls !== undefined) {
-    merged.parallel_tool_calls = resolvedParallelToolCalls;
-    delete merged.parallelToolCalls;
-  }
-
-  const resolvedTextVerbosity = resolveAliasedParamValue(
+  canonicalizeExtraParamAlias(merged, sources, ["parallel_tool_calls", "parallelToolCalls"]);
+  canonicalizeExtraParamAlias(
+    merged,
     [modelParams, agentModelParams, agentParams],
-    "text_verbosity",
-    "textVerbosity",
+    ["text_verbosity", "textVerbosity"],
   );
-  if (resolvedTextVerbosity !== undefined) {
-    merged.text_verbosity = resolvedTextVerbosity;
-    delete merged.textVerbosity;
-  }
-
-  const resolvedResponseFormat = resolveAliasedParamValue(
-    sources,
-    "response_format",
-    "responseFormat",
-  );
-  if (resolvedResponseFormat !== undefined) {
-    merged.response_format = resolvedResponseFormat;
-    delete merged.responseFormat;
-  }
-  canonicalizeMaxTokensParam({
+  canonicalizeExtraParamAlias(merged, sources, ["response_format", "responseFormat"]);
+  canonicalizeMaxTokensParam({ merged, sources });
+  canonicalizeExtraParamAlias(
     merged,
     sources,
-  });
-
-  const resolvedCachedContent = resolveAliasedParamValue(
-    sources,
-    "cached_content",
+    ["cached_content", "cachedContent"],
     "cachedContent",
   );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, sources);
   }
@@ -140,28 +101,20 @@ export function resolveExtraParams(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
-  cacheRetention?: "none" | "short" | "long";
+type CacheRetentionStreamOptions = SimpleStreamOptions & {
   cachedContent?: string;
   topP?: number;
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;
-  stop?: string[];
 };
-type SupportedTransport = AgentRuntimeTransport;
-
-function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
+function resolveSupportedTransport(value: unknown): AgentRuntimeTransport | undefined {
   return value === "sse" ||
     value === "websocket" ||
     value === "websocket-cached" ||
     value === "auto"
     ? value
     : undefined;
-}
-
-function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
-  return Object.hasOwn(settings, "transport");
 }
 
 export function resolvePreparedExtraParams(params: {
@@ -175,8 +128,9 @@ export function resolvePreparedExtraParams(params: {
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
-  resolvedTransport?: SupportedTransport;
+  resolvedTransport?: AgentRuntimeTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
+  auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -186,16 +140,9 @@ export function resolvePreparedExtraParams(params: {
       modelId: params.modelId,
       agentId: params.agentId,
     });
-  const override =
-    params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
-      ? stripRequestScopedExtraParams(
-          sanitizeExtraParamsRecord(
-            Object.fromEntries(
-              Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
-            ),
-          ),
-        )
-      : undefined;
+  const override = stripRequestScopedExtraParams(
+    sanitizeExtraParamsOverride(params.extraParamsOverride),
+  );
   const merged = {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
@@ -204,15 +151,12 @@ export function resolvePreparedExtraParams(params: {
     merged,
     sources: [resolvedExtraParams, override],
   });
-  const resolvedCachedContent = resolveAliasedParamValue(
+  canonicalizeExtraParamAlias(
+    merged,
     [resolvedExtraParams, override],
-    "cached_content",
+    ["cached_content", "cachedContent"],
     "cachedContent",
   );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
   }
@@ -234,6 +178,7 @@ export function resolvePreparedExtraParams(params: {
     modelId: params.modelId,
     model: params.model,
     thinkingLevel: params.thinkingLevel,
+    auth: params.auth,
   };
   const prepared = plugin?.prepareExtraParams?.({ ...context, extraParams: merged }) ?? merged;
   const transportPatch = plugin?.extraParamsForTransport?.({
@@ -249,17 +194,12 @@ export function resolvePreparedExtraParams(params: {
   return result;
 }
 
-function sanitizeExtraParamsRecord(
-  value: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
-    ),
-  );
+function sanitizeExtraParamsOverride(value: Record<string, unknown> | undefined) {
+  return value && Object.keys(value).length > 0
+    ? sanitizeExtraParamsRecord(
+        Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)),
+      )
+    : undefined;
 }
 
 function stripRequestScopedExtraParams(
@@ -274,28 +214,15 @@ function stripRequestScopedExtraParams(
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
-function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined): boolean {
-  if (!value) {
-    return false;
-  }
+function hasRequestScopedExtraParams(value: Record<string, unknown>): boolean {
   return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
-}
-
-function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
-  provider: string;
-  modelId: string;
-}): boolean {
-  if (params.provider !== "openai") {
-    return false;
-  }
-  return /^gpt-5(?:[.-]|$)/i.test(params.modelId);
 }
 
 function applyDefaultOpenAIGptRuntimeParams(
   params: { provider: string; modelId: string },
   merged: Record<string, unknown>,
 ): void {
-  if (!shouldApplyDefaultOpenAIGptRuntimeParams(params)) {
+  if (params.provider !== "openai" || !/^gpt-5(?:[.-]|$)/i.test(params.modelId)) {
     return;
   }
   if (
@@ -312,10 +239,10 @@ function applyDefaultOpenAIGptRuntimeParams(
 export function resolveAgentTransportOverride(params: {
   settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
-}): SupportedTransport | undefined {
+}): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
   const projectSettings = params.settingsManager.getProjectSettings();
-  if (hasExplicitTransportSetting(globalSettings) || hasExplicitTransportSetting(projectSettings)) {
+  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
@@ -324,13 +251,10 @@ export function resolveAgentTransportOverride(params: {
 export function resolveExplicitSettingsTransport(params: {
   settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
   sessionTransport: unknown;
-}): SupportedTransport | undefined {
+}): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
   const projectSettings = params.settingsManager.getProjectSettings();
-  if (
-    !hasExplicitTransportSetting(globalSettings) &&
-    !hasExplicitTransportSetting(projectSettings)
-  ) {
+  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
@@ -379,8 +303,7 @@ function createStreamFnWithExtraParams(
   }
   const resolvedResponseFormat = resolveAliasedParamValue(
     [extraParams],
-    "response_format",
-    "responseFormat",
+    ["response_format", "responseFormat"],
   );
   if (
     resolvedResponseFormat &&
@@ -409,27 +332,19 @@ function createStreamFnWithExtraParams(
     streamParams.cachedContent = cachedContent.trim();
   }
 
-  // Resolve sampling / repetition params and add to streamParams
-  // so transport layers can filter by API type (e.g. openai-responses skips penalty params).
-  // Resolve aliased params: camelCase (runtime/request) checked first so
-  // per-request gateway overrides take priority over configured snake_case values.
-  const resolvedFrequencyPenalty = resolveAliasedParamValueFromKeys(
-    [extraParams],
+  // Camel-case request overrides win over configured snake-case penalties.
+  // Transports still decide which API accepts each sampling parameter.
+  for (const keys of [
     ["frequencyPenalty", "frequency_penalty"],
-  );
-  const resolvedPresencePenalty = resolveAliasedParamValueFromKeys(
-    [extraParams],
     ["presencePenalty", "presence_penalty"],
-  );
-  const resolvedSeed = extraParams.seed;
-  if (typeof resolvedFrequencyPenalty === "number") {
-    streamParams.frequencyPenalty = resolvedFrequencyPenalty;
+  ] as const) {
+    const value = resolveAliasedParamValue([extraParams], keys);
+    if (typeof value === "number") {
+      streamParams[keys[0]] = value;
+    }
   }
-  if (typeof resolvedPresencePenalty === "number") {
-    streamParams.presencePenalty = resolvedPresencePenalty;
-  }
-  if (typeof resolvedSeed === "number") {
-    streamParams.seed = resolvedSeed;
+  if (typeof extraParams.seed === "number") {
+    streamParams.seed = extraParams.seed;
   }
   const resolvedStop = normalizeStopSequences(extraParams.stop);
   if (resolvedStop) {
@@ -439,23 +354,23 @@ function createStreamFnWithExtraParams(
   const readCacheCompat = (m?: ProviderRuntimeModel) =>
     m?.api === "openai-completions" ? resolveOpenAICompletionsCompat(m) : m?.compat;
 
-  const initialCacheRetention = resolveCacheRetention(
-    extraParams,
-    provider,
-    typeof model?.api === "string" ? model.api : undefined,
-    typeof model?.id === "string" ? model.id : undefined,
-    readCacheCompat(model),
-    model?.baseUrl,
-  );
-  if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
-    const debugParams = initialCacheRetention
-      ? { ...streamParams, cacheRetention: initialCacheRetention }
-      : streamParams;
-    log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
+  if (log.isEnabled("debug")) {
+    const initialCacheRetention = resolveCacheRetention(
+      extraParams,
+      provider,
+      typeof model?.api === "string" ? model.api : undefined,
+      typeof model?.id === "string" ? model.id : undefined,
+      readCacheCompat(model),
+      model?.baseUrl,
+    );
+    if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
+      const debugParams = { ...streamParams, cacheRetention: initialCacheRetention };
+      log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
+    }
   }
 
   const underlying = requireBaseStreamFn(baseStreamFn);
-  const wrappedStreamFn: StreamFn = (callModel, context, options) => {
+  return (callModel, context, options) => {
     const cacheRetention = resolveCacheRetention(
       extraParams,
       provider,
@@ -475,83 +390,46 @@ function createStreamFnWithExtraParams(
       ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
     });
   };
-
-  return wrappedStreamFn;
 }
 
-function resolveAliasedParamValue(
+function canonicalizeExtraParamAlias(
+  merged: Record<string, unknown>,
   sources: Array<Record<string, unknown> | undefined>,
-  snakeCaseKey: string,
-  camelCaseKey: string,
-): unknown {
-  return resolveAliasedParamValueFromKeys(sources, [snakeCaseKey, camelCaseKey]);
+  keys: readonly [string, string],
+  canonical = keys[0],
+): void {
+  const resolved = resolveAliasedParamValue(sources, keys);
+  if (resolved !== undefined) {
+    merged[canonical] = resolved;
+    delete merged[keys[0] === canonical ? keys[1] : keys[0]];
+  }
 }
 
-function resolveAliasedParamValueFromKeys(
-  sources: Array<Record<string, unknown> | undefined>,
-  keys: readonly string[],
-): unknown {
-  let resolved: unknown = undefined;
-  let seen = false;
-  for (const source of sources) {
-    if (!source) {
-      continue;
-    }
-    for (const key of keys) {
-      if (!Object.hasOwn(source, key)) {
-        continue;
-      }
-      resolved = source[key];
-      seen = true;
-      break;
-    }
-  }
-  return seen ? resolved : undefined;
-}
-
-function applyCanonicalAliasedParamValue(params: {
-  merged: Record<string, unknown>;
-  sources: Array<Record<string, unknown> | undefined>;
-  keys: readonly string[];
-  canonicalKey: string;
-}): void {
-  const resolved = resolveAliasedParamValueFromKeys(params.sources, params.keys);
-  if (resolved === undefined) {
-    return;
-  }
-  for (const key of params.keys) {
-    delete params.merged[key];
-  }
-  params.merged[params.canonicalKey] = resolved;
-}
+const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
+  ["responseCache", "response_cache"],
+  [
+    "responseCacheTtlSeconds",
+    "response_cache_ttl_seconds",
+    "responseCacheTtl",
+    "response_cache_ttl",
+  ],
+  ["responseCacheClear", "response_cache_clear"],
+] as const;
 
 function canonicalizeOpenRouterResponseCacheParams(
   merged: Record<string, unknown>,
   sources: Array<Record<string, unknown> | undefined>,
 ): void {
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: ["responseCache", "response_cache"],
-    canonicalKey: "responseCache",
-  });
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: [
-      "responseCacheTtlSeconds",
-      "response_cache_ttl_seconds",
-      "responseCacheTtl",
-      "response_cache_ttl",
-    ],
-    canonicalKey: "responseCacheTtlSeconds",
-  });
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: ["responseCacheClear", "response_cache_clear"],
-    canonicalKey: "responseCacheClear",
-  });
+  for (const keys of OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES) {
+    const resolved = resolveAliasedParamValue(sources, keys);
+    if (resolved === undefined) {
+      continue;
+    }
+    for (const key of keys) {
+      delete merged[key];
+    }
+    merged[keys[0]] = resolved;
+  }
 }
 
 function createParallelToolCallsWrapper(
@@ -560,7 +438,7 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (model, context, options) => {
-    if (!supportsGptParallelToolCallsPayload(model.api)) {
+    if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -572,139 +450,13 @@ function createParallelToolCallsWrapper(
   };
 }
 
-function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean {
-  if (model.api !== "openai-completions") {
-    return false;
-  }
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as Record<string, unknown>)
-      : undefined;
-  const capabilities =
-    getModelProviderRequestRouteFacts(model)?.capabilities ??
-    resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: model.api,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      compat,
-      capability: "llm",
-      transport: "stream",
-    }).capabilities;
-  return !capabilities.usesKnownNativeOpenAIRoute;
-}
-
-function createOpenAICompletionsStoreCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = requireBaseStreamFn(baseStreamFn);
-  return (model, context, options) => {
-    if (!shouldStripOpenAICompletionsStore(model as ProviderRuntimeModel)) {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      delete payloadObj.store;
-    });
-  };
-}
-
-function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(sanitizeExtraParamsRecord(value) ?? {}).filter(
-      ([, entry]) => entry !== undefined,
-    ),
-  );
-}
-
-function resolveExtraBodyParam(rawExtraBody: unknown): Record<string, unknown> | undefined {
-  if (rawExtraBody === undefined || rawExtraBody === null) {
-    return undefined;
-  }
-  if (typeof rawExtraBody !== "object" || Array.isArray(rawExtraBody)) {
-    const summary = typeof rawExtraBody === "string" ? rawExtraBody : typeof rawExtraBody;
-    log.warn(`ignoring invalid extra_body param: ${summary}`);
-    return undefined;
-  }
-  const extraBody = sanitizeExtraBodyRecord(rawExtraBody as Record<string, unknown>);
-  return Object.keys(extraBody).length > 0 ? extraBody : undefined;
-}
-
-function resolveChatTemplateKwargsParam(
-  rawChatTemplateKwargs: unknown,
-): Record<string, unknown> | undefined {
-  if (rawChatTemplateKwargs === undefined || rawChatTemplateKwargs === null) {
-    return undefined;
-  }
-  if (typeof rawChatTemplateKwargs !== "object" || Array.isArray(rawChatTemplateKwargs)) {
-    const summary =
-      typeof rawChatTemplateKwargs === "string"
-        ? rawChatTemplateKwargs
-        : typeof rawChatTemplateKwargs;
-    log.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
-    return undefined;
-  }
-  const chatTemplateKwargs = sanitizeExtraBodyRecord(
-    rawChatTemplateKwargs as Record<string, unknown>,
-  );
-  return Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined;
-}
-
-function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
-  baseStreamFn: StreamFn | undefined;
-  configured: Record<string, unknown>;
-}): StreamFn {
-  const underlying = requireBaseStreamFn(params.baseStreamFn);
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const existing = payloadObj.chat_template_kwargs;
-      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-        payloadObj.chat_template_kwargs = {
-          ...(existing as Record<string, unknown>),
-          ...params.configured,
-        };
-        return;
-      }
-      payloadObj.chat_template_kwargs = params.configured;
-    });
-  };
-}
-
-const FRAMEWORK_MANAGED_EXTRA_BODY_KEYS = new Set(["messages", "model", "stream"]);
-
-function createOpenAICompletionsExtraBodyWrapper(
-  baseStreamFn: StreamFn | undefined,
-  extraBody: Record<string, unknown>,
-): StreamFn {
-  const underlying = requireBaseStreamFn(baseStreamFn);
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const clobberedManagedKeys = Object.keys(extraBody).filter(
-        (key) => Object.hasOwn(payloadObj, key) && FRAMEWORK_MANAGED_EXTRA_BODY_KEYS.has(key),
-      );
-      if (clobberedManagedKeys.length > 0) {
-        log.warn(
-          `extra_body overrides framework-managed request keys: ${clobberedManagedKeys.join(", ")}`,
-        );
-      }
-      Object.assign(payloadObj, extraBody);
-    });
-  };
-}
-
 type ApplyExtraParamsContext = {
   agent: { streamFn?: StreamFn };
-  cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
-  agentDir?: string;
-  workspaceDir?: string;
   thinkingLevel?: ProviderThinkLevel;
   model?: ProviderRuntimeModel;
   effectiveExtraParams: Record<string, unknown>;
-  resolvedExtraParams?: Record<string, unknown>;
   override?: Record<string, unknown>;
 };
 
@@ -756,25 +508,26 @@ function applyPostPluginStreamWrappers(
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
       shouldPatchModel: (model) =>
-        isDeepSeekV4OpenAICompatibleModel(model) && deepSeekV4NativeThinkingAllowedByCompat(model),
+        isDeepSeekV4OpenAICompletionsModel(model) &&
+        !isMicrosoftFoundryProviderId(model.provider) &&
+        deepSeekV4NativeThinkingAllowedByCompat(model),
     });
     ctx.agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(ctx.agent.streamFn);
 
-    // MiMo reasoning models use the same DeepSeek-style reasoning_content wire
-    // format. When MiMo is reached through an unowned proxy/custom provider
-    // (e.g. `xiaomi-orbit` pointed at token-plan-*.xiaomimimo.com), the bundled
-    // xiaomi plugin's wrapStreamFn does not fire, so apply the shared wrapper
-    // here as a fallback so multi-turn tool calls succeed.
+    // Unowned MiMo proxy routes bypass the Xiaomi hook but still need its
+    // DeepSeek-style reasoning_content format for multi-turn tool calls.
     ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
+      shouldPatchModel: (model) =>
+        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS),
     });
     // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
     // the response-side fallback here for custom Xiaomi-compatible proxy routes.
     ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
       baseStreamFn: ctx.agent.streamFn,
-      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
+      shouldPatchModel: (model) =>
+        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS),
     });
 
     // Guard Google-family payloads against invalid negative thinking budgets
@@ -795,34 +548,14 @@ function applyPostPluginStreamWrappers(
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
-  const rawChatTemplateKwargs = resolveAliasedParamValue(
+  ctx.agent.streamFn = createOpenAICompletionsPayloadPolicyWrapper(
+    requireBaseStreamFn(ctx.agent.streamFn),
     [ctx.effectiveExtraParams, ctx.override],
-    "chat_template_kwargs",
-    "chatTemplateKwargs",
   );
-  const configuredChatTemplateKwargs = resolveChatTemplateKwargsParam(rawChatTemplateKwargs);
-  if (configuredChatTemplateKwargs) {
-    ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      configured: configuredChatTemplateKwargs,
-    });
-  }
-
-  const rawExtraBody = resolveAliasedParamValue(
-    [ctx.effectiveExtraParams, ctx.override],
-    "extra_body",
-    "extraBody",
-  );
-  const extraBody = resolveExtraBodyParam(rawExtraBody);
-  if (extraBody) {
-    ctx.agent.streamFn = createOpenAICompletionsExtraBodyWrapper(ctx.agent.streamFn, extraBody);
-  }
-  ctx.agent.streamFn = createOpenAICompletionsStoreCompatWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
-    "parallel_tool_calls",
-    "parallelToolCalls",
+    ["parallel_tool_calls", "parallelToolCalls"],
   );
   if (rawParallelToolCalls === undefined) {
     return;
@@ -850,15 +583,13 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   return withoutSuffix.split("/").pop();
 }
 
-function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  return isDeepSeekV4OpenAICompletionsModel(model) && !isMicrosoftFoundryProviderId(model.provider);
-}
-
 function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
-    (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
+    (normalizedModelId === "deepseek-flash" ||
+      normalizedModelId === "deepseek-v4-flash" ||
+      normalizedModelId === "deepseek-v4-pro")
   );
 }
 
@@ -874,14 +605,9 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
 }
 
 /**
- * The DeepSeek V4 wrapper emits the deepseek-native `thinking: { type }` wire
- * format (plus `reasoning_effort`). Honor an explicit `compat.thinkingFormat`
- * override that selects a different reasoning format: some OpenAI-compatible
- * deployments — notably Azure AI Foundry DeepSeek V4 — reject the `thinking`
- * parameter outright, even `thinking: { type: "disabled" }`. When no override
- * exists, honor provider-level detection for non-native formats such as
- * OpenRouter while keeping id-based fallback for unknown DeepSeek-compatible
- * proxy routes.
+ * Foundry and other non-native routes reject even thinking.type=disabled.
+ * Explicit compat wins, then detected non-native formats; unknown proxy routes
+ * retain the model-ID fallback to DeepSeek's native wire format.
  */
 function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
   const thinkingFormat = resolveDeepSeekV4ThinkingFormatOverride(model);
@@ -910,34 +636,24 @@ function createDeepSeekV4NonNativeCompatSanitizerWrapper(
     return undefined;
   }
   return (model, context, options) => {
-    if (!shouldSanitizeDeepSeekV4NonNativeFields(model)) {
+    if (
+      !isDeepSeekV4OpenAICompletionsModel(model) ||
+      (!isMicrosoftFoundryProviderId(model.provider) &&
+        deepSeekV4NativeThinkingAllowedByCompat(model))
+    ) {
       return baseStreamFn(model, context, options);
     }
     return streamWithPayloadPatch(baseStreamFn, model, context, options, (payload) => {
       delete payload.thinking;
-      stripDeepSeekV4ReasoningContent(payload);
+      if (Array.isArray(payload.messages)) {
+        for (const message of payload.messages) {
+          if (message && typeof message === "object") {
+            delete (message as Record<string, unknown>).reasoning_content;
+          }
+        }
+      }
     });
   };
-}
-
-function shouldSanitizeDeepSeekV4NonNativeFields(model: Parameters<StreamFn>[0]): boolean {
-  return (
-    isDeepSeekV4OpenAICompletionsModel(model) &&
-    (isMicrosoftFoundryProviderId(model.provider) ||
-      !deepSeekV4NativeThinkingAllowedByCompat(model))
-  );
-}
-
-function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    delete (message as Record<string, unknown>).reasoning_content;
-  }
 }
 
 const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
@@ -945,34 +661,22 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
-  "mimo-v2.6-pro",
+  ...["flash", "pro", "pro-ultraspeed"].map((variant) => `mimo-v2.6-${variant}`),
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
-function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    normalizedModelId !== undefined &&
-    MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
-  );
-}
-
-function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
+function isMiMoOpenAICompatibleModel(
   model: Parameters<StreamFn>[0],
+  modelIds: ReadonlySet<string>,
 ): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
     normalizedModelId !== undefined &&
-    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
+    modelIds.has(normalizedModelId)
   );
 }
 
-/**
- * Apply extra params (like temperature) to an agent's streamFn.
- * Also applies verified provider-specific request wrappers, such as OpenRouter attribution.
- */
 export function applyExtraParamsToAgent(
   agent: { streamFn?: StreamFn },
   cfg: OpenClawConfig | undefined,
@@ -984,9 +688,10 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   agentDir?: string,
-  resolvedTransport?: SupportedTransport,
+  resolvedTransport?: AgentRuntimeTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
+    auth?: ProviderPrepareExtraParamsContext["auth"];
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
 ) {
@@ -1003,14 +708,7 @@ export function applyExtraParamsToAgent(
     modelId,
     agentId,
   });
-  const override =
-    extraParamsOverride && Object.keys(extraParamsOverride).length > 0
-      ? sanitizeExtraParamsRecord(
-          Object.fromEntries(
-            Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
-          ),
-        )
-      : undefined;
+  const override = sanitizeExtraParamsOverride(extraParamsOverride);
   const effectiveExtraParams =
     options?.preparedExtraParams ??
     resolvePreparedExtraParams({
@@ -1026,18 +724,15 @@ export function applyExtraParamsToAgent(
       model,
       resolvedTransport,
       providerRuntimeHandle,
+      auth: options?.auth,
     });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
-    cfg,
     provider,
     modelId,
-    agentDir,
-    workspaceDir,
     thinkingLevel,
     model,
     effectiveExtraParams,
-    resolvedExtraParams,
     override,
   };
 
@@ -1057,6 +752,7 @@ export function applyExtraParamsToAgent(
       agentDir,
       workspaceDir,
       agentId,
+      auth: options?.auth,
       nativeWebSearchAllowedByToolPolicy,
       provider,
       modelId,

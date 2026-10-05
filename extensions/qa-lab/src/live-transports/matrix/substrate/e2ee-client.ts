@@ -1,4 +1,3 @@
-// QA Lab Matrix substrate implements E2EE client behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type {
@@ -179,7 +178,10 @@ function createMatrixQaPluginStateKeyedStore<T>(
     lookup: async (...args) => syncStore.lookup(...args),
     lookupMany: async (...args) => syncStore.lookupMany(...args),
     consume: async (...args) => syncStore.consume(...args),
-    delete: async (...args) => syncStore.delete(...args),
+    delete: async (key, opts) => {
+      opts?.assertCurrent?.();
+      return syncStore.delete(key);
+    },
     entries: async () => syncStore.entries(),
     clear: async () => syncStore.clear(),
   };
@@ -232,7 +234,7 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     password: params.password,
     recoveryKeyPath: storage.recoveryKeyPath,
     ssrfPolicy: { allowPrivateNetwork: true },
-    storageRootDir: path.dirname(storage.storagePath),
+    syncStore: await runtime.SqliteBackedMatrixSyncStore.create(path.dirname(storage.storagePath)),
     syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
     userId: params.userId,
   });
@@ -267,6 +269,7 @@ export async function createMatrixQaE2eeScenarioClient(
 
   const shutdownTimeoutMs = Math.max(1, Math.min(10_000, params.timeoutMs));
   const lifecycle = createMatrixQaE2eeClientLifecycle({
+    abortPendingRequests: () => client.abortPendingRequests(),
     detachListeners: () => {
       client.off("room.message", recordEvent);
       client.off("verification.summary", recordVerificationSummary);
@@ -330,10 +333,15 @@ export async function createMatrixQaE2eeScenarioClient(
     }
     return client.crypto;
   };
-  const runClientOperation = <T>(label: string, run: () => Promise<T>) =>
+  const runClientOperation = <T>(
+    label: string,
+    roomId: string,
+    run: (assertCurrent: () => void) => Promise<T>,
+  ) =>
     lifecycle.runOperation({
       label,
-      run,
+      run: (assertActive) =>
+        client.withLiveEncryptedRoom(roomId, run, { assertCurrent: assertActive }),
       timeoutMs: params.timeoutMs,
     });
 
@@ -341,32 +349,22 @@ export async function createMatrixQaE2eeScenarioClient(
     async acceptVerification(id: string) {
       return await requireCrypto().acceptVerification(id);
     },
-    async bootstrapOwnDeviceVerification(
-      opts?: Parameters<MatrixClient["bootstrapOwnDeviceVerification"]>[0],
-    ) {
-      return await client.bootstrapOwnDeviceVerification(opts);
-    },
+    bootstrapOwnDeviceVerification: client.bootstrapOwnDeviceVerification.bind(client),
     async confirmVerificationReciprocateQr(id: string) {
       return await requireCrypto().confirmVerificationReciprocateQr(id);
     },
     async confirmVerificationSas(id: string) {
       return await requireCrypto().confirmVerificationSas(id);
     },
-    async deleteOwnDevices(deviceIds: string[]) {
-      return await client.deleteOwnDevices(deviceIds);
-    },
+    deleteOwnDevices: client.deleteOwnDevices.bind(client),
     async generateVerificationQr(id: string) {
       return await requireCrypto().generateVerificationQr(id);
     },
-    async getDeviceVerificationStatus(userId: string, deviceId: string) {
-      return await client.getDeviceVerificationStatus(userId, deviceId);
-    },
+    getDeviceVerificationStatus: client.getDeviceVerificationStatus.bind(client),
     async getRecoveryKey() {
       return await requireCrypto().getRecoveryKey();
     },
-    async listOwnDevices() {
-      return await client.listOwnDevices();
-    },
+    listOwnDevices: client.listOwnDevices.bind(client),
     async listVerifications() {
       const current = await requireCrypto().listVerifications();
       return [...verificationSummaries, ...current].toSorted((a, b) =>
@@ -389,12 +387,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts: Parameters<MatrixQaCrypto["requestVerification"]>[0]) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(paramsLocal?: Parameters<MatrixClient["resetRoomKeyBackup"]>[0]) {
-      return await client.resetRoomKeyBackup(paramsLocal);
-    },
-    async restoreRoomKeyBackup(opts?: Parameters<MatrixClient["restoreRoomKeyBackup"]>[0]) {
-      return await client.restoreRoomKeyBackup(opts);
-    },
+    resetRoomKeyBackup: client.resetRoomKeyBackup.bind(client),
+    restoreRoomKeyBackup: client.restoreRoomKeyBackup.bind(client),
     async scanVerificationQr(id: string, qrDataBase64: string) {
       return await requireCrypto().scanVerificationQr(id, qrDataBase64);
     },
@@ -403,7 +397,7 @@ export async function createMatrixQaE2eeScenarioClient(
         roomId: string;
       },
     ) {
-      return await runClientOperation("Matrix E2EE text send", () =>
+      return await runClientOperation("Matrix E2EE text send", opts.roomId, () =>
         client.sendMessage(opts.roomId, buildMatrixQaMessageContent(opts) as MessageEventContent),
       );
     },
@@ -412,7 +406,7 @@ export async function createMatrixQaE2eeScenarioClient(
         roomId: string;
       },
     ) {
-      return await runClientOperation("Matrix E2EE notice send", () =>
+      return await runClientOperation("Matrix E2EE notice send", opts.roomId, () =>
         client.sendMessage(opts.roomId, {
           ...buildMatrixQaMessageContent(opts),
           msgtype: "m.notice",
@@ -427,27 +421,33 @@ export async function createMatrixQaE2eeScenarioClient(
       mentionUserIds?: string[];
       roomId: string;
     }) {
-      const encrypted = await requireCrypto().encryptMedia(opts.buffer);
-      const contentUri = await client.uploadContent(
-        encrypted.buffer,
-        opts.contentType,
-        opts.fileName,
-      );
-      const file: EncryptedFile = { url: contentUri, ...encrypted.file };
-      return await runClientOperation("Matrix E2EE image send", () =>
-        client.sendMessage(opts.roomId, {
-          ...buildMatrixQaMessageContent({
-            body: opts.body,
-            mentionUserIds: opts.mentionUserIds,
-          }),
-          file,
-          filename: opts.fileName,
-          info: {
-            mimetype: opts.contentType,
-            size: opts.buffer.byteLength,
-          },
-          msgtype: "m.image",
-        } as MessageEventContent),
+      return await runClientOperation(
+        "Matrix E2EE image send",
+        opts.roomId,
+        async (assertCurrent) => {
+          const encrypted = await requireCrypto().encryptMedia(opts.buffer);
+          assertCurrent();
+          const contentUri = await client.uploadContent(
+            encrypted.buffer,
+            opts.contentType,
+            opts.fileName,
+          );
+          assertCurrent();
+          const file: EncryptedFile = { url: contentUri, ...encrypted.file };
+          return await client.sendMessage(opts.roomId, {
+            ...buildMatrixQaMessageContent({
+              body: opts.body,
+              mentionUserIds: opts.mentionUserIds,
+            }),
+            file,
+            filename: opts.fileName,
+            info: {
+              mimetype: opts.contentType,
+              size: opts.buffer.byteLength,
+            },
+            msgtype: "m.image",
+          } as MessageEventContent);
+        },
       );
     },
     async startVerification(
@@ -468,9 +468,7 @@ export async function createMatrixQaE2eeScenarioClient(
       }
       throw new Error(`timed out after ${waitParams.timeoutMs}ms waiting for Matrix E2EE event`);
     },
-    async verifyWithRecoveryKey(rawRecoveryKey: string) {
-      return await client.verifyWithRecoveryKey(rawRecoveryKey);
-    },
+    verifyWithRecoveryKey: client.verifyWithRecoveryKey.bind(client),
   };
 }
 

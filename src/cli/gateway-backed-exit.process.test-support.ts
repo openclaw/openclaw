@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { storeOriginDeviceToken } from "../infra/device-auth-store.js";
+import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -84,7 +84,7 @@ export async function prepareUnreachableGatewayCliFixture(params: {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(UNREACHABLE_GATEWAY_URL),
       deviceId: identity.deviceId,
       role: "operator",

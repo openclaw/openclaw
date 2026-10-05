@@ -1,4 +1,3 @@
-// Channel MCP tools expose channel operations through an MCP server.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { OpenClawChannelBridge } from "./channel-bridge.js";
@@ -15,7 +14,6 @@ import {
  * Tool handlers stay thin: schemas validate public inputs and the bridge owns
  * Gateway readiness, routing, event queueing, and approval resolution.
  */
-/** Return protocol capabilities advertised when Claude channel mode is enabled. */
 export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "auto") {
   if (claudeChannelMode === "off") {
     return undefined;
@@ -28,7 +26,6 @@ export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "aut
   };
 }
 
-/** Register all channel MCP tools against a server instance. */
 export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChannelBridge): void {
   server.tool(
     "conversations_list",
@@ -90,10 +87,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     {
       session_key: z.string().min(1),
       message_id: z.string().min(1),
-      limit: z.number().int().min(1).max(200).optional(),
     },
-    async ({ session_key, message_id, limit }) => {
-      const message = await bridge.readMessage(session_key, message_id, limit ?? 100);
+    async ({ session_key, message_id }) => {
+      const message = await bridge.readMessage(session_key, message_id);
       if (!message) {
         return {
           content: [{ type: "text", text: `message not found: ${message_id}` }],

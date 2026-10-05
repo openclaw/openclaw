@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   readJsonBodyWithLimit,
@@ -170,33 +171,21 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       // Defer destruction so the rejections below reach the client before the close.
       destroyOnLimit: false,
     });
-    if (!bodyResult.ok && bodyResult.code === "REQUEST_BODY_TIMEOUT") {
+    if (
+      !bodyResult.ok &&
+      (bodyResult.code === "REQUEST_BODY_TIMEOUT" || bodyResult.code === "PAYLOAD_TOO_LARGE")
+    ) {
+      const timedOut = bodyResult.code === "REQUEST_BODY_TIMEOUT";
       await sendHttpRequestRejection(
         req,
         res,
-        408,
-        jsonBody({ error: "request body timeout" }),
+        timedOut ? 408 : 413,
+        jsonBody({ error: timedOut ? "request body timeout" : "request body too large" }),
         JSON_CONTENT_TYPE,
       );
       return true;
     }
-    if (!bodyResult.ok && bodyResult.code === "PAYLOAD_TOO_LARGE") {
-      await sendHttpRequestRejection(
-        req,
-        res,
-        413,
-        jsonBody({ error: "request body too large" }),
-        JSON_CONTENT_TYPE,
-      );
-      return true;
-    }
-    const body =
-      bodyResult.ok &&
-      bodyResult.value &&
-      typeof bodyResult.value === "object" &&
-      !Array.isArray(bodyResult.value)
-        ? (bodyResult.value as Record<string, unknown>)
-        : null;
+    const body = bodyResult.ok ? asOptionalRecord(bodyResult.value) : undefined;
     const code = typeof body?.code === "string" ? body.code.trim() : "";
     if (!code) {
       return respondJson(res, 401, { error: "invalid authorization code" });

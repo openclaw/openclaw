@@ -1,4 +1,3 @@
-// Delivers ACP turn results through reply payload routing.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -99,6 +98,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     pendingTranscriptOutcomes: [],
     cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
       cfg: params.cfg,
+      preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.sessionTtsAuto,
       agentId: params.agentId,
       channelId: params.ttsChannel,
@@ -360,6 +360,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       }
 
       const appliedTtsPayload = await maybeApplyAcpTts({
+        preparedTtsPreferences: params.preparedTtsPreferences,
         payload: outgoingPayload,
         cfg: params.cfg,
         agentId: params.agentId,

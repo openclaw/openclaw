@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 function probeSqlite(Database: unknown): unknown {
   return runInNewContext(SQLITE_CAPABILITY_PROBE, {
@@ -142,4 +143,81 @@ describe("SQLite NUL capability probe", () => {
       counts: { prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 },
     });
   });
+
+  it.each([false, true])(
+    "validates real SQLite when Node denies workers (SQL failure=%s)",
+    (sqlFailure) => {
+      const moduleUrl = new URL("../../node-sqlite.mjs", import.meta.url).href;
+      const output = execFileSync(
+        resolveTestNodeExecPath(),
+        [
+          "--input-type=module",
+          "-e",
+          `
+            import { DatabaseSync } from "node:sqlite";
+            import { Worker } from "node:worker_threads";
+            let closed = 0;
+            const close = DatabaseSync.prototype.close;
+            DatabaseSync.prototype.close = function (...args) {
+              closed++;
+              return Reflect.apply(close, this, args);
+            };
+            if (${sqlFailure}) {
+              DatabaseSync.prototype.exec = function () {
+                throw new Error("injected SQL failure");
+              };
+            }
+            let workersStarted = 0;
+            process.on("worker", () => workersStarted++);
+            const { detectCurrentSqliteCapabilities, nodeRuntimeFailure } = await import(${JSON.stringify(moduleUrl)});
+            const pending = detectCurrentSqliteCapabilities();
+            const samePending = pending === detectCurrentSqliteCapabilities();
+            const capabilities = await pending;
+            const sameResult = capabilities === await detectCurrentSqliteCapabilities();
+            let workerDenied;
+            try {
+              new Worker("", { eval: true });
+            } catch (error) {
+              workerDenied = { code: error.code, permission: error.permission };
+            }
+            process.stdout.write(JSON.stringify({
+              asynchronous: pending instanceof Promise, samePending, sameResult,
+              capabilities, failure: nodeRuntimeFailure(process.versions.node, capabilities),
+              closed, workersStarted, workerDenied,
+              permissions: {
+                worker: process.permission.has("worker"),
+                write: process.permission.has("fs.write"),
+                child: process.permission.has("child"),
+              },
+            }));
+          `,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 10_000,
+          env: { ...process.env, NODE_OPTIONS: "--permission --allow-fs-read=*" },
+        },
+      );
+      expect(JSON.parse(output)).toMatchObject({
+        asynchronous: true,
+        samePending: true,
+        sameResult: true,
+        capabilities: {
+          available: true,
+          version: expect.any(String),
+          text: !sqlFailure,
+          blob: !sqlFailure,
+          json: !sqlFailure,
+          ...(sqlFailure ? { error: "injected SQL failure" } : {}),
+        },
+        failure: sqlFailure
+          ? expect.stringContaining("node:sqlite NUL round-trip capability probe failed")
+          : null,
+        closed: 1,
+        workersStarted: 0,
+        workerDenied: { code: "ERR_ACCESS_DENIED", permission: "WorkerThreads" },
+        permissions: { worker: false, write: false, child: false },
+      });
+    },
+  );
 });

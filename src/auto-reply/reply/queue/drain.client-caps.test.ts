@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createQueueTestRun } from "../queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./drain.js";
+import { resolveFollowupDeliveryContextKey } from "./delivery-context.js";
 
 describe("followup delivery context", () => {
   it("separates runs with different gateway client capabilities", () => {

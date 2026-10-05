@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
   ComputerActResult,
   ComputerUseCapabilityDescriptor,
-  ComputerUseV2ActionName,
   ScreenSnapshotParams,
 } from "../../plugins/computer-use-contract.js";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./computer-tool-bindings.js";
 import type { GatewayComputerStatus } from "./computer-tool-gateway.js";
 import { computerActionNeedsFrame, validateCapabilityBoundInput } from "./computer-tool-request.js";
+import { availableComputerActions, COMPUTER_TOOL_ACTIONS } from "./computer-tool-schema.js";
 import type {
   ComputerContextEpoch,
   ComputerFrame,
@@ -79,23 +81,28 @@ function computerActIdempotencyKey(params: {
   const stableScope = params.scope?.trim();
   const stableCallId = params.toolCallId.trim();
   if (!stableScope || !stableCallId) {
-    // A call id is only unique inside its model response. Without a stable run
-    // scope and provider/fallback id, avoid collapsing unrelated actions.
+    // Runner-normalized call ids are unique within an attempt, not across all runs.
+    // Without both a stable run scope and call id, avoid collapsing unrelated actions.
     return crypto.randomUUID();
   }
-  const parts = [stableScope, stableCallId, COMPUTER_ACT_COMMAND];
+  const parts = [
+    stableScope,
+    getAgentToolAssistantTurnId() ?? "",
+    stableCallId,
+    COMPUTER_ACT_COMMAND,
+  ];
   if (params.purpose) {
     parts.push(params.purpose);
   }
-  const digest = crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  const digest = sha256Hex(JSON.stringify(parts));
   // The automatic read shares a tool-call id with input, but must never replay its result.
   if (params.purpose) {
-    return `computer.observation:v1:${digest}`;
+    return `computer.observation:v2:${digest}`;
   }
-  // `v1` versions this key's composition (scope + call id + command), not the
+  // `v2` versions this key's composition (scope + assistant turn + call id + command), not the
   // `computer.act` wire contract. Changing what goes into the digest needs a
   // new prefix so in-flight keys from an older node cannot collide.
-  return `computer.act:v1:${digest}`;
+  return `computer.act:v2:${digest}`;
 }
 
 function gatewayRequestDetails(err: unknown): Record<string, unknown> | undefined {
@@ -149,7 +156,7 @@ export class ComputerToolSession {
   private computerState: ComputerState = { kind: "unbound" };
   private heldButtonTarget: ComputerTarget | undefined;
   private readonly executionTargets = new Map<string, ComputerBinding>();
-  private readonly retiredGatewayBindings = new Set<ComputerBinding>();
+  private readonly cleanupBindings = new Set<ComputerBinding>();
   private disposePromise: Promise<void> | undefined;
 
   constructor(
@@ -159,10 +166,6 @@ export class ComputerToolSession {
       contextEpoch?: ComputerContextEpoch;
       transport?: ComputerToolTransport;
       gatewayStatus?: GatewayComputerStatus;
-      availableActions: (
-        actions: readonly ComputerUseV2ActionName[],
-      ) => readonly ComputerUseV2ActionName[];
-      defaultActions: readonly ComputerUseV2ActionName[];
       onCapabilitiesChanged: (capabilities?: ComputerUseCapabilityDescriptor) => void;
       registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
       getOperationQueue: () => Promise<unknown>;
@@ -193,19 +196,12 @@ export class ComputerToolSession {
     }
   }
 
-  private setComputerState(next: ComputerState): void {
-    this.computerState = next;
-    if (!this.options.contextEpoch) {
-      return;
-    }
-    if (next.kind !== "frame") {
+  setTarget(target: ComputerTarget): void {
+    this.computerState = { kind: "target", target };
+    if (this.options.contextEpoch) {
       delete this.options.contextEpoch.frameToolCallId;
       delete this.options.contextEpoch.frameImageIdentity;
     }
-  }
-
-  setTarget(target: ComputerTarget): void {
-    this.setComputerState({ kind: "target", target });
   }
 
   private prepareScreenshotTarget(target: ComputerTarget): void {
@@ -228,13 +224,11 @@ export class ComputerToolSession {
     target: ComputerTarget;
     capture: ScreenshotCapture;
     imageIdentity?: string;
-    modelHasVision?: boolean;
   }): ComputerFrame | undefined {
     const frame = this.computerState;
     const contextEpoch = this.options.contextEpoch;
     // Without context tracking, the earlier screenshot may already have been pruned.
     if (
-      params.modelHasVision === false ||
       !contextEpoch?.frameImageIdentity ||
       contextEpoch.frameImageIdentity !== params.imageIdentity ||
       frame.kind !== "frame" ||
@@ -255,9 +249,8 @@ export class ComputerToolSession {
     frameId: string;
     toolCallId: string;
     imageIdentity?: string;
-    modelHasVision?: boolean;
   }): void {
-    if (params.modelHasVision === false || !params.imageIdentity) {
+    if (!params.imageIdentity) {
       this.setTarget(params.resolved.target);
       return;
     }
@@ -302,6 +295,23 @@ export class ComputerToolSession {
       throw new Error("computer target must be gateway or node");
     }
     const explicitNode = typeof params.input.node === "string" ? params.input.node : undefined;
+    const environmentId =
+      typeof params.input.environmentId === "string"
+        ? params.input.environmentId.trim()
+        : undefined;
+    if (
+      environmentId !== undefined &&
+      (!environmentId ||
+        explicitHost !== undefined ||
+        explicitNode !== undefined ||
+        params.gatewayOpts.gatewayUrl ||
+        params.gatewayOpts.gatewayToken ||
+        this.options.transport)
+    ) {
+      throw new Error(
+        "Computer environmentId must select an attached environment without another target or Gateway override",
+      );
+    }
     if (explicitHost === "gateway" && explicitNode !== undefined) {
       throw new Error("computer target=gateway does not accept a node selector");
     }
@@ -313,19 +323,15 @@ export class ComputerToolSession {
     ) {
       throw new Error("Computer control is bound to this session's desktop");
     }
-    const explicitScreenIndex = (() => {
-      if (params.input.screenIndex === undefined) {
-        return undefined;
-      }
-      if (
-        typeof params.input.screenIndex !== "number" ||
-        !Number.isInteger(params.input.screenIndex) ||
-        params.input.screenIndex < 0
-      ) {
-        throw new Error("screenIndex must be a non-negative integer");
-      }
-      return params.input.screenIndex;
-    })();
+    const explicitScreenIndex = params.input.screenIndex;
+    if (
+      explicitScreenIndex !== undefined &&
+      (typeof explicitScreenIndex !== "number" ||
+        !Number.isInteger(explicitScreenIndex) ||
+        explicitScreenIndex < 0)
+    ) {
+      throw new Error("screenIndex must be a non-negative integer");
+    }
     const needsFrame = computerActionNeedsFrame(params.action, params.input);
     const priorTarget =
       this.computerState.kind === "unbound" ? undefined : this.computerState.target;
@@ -333,6 +339,8 @@ export class ComputerToolSession {
     const reuseTarget =
       explicitNode === undefined &&
       implicitTarget &&
+      (environmentId === undefined ||
+        (implicitTarget.host === "node" && implicitTarget.environmentId === environmentId)) &&
       (explicitHost === undefined || explicitHost === implicitTarget.host);
     const explicitGateway =
       params.gatewayOpts.gatewayUrl !== undefined || params.gatewayOpts.gatewayToken !== undefined;
@@ -354,10 +362,15 @@ export class ComputerToolSession {
           gatewayStatus: this.options.gatewayStatus,
           target: explicitHost,
           node: explicitNode,
+          environmentId,
           gatewayOpts: selectionGatewayOpts,
           signal: params.signal,
         });
-    this.assertOpen();
+    // Each attached preparation owns resources even when selection reuses an
+    // earlier binding. Retain it before selection or validation can reject it.
+    if (resolvedBinding.host.host === "node" && resolvedBinding.host.environmentId !== undefined) {
+      this.cleanupBindings.add(resolvedBinding);
+    }
     const targetKey = computerHostKey(resolvedBinding.host);
     const existingBinding = this.executionTargets.get(targetKey);
     const refreshNode =
@@ -374,19 +387,31 @@ export class ComputerToolSession {
       );
     }
     const binding = refreshNode ? resolvedBinding : (existingBinding ?? resolvedBinding);
+    // Cleanup drains the action queue before these bindings. Take custody before
+    // the closed-session fence can reject a newly resolved binding.
+    this.executionTargets.set(targetKey, binding);
+    this.assertOpen();
     const capabilities = binding.capabilities;
     this.bindCapabilities(binding, refreshNode);
-    this.executionTargets.set(targetKey, binding);
-    const advertisedActions = this.options.availableActions(
-      capabilities?.actions ?? this.options.defaultActions,
+    const advertisedActions = availableComputerActions(
+      capabilities?.actions ?? COMPUTER_TOOL_ACTIONS,
+      this.options.registerRunCleanup !== undefined,
     );
-    if (!advertisedActions.includes(params.action)) {
+    if (
+      params.action === "take_control" &&
+      !this.options.transport &&
+      !(binding.host.host === "node" && binding.host.environmentId)
+    ) {
+      throw new Error("take_control is only available for an attached or session desktop");
+    }
+    const providerAction = params.action === "take_control" ? "screenshot" : params.action;
+    if (!advertisedActions.includes(providerAction)) {
       throw new Error(
         `${COMPUTER_CONTRACT_MISMATCH}: computer ${targetKey} does not advertise action ${params.action}`,
       );
     }
     validateCapabilityBoundInput({
-      action: params.action,
+      action: providerAction,
       input: params.input,
       targetKey,
       capabilities,
@@ -447,6 +472,30 @@ export class ComputerToolSession {
     return { target: { ...binding.host, screenIndex }, frame, capabilities };
   }
 
+  async takeControl(
+    resolved: ResolvedComputerTarget,
+    toolCallId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.assertOpen();
+    signal?.throwIfAborted();
+    // Human input invalidates both coordinate frames and targeted observation refs.
+    // Clear before dispatch, including uncertain failures, so no old target is reused.
+    this.setTarget(resolved.target);
+    this.observationState = undefined;
+    const binding = this.executionTargets.get(computerHostKey(resolved.target))!;
+    await binding.invoke({
+      command: COMPUTER_ACT_COMMAND,
+      commandParams: { action: "__take_control", executionId: this.options.executionId },
+      idempotencyKey: computerActIdempotencyKey({
+        scope: this.options.idempotencyScope,
+        toolCallId,
+      }),
+      signal,
+    });
+    signal?.throwIfAborted();
+  }
+
   async captureScreenshot(
     resolved: ResolvedComputerTarget,
     refWidth: number,
@@ -492,7 +541,7 @@ export class ComputerToolSession {
           gatewayOpts: binding.gatewayOpts,
           signal,
         });
-        this.retiredGatewayBindings.add(binding);
+        this.cleanupBindings.add(binding);
         this.executionTargets.set(targetKey, refreshed);
         this.assertOpen();
         signal?.throwIfAborted();
@@ -514,8 +563,6 @@ export class ComputerToolSession {
         base64: parsed.base64,
         displayFrameId: parsed.displayFrameId,
         mimeType: imageMimeFromFormat(parsed.format) ?? "image/jpeg",
-        width: parsed.width,
-        height: parsed.height,
       };
     } catch (error) {
       this.setTarget(resolved.target);
@@ -612,17 +659,12 @@ export class ComputerToolSession {
       .getOperationQueue()
       .catch(() => {})
       .then(async () => {
-        const targets = [
-          ...this.executionTargets.entries(),
-          ...[...this.retiredGatewayBindings].map((binding): [string, ComputerBinding] => [
-            computerHostKey(binding.host),
-            binding,
-          ]),
-        ];
+        // Distinct preparations can share a host; only identical bindings share cleanup.
+        const targets = [...new Set([...this.executionTargets.values(), ...this.cleanupBindings])];
         this.executionTargets.clear();
-        this.retiredGatewayBindings.clear();
+        this.cleanupBindings.clear();
         const results = await Promise.allSettled(
-          targets.map(async ([targetKey, binding]) => {
+          targets.map(async (binding) => {
             await binding.invoke({
               command: COMPUTER_ACT_COMMAND,
               commandParams: {
@@ -630,25 +672,21 @@ export class ComputerToolSession {
                 executionId: this.options.executionId,
                 reason,
               },
-              idempotencyKey: `computer.close:${this.options.executionId}:${targetKey}`,
+              idempotencyKey: `computer.close:${this.options.executionId}:${computerHostKey(binding.host)}`,
             });
           }),
         );
         // Ordinary paired nodes can disconnect during best-effort cleanup.
         // A bound session owner must observe cleanup failure before acknowledging its turn.
-        if (
+        const ownsCleanup = (binding: ComputerBinding | undefined) =>
           this.options.transport ||
-          targets.some(([, binding]) => binding.host.host === "gateway")
-        ) {
-          const failures = results.flatMap((result, index) =>
-            result.status === "rejected" &&
-            (this.options.transport || targets[index]?.[1].host.host === "gateway")
-              ? [result.reason]
-              : [],
-          );
-          if (failures.length > 0) {
-            throw new AggregateError(failures, "computer: session desktop cleanup failed");
-          }
+          binding?.host.host === "gateway" ||
+          (binding?.host.host === "node" && binding.host.environmentId !== undefined);
+        const failures = results.flatMap((result, index) =>
+          result.status === "rejected" && ownsCleanup(targets[index]) ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "computer: session desktop cleanup failed");
         }
       });
     return await this.disposePromise;

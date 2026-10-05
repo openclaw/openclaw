@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
@@ -9,10 +10,12 @@ import {
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   readParticipantIdentity,
   type SessionParticipantIdentity,
 } from "./session-participant-identity.js";
+import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionParticipantRecord = {
@@ -45,20 +48,12 @@ function prepareSingleSessionParticipantQuery(database: DatabaseSync) {
 }
 
 // Compiled SQL follows the connection; native statement invalidation remains executor-owned.
-const singleSessionParticipantQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSingleSessionParticipantQuery>
->();
+const singleSessionParticipantQuery = createSqliteQueryCache(prepareSingleSessionParticipantQuery);
 
 function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly string[]) {
   const sessionKey = sessionKeys?.length === 1 ? sessionKeys[0] : undefined;
   if (sessionKey !== undefined) {
-    let query = singleSessionParticipantQueries.get(database);
-    if (!query) {
-      query = prepareSingleSessionParticipantQuery(database);
-      singleSessionParticipantQueries.set(database, query);
-    }
-    return query(sessionKey).rows;
+    return singleSessionParticipantQuery(database)(sessionKey).rows;
   }
   let query = selectParticipantRows(database);
   if (sessionKeys) {
@@ -112,8 +107,12 @@ function withProjectedParticipants(
 }
 
 export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
-  return participantProjection(
-    participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
+  return (
+    readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey) ??
+    participantProjection(
+      participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
+    )
   );
 }
 
@@ -122,6 +121,12 @@ export function projectSqliteSessionParticipants(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
+  const prepared =
+    readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey);
+  if (prepared) {
+    return prepared.participants ? { ...entry, ...prepared } : entry;
+  }
   return withProjectedParticipants(
     entry,
     participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
@@ -136,6 +141,10 @@ export function prepareSqliteSessionParticipantProjection(
   let rowsByKey: Map<string, SessionParticipantRow[]> | undefined;
   let acquisitionFailed = false;
   return (sessionKey, entry) => {
+    const prepared = readPreparedSessionParticipants(database, sessionKey);
+    if (prepared) {
+      return prepared.participants ? { ...entry, ...prepared } : entry;
+    }
     if (!rowsByKey && !acquisitionFailed) {
       try {
         const rows = tableExists(database, SESSION_PARTICIPANTS_TABLE)
@@ -166,6 +175,17 @@ export function projectSqliteSessionParticipantsBatch(
   database: DatabaseSync,
   entries: ReadonlyMap<string, SessionEntry>,
 ): Map<string, SessionEntry> {
+  const prepared = new Map<string, SessionEntry>();
+  for (const [sessionKey, entry] of entries) {
+    const projection = readPreparedSessionParticipants(database, sessionKey);
+    if (!projection) {
+      break;
+    }
+    prepared.set(sessionKey, projection.participants ? { ...entry, ...projection } : entry);
+  }
+  if (prepared.size === entries.size) {
+    return prepared;
+  }
   const records = participantRecordsBySessionKey(database, [...entries.keys()]);
   const projected = new Map(entries);
   for (const [sessionKey, participants] of records) {

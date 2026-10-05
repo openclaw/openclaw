@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolvePluginServiceScheduler } from "openclaw/plugin-sdk/runtime";
 import {
   asNonArrayRecord as asParamRecord,
   asOptionalRecord,
@@ -95,6 +97,7 @@ const VOICE_CALL_RUNTIME_COORDINATOR_KEY = Symbol.for("openclaw.voice-call.runti
 
 type VoiceCallRuntimeGeneration = {
   retired: boolean;
+  scheduler?: PluginServiceSchedulerV1;
   serviceHealth?: Parameters<
     Parameters<OpenClawPluginApi["registerService"]>[0]["start"]
   >[0]["serviceHealth"];
@@ -263,7 +266,14 @@ export default definePluginEntry({
           return createdRuntime;
         }
 
+        const scheduler = runtimeGeneration.scheduler;
+        if (!scheduler || scheduler.signal.aborted) {
+          throw new VoiceCallRuntimeLifecycleError(
+            "Voice call service is not running; start the Gateway and retry",
+          );
+        }
         const runtimePromise = createVoiceCallRuntime({
+          scheduler,
           config,
           coreConfig: api.config as OpenClawConfig,
           fullConfig: api.config,
@@ -460,25 +470,28 @@ export default definePluginEntry({
         try {
           // Preserve tool error precedence: runtime availability is checked before model input.
           await ensureRuntime();
+          const initiateParams = {
+            to: normalizeOptionalString(rawParams.to),
+            message: normalizeOptionalString(rawParams.message),
+            dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+            sessionKey: normalizeOptionalString(rawParams.sessionKey),
+            agentId,
+            requesterSessionKey,
+          };
           if (typeof rawParams.action === "string") {
             switch (rawParams.action) {
               case "initiate_call": {
-                const message = normalizeOptionalString(rawParams.message);
+                const message = initiateParams.message;
                 if (!message) {
                   throw new VoiceCallCommandInputError("message required");
                 }
                 return json(
                   await commands.initiate({
-                    to: normalizeOptionalString(rawParams.to),
-                    message,
-                    dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+                    ...initiateParams,
                     mode:
                       rawParams.mode === "notify" || rawParams.mode === "conversation"
                         ? rawParams.mode
                         : undefined,
-                    sessionKey: normalizeOptionalString(rawParams.sessionKey),
-                    agentId,
-                    requesterSessionKey,
                   }),
                 );
               }
@@ -524,19 +537,7 @@ export default definePluginEntry({
             return json(await commands.status(sid));
           }
 
-          return json(
-            await commands.initiate(
-              {
-                to: normalizeOptionalString(rawParams.to),
-                dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-                message: normalizeOptionalString(rawParams.message),
-                sessionKey: normalizeOptionalString(rawParams.sessionKey),
-                agentId,
-                requesterSessionKey,
-              },
-              "to required for call",
-            ),
-          );
+          return json(await commands.initiate(initiateParams, "to required for call"));
         } catch (err) {
           return json({
             error: formatErrorMessage(err),
@@ -552,9 +553,11 @@ export default definePluginEntry({
           program,
           config,
           coreConfig: api.config,
-          ensureRuntime,
+          ensureRuntime: () => {
+            runtimeRegistration.generation.scheduler = resolvePluginServiceScheduler();
+            return ensureRuntime();
+          },
           stateRuntime: api.runtime.state,
-          logger: api.logger,
         });
       },
       { commands: ["voicecall"], descriptors: [VOICE_CALL_CLI_DESCRIPTOR] },
@@ -562,6 +565,7 @@ export default definePluginEntry({
 
     api.registerService({
       id: "voicecall",
+      apiVersion: 2,
       start: (ctx) => {
         if (isCliOnlyProcess()) {
           return;
@@ -575,6 +579,7 @@ export default definePluginEntry({
             }
             runtimeRegistration.generation = { retired: false };
           }
+          runtimeRegistration.generation.scheduler = ctx.scheduler;
           runtimeRegistration.generation.serviceHealth = ctx.serviceHealth;
           activateRuntimeGeneration(runtimeRegistration.generation);
         } catch (err) {
@@ -606,6 +611,7 @@ export default definePluginEntry({
         try {
           await stopVoiceCallRuntimeGeneration(runtimeCoordinator, runtimeGeneration);
         } finally {
+          runtimeGeneration.scheduler = undefined;
           runtimeGeneration.serviceHealth = undefined;
         }
       },

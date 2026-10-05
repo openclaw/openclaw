@@ -28,6 +28,7 @@ Warning and audit signals:
 - `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
 - `REF_SHADOWED` (audit finding when SQLite auth-profile credentials take precedence over `openclaw.json` refs)
 - `STORE_PLAINTEXT_RESIDUE` (audit finding when a stored name still has an equivalent plaintext config value)
+- `PLACEHOLDER_VALUE` (audit error when a resolved credential or store entry contains a known redaction placeholder; counted as unresolved)
 
 Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
 
@@ -49,6 +50,7 @@ Activation contract:
 - Reload and restart-check isolate eligible mapped owners. Unchanged ref identities with unchanged provider definitions and an unchanged complete non-secret owner contract retain their exact last-known-good values as stale; changed or newly configured unresolved refs publish cold for only that owner. A strict reload failure preserves the previously active snapshot.
 - `config.set`, `config.apply`, and `config.patch` accept syntactically valid unresolved refs for isolatable owners and return a redacted `degradedSecretOwners` report. Gateway ingress auth, structurally invalid config or resolved values, policy violations, and unknown owners still reject before disk mutation.
 - Healthy sibling owners resolve and publish normally even when another owner is cold or stale.
+- A known redaction placeholder makes its mapped, isolatable owner configured-unavailable without reusing its previous credential, even when another reference for that owner also fails. Gateway token/password auth refuses startup with the affected reference and repair guidance. Doctor can repair store-backed Gateway tokens after a verified backup; other secrets require replacement at their source.
 - Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
 
 ## Degraded and recovered signals
@@ -133,6 +135,8 @@ If you save a plan instead of applying during `configure`, apply that saved plan
     - Unresolved refs.
     - Precedence shadowing (SQLite auth profiles taking priority over `openclaw.json` refs).
     - Store residue (a stored name still has an equivalent plaintext value in config).
+
+    Initially missing generated `models.json` files are skipped. When reading an existing file, audit enforces a 5 MiB limit and reports leaf symlinks, non-regular files, and read or parse failures as `REF_UNRESOLVED`. Parse diagnostics identify the file without echoing its contents.
 
     Exec note: by default, audit skips exec SecretRef resolvability checks to avoid command side effects. Use `openclaw secrets audit --allow-exec` to execute exec providers during audit.
 

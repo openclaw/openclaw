@@ -9,7 +9,7 @@ import type { ProviderSystemPromptContributionContext } from "./provider-authent
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
 type ModelProviderRequestTransportOverrides =
-  import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
+  import("../agents/provider-request-config.types.js").ModelProviderRequestTransportOverrides;
 
 type ProviderRuntimeProviderConfig = {
   baseUrl?: string;
@@ -63,12 +63,7 @@ export type ProviderPreferRuntimeResolvedModelContext = {
  * the embedded runner uses it. Typical uses: swap API ids, fix base URLs, or
  * patch provider-specific compat bits.
  */
-export type ProviderNormalizeResolvedModelContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
+export type ProviderNormalizeResolvedModelContext = ProviderPreferRuntimeResolvedModelContext & {
   model: ProviderRuntimeModel;
 };
 
@@ -150,6 +145,8 @@ export type ProviderPreparedRuntimeAuth = {
  * token blob, read a legacy credential file, or pick between aliases).
  */
 export type ProviderResolveUsageAuthContext = {
+  /** Cancel provider-owned work when the usage collection deadline expires. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -172,6 +169,8 @@ export type ProviderResolveUsageAuthContext = {
 
 export type ProviderUsageAuthToken = {
   token: string;
+  /** Provider-owned grant family used to authorize the usage endpoint. */
+  authFlow?: string;
   accountId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
@@ -202,20 +201,15 @@ export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true
  * fan-out, timeout wrapping, filtering, and formatting; the provider plugin
  * owns the provider-specific HTTP request + response normalization.
  */
-export type ProviderFetchUsageSnapshotContext = {
+export type ProviderFetchUsageSnapshotContext = ProviderUsageAuthToken & {
+  /** Custom transports must preserve this signal; fetchFn already includes it. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
-  token: string;
-  accountId?: string;
   authProfileId?: string;
-  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
-  subscriptionType?: string;
-  rateLimitTier?: string;
-  /** Account email captured on the resolved credential, when known. */
-  email?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -249,6 +243,8 @@ export type ProviderPrepareExtraParamsContext = {
   agentDir?: string;
   workspaceDir?: string;
   agentId?: string;
+  /** Selected credential facts; excludes credential material. */
+  auth?: { mode: string; authFlow?: string };
   nativeWebSearchAllowedByToolPolicy?: boolean;
   provider: string;
   modelId: string;

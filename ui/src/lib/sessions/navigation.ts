@@ -3,9 +3,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  isCronSessionDisplayKey,
+  isSystemCreatedSessionRow,
+} from "../../../../src/shared/session-list-visibility.ts";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { isCronSessionKey } from "../session-display.ts";
 import { parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   isUiGlobalSessionKey,
@@ -21,7 +24,7 @@ import {
   uiConversationMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-export type SessionArchivedFilter = "active" | "archived" | "all";
+export type SessionArchivedFilter = "active" | "snoozed" | "archived" | "all";
 
 type SessionNavigationInput = {
   result: SessionsListResult | null;
@@ -159,36 +162,6 @@ type VisibleSessionRowOptions = {
   archivedFilter?: SessionArchivedFilter;
 };
 
-/**
- * Machine-created probe/system rows (health-check turns, internal effect
- * sessions), classified from recorded creation provenance only — never from
- * message text, which rots and false-positives real chats. Rows without
- * recorded provenance (legacy stores) stay visible.
- *
- * Accepted tradeoff: a profile-less client's unnamed `run` session is
- * indistinguishable from a probe and hides by default too. Operator-named CLI
- * sessions are stamped at creation and remain visible. Unnamed rows stay fully
- * reachable: the selected session always renders in the sidebar, the Sessions
- * page never applies this filter, and the sort-menu toggle reveals all rows.
- */
-export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
-  // Cron rows are owned by the automation toggle; cron creation stamps a
-  // system actor, so classifying them here would demand both toggles at once.
-  if (isCronSessionKey(row.key)) {
-    return false;
-  }
-  if (row.createdActor?.type === "system") {
-    return true;
-  }
-  if (row.createdVia !== "run" && row.createdVia !== "internal") {
-    return false;
-  }
-  if (row.createdActor?.type === "human") {
-    return false;
-  }
-  return !(row.label?.trim() || row.displayName?.trim() || row.subject?.trim());
-}
-
 export function sessionMatchesArchivedFilter(
   row: GatewaySessionRow,
   archivedFilter: SessionArchivedFilter = "active",
@@ -207,7 +180,8 @@ export function sessionMatchesVisibleSessionScope(
     sessionMatchesArchivedFilter(row, options.archivedFilter) &&
     row.kind !== "global" &&
     row.kind !== "unknown" &&
-    (options.showCron === true || !isCronSessionKey(row.key)) &&
+    row.isDock !== true &&
+    (options.showCron === true || !isCronSessionDisplayKey(row.key)) &&
     (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
     (!options.filterByAgent ||
       isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
@@ -221,6 +195,7 @@ export function filterVisibleSessionRows(
   return rows.filter((row) => {
     if (
       row.key === options.currentSessionKey &&
+      row.isDock !== true &&
       ((options.archivedFilter ?? "active") === "active" ||
         sessionMatchesArchivedFilter(row, options.archivedFilter))
     ) {
@@ -229,16 +204,10 @@ export function filterVisibleSessionRows(
     return (
       sessionMatchesVisibleSessionScope(row, options) &&
       !isSubagentSessionKey(row.key) &&
-      !row.spawnedBy
+      // Explicit groups keep persistent spawned conversations in shared navigation.
+      (!row.spawnedBy || normalizeOptionalString(row.category) != null)
     );
   });
-}
-
-export function getVisibleSessionRows(
-  result: SessionsListResult | null,
-  options: VisibleSessionRowOptions,
-): GatewaySessionRow[] {
-  return filterVisibleSessionRows(result?.sessions ?? [], options);
 }
 
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
@@ -284,7 +253,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     !parseCatalogSessionKey(currentSessionKey)
       ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
       : undefined;
-  const sortedSessions = getVisibleSessionRows(input.result, {
+  const sortedSessions = filterVisibleSessionRows(input.result?.sessions ?? [], {
     currentSessionKey: currentSessionKey || undefined,
     agentId: selectedAgentId,
     defaultAgentId,
@@ -298,7 +267,12 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   // hides another one behind a separate route.
   let visibleSessions = sortedSessions;
   let activeRow = visibleSessions.find(matchesCurrentSession);
-  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
+  if (
+    !activeRow &&
+    activeSession &&
+    activeSession.isDock !== true &&
+    input.archivedFilter !== "archived"
+  ) {
     // Deep-linked and archived sessions still need a visible selected row.
     activeRow = activeSession;
     visibleSessions = [activeRow, ...visibleSessions];

@@ -23,10 +23,11 @@ from a single entry point:
 - **`openclaw/plugin-sdk/infra-runtime`** - a broad barrel mixing system
   events, heartbeat state, delivery queues, fetch/proxy helpers, file helpers,
   approval types, and unrelated utilities.
-- **`openclaw/plugin-sdk/config-runtime`** - a broad config barrel retained
-  for compatibility, including deprecated direct `loadConfig` and
-  `writeConfigFile` exports. Those methods were removed from the injected
-  plugin runtime, not from this retained barrel.
+- **`openclaw/plugin-sdk/config-runtime`** - a removed broad config barrel,
+  including its deprecated direct `loadConfig` and `writeConfigFile` exports.
+- **`openclaw/plugin-sdk/channel-lifecycle`**, **`channel-message`**, and
+  **`channel-reply-pipeline`** - removed channel compatibility facades. Use
+  the focused outbound and inbound contracts, checking each named export.
 - **`openclaw/extension-api`** - a removed bridge that gave plugins direct
   access to host-side helpers like the embedded agent runner.
 - **`api.registerEmbeddedExtensionFactory(...)`** - a removed embedded-runner-only
@@ -34,12 +35,13 @@ from a single entry point:
   tool-result middleware instead (see [Migrate embedded tool-result extensions
   to middleware](/plugins/sdk-migration/how-to-migrate#how-to-migrate)).
 
-The root SDK, compat barrel, extension bridge, and embedded extension factory
-have been removed. `infra-runtime` and `config-runtime` remain only for their
-separately recorded later windows. New plugins should use focused subpaths.
+The root SDK, compat barrel, extension bridge, embedded extension factory, and
+five channel/config/infrastructure compatibility facades have been removed.
+The latter retirement received explicit SDK-owner approval on September 30,
+2026; see the [removal timeline](/plugins/sdk-migration/removal-timeline).
 
 <Warning>
-  Plugins importing the removed root, compat, or extension surfaces no longer
+  Plugins importing the removed SDK or extension surfaces no longer
   load. Follow the [import path mappings](/plugins/sdk-migration/import-paths) before upgrading.
 </Warning>
 
@@ -53,6 +55,49 @@ registration behavior.
 2026.8.1 SDK. Command lists display these legacy definitions under **Tools**.
 The category does not enable channel docking or restore retired docking commands.
 New definitions should use `"tools"`.
+
+Bundled ACP integrations should await `readAcpSessionEntryAsync` from the local
+`openclaw/plugin-sdk/acp-runtime` facade for session metadata reads. This facade
+remains a JavaScript compatibility export; its declarations are excluded from
+the typed public SDK. File-backed reads run on the SQLite workers and preserve the session lifecycle throughout the
+metadata join. File-backed results are detached snapshots, including when
+`clone: false` is supplied. The returned `storeReadFailed` flag still distinguishes an
+unreadable session store from missing metadata; startup cleanup must keep
+bindings when that flag is set. Unbound legacy ACP metadata can still accompany
+that flag; it does not certify the session row. Source retirement and worker failures reject
+the read and must not be treated as an absent session.
+
+The synchronous `readAcpSessionEntry` and
+`getAcpSessionManager().resolveSession()` contracts shipped in `v2026.9.4`
+remain available for existing consumers of that compatibility export. They are
+deprecated for runtime use. Ordinary ACP manager and Gateway callers use
+`readAcpSessionEntryAsync` and `getAcpSessionManager().resolveSessionAsync()`.
+Discord and Telegram startup binding cleanup retain their existing synchronous
+reader until conditional deletion can validate metadata at the mutation owner.
+Their inactive incognito composition accepts a prepared session reader whose
+current-source assertion reaches the binding transaction and commit grants.
+The preparation retains the original actor revision and ACP metadata publication
+fence until cleanup releases it. Production does not supply that reader until
+the atomic incognito activation; guarded durable cleanup remains separate work.
+`IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
+the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
+probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
+as an absent session or an uncertain probe; it also recognizes nested refusals.
+Removing the synchronous contracts
+requires a separately announced breaking SDK release. Incognito reads retain
+their existing native in-memory owner until that owner's worker migration.
+
+### Session reset freshness
+
+Channel runtime consumers should await
+`runtime.channel.session.resolveEntryResetFreshnessAsync(...)` when deciding
+whether a session needs reset. File-backed entries and transcript lifecycle
+timestamps are read from the same worker snapshot, with the original database
+owner retained through validation and cleanup. The synchronous
+`resolveEntryResetFreshness(...)` method shipped in `v2026.9.8` remains available
+for existing JavaScript consumers and is deprecated for runtime use; removal
+requires the next Plugin SDK major and explicit breaking-release approval. Both methods retain the
+existing reset policy and process-held incognito behavior.
 
 ### Why
 
@@ -86,6 +131,10 @@ The anchors from the single-page version still resolve here.
 
 [How to migrate a plugin](/plugins/sdk-migration/how-to-migrate) — the ordered migration steps.
 
+- [Await personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations)
+- [Await session transcript persistence](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+- [Await extension session changes](/plugins/sdk-migration/how-to-migrate#await-extension-session-changes)
+- [Await provider replay metadata](/plugins/sdk-migration/how-to-migrate#await-provider-replay-metadata)
 - <a id="how-to-migrate"></a>[How to migrate](/plugins/sdk-migration/how-to-migrate#how-to-migrate)
 - <a id="migrate-runtime-config-load%2Fwrite-helpers"></a>[Migrate runtime config load/write helpers](/plugins/sdk-migration/how-to-migrate#migrate-runtime-config-load%2Fwrite-helpers)
 - <a id="migrate-embedded-tool-result-extensions-to-middleware"></a>[Migrate embedded tool-result extensions to middleware](/plugins/sdk-migration/how-to-migrate#migrate-embedded-tool-result-extensions-to-middleware)
@@ -102,7 +151,7 @@ The anchors from the single-page version still resolve here.
 [Import path reference](/plugins/sdk-migration/import-paths) — which typed-public subpath replaces each legacy import.
 
 - <a id="import-path-reference"></a>[Import path reference](/plugins/sdk-migration/import-paths#import-path-reference)
-- <a id="retained-channel-facade-mappings"></a>[Retained channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+- <a id="retained-channel-facade-mappings"></a>[Removed channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
 
 ### Removed surfaces and replacements
 
@@ -113,25 +162,24 @@ The anchors from the single-page version still resolve here.
 - <a id="deactivate-hook-alias"></a>[Deactivate hook alias](/plugins/sdk-migration/removed-surfaces#deactivate-hook-alias)
 - <a id="private-testing-barrel"></a>[Private testing barrel](/plugins/sdk-migration/removed-surfaces#private-testing-barrel)
 - <a id="migration-reference"></a>[Migration reference](/plugins/sdk-migration/removed-surfaces#migration-reference)
-- <a id="command-auth"></a>[`command-auth` help builders -> `command-status`](/plugins/sdk-migration/removed-surfaces#command-auth)
-- <a id="mention"></a>[Mention gating helpers -> `resolveInboundMentionDecision`](/plugins/sdk-migration/removed-surfaces#mention)
+- <a id="command-auth"></a>[`command-auth` help builders -> `command-status`](/plugins/sdk-migration/removed-surfaces#command-auth-help-builders-command-status)
+- <a id="mention"></a>[Mention gating helpers -> `resolveInboundMentionDecision`](/plugins/sdk-migration/removed-surfaces#mention-gating-helpers-resolveinboundmentiondecision)
 - <a id="channel-runtime-shim-and-channel-actions-helpers"></a>[Channel runtime shim and channel actions helpers](/plugins/sdk-migration/removed-surfaces#channel-runtime-shim-and-channel-actions-helpers)
-- <a id="web"></a>[Web search provider `tool()` helper -> `createTool()` on the plugin](/plugins/sdk-migration/removed-surfaces#web)
-- <a id="plaintext"></a>[Plaintext channel envelopes -> `BodyForAgent`](/plugins/sdk-migration/removed-surfaces#plaintext)
-- <a id="subagent-spawning"></a>[`subagent_spawning` hook -> core thread binding](/plugins/sdk-migration/removed-surfaces#subagent-spawning)
-- <a id="provider"></a>[Provider discovery types -> provider catalog types](/plugins/sdk-migration/removed-surfaces#provider)
-- <a id="thinking"></a>[Thinking policy hooks -> `resolveThinkingProfile`](/plugins/sdk-migration/removed-surfaces#thinking)
-- <a id="external"></a>[External auth providers -> `contracts.externalAuthProviders`](/plugins/sdk-migration/removed-surfaces#external)
-- <a id="provider-1"></a>[Provider env-var lookup -> `setup.providers[].envVars`](/plugins/sdk-migration/removed-surfaces#provider-1)
-- <a id="memory"></a>[Memory plugin registration -> `registerMemoryCapability`](/plugins/sdk-migration/removed-surfaces#memory)
+- <a id="web"></a>[Web search provider `tool()` helper -> `createTool()` on the plugin](/plugins/sdk-migration/removed-surfaces#web-search-provider-tool-helper-createtool-on-the-plugin)
+- <a id="plaintext"></a>[Plaintext channel envelopes -> `BodyForAgent`](/plugins/sdk-migration/removed-surfaces#plaintext-channel-envelopes-bodyforagent)
+- <a id="subagent-spawning"></a>[`subagent_spawning` hook -> core thread binding](/plugins/sdk-migration/removed-surfaces#subagent-spawning-hook-core-thread-binding)
+- <a id="provider"></a>[Provider discovery types -> provider catalog types](/plugins/sdk-migration/removed-surfaces#provider-discovery-types-provider-catalog-types)
+- <a id="thinking"></a>[Thinking policy hooks -> `resolveThinkingProfile`](/plugins/sdk-migration/removed-surfaces#thinking-policy-hooks-resolvethinkingprofile)
+- <a id="external"></a>[External auth providers -> `contracts.externalAuthProviders`](/plugins/sdk-migration/removed-surfaces#external-auth-providers-contracts-externalauthproviders)
+- <a id="provider-1"></a>[Provider env-var lookup -> `setup.providers[].envVars`](/plugins/sdk-migration/removed-surfaces#provider-env-var-lookup-setup-providers-envvars)
+- <a id="memory"></a>[Memory plugin registration -> `registerMemoryCapability`](/plugins/sdk-migration/removed-surfaces#memory-plugin-registration-registermemorycapability)
 - <a id="memory-embedding-provider-api"></a>[Memory embedding provider API](/plugins/sdk-migration/removed-surfaces#memory-embedding-provider-api)
-- <a id="raw"></a>[Raw channel send results -> `OutboundDeliveryResult`](/plugins/sdk-migration/removed-surfaces#raw)
+- <a id="raw"></a>[Raw channel send results -> `OutboundDeliveryResult`](/plugins/sdk-migration/removed-surfaces#raw-channel-send-results-outbounddeliveryresult)
 - <a id="subagent-session-messages-types-renamed"></a>[Subagent session messages types renamed](/plugins/sdk-migration/removed-surfaces#subagent-session-messages-types-renamed)
 - <a id="removed-session-and-transcript-file-apis"></a>[Removed session and transcript file APIs](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis)
-- <a id="agent"></a>[Agent harness attempt params -> V2 host-capability contract](/plugins/sdk-migration/removed-surfaces#agent)
-- <a id="runtime-tasks-flow"></a>[`runtime.tasks.flow` -> `runtime.tasks.managedFlows`](/plugins/sdk-migration/removed-surfaces#runtime-tasks-flow)
-- <a id="embedded"></a>[Embedded extension factories -> agent tool-result middleware](/plugins/sdk-migration/removed-surfaces#embedded)
-- <a id="openclawschematype"></a>[`OpenClawSchemaType` alias -> `OpenClawConfig`](/plugins/sdk-migration/removed-surfaces#openclawschematype)
+- <a id="agent"></a>[Agent harness attempt params -> V2 host-capability contract](/plugins/sdk-migration/removed-surfaces#agent-harness-attempt-params-v2-host-capability-contract)
+- <a id="embedded"></a>[Embedded extension factories -> agent tool-result middleware](/plugins/sdk-migration/removed-surfaces#embedded-extension-factories-agent-tool-result-middleware)
+- <a id="openclawschematype"></a>[`OpenClawSchemaType` alias -> `OpenClawConfig`](/plugins/sdk-migration/removed-surfaces#openclawschematype-alias-openclawconfig)
 
 ### Talk and voice
 
@@ -171,3 +219,7 @@ The anchors from the single-page version still resolve here.
 - [Plugin Internals](/plugins/architecture) - architecture deep dive
 - [Plugin Manifest](/plugins/manifest) - manifest schema reference
 - [Plugin hooks](/plugins/hooks) - typed and custom hook surfaces
+
+<a id="runtime-tasks-flow" />
+
+For the removed Tasks and TaskFlow surfaces, see [Tasks and TaskFlow API removal](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed).

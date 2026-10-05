@@ -33,13 +33,12 @@ function rememberInboundMessage(messageId: string, quoteToken: string) {
 describe("the reply-token delivery path", () => {
   it("quotes the message the reply answers", async () => {
     rememberInboundMessage("inbound-1", "token-1");
-    const { deps, replyMessageLine } = createDeps();
+    const { replyMessageLine } = createDeps();
 
     await deliverLineAutoReply({
       ...baseDeliveryParams,
       payload: { text: "answering you", replyToId: "inbound-1" },
       lineData: {},
-      deps,
     });
 
     expect(expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages")).toEqual([
@@ -49,7 +48,7 @@ describe("the reply-token delivery path", () => {
 
   it("quotes once, on the first message LINE accepts a quote on", async () => {
     rememberInboundMessage("inbound-multi", "token-multi");
-    const { deps, replyMessageLine } = createDeps({
+    const { replyMessageLine } = createDeps({
       chunkMarkdownText: (text) => text.split("|"),
     });
 
@@ -57,7 +56,6 @@ describe("the reply-token delivery path", () => {
       ...baseDeliveryParams,
       payload: { text: "first|second|third", replyToId: "inbound-multi" },
       lineData: { flexMessage: { altText: "card", contents: { type: "bubble" } } },
-      deps,
     });
 
     const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages");
@@ -67,7 +65,7 @@ describe("the reply-token delivery path", () => {
 
   it("keeps the quote when a failed reply token falls back to a push", async () => {
     rememberInboundMessage("inbound-fallback", "token-fallback");
-    const { deps, replyMessageLine, pushMessagesLine } = createDeps();
+    const { replyMessageLine, pushMessagesLine } = createDeps();
     replyMessageLine.mockRejectedValueOnce(
       Object.assign(new Error("Invalid reply token"), { status: 400 }),
     );
@@ -76,7 +74,6 @@ describe("the reply-token delivery path", () => {
       ...baseDeliveryParams,
       payload: { text: "late answer", replyToId: "inbound-fallback" },
       lineData: {},
-      deps,
     });
 
     expect(expectDefined(pushMessagesLine.mock.calls[0]?.[1], "push messages")).toEqual([
@@ -86,13 +83,12 @@ describe("the reply-token delivery path", () => {
 
   it("sends unquoted when the reply carries nothing that can hold a quote", async () => {
     rememberInboundMessage("inbound-flex", "token-flex");
-    const { deps, replyMessageLine } = createDeps();
+    const { replyMessageLine } = createDeps();
 
     await deliverLineAutoReply({
       ...baseDeliveryParams,
       payload: { replyToId: "inbound-flex" },
       lineData: { flexMessage: { altText: "card", contents: { type: "bubble" } } },
-      deps,
     });
 
     const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages");
@@ -101,14 +97,13 @@ describe("the reply-token delivery path", () => {
 
   it("reports a reply that answered a message but could carry no quote", async () => {
     rememberInboundMessage("inbound-cardonly", "token-cardonly");
-    const { deps } = createDeps();
+    createDeps();
     logVerboseMock.mockClear();
 
     await deliverLineAutoReply({
       ...baseDeliveryParams,
       payload: { replyToId: "inbound-cardonly" },
       lineData: { flexMessage: { altText: "card", contents: { type: "bubble" } } },
-      deps,
     });
 
     expect(logVerboseMock).toHaveBeenCalledWith(
@@ -123,13 +118,12 @@ describe("the reply-token delivery path", () => {
       messageId: "inbound-elsewhere",
       quoteToken: "token-elsewhere",
     });
-    const { deps, replyMessageLine } = createDeps();
+    const { replyMessageLine } = createDeps();
 
     await deliverLineAutoReply({
       ...baseDeliveryParams,
       payload: { text: "answering you", replyToId: "inbound-elsewhere" },
       lineData: {},
-      deps,
     });
 
     expect(expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages")).toEqual([
@@ -138,13 +132,12 @@ describe("the reply-token delivery path", () => {
   });
 
   it("sends unquoted when the reply answers nothing", async () => {
-    const { deps, replyMessageLine } = createDeps();
+    const { replyMessageLine } = createDeps();
 
     await deliverLineAutoReply({
       ...baseDeliveryParams,
       payload: { text: "unprompted" },
       lineData: {},
-      deps,
     });
 
     expect(expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages")).toEqual([

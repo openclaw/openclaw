@@ -38,6 +38,8 @@ export type CustodianMessage = {
   at: number;
   question: CustodianStructuredQuestion | null;
   step: WizardStep | null;
+  /** Gateway-recorded optional welcome; notices and required input remain visible. */
+  optionalWelcome?: boolean;
 };
 
 export function createCustodianMessage(
@@ -59,7 +61,10 @@ export function createCustodianReplyMessage(
   const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
   return silentReply && !question && !step
     ? null
-    : createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step);
+    : {
+        ...createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step),
+        optionalWelcome: result.optionalWelcome === true,
+      };
 }
 
 export function hasUnresolvedCustodianQuestion(

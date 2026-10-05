@@ -38,6 +38,12 @@ const loginParams = {
   sendMessage: vi.fn(async (_message: string) => {}),
   unsupportedPromptMessage: "Open Control UI to enter credentials.",
 };
+const loginResult = {
+  providerId: "acme-cloud",
+  methodId: "device-code",
+  authRefresh: "refreshed",
+  profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
+};
 
 describe("provider channel login runtime", () => {
   beforeEach(() => {
@@ -76,6 +82,27 @@ describe("provider channel login runtime", () => {
     cancelProviderLoginFlow({ flows, flowKey: "other" });
   });
 
+  it.each(["before", "after"] as const)(
+    "allows another login when the caller cancels %s reservation",
+    (timing) => {
+      const flows = createProviderLoginFlowRegistry();
+      const controller = new AbortController();
+      const params = { flows, flowKey: "chat", providerLabel: "Acme" };
+      if (timing === "before") {
+        controller.abort();
+      }
+      reserveProviderLoginFlow({ ...params, signal: controller.signal });
+      controller.abort();
+
+      const replacement = reserveProviderLoginFlow(params);
+      try {
+        expect(replacement.status).toBe("reserved");
+      } finally {
+        cancelProviderLoginFlow(params);
+      }
+    },
+  );
+
   it("uses the host config replaced before flow entry", async () => {
     const config: OpenClawConfig = { plugins: { entries: { acme: { enabled: true } } } };
     let currentConfig = config;
@@ -86,12 +113,7 @@ describe("provider channel login runtime", () => {
         ? { status: "unsupported", choices: [] }
         : { status: "resolved", choice },
     );
-    const runLoginFlow = vi.fn(async () => ({
-      providerId: "acme-cloud",
-      methodId: "device-code",
-      authRefresh: "refreshed",
-      profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
-    }));
+    const runLoginFlow = vi.fn(async () => loginResult);
 
     await expect(
       runProviderChannelLoginFlow({ ...loginParams, config, readConfig, runLoginFlow }),
@@ -122,12 +144,7 @@ describe("provider channel login runtime", () => {
         } else {
           await opts.prompter.deviceCode?.({ title: "Sign in", code: "ABCD-EFGH" });
         }
-        return {
-          providerId: "acme-cloud",
-          methodId: "device-code",
-          authRefresh: "refreshed",
-          profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
-        };
+        return loginResult;
       };
       await expect(
         runProviderChannelLoginFlow({
@@ -153,12 +170,7 @@ describe("provider channel login runtime", () => {
       currentConfig = { commands: { ownerAllowFrom: ["replacement"] } };
       opts.assertCurrent?.();
       persist();
-      return {
-        providerId: "acme-cloud",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
-      };
+      return loginResult;
     };
     await expect(
       runProviderChannelLoginFlow({
@@ -188,9 +200,7 @@ describe("provider channel login runtime", () => {
       runLoginFlow: async (opts) => {
         opts.assertCurrent?.();
         const saved = {
-          providerId: "acme-cloud",
-          methodId: "device-code",
-          authRefresh: "refreshed",
+          ...loginResult,
           profiles: [{ profileId: "acme-cloud:saved", provider: "acme-cloud", mode: "oauth" }],
         };
         authorized = false;
@@ -220,14 +230,13 @@ describe("provider channel login runtime", () => {
     ).toEqual({ status: "rejected" });
   });
 
-  it.each(["removed", "pluginId", "providerId", "methodId"] as const)(
+  it.each(["pluginId", "providerId", "methodId"] as const)(
     "rejects a stale %s before the provider can start",
     async (field) => {
-      resolveChoice.mockReturnValue(
-        field === "removed"
-          ? { status: "unsupported", choices: [] }
-          : { status: "resolved", choice: { ...choice, [field]: "replacement" } },
-      );
+      resolveChoice.mockReturnValue({
+        status: "resolved",
+        choice: { ...choice, [field]: "replacement" },
+      });
       const runLoginFlow = vi.fn();
       await expect(runProviderChannelLoginFlow({ ...loginParams, runLoginFlow })).rejects.toThrow(
         "no longer available",

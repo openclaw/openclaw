@@ -2,7 +2,6 @@
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -33,6 +32,7 @@ import {
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
 import { settleDurableDelivery } from "./delivery-completion.js";
+import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
 import type { DeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
   failDelivery,
@@ -40,7 +40,7 @@ import {
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
 } from "./delivery-queue-storage.js";
-import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
+import { createOutboundMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditLifecycle,
@@ -104,18 +104,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   // Deliberately process-local: message_sent is best-effort after queue
   // settlement, not a durable plugin outbox or a reason to retry delivery.
   const messageSentEvents: MessageSentEvent[] = [];
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
-  const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
-    hookRunner: getGlobalHookRunner(),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    sessionKeyForInternalHooks,
-    isGroup: params.mirror?.isGroup,
-    groupId: params.mirror?.groupId,
-    runId: params.preparedBatch?.runId,
-    logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
-  });
+  const { emitMessageSent, hasMessageSentHooks, sessionKeyForInternalHooks } =
+    createOutboundMessageSentEmitter(params, OUTBOUND_DELIVERY_LOG_SCOPE);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       `${OUTBOUND_DELIVERY_LOG_SCOPE}: session.agentId present without session key; internal message:sent hook will be skipped`,
@@ -198,7 +188,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     cancelledPreparationRetirement = (async () => {
       await producerLease?.stop();
       try {
-        releaseCancelledPreparation = queueOwner.retireUnsent();
+        releaseCancelledPreparation = await queueOwner.retireUnsent();
         if (releaseCancelledPreparation) {
           // Preparation stays attached until its late token and resources settle.
           queuedPostSendState = "acked";
@@ -216,6 +206,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     void cancelledPreparationRetirement.catch((error: unknown) => {
       log.warn(`failed to stop cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
     });
+  };
+  let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  const assertPlatformSendAuthorized = (): void => {
+    throwIfAborted(params.abortSignal);
+    assertSessionWriterDeliveryAuthorized(
+      params.deliveryCompletion?.kind === "pending-final"
+        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+        : undefined,
+    );
   };
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
@@ -269,23 +268,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       platformSendStarted = true;
     },
     onDirectAdapterHandoff: async () => {
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
+      generation?.assertCurrent();
     },
     assertDirectAdapterHandoff: () => {
+      generation?.assertCurrent();
       params.assertDirectAdapterHandoff?.();
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
     },
     onPlatformSendDispatch: async () => {
       throwIfAborted(params.abortSignal);
@@ -293,23 +284,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       // A later payload dispatch must not regress that durable evidence to attempt-started.
       if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
         try {
-          if (producerClaimId) {
-            await markDeliveryPlatformSendDispatched(
-              platformQueueId,
-              platformQueueStateDir,
-              platformSendRoute,
-              producerClaimId,
-              params.deliveryQueueStateContext,
-            );
-          } else {
-            await markDeliveryPlatformSendDispatched(
-              platformQueueId,
-              platformQueueStateDir,
-              platformSendRoute,
-              undefined,
-              params.deliveryQueueStateContext,
-            );
-          }
+          await markDeliveryPlatformSendDispatched(
+            platformQueueId,
+            platformQueueStateDir,
+            platformSendRoute,
+            producerClaimId || undefined,
+            params.deliveryQueueStateContext,
+          );
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
           // Any SQLite-fenced live producer must prove it still owns the row at
@@ -323,14 +304,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       }
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
+      generation?.assertCurrent();
       if (platformSendSourceIndex !== undefined) {
         platformDispatchedPayloads.add(platformSendSourceIndex);
       }
@@ -370,6 +347,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       cancelBeforeSend();
     }
     throwIfProducerLeaseLost();
+    if (params.sessionGeneration !== undefined) {
+      generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
+      throwIfProducerLeaseLost();
+    }
     const conversationAttemptAuthority =
       params.deliveryCompletion?.kind === "conversation"
         ? params.deliveryCompletion
@@ -591,6 +572,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       if (err instanceof OutboundDeliveryError && err.results.length > 0) {
         deliveredResults = err.results;
       }
+      const failureIsProvenNotSent = isProvenBatchNotSent(err, payloadOutcomes);
       const hasPlatformSendEvidence =
         deliveredResults.length > 0 ||
         (!allPayloadsSuppressed &&
@@ -606,7 +588,17 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           await runCommitHooksAfterAck();
           emitFailedTerminals(platformSendFailureStage);
         } else if (params.abortSignal?.aborted) {
-          if (hasPlatformSendEvidence) {
+          if (
+            failureIsProvenNotSent &&
+            deliveredResults.length === 0 &&
+            params.deliveryCompletion
+          ) {
+            // A pre-I/O fence may abort after its durable dispatch marker was
+            // written. Keep the wholly unsent final replayable, not ambiguous;
+            // the next attempt still rechecks its persisted writer authority.
+            await queueOwner.fail(failDeliveryBeforePlatformSend, formatErrorMessage(err));
+            queuedPostSendState = "failed";
+          } else if (hasPlatformSendEvidence) {
             if (queuedPostSendState !== "failed") {
               await queueOwner.fail(
                 failDeliveryAfterPlatformSend,
@@ -628,7 +620,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             emitFailedTerminals("queue");
           }
         } else if (!platformResultsReturned) {
-          const failureIsProvenNotSent = isProvenBatchNotSent(err, payloadOutcomes);
           const sendEvidence =
             deliveredResults.length > 0 ||
             (!failureIsProvenNotSent &&
@@ -719,6 +710,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         : error;
     }
   } finally {
+    generation?.release();
     params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
     // Both result and error exits already joined cancellation, including a failed stop.
     if (!cancelledPreparationRetirement) {

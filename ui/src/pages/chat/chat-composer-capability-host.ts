@@ -4,10 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import "../../components/modal-dialog.ts";
 import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
+import "../../components/modal-dialog.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
@@ -40,11 +41,9 @@ import {
 } from "./composer-capability-catalog.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
 
-type ComposerMcpServerScope = "session" | "everywhere";
+registerMcpEnglish();
 
-type CapabilityMutationResult =
-  | { ok: true }
-  | { ok: false; error: string; stage: "config" | "session" };
+type ComposerMcpServerScope = "session" | "everywhere";
 
 function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   const revision =
@@ -52,8 +51,7 @@ function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   if (revision) {
     return revision;
   }
-  // Older gateways and partial test fixtures may omit revision hashes. Include the complete
-  // connector definitions so edits to targets, args, auth, or filters still invalidate tools.
+  // Without a revision hash, connector edits still invalidate the effective tools.
   return JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null);
 }
 
@@ -63,7 +61,7 @@ export class ChatComposerCapabilityHost {
   private readonly patchTokens = new Map<string, symbol>();
   private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
   private effectiveToolsErrorKey: string | null = null;
-  private effectiveToolsRequest: { key: string; owner: symbol } | null = null;
+  private effectiveToolsRequest: { key: string } | null = null;
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
   private addDialogOpen = false;
@@ -74,72 +72,6 @@ export class ChatComposerCapabilityHost {
   constructor(private readonly notify: () => void) {
     this.skillCatalog = new ComposerSkillCatalog(notify);
     this.library = new ComposerLibrarySession(notify);
-  }
-
-  static async addMcpServer(options: {
-    scope: ComposerMcpServerScope;
-    name: string;
-    config: Record<string, unknown>;
-    patchGlobal: (
-      config: Record<string, unknown>,
-    ) => Promise<{ ok: true } | { ok: false; error: string }>;
-    loadSessionOverrides: () => Promise<
-      | { ok: true; overrides: SessionToolOverrides | null | undefined }
-      | { ok: false; error: string }
-    >;
-    patchSession: (
-      next: SessionToolOverrides,
-    ) => Promise<{ ok: true } | { ok: false; error: string }>;
-  }): Promise<CapabilityMutationResult> {
-    const globalConfig =
-      options.scope === "session" ? { ...options.config, enabled: false } : options.config;
-    let globalResult: Awaited<ReturnType<typeof options.patchGlobal>>;
-    try {
-      globalResult = await options.patchGlobal(globalConfig);
-    } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "config",
-      };
-    }
-    if (!globalResult.ok) {
-      return { ...globalResult, stage: "config" };
-    }
-    if (options.scope === "everywhere") {
-      return { ok: true };
-    }
-    let loaded: Awaited<ReturnType<typeof options.loadSessionOverrides>>;
-    try {
-      loaded = await options.loadSessionOverrides();
-    } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "session",
-      };
-    }
-    if (!loaded.ok) {
-      return { ...loaded, stage: "session" };
-    }
-    const next = nextBooleanToolOverrides(
-      loaded.overrides,
-      "mcpServers",
-      options.name,
-      true,
-      false,
-    );
-    let sessionResult: Awaited<ReturnType<typeof options.patchSession>>;
-    try {
-      sessionResult = await options.patchSession(next);
-    } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "session",
-      };
-    }
-    return sessionResult.ok ? sessionResult : { ...sessionResult, stage: "session" };
   }
 
   private loadSkills(context: ApplicationContext, state: ChatPageHost, agentId: string): void {
@@ -194,23 +126,23 @@ export class ChatComposerCapabilityHost {
     ) {
       return;
     }
-    const requestOwner = Symbol("composer-effective-tools-request");
+    const request = { key: cacheKey };
     const connectionEpoch = state.connectionEpoch;
-    this.effectiveToolsRequest = { key: cacheKey, owner: requestOwner };
-    const loader = {
+    this.effectiveToolsRequest = request;
+    const loader: Parameters<typeof loadToolsEffective>[0] = {
       chatModelCatalog: state.chatModelCatalog,
       client,
       connected: true,
       sessions: context.sessions,
       sessionsResult: state.sessionsResult,
-      toolsEffectiveError: null as string | null,
+      toolsEffectiveError: null,
       toolsEffectiveLoading: false,
-      toolsEffectiveLoadingKey: null as string | null,
-      toolsEffectiveResult: null as ToolsEffectiveResult | null,
-      toolsEffectiveResultKey: null as string | null,
+      toolsEffectiveLoadingKey: null,
+      toolsEffectiveResult: null,
+      toolsEffectiveResultKey: null,
     };
     const isCurrent = () =>
-      this.effectiveToolsRequest?.owner === requestOwner &&
+      this.effectiveToolsRequest === request &&
       this.client === client &&
       state.client === client &&
       state.connected &&
@@ -237,7 +169,7 @@ export class ChatComposerCapabilityHost {
         }
       })
       .finally(() => {
-        if (this.effectiveToolsRequest?.owner === requestOwner) {
+        if (this.effectiveToolsRequest === request) {
           this.effectiveToolsRequest = null;
           if (this.client === client && this.connectionEpoch === connectionEpoch) {
             this.notify();
@@ -273,19 +205,15 @@ export class ChatComposerCapabilityHost {
       state.client === client &&
       state.sessionKey === sessionKey &&
       this.patchTokens.get(sessionKey) === patchToken;
-    if (state.sessionKey === sessionKey) {
-      state.lastError = null;
-      state.chatError = null;
-    }
+    state.lastError = null;
+    state.chatError = null;
     this.notify();
     try {
       const result = await patchChatSessionSettings(
         state,
         sessionKey,
         { toolOverrides: next },
-        {
-          ...scopedAgentParamsForSession(state, sessionKey),
-        },
+        scopedAgentParamsForSession(state, sessionKey),
       );
       if (!result) {
         throw new Error(t("chat.composer.menu.offlineBlocked"));
@@ -417,27 +345,38 @@ export class ChatComposerCapabilityHost {
     this.notify();
     const sessionKey = state.sessionKey;
     const agentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
-    let result: CapabilityMutationResult;
+    const scope = this.addScope;
+    const globalConfig = scope === "session" ? { ...config, enabled: false } : config;
+    let stage: "config" | "session" = "config";
+    let failure: string | undefined;
     try {
-      result = await ChatComposerCapabilityHost.addMcpServer({
-        scope: this.addScope,
-        name,
-        config,
-        patchGlobal: (globalConfig) =>
-          patchMcpServers(context.runtimeConfig, {
-            buildPatch: (servers) => buildAddMcpServerPatch(servers, name, globalConfig),
-            note: `composer connectors: add MCP server ${name}`,
-          }),
-        loadSessionOverrides: () => this.loadCurrentSessionOverrides(state, sessionKey, agentId),
-        patchSession: (next) => this.patch(context, state, next),
+      const globalResult = await patchMcpServers(context.runtimeConfig, {
+        buildPatch: (servers) => buildAddMcpServerPatch(servers, name, globalConfig),
+        note: `composer connectors: add MCP server ${name}`,
       });
+      if (!globalResult.ok) {
+        failure = globalResult.error;
+      } else if (scope === "session") {
+        stage = "session";
+        const loaded = await this.loadCurrentSessionOverrides(state, sessionKey, agentId);
+        if (!loaded.ok) {
+          failure = loaded.error;
+        } else {
+          const next = nextBooleanToolOverrides(loaded.overrides, "mcpServers", name, true, false);
+          const sessionResult = await this.patch(context, state, next);
+          if (!sessionResult.ok) {
+            failure = sessionResult.error;
+          }
+        }
+      }
+    } catch (error) {
+      failure = formatUiError(error);
     } finally {
       this.addBusy = false;
     }
-    if (!result.ok) {
-      const error = formatUiExternalText(result.error);
-      this.addError =
-        result.stage === "session" ? t("mcpServers.sessionEnableFailed", { error }) : error;
+    if (failure !== undefined) {
+      const error = formatUiExternalText(failure);
+      this.addError = stage === "session" ? t("mcpServers.sessionEnableFailed", { error }) : error;
       this.notify();
       return;
     }

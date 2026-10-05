@@ -4,15 +4,16 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
+import { normalizePluginId } from "../plugins/config-state.js";
+import {
+  findUninspectedPluginDiagnostic,
+  pluginDiagnosticToConfigWarning,
+} from "../plugins/discovery-availability.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
-import { resolveSecretRefProviderSourceMismatch } from "../secrets/ref-contract.js";
-import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import {
@@ -23,7 +24,6 @@ import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { resolveSecretInputRef } from "./types.secrets.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
@@ -31,17 +31,20 @@ import {
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
 import { collectHeartbeatOwnerWarnings } from "./validation-core.js";
-import { withConfigIssuePath } from "./validation-issues.js";
 import {
-  createPluginRegistryConfigValidator,
   formatChannelConfigIssueMessage,
   resolveDeferredChannelConfigWarning,
   validateExplicitPluginConfig,
 } from "./validation-plugin-config.js";
-
-export type ValidateConfigWithPluginsResult =
-  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
-  | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] };
+import {
+  createPluginRegistryConfigValidator,
+  collectSecretRefProviderSourceIssues,
+} from "./validation-plugin-registry.js";
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
+import type { ValidateConfigWithPluginsResult } from "./validation.types.js";
 
 export type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
@@ -62,7 +65,6 @@ type RegistryInfo = {
   registry: PluginManifestRegistry;
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
-  normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
   channelSchemaSelection?: ReadonlySet<string>;
   channelSchemas?: Map<
     string,
@@ -70,74 +72,34 @@ type RegistryInfo = {
   >;
 };
 
-function collectSecretRefProviderSourceIssues(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRegistry: PluginManifestRegistry;
-}): ConfigValidationIssue[] {
-  const issues: ConfigValidationIssue[] = [];
-  for (const target of discoverConfigSecretTargets(params.config, {
-    env: params.env,
-    manifestRegistry: params.manifestRegistry,
-  })) {
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults: params.config.secrets?.defaults,
-    });
-    if (!ref) {
-      continue;
-    }
-    const configuredSource = resolveSecretRefProviderSourceMismatch(params.config, ref);
-    if (!configuredSource) {
-      continue;
-    }
-    const path = target.refPath ?? target.path;
-    const pathSegments = target.refPathSegments ?? target.pathSegments;
-    issues.push(
-      withConfigIssuePath(
-        {
-          path,
-          message: `Secret provider "${ref.provider}" has source "${configuredSource}" but ref requests "${ref.source}".`,
-        },
-        pathSegments,
-      ),
-    );
-  }
-  return issues;
-}
-
 export function validatePreparedConfigWithPlugins(
   raw: unknown,
   parsedConfig: OpenClawConfig,
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
-    onManifestRegistryResolved?: (registry: PluginManifestRegistry) => void;
+    schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
-  const rememberRegistry = (registry: PluginManifestRegistry): RegistryInfo => {
-    opts.onManifestRegistryResolved?.(registry);
-    return { registry };
-  };
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
-    ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
+    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
     : null;
   const ensureLoadedRegistryInfo = (): RegistryInfo => {
-    registryInfo ??= rememberRegistry(
-      opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
+    registryInfo ??= {
+      registry:
+        opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
         resolveConfigWidePluginManifestRegistry({
           config: parsedConfig,
           env: opts.env ?? process.env,
         }),
-    );
+    };
     return registryInfo;
   };
 
   if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
-      registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
+      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
     }
   }
   const config = opts.applyDefaults
@@ -161,6 +123,15 @@ export function validatePreparedConfigWithPlugins(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  const preserveUnavailableConfig = (path: string): boolean => {
+    const diagnostic = findUninspectedPluginDiagnostic(
+      ensureLoadedRegistryInfo().registry.diagnostics,
+    );
+    if (diagnostic) {
+      warnings.push(pluginDiagnosticToConfigWarning(diagnostic, path));
+    }
+    return diagnostic !== undefined;
+  };
   const deferredPluginIds = new Set(
     opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
   );
@@ -207,7 +178,7 @@ export function validatePreparedConfigWithPlugins(
 
   const ensureKnownIds = (): Set<string> => {
     const info = ensureRegistry();
-    info.knownIds ??= new Set(info.registry.plugins.map((record) => record.id));
+    info.knownIds ??= new Set(info.registry.plugins.map((record) => normalizePluginId(record.id)));
     return info.knownIds;
   };
 
@@ -222,12 +193,6 @@ export function validatePreparedConfigWithPlugins(
     return info.overriddenPluginIds;
   };
 
-  const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
-    const info = ensureRegistry();
-    info.normalizedPlugins ??= normalizePluginsConfig(config.plugins);
-    return info.normalizedPlugins;
-  };
-
   const ensureChannelSchemaSelection = (): ReadonlySet<string> => {
     const info = ensureLoadedRegistryInfo();
     info.channelSchemaSelection ??= resolveChannelSchemaSelection(
@@ -238,10 +203,7 @@ export function validatePreparedConfigWithPlugins(
     return info.channelSchemaSelection;
   };
 
-  const ensureChannelSchemas = (): Map<
-    string,
-    { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
-  > => {
+  const ensureChannelSchemas = (): NonNullable<RegistryInfo["channelSchemas"]> => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
       info.channelSchemas = new Map(
@@ -280,7 +242,6 @@ export function validatePreparedConfigWithPlugins(
 
   let mutatedConfig = config;
   let channelsCloned = false;
-  let pluginsCloned = false;
   let pluginEntriesCloned = false;
   let installedPluginRecordIds = opts.installedPluginRecordIds
     ? new Set([...opts.installedPluginRecordIds].map(normalizePluginId))
@@ -302,19 +263,9 @@ export function validatePreparedConfigWithPlugins(
     return installedPluginRecordIds;
   };
 
-  const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
-    const normalizedChannelId = normalizePluginId(channelId);
-    if (!normalizedChannelId || ensureKnownIds().has(normalizedChannelId)) {
-      return false;
-    }
-    const pluginConfig = config.plugins;
-    const matches = (pluginId: string) => normalizePluginId(pluginId) === normalizedChannelId;
-    return (
-      (Array.isArray(pluginConfig?.allow) && pluginConfig.allow.some(matches)) ||
-      (isRecord(pluginConfig?.entries) && Object.keys(pluginConfig.entries).some(matches)) ||
-      (isRecord(pluginConfig?.installs) && Object.keys(pluginConfig.installs).some(matches)) ||
-      ensureInstalledPluginRecordIds().has(normalizedChannelId)
-    );
+  const hasStalePluginEvidence = (id: string): boolean => {
+    const normalizedId = normalizePluginId(id);
+    return Boolean(normalizedId) && !ensureKnownIds().has(normalizedId) && hasPluginEvidence(id);
   };
 
   const collectActiveWebSearchProviderIds = (): string[] => {
@@ -340,9 +291,7 @@ export function validatePreparedConfigWithPlugins(
     ].toSorted((left, right) => left.localeCompare(right));
   };
 
-  const hasPluginEvidenceForWebSearchProvider = (
-    ...pluginOrProviderIds: readonly string[]
-  ): boolean => {
+  const hasPluginEvidence = (...pluginOrProviderIds: readonly string[]): boolean => {
     const candidateIds = new Set(
       pluginOrProviderIds.map(normalizePluginId).filter((id) => id.length > 0),
     );
@@ -376,6 +325,9 @@ export function validatePreparedConfigWithPlugins(
     if (activeProviderIds.includes(trimmed)) {
       return;
     }
+    if (preserveUnavailableConfig(issuePath)) {
+      return;
+    }
     const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
       (entry) => entry.provider.id === trimmed,
     );
@@ -385,7 +337,7 @@ export function validatePreparedConfigWithPlugins(
         message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
         allowedValues: collectKnownWebSearchProviderIds(),
       };
-      if (hasPluginEvidenceForWebSearchProvider(trimmed, installCatalogEntry.pluginId)) {
+      if (hasPluginEvidence(trimmed, installCatalogEntry.pluginId)) {
         warnings.push({
           ...issue,
           message: `web_search provider is not available: ${trimmed} (configured plugin "${installCatalogEntry.pluginId}" is unavailable; Gateway will ignore this optional provider until the plugin is installed/enabled or openclaw doctor --fix repairs the config)`,
@@ -404,13 +356,7 @@ export function validatePreparedConfigWithPlugins(
       message: `unknown web_search provider: ${trimmed}`,
       allowedValues,
     };
-    const normalizedProviderId = normalizePluginId(trimmed);
-    const hasStaleEvidence = Boolean(
-      normalizedProviderId &&
-      !ensureKnownIds().has(normalizedProviderId) &&
-      hasPluginEvidenceForWebSearchProvider(trimmed),
-    );
-    if (hasStaleEvidence) {
+    if (hasStalePluginEvidence(trimmed)) {
       warnings.push({
         ...issue,
         message: `${issue.message} (stale web search plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
@@ -426,18 +372,12 @@ export function validatePreparedConfigWithPlugins(
       return;
     }
     const { registry } = ensureRegistry();
-    const suppressedModels = new Map<
-      string,
-      { provider: string; model: string; reason?: string }
-    >();
-    for (const suppression of planManifestModelCatalogSuppressions({ registry }).suppressions) {
+    const { suppressions } = planManifestModelCatalogSuppressions({ registry });
+    const suppressedModels = new Map<string, (typeof suppressions)[number]>();
+    for (const suppression of suppressions) {
       const key = `${suppression.provider}/${suppression.model}`;
       if (!suppression.when && !suppressedModels.has(key)) {
-        suppressedModels.set(key, {
-          provider: suppression.provider,
-          model: suppression.model,
-          ...(suppression.reason ? { reason: suppression.reason } : {}),
-        });
+        suppressedModels.set(key, suppression);
       }
     }
     const seen = new Set<string>();
@@ -477,14 +417,13 @@ export function validatePreparedConfigWithPlugins(
   };
 
   const replacePluginEntryConfig = (pluginId: string, nextValue: Record<string, unknown>): void => {
-    if (!pluginsCloned) {
-      mutatedConfig = { ...mutatedConfig, plugins: { ...mutatedConfig.plugins } };
-      pluginsCloned = true;
-    }
     if (!pluginEntriesCloned) {
-      mutatedConfig.plugins = {
-        ...mutatedConfig.plugins,
-        entries: { ...mutatedConfig.plugins?.entries },
+      mutatedConfig = {
+        ...mutatedConfig,
+        plugins: {
+          ...mutatedConfig.plugins,
+          entries: { ...mutatedConfig.plugins?.entries },
+        },
       };
       pluginEntriesCloned = true;
     }
@@ -507,8 +446,11 @@ export function validatePreparedConfigWithPlugins(
         }
       }
       if (!allowedChannels.has(trimmed)) {
+        if (preserveUnavailableConfig(`channels.${trimmed}`)) {
+          continue;
+        }
         const issue = { path: `channels.${trimmed}`, message: `unknown channel id: ${trimmed}` };
-        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+        if (hasStalePluginEvidence(trimmed)) {
           warnings.push({
             ...issue,
             message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
@@ -516,6 +458,9 @@ export function validatePreparedConfigWithPlugins(
         } else {
           issues.push(issue);
         }
+        continue;
+      }
+      if (preserveUnavailableConfig(`channels.${trimmed}`)) {
         continue;
       }
       const channelSchema = ensureChannelSchemas().get(trimmed);
@@ -536,14 +481,17 @@ export function validatePreparedConfigWithPlugins(
       // (channel-config-metadata.ts merges every plugin origin, not just bundled), so it
       // is untrusted manifest input and must use the isolation path instead of the
       // throwing validator reserved for repo-owned schemas.
-      const result = validatePluginSchemaValue({
-        origin: channelSchema.origin,
-        schema: channelSchema.schema,
-        cacheKey: `channel:${trimmed}`,
-        value: config.channels[trimmed],
-        applyDefaults: true, // Always apply defaults for plugin schema validation;
-        // writeConfigFile persists persistCandidate, not validated.config (#61841)
-      });
+      const result = validatePreparedPluginSchemaValue(
+        {
+          origin: channelSchema.origin,
+          schema: channelSchema.schema,
+          cacheKey: `channel:${trimmed}`,
+          value: config.channels[trimmed],
+          applyDefaults: true, // Always apply defaults for plugin schema validation;
+          // writeConfigFile persists persistCandidate, not validated.config (#61841)
+        },
+        opts.schemaValidations,
+      );
       if (!result.ok) {
         for (const error of result.errors) {
           issues.push({
@@ -560,9 +508,7 @@ export function validatePreparedConfigWithPlugins(
     }
   }
 
-  const heartbeatChannelIds = new Set(
-    bundledChannelIds.map((channelId) => normalizeLowercaseStringOrEmpty(channelId)),
-  );
+  const heartbeatChannelIds = new Set(bundledChannelIds);
   const validateHeartbeatTarget = (target: string | undefined, issuePath: string): void => {
     if (typeof target !== "string") {
       return;
@@ -592,6 +538,9 @@ export function validatePreparedConfigWithPlugins(
       }
     }
     if (!heartbeatChannelIds.has(normalized)) {
+      if (preserveUnavailableConfig(issuePath)) {
+        return;
+      }
       issues.push({ path: issuePath, message: `unknown heartbeat target: ${target}` });
     }
   };
@@ -615,9 +564,8 @@ export function validatePreparedConfigWithPlugins(
       config,
       env: opts.env,
       applyDefaults: opts.applyDefaults,
+      schemaValidations: opts.schemaValidations,
       registry,
-      knownIds: ensureKnownIds(),
-      normalizedPlugins: ensureNormalizedPlugins(),
       deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,

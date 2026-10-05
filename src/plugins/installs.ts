@@ -1,4 +1,3 @@
-// Normalizes installed plugin config and install records.
 import {
   copyPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -6,12 +5,14 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 
 /** Plugin install record update with the target plugin id attached. */
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
+
+export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/install-source-utils.js";
 
 type NpmInstallPathRecord = Pick<PluginInstallRecord, "source" | "installPath">;
 
@@ -91,16 +92,6 @@ export function reconcileNpmPluginLoadPath(params: {
   };
 }
 
-/** Builds install record fields from resolved npm package metadata. */
-export function buildNpmResolutionInstallFields(
-  resolution?: NpmSpecResolution,
-): Pick<
-  PluginInstallRecord,
-  "resolvedName" | "resolvedVersion" | "resolvedSpec" | "integrity" | "shasum" | "resolvedAt"
-> {
-  return buildNpmResolutionFields(resolution);
-}
-
 function isExactRegistryNpmSpec(spec: string | undefined): spec is string {
   const parsed = spec ? parseRegistryNpmSpec(spec) : null;
   return parsed?.selectorKind === "exact-version";
@@ -118,30 +109,34 @@ export function resolveNpmInstallRecordSpec(params: {
   return resolvedSpec;
 }
 
+export function recordPluginInstallInRecords(
+  records: Record<string, PluginInstallRecord> | undefined,
+  update: PluginInstallUpdate,
+): Record<string, PluginInstallRecord> {
+  const { pluginId, ...record } = update;
+  const installs = copyPluginInstallRecordMap(records);
+  setPluginInstallRecordMapEntry(installs, pluginId, {
+    ...record,
+    installedAt: record.installedAt ?? new Date().toISOString(),
+  });
+  return installs;
+}
+
 /** Replaces a plugin install record with the authoritative completed install. */
 export function recordPluginInstall(
   cfg: OpenClawConfig,
   update: PluginInstallUpdate,
 ): OpenClawConfig {
-  const { pluginId, ...record } = update;
-  const nextRecord = {
-    ...record,
-    installedAt: record.installedAt ?? new Date().toISOString(),
-  };
-  const installs = copyPluginInstallRecordMap(cfg.plugins?.installs);
-  setPluginInstallRecordMapEntry(installs, pluginId, nextRecord);
-
   const next = {
     ...cfg,
     plugins: {
-      // cfg.plugins may be absent on first install; spreading undefined is {}.
       ...cfg.plugins,
-      installs,
+      installs: recordPluginInstallInRecords(cfg.plugins?.installs, update),
     },
   };
   return reconcileNpmPluginLoadPath({
     config: next,
-    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, pluginId),
-    nextInstall: nextRecord,
+    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, update.pluginId),
+    nextInstall: update,
   });
 }

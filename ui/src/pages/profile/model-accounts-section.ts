@@ -73,12 +73,8 @@ function inputValue(event: Event): string {
 }
 
 function gatewayEndpoint(gatewayUrl: string): string {
-  try {
-    const url = new URL(gatewayUrl);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return t("profilePage.modelAccounts.gatewayUnavailable");
-  }
+  const url = URL.parse(gatewayUrl);
+  return url ? `${url.origin}${url.pathname}` : t("profilePage.modelAccounts.gatewayUnavailable");
 }
 
 function accountIdDetail(accounts: UserModelAccount[], account: UserModelAccount) {
@@ -111,6 +107,7 @@ function renderLinkedRow(props: ModelAccountsSectionProps, link: UserProfileAuth
       <button
         type="button"
         class="btn btn--sm profile-auth-link-unlink"
+        aria-label=${`${t("profilePage.modelAccounts.unlinkAction")}: ${providerDisplayLabel(link.provider)} · ${account?.label ?? link.authProfileId}`}
         ?disabled=${props.busy}
         @click=${() => props.onUnlink(link.provider)}
       >
@@ -134,6 +131,7 @@ function renderSavedAccountRow(props: ModelAccountsSectionProps, account: UserMo
         type="button"
         class="btn btn--sm profile-auth-account-select"
         data-auth-profile-id=${account.authProfileId}
+        aria-label=${`${t("profilePage.modelAccounts.selectAction")}: ${providerDisplayLabel(account.provider)} · ${account.label} (${account.authProfileId})`}
         ?disabled=${props.busy}
         @click=${() => props.onSelectAccount(account.authProfileId)}
       >

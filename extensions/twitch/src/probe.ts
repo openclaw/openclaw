@@ -1,15 +1,12 @@
-// Twitch plugin module implements probe behavior.
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
-/**
- * Result of probing a Twitch account
- */
 type ProbeTwitchResult = BaseProbeResult<string> & {
   username?: string;
   elapsedMs: number;
@@ -17,12 +14,6 @@ type ProbeTwitchResult = BaseProbeResult<string> & {
   channel?: string;
 };
 
-/**
- * Probe a Twitch account to verify the connection is working
- *
- * This tests the Twitch OAuth token by attempting to connect
- * to the chat server and verify the bot's username.
- */
 export async function probeTwitch(
   account: TwitchAccountConfig,
   timeoutMs: number,
@@ -43,7 +34,8 @@ export async function probeTwitch(
         const rawToken = normalizeToken(account.accessToken.trim());
         const authProvider = new StaticAuthProvider(account.clientId ?? "", rawToken);
 
-        client = new ChatClient({ authProvider });
+        const probeClient = new ChatClient({ authProvider });
+        client = probeClient;
 
         const connectionPromise = new Promise<void>((resolve, reject) => {
           let settled = false;
@@ -77,22 +69,16 @@ export async function probeTwitch(
             });
         });
 
-        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timeoutHandle = setTimeout(
-            () => reject(new Error(`timeout after ${timeoutMs}ms`)),
-            timeoutMs,
-          );
-        });
-
-        client.connect();
-        try {
-          await Promise.race([connectionPromise, timeout]);
-        } finally {
-          if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-          }
-        }
+        await raceWithTimeout(
+          () => {
+            probeClient.connect();
+            return connectionPromise;
+          },
+          timeoutMs,
+          () => {
+            throw new Error(`timeout after ${timeoutMs}ms`);
+          },
+        );
 
         client.quit();
         client = undefined;

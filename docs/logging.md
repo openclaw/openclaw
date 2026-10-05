@@ -165,8 +165,21 @@ Console logs are **TTY-aware** and formatted for readability:
 - Subsystem prefixes (e.g. `gateway/channels/whatsapp`)
 - Level coloring (info/warn/error)
 - Optional compact or JSON mode
+- Structured fields on `warn`, `error`, and `fatal` records, appended as one
+  compact `key=value ...` tail (nested values as JSON, capped at 2 KiB) so
+  plain-text sinks such as journald keep the diagnostics; `info` and lower
+  console lines stay message-only, and the file log always carries the full record.
+  These fields go through the same redaction as the `json` console style before
+  they are flattened, so a sensitive key such as `apiToken` is masked by name and
+  the length cap can only clip text that is already masked
 
 Console formatting is controlled by `logging.consoleStyle`.
+
+SQLite worker diagnostics use stderr. After the final backend closes normally,
+the worker flushes queued file logs and gives pending console output up to five
+seconds to drain before acknowledging close. Source-loaded backends and compiled
+workers share the same file-log queue. Forced worker termination can still discard
+pending diagnostics.
 
 ### Gateway WebSocket logs
 
@@ -184,6 +197,32 @@ openclaw gateway
 openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
+
+### Steering and input cancellation
+
+When retained reply-delivery state prevents steering, the Gateway logs
+`chat steering rejected; falling back to follow-up dispatch`. Its structured
+fields distinguish the incoming input's `runId` from `activeRunId` and record
+the session, active source turn, recovery claim, and exact `reason`:
+
+- `terminal-pending` or `delivered-terminal`: a final-reply receipt is present.
+- `unresolved-terminal-tool` or `delivery-ambiguous`: a final-reply delivery is unresolved.
+- `already-delivered`: the active source turn is recorded as completed.
+- `unknown-source-with-terminal-history`: the active source is unknown and
+  completed source turns are retained.
+- `stale-claim`: the recovery claim does not authorize the active source turn.
+- `session-entry-unavailable`: the Gateway could not read the current session state.
+
+These checks also run during ordinary conversations; the warning does not mean
+a Gateway restart is in progress. Rejection falls back to follow-up dispatch;
+it does not itself cancel the input.
+
+`chat pending input aborted` records an accepted input that was aborted before
+consumption, including inputs waiting in the follow-up queue. The message includes
+the cause and whether the saved input became `cancelled` or `interrupted`.
+Structured fields include its run, session, and agent IDs. Causes distinguish
+`rpc`, `stop`, `timeout`, `restart`, `archive`, `delete`, `authority-revoked`, and `superseded`;
+unclassified aborts use `aborted`. These records omit message text and attachments.
 
 ## Configuring logging
 
@@ -225,6 +264,42 @@ Chat displays recognized request-limit facts, including the allowed and actual
 number of `cache_control` blocks, in both live failures and saved history. Raw
 proxy metadata stays in redacted diagnostics rather than the chat message.
 
+Saved failed replies also distinguish rate limits, authentication failures,
+provider HTTP errors, and network interruptions. Worker inference preserves
+bounded, redacted error details for classification, including when a large
+partial response cannot fit in the transcript. Unrecognized errors still use
+generic chat copy; inspect the Gateway logs and stored error for diagnosis.
+
+Responses output-identity conflicts record the event type, output position,
+expected and observed item types, and whether a tool call completed, without
+recording item IDs or response content. OpenClaw uses the existing bounded session
+retry policy when the failing response produced no visible text or completed tool
+calls and its request enabled only client-executed function tools. Continuation
+keeps earlier tool results, so those completed actions are not replayed. Conflicts
+after output or with provider-hosted tools remain terminal; inspect earlier
+results before continuing. Previously emitted text remains terminal even if a
+later snapshot clears it. Automatic recovery requires a successful completed
+response without a refusal; conflicts before that terminal cannot be retried
+because the final outcome is unknown. Failed or incomplete terminal responses,
+including content filtering, cannot be overridden by identity recovery. The
+identity checks stay enforced on every attempt.
+
+When OpenAI Responses cuts off a tool call at `max_output_tokens`, the embedded
+runner can continue once in the same run after earlier tools have settled. It
+appends a runtime transcript notice identifying the unfinished call when its ID
+is available and instructing the model to split the work into smaller tool calls.
+The incomplete call is not executed, completed tool results remain available,
+and earlier transcript entries are unchanged. A second truncation ends the run
+with the existing unfinished-tool-call warning. Transport error logs include the
+allowlisted incomplete reason without raw provider text; content-filtered and
+unrecognized incomplete responses retain their existing failure behavior.
+
+A worker message-size failure is separate from a model context-window limit.
+Retry with a smaller response or continue on the Gateway. If the worker cannot
+preserve the model's continuation data, stop or reclaim it before retrying on
+the Gateway. Earlier tool actions may already have completed, so check their
+results before repeating them.
+
 ### Targeted model transport diagnostics
 
 When debugging provider calls, use targeted environment flags instead of raising
@@ -262,9 +337,11 @@ enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
-is always emitted at `info` level regardless of
-`OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
-without debug flags.
+uses `debug` by default. Responses with a non-2xx status or at least one second
+of elapsed time remain at `info`, and transport failures remain warnings.
+Elapsed time includes local-service preparation and waiting for response headers,
+but excludes streaming the response body. The targeted debug flags above promote
+start and fast successful response metadata to `info` when troubleshooting.
 
 `[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
 reports dropping invalidated thinking from replay. It includes the mismatch
@@ -480,8 +557,9 @@ holder sample.
 
 `operationId` and `holderOperationId` identify diagnostic operation instances
 within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
-labels `lifecycle`, `mutation` and `compaction`; they do not name arbitrary
-callers. Existing request traces appear in `operationTraceId`/`operationSpanId`
+labels `lifecycle`, `mutation` and `compaction`. Mutations also include the bounded
+`mutationKind` (for example, `create`, `archive`, `delete`, or `worktree-cleanup`);
+queue samples include `holderMutationKind`. Existing request traces appear in `operationTraceId`/`operationSpanId`
 and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
 fields remain unknown; no new trace or audit execution identity is created.
 
@@ -489,6 +567,10 @@ fields remain unknown; no new trace or audit execution identity is created.
 identity. It correlates only inside the same JavaScript runtime isolate and
 diagnostic epoch. Raw session keys and paths are omitted. The digest is
 operational correlation, not anonymization or authorization evidence.
+Both records include `sessionScopeHash`, the salted digest of the first normalized
+identity, and `identityCount`. For batches this names one scope, not every affected
+session. `holderSessionScopeHash` identifies that same scope for the current holder.
+No session titles, transcript content, repository names, or raw identities are logged.
 
 `slow session lifecycle operation` records operations taking at least one
 second through their actual queued work's settlement. It separates
@@ -511,11 +593,29 @@ capacity or after enablement. `omittedObservations` on a later record reports
 suppressed observations; missing records never prove no wait.
 
 Elapsed intervals can include asynchronous waits and nested work, so phase
-and queue totals need not form a disjoint partition. A holder sample identifies
+and queue totals need not form a disjoint partition. `isMainThread=true` identifies
+the emitting thread; a long `.run` interval does not establish event-loop blocking.
+Correlate it with event-loop delay or a CPU profile before attributing a stall.
+Work before lifecycle admission, including request preflight, is outside these intervals.
+A holder sample identifies
 who owns that queue at the sampled instant, not every predecessor responsible
 for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
 retention, principal attribution or admission authority.
+
+### Worker pool capacity
+
+Gateway `status` responses include `workerPools.transcriptReconciliation` and
+`workerPools.modelCatalog`. Each reports `maxWorkers`, `workers`, `workersCreated`,
+`activeTasks`, and `pendingTasks` from the pool owner. Both Gateway pools admit one
+worker at a time. Pending tasks include queued and executing work; creation counts
+belong to the current pool lifetime. The startup trace's `memory.ready` record also
+includes these pool counts.
+
+These figures describe worker and task counts. Process RSS includes every isolate
+and native allocation; Node's process heap flags can override a worker's requested
+heap limits. Use constructor or per-isolate measurements when attributing memory
+growth to a particular worker.
 
 ### Slow worktree cleanup
 
@@ -578,6 +678,31 @@ completion behavior.
 
 ### Slow agent database opens
 
+Foreground Gateway startup reports a bounded set of `startup phase` records even
+without opt-in tracing. CLI records identify entry-module loading, environment
+selection, command imports, and state preparation before `loading configuration`.
+Bootstrap subphases separate config-guard imports, config and database admission,
+plugin metadata, payload verification, and lease acquisition. Gateway records
+separate maintenance work, listener binding, plugin loading and attachment, worker
+startup, model preparation, channel startup, and restored subagent activation.
+Measured phases log both their start and elapsed
+duration; `total` is elapsed time from process startup (or the current in-process
+restart). These are wall times, including asynchronous waits, not CPU measurements.
+Nested durations overlap their parent phases; do not add them to the parent total.
+Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
+import and registration timings.
+
+Desktop permission narrowing and canonical session checks remain on their required
+admission paths. Transcript projection repair, orphan settlement, channel
+maintenance, pairing diagnostics, and restored-subagent activation run after
+readiness. Retired plugin captures join the existing post-ready idle cleanup.
+History reads use the transcript owner's bounded on-demand repair when needed.
+Orphan status and its failure receipt settle together in the database worker,
+with current run ownership checked before commit. These scheduling changes do
+not change stored formats or require an update migration.
+Each CLI admission pass shares one read-only state snapshot and releases it before
+live guards and writes; acquiring a preparation lease still starts a fresh pass.
+
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
 a persistent database open takes at least one second:
 
@@ -596,7 +721,7 @@ proof that the main event loop was blocked for the whole interval.
 
 The structured warning also includes `pid`, Node's `threadId`, and `isMainThread`
 for the opener emitting it. Inspect each `openclaw logs --json` event's original
-`raw` record; ordinary console text omits structured metadata.
+`raw` record; warn-level console text also carries these fields as `key=value` pairs.
 An opener on the main thread may have awaited an integrity Worker, so these
 fields do not identify the thread performing every phase. `admissionMode` records
 the actual `sync` or `async` open driver. Async admission offloads its initial
@@ -616,15 +741,23 @@ both fields absent because its parent cannot measure the callback itself.
 
 SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
 at `warn` when their joined operation takes at least one second. The record is
-emitted after Worker exit and parent admission settlement. It includes the
+emitted after a settled Worker result or native exit and parent admission settlement. It includes the
 parent's `pid`, `threadId` and `isMainThread`, the actual Node `workerThreadId`,
 `reclamationKind`, `elapsedMs`, terminal `outcome` (`resolved` or `rejected`), and
 `exitCode`. Timing starts after admission to the archive Worker queue and includes
 startup, validation, admission waits, work, and cleanup. It does not measure CPU
-time or isolate a validation phase. Short writer sections can therefore remain
+time, isolate a validation phase, or establish that the emitting parent thread blocked. Short writer sections can therefore remain
 quiet while this whole-operation warning exposes slow preparation between them.
-The record inherits an existing parent trace when available; it contains no
-database path, session identifier, plan content, or raw error.
+The record inherits an existing parent trace when available. Failed retained
+reclamation operations also include `sessionIdHash` (when targeting one session),
+`error` (the redacted message and causes), and `errorFrame` (the first stack frame).
+These failures emit one warning even below one second, named
+`SQLite reclamation Worker failed`; slower failures use the existing slow-operation
+warning. Automatic maintenance that a newer session write supersedes before commit
+is not a Worker failure: maintenance retries after the write quiet window, and a
+fast superseded Worker logs `SQLite reclamation Worker superseded by newer inputs`
+at debug level. Session identifiers use the same hash as other session SQLite diagnostics;
+the failure fields are redacted and bounded to 2,048 characters each.
 Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
 `cold-restore` (restore a transcript). Their writer warnings carry the same Worker
@@ -633,22 +766,30 @@ identity and numbered admission fields.
 ### SQLite transaction timing
 
 The `sqlite/transaction` warnings `slow SQLite transaction hold`,
-`slow SQLite transaction lock wait`, and `SQLite transaction lock wait failed`
-include `pid`, Node's `threadId`, and `isMainThread` for the thread executing the
-transaction. Inspect the original `raw` record in `openclaw logs --json` to
+`slow SQLite transaction step`, and `SQLite transaction lock wait failed`
+include `database`, `operation`, `pid`, Node's `threadId`, and `isMainThread` for
+the thread executing the transaction. Explicit labels take precedence; otherwise
+diagnostics use the native database path and the current Worker operation.
+An in-memory database is `:memory:`, a retired handle is `unavailable`, and a
+caller without operation context is `unlabeled`. Hold warnings also include
+`mode` (`deferred` or `immediate`). Inspect the original `raw` record in `openclaw logs --json` to
 distinguish the main thread from Workers sharing the same process. `async: false`
 describes the synchronous transaction helper; it does not identify the thread.
 
-Hold time covers the synchronous callback and its result checks after `BEGIN`
-and before `COMMIT`, including any JavaScript consumer work inside that callback.
-It excludes database opening and the separately timed begin and commit steps.
-These elapsed durations do not measure SQL CPU time or establish a causal link
-to a nearby request.
+Hold time starts after `BEGIN` succeeds and includes the synchronous callback,
+result checks, and commit or rollback. It excludes database opening and the
+begin step. Host admission waits inside a transaction count toward its hold;
+overlapping deferred read holds do not establish that multiple writers held a lock.
+Successful begin and commit step timings include native execution, storage work,
+and scheduling delays; they do not establish lock contention. The separate
+`SQLite transaction lock wait failed` warning identifies caught SQLite lock
+errors. These elapsed durations do not measure SQL CPU time or establish a
+causal link to a nearby request.
 
-The operation `session.reclamation.commit-settlement` identifies the parent's
-synchronous join after it authorizes a reclamation Worker to commit. Its lock
-wait is separate from the Worker's integrity scan and deletion work. This label
-also applies to cold-storage operations using that commit boundary.
+Older builds report `session.reclamation.commit-settlement` for a parent-side
+synchronous SQLite probe after authorizing a reclamation or cold-storage commit.
+The parent now atomically accepts the commit after checking live authority and
+awaits settlement asynchronously, without that probe or its lock wait.
 
 Hot transcript reads identify their purpose in `operation`: `session transcript
 <purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,
@@ -688,8 +829,8 @@ The timing fields separate the elapsed interval into:
 - `completionDelayMs`: time between callback completion and the caller resuming.
 
 These fields are available when the queued callback started and finished;
-`elapsedMs` records the total duration. Inspect the original `raw` record in
-`openclaw logs --json` to see the structured fields.
+`elapsedMs` records the total duration. The warning's console line carries the
+same fields as `key=value` pairs; `openclaw logs --json` shows the original `raw` record.
 
 Use `operation` to locate the owning code path. It does not identify a specific
 SQL statement, measure CPU time or lock contention, or establish that a nearby
@@ -781,6 +922,13 @@ flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Co
 logs each completed slow stage immediately, including failures, and emits a
 `native-turn-handoff` summary before submitting the native turn. Timing records
 contain stage names and identifiers, not prompts or tool arguments.
+
+Dispatch preparation separates `reply.wait_admission_ticket` from
+`reply.admit_pre_dispatch`, `reply.admit_dispatch`, and
+`reply.admit_command_resolution`. These spans distinguish waiting behind an
+earlier input from waiting for the session's execution owner. A cancelled or
+failed request that never reaches the reply resolver still reports slow
+preparation under the same thresholds.
 
 Embedded-run startup, prep, core-plugin-tool and auth stage summaries include
 `pid`, `threadId` and `isMainThread` in the message to distinguish emitters sharing

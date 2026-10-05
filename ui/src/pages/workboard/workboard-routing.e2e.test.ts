@@ -109,7 +109,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": configSnapshot(true),
           "sessions.list": sessionsListResponse(),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.boards.list": { boards },
           "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
         },
@@ -137,7 +136,7 @@ suite.define(() => {
       }
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
         .getByRole("menuitem", { name: "Edit pinned items" })
@@ -226,7 +225,6 @@ suite.define(() => {
             },
             "config.get": configSnapshot(true),
             "sessions.list": sessionsListResponse(),
-            "tasks.list": { nextCursor: null, tasks: [] },
             "workboard.boards.list": { boards },
             "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
           },
@@ -306,14 +304,13 @@ suite.define(() => {
           methodResponses: {
             "config.get": configSnapshot(true),
             "sessions.list": sessionsListResponse(),
-            "tasks.list": { nextCursor: null, tasks: [] },
             "workboard.boards.list": { boards },
             "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
           },
         });
         await page.goto(`${suite.server.baseUrl}apps`);
         const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(".sidebar-nav__head-action").click();
+        await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-more-menu")
           .getByRole("menuitem", { name: "Edit pinned items" })
@@ -367,7 +364,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await moreMenu.waitFor();
       expect(await moreMenu.getByText("Workboard", { exact: true }).count()).toBe(0);
