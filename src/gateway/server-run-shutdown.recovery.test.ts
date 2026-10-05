@@ -10,7 +10,6 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
-  onAgentEvent,
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import {
@@ -24,6 +23,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
+import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
@@ -54,9 +54,12 @@ it("persists interruption after a cut-short restart while recovering eligible wo
     persistGatewaySessionLifecycleEventForEvent: persist,
   });
   harness.clearAgentRunContext.mockImplementation(clearAgentRunContext);
-  const unsubscribe = onAgentEvent(harness.handler);
+  const unsubscribe = subscribeAgentEvents(harness.handler);
   const registrations: Array<ReturnType<typeof registerChatAbortController>> = [];
-  const joinPersistence = () => Promise.all(persist.mock.results.map((result) => result.value));
+  const joinPersistence = async () => {
+    await unsubscribe.drain();
+    await Promise.all(persist.mock.results.map((result) => result.value));
+  };
   const read = (sessionKey: string) =>
     expectDefined(
       loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
@@ -222,9 +225,9 @@ it("persists interruption after a cut-short restart while recovering eligible wo
       hasActiveRun: false,
     });
   } finally {
-    unsubscribe();
+    await unsubscribe();
     await joinPersistence();
-    harness.handler.dispose();
+    await harness.handler.dispose();
     for (const registration of registrations) {
       registration.cleanup();
     }
