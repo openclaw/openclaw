@@ -245,9 +245,15 @@ new work is fenced and admitted work gets the computed grace period, still cappe
 by the native shutdown deadline. Deferral time does not spend that shutdown budget.
 For a supervisor's SIGTERM restart, a shorter requested drain limits when active
 runs are interrupted, not when database cleanup must finish: cleanup can use the
-remaining native stop budget. The Gateway still exits before the supervisor's
-deadline. Clean database restart proof is published only after writer leases,
-checkpointing, and native connection closure settle.
+remaining native stop budget. After an interrupted external restart, the Gateway
+joins final chat persistence, drains Memory's database borrows, and closes agent
+databases before exiting. It skips plugin and channel teardown that could retain
+the process until the deadline. Database admission stays fenced through lock
+release and log flushing, which have a final five-second exit window. Shutdown
+logs report the elapsed time for these steps. The supervisor deadline remains
+the hard upper bound. Clean database restart proof is published only after writer
+leases, checkpointing, and native connection closure settle; one database's idle
+receipt alone does not authorize process exit.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
