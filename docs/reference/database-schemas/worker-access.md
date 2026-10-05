@@ -150,7 +150,9 @@ dispatch. Each read retains its physical owner and writer FIFO through synchrono
 consumption; the native mutation witness rejects intervening synchronous SDK
 writes. Pending-input and transcript worker grants supply transaction-local sharing
 facts to the original caller's live custody checks. Collected inputs recheck every
-source against the same snapshot. Accepted persistence keeps its existing settlement
+source against the same snapshot. Foreign-store transcript rewrites retain the
+original source owner's live host assertion; the destination cannot supply its facts.
+Accepted persistence keeps its existing settlement
 and close owner. Released synchronous custody callbacks retain their compatibility
 contract; no schema, permission, retention, or update migration is required.
 

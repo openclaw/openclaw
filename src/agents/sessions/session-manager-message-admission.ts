@@ -33,8 +33,8 @@ export function captureSessionMessageAdmission(
         }
         pendingInput.assertCurrent(
           // SAFETY: This bound worker alone produces the session-message grant.
-          facts.authority as SessionPendingInputAuthorityFacts,
-          assertCurrent,
+          (facts.authority ?? undefined) as SessionPendingInputAuthorityFacts | undefined,
+          facts.authority === null ? undefined : assertCurrent,
         );
       } else if (facts.check === "fresh") {
         if (!controls?.beforeFreshMessageCommit) {

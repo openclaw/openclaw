@@ -87,6 +87,10 @@ function runWithMetadataMessageAdmission<T>(
   let pendingAuthorityChecked = false;
   const readAuthority = () => {
     const source = controls?.pendingInput?.facts;
+    // Foreign custody keeps its original host owner's live assertion.
+    if (source?.preparedAuthority && source.databasePath !== context.databasePath) {
+      return null;
+    }
     return source?.preparedAuthority && source.agentId && source.databaseAgentId
       ? readSessionPendingInputAuthorityFacts(
           { db: context.database, path: context.databasePath, agentId: source.databaseAgentId },
