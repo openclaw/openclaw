@@ -21,7 +21,10 @@ import {
 import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
-import { restartRecoveryStoreTargetKey } from "./main-session-restart-recovery-diagnostics.js";
+import {
+  restartRecoveryStoreTargetKey,
+  type MainSessionRecoverySkipReason,
+} from "./main-session-restart-recovery-diagnostics.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
@@ -35,7 +38,6 @@ import {
 import {
   loadExpectedRestartRecoveryTarget,
   recoverStore,
-  type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-store.js";
 
 type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };

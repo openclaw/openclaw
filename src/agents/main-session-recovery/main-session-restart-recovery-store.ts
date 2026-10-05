@@ -43,6 +43,7 @@ import {
 import {
   skippedMainSessionRecoveryDecision,
   type MainSessionRecoveryDecision,
+  type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
 import { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
@@ -168,25 +169,6 @@ export function loadExpectedRestartRecoveryTarget(params: {
     ? entry
     : undefined;
 }
-
-export type MainSessionRecoverySkipReason =
-  | "stopped"
-  | "not_main_session"
-  | "work_start_blocked"
-  | "dispatch_target_unavailable"
-  | "live_owner"
-  | "already_handled"
-  | "state_changed"
-  | "inactive"
-  | "blocked"
-  | "tombstoned"
-  | "exhausted"
-  | "message_action_authority_unavailable"
-  | "observation_only"
-  | "pending_delivery"
-  | "invalid_harness_completion"
-  | "delegated_authority_unavailable"
-  | "dispatch_skipped";
 
 export async function recoverStore(params: {
   storeAgentId?: string;

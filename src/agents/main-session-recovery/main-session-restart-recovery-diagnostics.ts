@@ -3,7 +3,25 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
-import type { MainSessionRecoverySkipReason } from "./main-session-restart-recovery-store.js";
+
+export type MainSessionRecoverySkipReason =
+  | "stopped"
+  | "not_main_session"
+  | "work_start_blocked"
+  | "dispatch_target_unavailable"
+  | "live_owner"
+  | "already_handled"
+  | "state_changed"
+  | "inactive"
+  | "blocked"
+  | "tombstoned"
+  | "exhausted"
+  | "message_action_authority_unavailable"
+  | "observation_only"
+  | "pending_delivery"
+  | "invalid_harness_completion"
+  | "delegated_authority_unavailable"
+  | "dispatch_skipped";
 
 export type MainSessionRecoveryDecision = {
   decision: "started" | "settled" | "deferred" | "blocked";
