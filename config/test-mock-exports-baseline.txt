@@ -8242,7 +8242,6 @@
 ["src/gateway/server-plugin-subagent-runtime.overrides.test.ts","../agents/provider-model-normalization.runtime.js","a5c6650ad159c759469f522755081fd55bd6202e8c0fe8a603394ff3b8de20a7",1]
 ["src/gateway/server-plugin-subagent-runtime.test.ts","../agents/isolated-completion.js","dc94f6a9116e194ea8d222afd05d7e0770a9e0c5639b9ad25fa7ff927794c655",1]
 ["src/gateway/server-plugin-subagent-runtime.test.ts","../agents/provider-model-normalization.runtime.js","322238fe75bd5f34744abba831afa522fa9df944d9545ee4d6e9843c4f567e93",1]
-["src/gateway/server-plugins.subagent-ended-hook.test.ts","./server-methods.js","8b2427a8e63caaebd481ca02ef794618cb1a5c4d2597a1f8106dc6e5b801deb0",1]
 ["src/gateway/server-plugins.test.ts","../agents/provider-model-normalization.runtime.js","322238fe75bd5f34744abba831afa522fa9df944d9545ee4d6e9843c4f567e93",1]
 ["src/gateway/server-plugins.test.ts","../auto-reply/reply/dispatch-from-config.js","28baf2b35d960f69c570ec4007e7cc5dbcb7fb9ac2c8338a6f08c211a6cc7c2f",1]
 ["src/gateway/server-plugins.test.ts","../channels/registry.js","a31efb153fd5222c8a7da3599b6334cf8af9466d6be8dc85a1553b926b13cdbf",1]
