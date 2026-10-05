@@ -842,9 +842,7 @@ describe("Codex app-server main thread cleanup", () => {
       harness.send({ id: threadStart.id, result: threadStartResult() });
       const turnStart = await waitForHarnessRequest(harness, "turn/start");
       harness.send({ id: turnStart.id, result: turnStartResult() });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       abort.abort("cancelled");
       const interrupt = await waitForHarnessRequest(harness, "turn/interrupt");
@@ -853,9 +851,7 @@ describe("Codex app-server main thread cleanup", () => {
         params: { threadId: "thread-1", turnId: "turn-1" },
       });
       harness.send({ id: interrupt.id, result: {} });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(settled).toBe(false);
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
         "thread/unsubscribe",
