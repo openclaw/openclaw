@@ -543,8 +543,19 @@ export function createIncognitoSessionFacts(
           authority: IncognitoSessionAuthority,
           command: { type: Key; input: IncognitoHistoryOperations[Key]["input"] },
           signal?: AbortSignal,
+          onRead?: (value: IncognitoHistoryOperations[Key]["output"]) => void,
         ): Promise<IncognitoHistoryOperations[Key]["output"]> =>
-          perform(authority, command, false, (result) => result.value, signal),
+          perform(
+            authority,
+            command,
+            false,
+            (result) => {
+              // Synchronous publication remains inside the read's original FIFO turn.
+              onRead?.(result.value);
+              return result.value;
+            },
+            signal,
+          ),
         readPendingInput(authority: IncognitoSessionAuthority, input: PendingInputRead) {
           return perform(
             authority,

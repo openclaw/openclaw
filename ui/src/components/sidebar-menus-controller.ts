@@ -428,6 +428,16 @@ export class SidebarMenusController implements ReactiveController {
     if (this.agentMenuInteractionState === "open-hover") {
       this.agentMenuFocusBeforeHover = null;
       this.updateState("agentMenuInteractionState", "open-click");
+      // Promotion does not reopen the dropdown, so after-show will not move focus.
+      void this.host.updateComplete.then(() => {
+        if (this.agentMenuInteractionState !== "open-click" || this.agentMenuTrigger !== trigger) {
+          return;
+        }
+        const dropdown = this.host.querySelector<HTMLElement>(".sidebar-agent-menu");
+        if (dropdown) {
+          this.menuRenderer?.focusActiveAgentMenuItem(dropdown);
+        }
+      });
       return;
     }
     this.openAgentMenu(trigger, "open-click");

@@ -328,12 +328,11 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
-    const settingsAgent = [
-      ...(menu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
-    ].find((row) => row.textContent?.includes("settings"));
-    menu?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: settingsAgent }, bubbles: true }),
+    const settingsAgent = menu?.querySelector<HTMLElement>(
+      'wa-dropdown-item[value="agent:settings"]',
     );
+    expect(settingsAgent).not.toBeNull();
+    settingsAgent!.click();
     await sidebar.updateComplete;
 
     // Uncached agent main session: the face is a guess, so the navigation carries the

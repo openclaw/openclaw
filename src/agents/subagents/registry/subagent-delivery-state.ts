@@ -234,6 +234,36 @@ export function isCompletedRequesterDeliveryBlocked(
   );
 }
 
+/** Delivered child history releases its requester only after every completion owner settles. */
+export function isSettledSubagentRequesterHistory(entry: SubagentRunRecord): boolean {
+  const endedAt = entry.execution.endedAt;
+  const cleanedAt = entry.cleanupCompletedAt;
+  return (
+    entry.execution.status === "terminal" &&
+    typeof endedAt === "number" &&
+    Number.isFinite(endedAt) &&
+    typeof cleanedAt === "number" &&
+    Number.isFinite(cleanedAt) &&
+    cleanedAt >= endedAt &&
+    entry.delivery?.status === "delivered" &&
+    !entry.requesterTurnRunId &&
+    !entry.requesterSettleWake &&
+    !entry.retireAfterRequesterTurn &&
+    !entry.wakeOnDescendantSettle &&
+    !entry.pauseReason &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    !entry.execution.restartRecovery &&
+    !entry.terminalOwner &&
+    !entry.suppressAnnounceReason &&
+    !entry.collect &&
+    !entry.collectorCompletion &&
+    !entry.collectorLaunchCleanupPending &&
+    !entry.swarmLaunchPending &&
+    !entry.queuedLaunch
+  );
+}
+
 /** Returns true when required delivery still owns the row after its child session is gone. */
 export function hasRetainedRequiredCompletionDelivery(
   entry: Pick<

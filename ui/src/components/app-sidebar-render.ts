@@ -5,7 +5,6 @@ import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
-import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
@@ -154,12 +153,9 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
                 aria-hidden="true"
                 >${icons.mark}</span
               >`
-            : html`<img
-                class="sidebar-workspace-header__mark"
-                src=${controlUiPublicAssetPath("favicon.svg", host.basePath)}
-                alt=""
-                aria-hidden="true"
-              />`
+            : html`<span class="sidebar-workspace-header__mark" aria-hidden="true"
+                >${icons.lobster}</span
+              >`
         }
         <span class="sidebar-agent-card__text">
           <span class="sidebar-agent-card__name">

@@ -2154,7 +2154,6 @@ src/gateway/server-runtime-state-prepare.ts	1
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-post-attach.ts	1
-src/gateway/server-worker-placement-startup.ts	2
 src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	7
 src/gateway/server.auth.control-ui.device-token.suite.ts	2
 src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	6
@@ -2267,7 +2266,7 @@ src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	1
 src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
-src/infra/net/runtime-fetch.ts	5
+src/infra/net/runtime-fetch.ts	4
 src/infra/net/ssrf.ts	7
 src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2

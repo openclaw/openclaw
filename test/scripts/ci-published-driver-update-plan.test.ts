@@ -29,15 +29,16 @@ describe("published-driver update selection", () => {
     { paths: null, expected: true },
     { paths: [], expected: true },
     { paths: [""], expected: true },
-  ])("selects the cross-version cell for $paths: $expected", ({ paths, expected }) => {
-    expect(shouldRunPublishedDriverUpdate(paths)).toBe(expected);
+  ])("retains dispatch owner selection for $paths: $expected", ({ paths, expected }) => {
+    expect(shouldRunPublishedDriverUpdate(paths, "workflow_dispatch")).toBe(expected);
+    expect(shouldRunPublishedDriverUpdate(paths, "pull_request")).toBe(false);
   });
 
   it.each([
     {
       eventName: "pull_request",
       file: "src/infra/update-managed-service-handoff.ts",
-      selected: true,
+      selected: false,
     },
     { eventName: "pull_request", file: "src/state/openclaw-state-lease.ts", selected: false },
     { eventName: "push", file: "src/agents/context-window-guard.ts", selected: true },
