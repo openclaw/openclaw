@@ -4,6 +4,7 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
+  agentCommand,
   agentCommandFromGatewayIngress,
   compactionTestRuntime,
   compactionTestState as state,
@@ -13,6 +14,7 @@ import {
   requireCompactionStorePath,
 } from "./agent-command.compaction.test-support.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
+import * as modelSelection from "./command/model-selection.js";
 import { markSessionCompletedAfterRecoveryCheckpoint } from "./main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-recovery/main-session-restart-recovery-store.js";
@@ -25,6 +27,59 @@ const {
 } = compactionTestRuntime;
 
 registerAgentCommandCompactionTestHooks();
+
+it.each(["pre-model", "attempt"] as const)(
+  "retires only the failed local execution fence after a %s error",
+  async (boundary) => {
+    const sessionKey = `agent:main:dashboard:local-failure-${boundary}`;
+    const sessionId = `local-failure-${boundary}`;
+    const runId = `failed-local-${boundary}`;
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const scope = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+    const failure = new Error(`ordinary ${boundary} failure`);
+    const siblingFence = { runId: "sibling-run", lifecycleGeneration };
+    const siblingClaim = {
+      restartRecoveryDeliveryRunId: "sibling-delivery",
+      restartRecoveryDeliverySourceRunId: "sibling-source",
+      restartRecoverySourceIngress: "control-ui" as const,
+      restartRecoveryTerminalRunIds: ["previous-terminal"],
+    };
+    const failAdmittedRun = async () => {
+      expect(loadSessionEntry(scope)?.restartRecoveryRuns).toEqual([
+        { runId, lifecycleGeneration },
+      ]);
+      expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBeUndefined();
+      await compactionTestRuntime.patchSessionEntryCore(scope, (entry) => ({
+        ...siblingClaim,
+        restartRecoveryRuns: [...(entry.restartRecoveryRuns ?? []), siblingFence],
+      }));
+      throw failure;
+    };
+    const selection =
+      boundary === "pre-model"
+        ? vi
+            .spyOn(modelSelection, "resolveEmbeddedModelSelection")
+            .mockImplementationOnce(failAdmittedRun)
+        : undefined;
+    if (boundary === "attempt") {
+      state.runAgentAttemptMock.mockImplementationOnce(failAdmittedRun);
+    }
+    try {
+      await expect(
+        agentCommand({ sessionKey, sessionId, runId, message: "Attempt this local turn" }),
+      ).rejects.toThrow(failure.message);
+    } finally {
+      selection?.mockRestore();
+    }
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(boundary === "attempt" ? 1 : 0);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      ...siblingClaim,
+      restartRecoveryRuns: [siblingFence],
+      restartRecoveryTerminalRunIds: ["previous-terminal", runId],
+    });
+  },
+);
 
 it.each(["unknown", "delivered"] as const)(
   "admits the next agent turn after settling a %s final across another restart",

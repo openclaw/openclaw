@@ -319,17 +319,6 @@ export function shouldPersistRestartRecoveryContextClaim(
   );
 }
 
-export function shouldPersistRestartRecoveryCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-): boolean {
-  return (
-    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
-    current?.restartRecoveryDeliveryRunId === runId
-  );
-}
-
 export function buildCurrentRunRestartRecoveryClaim(params: {
   harnessCompletion?: HarnessCompletionRecovery;
   deliveryContext?: DeliveryContext;

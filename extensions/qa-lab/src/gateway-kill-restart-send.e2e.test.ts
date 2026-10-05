@@ -110,6 +110,7 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
             return undefined;
           }
           const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey, {
+            allowEmpty: true,
             includeCodeModeControl: true,
           });
           return (transcript.assistantToolCallCounts.wait ?? 0) >
