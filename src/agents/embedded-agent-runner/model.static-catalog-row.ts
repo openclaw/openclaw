@@ -4,7 +4,6 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveProviderModelInput } from "./model.inline-provider.js";
 
-/** Converts a normalized catalog row into the provider runtime model shape. */
 export function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
     id: row.id,

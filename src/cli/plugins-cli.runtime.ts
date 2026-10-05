@@ -25,7 +25,6 @@ import type { PluginPackageInstall } from "../plugins/package-manifest.types.js"
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -40,8 +39,6 @@ import type {
 import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
 
 type PluginInstallActionOptions = RunPluginInstallCommandParams["opts"];
-
-const loadPluginsStatus = createLazyRuntimeModule(() => import("../plugins/status.js"));
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
@@ -310,7 +307,7 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     buildPluginCompatibilityNotices,
     withPluginDiagnosticsReportForInspection,
     formatPluginCompatibilityNotice,
-  } = await loadPluginsStatus();
+  } = await import("../plugins/status.js");
   const {
     collectStalePluginConfigWarnings,
     isStalePluginAutoRepairBlocked,
@@ -535,7 +532,6 @@ function classifyMarketplaceFeedFallback(error: string | undefined): string | un
 
 function emitMarketplaceFeedTelemetry(params: {
   command: "entries" | "refresh";
-  entryCount?: number;
   failedPinnedRefresh?: boolean;
   opts: MarketplaceFeedTelemetryOptions;
   config?: OpenClawConfig;
@@ -543,7 +539,7 @@ function emitMarketplaceFeedTelemetry(params: {
 }): void {
   const attributes: Record<string, string | number | boolean | null> = {
     command: params.command,
-    entries: params.entryCount ?? params.payload.entries,
+    entries: params.payload.entries,
     source: params.payload.source,
   };
   if (params.opts.feedProfile?.trim()) {
@@ -769,7 +765,6 @@ export async function runPluginMarketplaceEntriesCommand(
 
   emitMarketplaceFeedTelemetry({
     command: "entries",
-    entryCount: entries.length,
     opts,
     config: cfg,
     payload: summary,

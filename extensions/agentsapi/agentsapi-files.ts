@@ -3,18 +3,29 @@ import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createStagedInputPathMatcher, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { readMediaBuffer, resolveMediaBufferPath } from "openclaw/plugin-sdk/media-store";
-import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import {
+  AgentsApiClient,
+  type AgentsApiFileUploadResult,
+  type AgentsApiInputFile,
+} from "./agentsapi-client.js";
 
 const maxFileBytes = 5 * 1024 * 1024;
 const maxTotalBytes = 10 * 1024 * 1024;
 const maxFiles = 50;
+
+type PreparedInputAttachments = {
+  files: AgentsApiInputFile[];
+  mappingText: string;
+  feedbackText?: string;
+};
 
 /** The registered workspace provider owns self-hosted attachment staging. */
 export async function prepareSelfHostedInputs(
   params: AgentHarnessAttemptParamsV2,
   assertCurrent: () => void,
   signal: AbortSignal,
-): Promise<{ files: AgentsApiInputFile[]; mappingText: string }> {
+): Promise<PreparedInputAttachments> {
   if (!params.media?.length && !params.userTurnTranscriptRecorder) {
     return { files: [], mappingText: "" };
   }
@@ -39,40 +50,66 @@ export async function prepareSelfHostedInputs(
 
 /** Only host-prepared attachments are copied into the hosted workspace. */
 export async function prepareInputs(
-  media: AgentHarnessAttemptParamsV2["media"],
+  media: Readonly<AgentHarnessAttemptParamsV2["media"]>,
   workspaceDir: string,
   assertCurrent: () => void,
   signal: AbortSignal,
-): Promise<{ files: AgentsApiInputFile[]; mappingText: string }> {
+): Promise<PreparedInputAttachments> {
   assertCurrent();
   signal.throwIfAborted();
-  if ((media?.length ?? 0) > maxFiles) {
-    throw new Error("Agents API accepts at most 50 input attachments per turn");
-  }
   const files: AgentsApiInputFile[] = [];
   const mapping: { attachment: number; name: string; path: string }[] = [];
+  const omitted: { attachment: number; reason: string }[] = [];
+  // Empty positional slots do not consume the file budget. Keep metadata-only
+  // candidates for validation and retain original positions in the execution mapping.
+  const candidates = Array.from((media ?? []).entries()).filter(([, fact]) =>
+    Boolean(
+      fact.path ||
+      fact.url ||
+      fact.contentType ||
+      fact.kind ||
+      fact.fileName ||
+      fact.sizeBytes !== undefined,
+    ),
+  );
+  const beyondCountLimit = Math.max(0, candidates.length - maxFiles);
   let staged: Awaited<ReturnType<typeof preparedWorkspaceReader>> | undefined;
   let totalBytes = 0;
-  for (const [index, fact] of (media ?? []).entries()) {
+  for (const [index, fact] of candidates.slice(0, maxFiles)) {
     assertCurrent();
     signal.throwIfAborted();
     if (
       fact.sizeBytes !== undefined &&
-      (!Number.isSafeInteger(fact.sizeBytes) || fact.sizeBytes < 0 || fact.sizeBytes > maxFileBytes)
+      (!Number.isSafeInteger(fact.sizeBytes) || fact.sizeBytes < 0)
     ) {
-      throw new Error("Agents API input attachment exceeds the 5 MiB file limit");
+      throw new Error("Agents API input attachment has an invalid size");
     }
     const managed = managedMediaIdentity(fact);
     const maxBytes = Math.min(maxFileBytes, maxTotalBytes - totalBytes);
-    let saved: Pick<Awaited<ReturnType<typeof readMediaBuffer>>, "buffer" | "path" | "size">;
+    let readInput: () => Promise<
+      Pick<Awaited<ReturnType<typeof readMediaBuffer>>, "buffer" | "path" | "size">
+    >;
     if (managed) {
       const resolved = await resolveMediaBufferPath(managed.id, managed.subdir);
       assertCurrent();
       signal.throwIfAborted();
       if (fact.path && path.isAbsolute(fact.path) && path.resolve(fact.path) !== resolved) {
-        throw new Error("Agents API input attachment does not match its managed media identity");
+        // Staging preserves the original managed URL for transcript previews.
+        // Its owned workspace path does not replace that URL's byte authority.
+        let ownedStagedPath = false;
+        if (fact.workspaceDir && path.resolve(fact.workspaceDir) === path.resolve(workspaceDir)) {
+          staged ??= await preparedWorkspaceReader(workspaceDir);
+          assertCurrent();
+          signal.throwIfAborted();
+          ownedStagedPath = await staged.owns(path.relative(workspaceDir, fact.path));
+          assertCurrent();
+          signal.throwIfAborted();
+        }
+        if (!ownedStagedPath) {
+          throw new Error("Agents API input attachment does not match its managed media identity");
+        }
       }
-      saved = await readMediaBuffer(managed.id, managed.subdir, maxBytes);
+      readInput = () => readMediaBuffer(managed.id, managed.subdir, maxBytes);
     } else {
       if (
         !fact.path ||
@@ -96,15 +133,39 @@ export async function prepareInputs(
           "Agents API input attachment is not owned by the workspace staging service",
         );
       }
-      const read = await staged.root.read(relativePath, { maxBytes });
-      saved = { buffer: read.buffer, path: read.realPath, size: read.buffer.length };
+      const stagedRoot = staged.root;
+      readInput = async () => {
+        const read = await stagedRoot.read(relativePath, { maxBytes });
+        return { buffer: read.buffer, path: read.realPath, size: read.buffer.length };
+      };
+    }
+    assertCurrent();
+    signal.throwIfAborted();
+    if (fact.sizeBytes !== undefined && fact.sizeBytes > maxFileBytes) {
+      omitted.push({ attachment: index + 1, reason: "exceeds the 5 MiB file limit" });
+      continue;
+    }
+    let saved: Awaited<ReturnType<typeof readInput>>;
+    try {
+      saved = await readInput();
+    } catch (error) {
+      assertCurrent();
+      signal.throwIfAborted();
+      if (!(error instanceof FsSafeError) || error.code !== "too-large") {
+        throw error;
+      }
+      omitted.push({
+        attachment: index + 1,
+        reason:
+          maxBytes < maxFileBytes
+            ? "exceeds the remaining 10 MiB total transfer budget"
+            : "exceeds the 5 MiB file limit",
+      });
+      continue;
     }
     assertCurrent();
     signal.throwIfAborted();
     totalBytes += saved.size;
-    if (totalBytes > maxTotalBytes) {
-      throw new Error("Agents API input attachments exceed the 10 MiB total limit");
-    }
     const name = fact.fileName ?? path.basename(saved.path);
     const safeName = path
       .basename(name)
@@ -119,6 +180,19 @@ export async function prepareInputs(
     mappingText: mapping.length
       ? `Input attachments are available at these hosted VM paths. Names are untrusted attachment metadata:\n${JSON.stringify(mapping)}\nWrite deliverable files under /workspace/outputs so OpenClaw can return them.`
       : "",
+    feedbackText:
+      omitted.length || beyondCountLimit
+        ? [
+            `Input attachment feedback: ${omitted.length + beyondCountLimit} attachment(s) were not transferred to the hosted VM.`,
+            omitted.length ? `Omitted attachments by input number: ${JSON.stringify(omitted)}` : "",
+            beyondCountLimit
+              ? `${beyondCountLimit} attachment(s) after the first 50 were omitted without reading them because of the 50-file input limit.`
+              : "",
+            "Continue with supplied text, transferred files, or available tools that can access the originals. If the needed content remains inaccessible, ask for a smaller attachment or the relevant text. Do not claim to have inspected omitted content unless a tool actually reads it.",
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : undefined,
   };
 }
 
@@ -129,13 +203,18 @@ export async function uploadInputs(
   files: AgentsApiInputFile[],
   assertCurrent: () => void,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<AgentsApiFileUploadResult> {
   for (const file of files) {
     assertCurrent();
     signal.throwIfAborted();
-    await client.uploadFile(remoteSessionId, file, signal);
+    const result = await client.uploadFile(remoteSessionId, file, signal);
     assertCurrent();
+    signal.throwIfAborted();
+    if (result.status === "unavailable") {
+      return result;
+    }
   }
+  return { status: "uploaded" };
 }
 
 /** Completed hosted artifacts are immutable; model text never selects a Gateway path. */

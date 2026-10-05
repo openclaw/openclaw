@@ -30,13 +30,15 @@ export class FilterableSelectList implements Component, Focusable {
   private input: Input;
   private selectList: SelectList;
   private allItems: Array<{ item: FilterableSelectItem; searchText: string }>;
-  private maxVisible: number;
-  private theme: FilterableSelectListTheme;
 
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
 
-  constructor(items: FilterableSelectItem[], maxVisible: number, theme: FilterableSelectListTheme) {
+  constructor(
+    items: FilterableSelectItem[],
+    private readonly maxVisible: number,
+    private readonly theme: FilterableSelectListTheme,
+  ) {
     // Each overlay owns fixed rows; search keeps raw fields while display copies stay sanitized.
     this.allItems = items.map((item) => ({
       searchText: [item.label, item.description, item.searchText].filter(Boolean).join(" "),
@@ -49,8 +51,6 @@ export class FilterableSelectList implements Component, Focusable {
         description: sanitizeRenderableLine(item.description ?? ""),
       },
     }));
-    this.maxVisible = maxVisible;
-    this.theme = theme;
     this.input = new Input();
     // Input owns terminal key decoding; clearing follows the normal filter refresh.
     this.input.onEscape = () => {

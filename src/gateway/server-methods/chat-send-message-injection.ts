@@ -52,7 +52,7 @@ export function createChatSendMessageInjectionStarter(params: {
   >;
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: Pick<
-    ReturnType<typeof prepareChatSendUserTurn>,
+    Awaited<ReturnType<typeof prepareChatSendUserTurn>>,
     "ctx" | "isInternalTextSlashCommandTurn" | "replyOptionImages" | "replyOptionMedia"
   >;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
@@ -246,6 +246,20 @@ export async function settleChatSendPreAckMessageInjection(params: {
     return { status: "handled" };
   }
   return { status: "continue", attempt: undefined };
+}
+
+/** Pre-ACK steering is already owned; join it before fallible source preparation. */
+export async function settleChatSendMessageInjection(
+  attempt: ReplyMessageInjectionAttempt | undefined,
+): Promise<boolean> {
+  if (!attempt) {
+    return false;
+  }
+  const outcome = await attempt.outcome;
+  if (outcome.status === "failed") {
+    throw outcome.error;
+  }
+  return outcome.status !== "rejected";
 }
 
 /** Finish an accepted steer without entering reply dispatch, or return false for fallback. */

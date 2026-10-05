@@ -1,4 +1,3 @@
-// Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
@@ -19,6 +18,7 @@ import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { resolveNpmCommand } from "./npm-command.js";
+import { parseNpmErrorCode } from "./npm-error.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import {
   isExactSemverVersion,
@@ -55,6 +55,8 @@ export type NpmSpecResolution = {
   resolvedAt?: string;
   packageOpenClaw?: Record<string, unknown>;
 };
+
+type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 
 /** Flattened npm resolution fields stored on install results and diagnostics. */
 type NpmResolutionFields = {
@@ -220,7 +222,7 @@ export async function resolveNpmSpecMetadata(params: {
   );
   if (res.code !== 0) {
     const raw = formatNpmCommandFailureOutput(res);
-    if (/E404|is not in this registry/i.test(raw)) {
+    if (parseNpmErrorCode(raw) === "E404") {
       return {
         ok: false,
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
@@ -269,16 +271,9 @@ export async function withInstallWorkspace<T>(
 }
 
 /** Resolves and validates a user-supplied archive path before extraction. */
-export async function resolveArchiveSourcePath(archivePath: string): Promise<
-  | {
-      ok: true;
-      path: string;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
-> {
+export async function resolveArchiveSourcePath(
+  archivePath: string,
+): Promise<InstallSourceResult<{ path: string }>> {
   const resolved = resolveUserPath(archivePath);
   if (!(await pathExists(resolved))) {
     return { ok: false, error: `archive not found: ${resolved}` };
@@ -388,17 +383,7 @@ export async function packNpmSpecToArchive(params: {
   workTimeoutMs?: number | null;
   cwd: string;
   signal?: AbortSignal;
-}): Promise<
-  | {
-      ok: true;
-      archivePath: string;
-      metadata: NpmSpecResolution;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
-> {
+}): Promise<InstallSourceResult<{ archivePath: string; metadata: NpmSpecResolution }>> {
   const res = await runCommandWithTimeout(
     resolveNpmCommand([
       "pack",
@@ -421,7 +406,7 @@ export async function packNpmSpecToArchive(params: {
   );
   if (res.code !== 0) {
     const raw = formatNpmCommandFailureOutput(res);
-    if (/E404|is not in this registry/i.test(raw)) {
+    if (parseNpmErrorCode(raw) === "E404") {
       return {
         ok: false,
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
@@ -458,16 +443,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<
-  | {
-      ok: true;
-      archivePath: string;
-      tarballName: string;
-      metadata: NpmSpecResolution;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
+  InstallSourceResult<{ archivePath: string; tarballName: string; metadata: NpmSpecResolution }>
 > {
   const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
   if (!archivePathResult.ok) {

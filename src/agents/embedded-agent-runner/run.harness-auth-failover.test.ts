@@ -374,4 +374,81 @@ describe("native harness auth failover", () => {
       expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    [
+      "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
+      "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+    ],
+    [
+      "CODEX_NODE_EXEC_APPROVAL_DENIED",
+      "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+    ],
+    [
+      "CODEX_NODE_EXEC_APPROVAL_REQUIRED",
+      "Codex node execution requires an available approval reviewer.",
+    ],
+  ])("preserves %s without rotating or failing healthy profiles", async (code, message) => {
+    const runEmbeddedAgent = prepareAuthFailoverRun();
+    const { GatewayClientRequestError } =
+      await import("../../../packages/gateway-client/src/request-error.js");
+    const { resolveModelFallbackError } = await import("../failover-error.js");
+    const { buildExternalRunFailureReply } =
+      await import("../../auto-reply/reply/agent-runner-failure-reply.js");
+    const failure = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message,
+      details: { code },
+    });
+    mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
+
+    await expect(
+      runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        authProfileId: failedProfile,
+        authProfileIdSource: "auto",
+      }),
+    ).rejects.toBe(failure);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(resolveModelFallbackError(failure)).toEqual({ kind: "coordination", error: failure });
+    expect(
+      buildExternalRunFailureReply({ error: failure, message: `${message} | INVALID_REQUEST` }),
+    ).toEqual({
+      text: `⚠️ ${message}`,
+      isGenericRunnerFailure: false,
+    });
+  });
+
+  it.each(["401 Unauthorized", "invalid API key", "OAuth token expired"])(
+    "still records genuine harness auth failure and shows sign-in guidance: %s",
+    async (message) => {
+      const runEmbeddedAgent = prepareAuthFailoverRun();
+      mockedResolveAuthProfileOrder.mockReturnValue([failedProfile]);
+      const { buildExternalRunFailureReply } =
+        await import("../../auto-reply/reply/agent-runner-failure-reply.js");
+      const failure = new Error(message);
+      mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
+
+      await expect(
+        runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          authProfileId: failedProfile,
+          authProfileIdSource: "auto",
+        }),
+      ).rejects.toBe(failure);
+      expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: failedProfile, reason: "auth" }),
+      );
+      expect(buildExternalRunFailureReply({ error: failure, message }).text).toBe(
+        "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+      );
+    },
+  );
 });

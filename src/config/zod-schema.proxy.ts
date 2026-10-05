@@ -5,14 +5,13 @@ import { sensitive } from "./zod-schema.sensitive.js";
 const ProxyLoopbackModeSchema = z.enum(["gateway-only", "proxy", "block"]);
 
 const ProxyTlsConfigSchema = z
-  .object({
+  .strictObject({
     caFile: z.string().min(1).optional(),
   })
-  .strict()
   .optional();
 
 export const ProxyConfigSchema = z
-  .object({
+  .strictObject({
     enabled: z.boolean().optional(),
     proxyUrl: z
       .url()
@@ -24,7 +23,6 @@ export const ProxyConfigSchema = z
     tls: ProxyTlsConfigSchema,
     loopbackMode: ProxyLoopbackModeSchema.optional(),
   })
-  .strict()
   .optional();
 
 export type ProxyConfig = z.infer<typeof ProxyConfigSchema>;

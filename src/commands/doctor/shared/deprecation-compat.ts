@@ -91,12 +91,12 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-08-16",
     source:
       "models.providers.* context defaults and agents.defaults/entries/list contextTokens caps",
-    migration: "src/config/legacy.context-budget.ts",
+    migration: "src/commands/doctor/shared/legacy-context-budget.ts",
     replacement:
       "models.providers.<provider>.models[].contextTokens active-input caps and per-model contextWindow metadata",
     docsPath: "/concepts/model-providers",
     tests: [
-      "src/config/legacy.context-budget.test.ts",
+      "src/commands/doctor/shared/legacy-context-budget.test.ts",
       "src/config/io.compat.test.ts",
       "src/commands/doctor-config-flow.test.ts",
     ],
@@ -287,41 +287,6 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
   }),
-  compatRecord("doctor-agent-runtime-embedded-harness", "removed", {
-    owner: "agent-runtime",
-    introduced: "2026-04-25",
-    deprecated: "2026-04-26",
-    warningStarts: "2026-04-26",
-    previousRemoveAfter: "2026-07-26",
-    source: "agents.defaults.embeddedHarness; agents.list[].embeddedHarness",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
-    replacement: "models.providers.<provider>.agentRuntime or model-scoped agentRuntime",
-    docsPath: "/plugins/sdk-agent-harness",
-    notes:
-      "Pre-June embeddedHarness configs must pass through OpenClaw 2026.9.5 Doctor before upgrading. Separate agentRuntime pins retain the Codex installation opt-out shipped in 2026.8.1.",
-  }),
-  compatRecord("doctor-agent-embedded-pi-config", "removed", {
-    owner: "agent-runtime",
-    introduced: "2026-05-21",
-    previousRemoveAfter: "2026-07-26",
-    source: "agents.defaults.embeddedPi; agents.list[].embeddedPi",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
-    replacement: "agents.defaults.embeddedAgent; agents.list[].embeddedAgent",
-    docsPath: "/gateway/config-agents",
-    notes:
-      "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
-  }),
-  compatRecord("doctor-agent-sandbox-persession", "removed", {
-    owner: "agent-runtime",
-    introduced: "2026-04-26",
-    previousRemoveAfter: "2026-07-26",
-    source: "agents.defaults.sandbox.perSession; agents.list[].sandbox.perSession",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
-    replacement: "agents.*.sandbox.scope",
-    docsPath: "/cli/doctor",
-    notes:
-      "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
-  }),
   compatRecord("doctor-memory-search-owner-consolidation", "deprecated", {
     previousRemoveAfter: "2026-09-18",
     owner: "config",
@@ -389,15 +354,6 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "threadBindings.idleHours",
     docsPath: "/channels/channel-routing",
   }),
-  compatRecord("doctor-message-queue-steering-modes", "removal-pending", {
-    owner: "config",
-    introduced: "2026-05-04",
-    previousRemoveAfter: "2026-07-26",
-    source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
-    replacement: "steer, followup, collect, or interrupt queue modes",
-    docsPath: "/concepts/queue",
-  }),
   compatRecord("doctor-channel-dm-aliases", "removal-pending", {
     owner: "channel",
     introduced: "2026-04-26",
@@ -431,7 +387,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "chat.history maxChars per-request override when a custom client needs it",
     docsPath: "/web/webchat",
     notes:
-      "WebChat is an internal control surface, not a configurable outbound channel. Runtime ignores the retired channel key; doctor removes stale config.",
+      "WebChat is an internal control surface, not a configurable outbound channel. Doctor refuses this retired key with an intermediate-upgrade path.",
   }),
   compatRecord("doctor-tts-top-level-owner", "deprecated", {
     previousRemoveAfter: "2026-09-18",
@@ -473,21 +429,6 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "speakerVoice and speakerVoiceId",
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
-  }),
-  compatRecord("doctor-plugin-install-config-ledger", "removal-pending", {
-    owner: "plugin",
-    introduced: "2026-04-25",
-    deprecated: "2026-04-26",
-    warningStarts: "2026-04-26",
-    previousRemoveAfter: "2026-07-26",
-    source: "plugins.installs in authored config",
-    migration: "src/config/plugin-install-config-migration.ts",
-    replacement: "shared SQLite config_machine_state plugins.installedIndex install ledger",
-    docsPath: "/cli/plugins#registry",
-    tests: [
-      "src/config/io.write-config.test.ts",
-      "src/commands/doctor/shared/plugin-registry-migration.test.ts",
-    ],
   }),
   compatRecord("doctor-bundled-plugin-load-paths", "removal-pending", {
     owner: "plugin",

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { writeTextAtomic } from "@openclaw/fs-safe/atomic";
 import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { ensureAbsoluteDirectory, pathExists, root as openFsSafeRoot } from "../infra/fs-safe.js";
@@ -66,9 +67,6 @@ export function withCachedMigrationConfigRuntime(
     return undefined;
   }
   const configApi = runtime.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
-    return runtime;
-  }
   let cachedConfig: MigrationProviderContext["config"] | undefined;
   const current = (): ReturnType<typeof configApi.current> => {
     cachedConfig ??= structuredClone(
@@ -93,15 +91,11 @@ export function withCachedMigrationConfigRuntime(
         cachedConfig = structuredClone(result.nextConfig);
         return result;
       },
-      ...(configApi.replaceConfigFile
-        ? {
-            replaceConfigFile: async (params) => {
-              const result = await configApi.replaceConfigFile(params);
-              cachedConfig = structuredClone(result.nextConfig);
-              return result;
-            },
-          }
-        : {}),
+      replaceConfigFile: async (params) => {
+        const result = await configApi.replaceConfigFile(params);
+        cachedConfig = structuredClone(result.nextConfig);
+        return result;
+      },
     },
   };
 }
@@ -109,11 +103,7 @@ export function withCachedMigrationConfigRuntime(
 async function allocateMigrationBackupPath(target: string, reportDir: string): Promise<string> {
   const backupRoot = path.join(reportDir, "item-backups");
   await fs.mkdir(backupRoot, { recursive: true });
-  const targetHash = crypto
-    .createHash("sha256")
-    .update(path.resolve(target))
-    .digest("hex")
-    .slice(0, 12);
+  const targetHash = sha256HexPrefixCore(path.resolve(target), 12);
   const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
   return path.join(backupDir, path.basename(target));
 }

@@ -5,16 +5,16 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
-import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
+import { notifyListeners } from "../shared/listeners.js";
+import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
+import {
+  clearMcpAppModelContextForView,
+  leaseMcpAppModelContextForTurn,
+  projectMcpAppModelContextInput,
+} from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
-
-const completeDeferredSessionMcpRuntimeRetirement = createLazyRuntimeMethod(
-  () => import("./agent-bundle-mcp-manager-api.js"),
-  (runtime) => runtime.completeDeferredSessionMcpRuntimeRetirement,
-);
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
@@ -27,6 +27,40 @@ const MCP_APP_VIEW_STORE_KEY = Symbol.for("openclaw.mcpAppViewStore");
 type McpAppPermissions = Partial<
   Record<"camera" | "clipboardWrite" | "geolocation" | "microphone", Record<string, never>>
 >;
+
+export type McpAppPrepareToolCall = (request: {
+  options: import("../gateway/server-methods/types.js").GatewayRequestHandlerOptions;
+  toolName: string;
+  input: Record<string, unknown>;
+  view?: McpAppViewLease;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+}) => Promise<void | (() => void)>;
+
+export type McpFormResourceUpload = (request: {
+  options: import("../gateway/server-methods/types.js").GatewayRequestHandlerOptions;
+  kind: "file" | "directory";
+  files: Array<{ name: string; mimeType: string; data: Buffer; relativePath?: string }>;
+  assertCurrent: () => void;
+}) => Promise<Array<{ uri: string; name: string }>>;
+export type McpAppFormOrigin = {
+  runtime: SessionMcpRuntime;
+  serverName: string;
+  agentId: string;
+  sessionKey: string;
+  requesterId?: string;
+  assertCurrent: () => void;
+  prepareToolCall?: McpAppPrepareToolCall;
+};
+export type McpAppHostFile = {
+  resourceUri: string;
+  name: string;
+  /** Host-only admitted workspace identity. Never included in the App payload. */
+  rootDir: string;
+  path: string;
+  sessionId: string;
+  requesterId?: string;
+};
 
 export type McpAppViewLease = {
   viewId: string;
@@ -41,8 +75,21 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  /** Requester-scoped, exact server/tool approvals live only as long as this view. */
+  toolApprovalGrants?: Map<string | undefined, Set<string>>;
+  prepareToolCall?: McpAppPrepareToolCall;
+  uploadResources?: McpFormResourceUpload;
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
+  requesterId?: string;
+  hostFile?: McpAppHostFile;
+  richModelContextSupported?: boolean;
+  deepLink?: { url: string };
+  displayMode?: "inline" | "fullscreen";
+  displayModes?: {
+    availableDisplayModes?: Array<"inline" | "fullscreen">;
+    preferredDisplayMode?: "inline" | "fullscreen";
+  };
   toolInput: unknown;
   toolResult: CallToolResult;
   expiresAtMs: number;
@@ -53,6 +100,7 @@ export type McpAppViewLease = {
   byteSize: number;
   expiryTimer?: ReturnType<typeof setTimeout>;
   releaseRuntimeLease?: () => void;
+  disposeCallbacks?: Set<() => void>;
 };
 
 export type McpAppChannelView = {
@@ -84,12 +132,26 @@ function deleteView(viewId: string, expected?: McpAppViewLease): void {
     return;
   }
   clearTimeout(view.expiryTimer);
+  view.toolApprovalGrants?.clear();
+  // Publish the final context clear before retiring this view’s subscribers.
   clearMcpAppModelContextForView(view.runtime, view);
+  notifyListeners(view.disposeCallbacks ?? [], undefined, (error) => {
+    logWarn(`mcp-app: view cleanup failed: ${formatErrorMessage(error)}`);
+  });
+  view.disposeCallbacks?.clear();
   view.releaseRuntimeLease?.();
   store.delete(viewId);
   void completeDeferredSessionMcpRuntimeRetirement(view.runtime).catch((error: unknown) => {
     logWarn(`mcp-app: deferred runtime cleanup failed: ${formatErrorMessage(error)}`);
   });
+}
+
+/** Retire only the exact runtime-owned view, including form preview children. */
+export function releaseMcpAppView(viewId: string, runtime: SessionMcpRuntime): void {
+  const view = getViewStore().get(viewId);
+  if (view?.runtime === runtime) {
+    deleteView(viewId, view);
+  }
 }
 
 function pruneViewStore(
@@ -220,8 +282,15 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
+  prepareToolCall?: McpAppPrepareToolCall;
+  uploadResources?: McpFormResourceUpload;
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
+  requesterId?: string;
+  hostFile?: McpAppHostFile;
+  richModelContextSupported?: boolean;
+  deepLink?: { url: string };
+  displayMode?: "inline" | "fullscreen";
   viewId?: string;
 }): Promise<
   | {
@@ -268,6 +337,24 @@ export async function fetchMcpAppView(params: {
       : await resolveListingUiMeta(params.runtime, params.serverName, params.uiResourceUri);
     getSessionMcpRequestSignal()?.throwIfAborted();
     const uiMeta = contentUiMeta ?? listingUiMeta;
+    const openaiUi = asRecord(asRecord(metadata)?.["openai/ui"]);
+    const supportedModes = ["inline", "fullscreen"] as const;
+    const advertisedDisplayModes = openaiUi?.availableDisplayModes;
+    const availableDisplayModes = Array.isArray(advertisedDisplayModes)
+      ? supportedModes.filter((mode) => advertisedDisplayModes.includes(mode))
+      : undefined;
+    const preferredDisplayMode: "inline" | "fullscreen" | undefined =
+      openaiUi?.preferredDisplayMode === "inline" || openaiUi?.preferredDisplayMode === "fullscreen"
+        ? openaiUi.preferredDisplayMode
+        : undefined;
+    const displayModes: McpAppViewLease["displayModes"] =
+      availableDisplayModes || preferredDisplayMode
+        ? {
+            availableDisplayModes: availableDisplayModes ?? [preferredDisplayMode!],
+            ...(preferredDisplayMode ? { preferredDisplayMode } : {}),
+          }
+        : undefined;
+    const requestedDisplayMode = params.displayMode ?? preferredDisplayMode ?? "inline";
     const csp = normalizeMcpAppCsp(uiMeta?.csp);
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
@@ -290,10 +377,23 @@ export async function fetchMcpAppView(params: {
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
         : {}),
+      ...(params.prepareToolCall ? { prepareToolCall: params.prepareToolCall } : {}),
+      ...(params.uploadResources ? { uploadResources: params.uploadResources } : {}),
       ...(params.authorizeAppInteraction
         ? { authorizeAppInteraction: params.authorizeAppInteraction }
         : {}),
       ...(params.readOnly ? { readOnly: true as const } : {}),
+      requesterId: params.requesterId,
+      ...(params.hostFile ? { hostFile: params.hostFile } : {}),
+      ...(params.richModelContextSupported !== undefined
+        ? { richModelContextSupported: params.richModelContextSupported }
+        : {}),
+      ...(params.deepLink ? { deepLink: params.deepLink } : {}),
+      displayMode:
+        availableDisplayModes?.length && !availableDisplayModes.includes(requestedDisplayMode)
+          ? availableDisplayModes[0]
+          : requestedDisplayMode,
+      ...(displayModes ? { displayModes } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
@@ -348,6 +448,78 @@ export function getMcpAppViewLeaseForSession(
   return view?.runtime.sessionKey === sessionKey && view.agentId === normalizeAgentId(agentId)
     ? view
     : undefined;
+}
+
+/** The bounded live-view owner joins managed, discovery and native runtimes for one exact turn. */
+export async function leaseMcpAppModelContextForSessionTurn(params: {
+  sessionKey?: string;
+  sessionId: string;
+  agentId?: string;
+  requesterId?: string;
+}) {
+  if (!params.sessionKey) {
+    return undefined;
+  }
+  const agentId = normalizeAgentId(
+    params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId,
+  );
+  pruneViewStore();
+  const byRuntime = new Map<SessionMcpRuntime, Set<object>>();
+  for (const view of getViewStore().values()) {
+    if (
+      view.runtime.sessionKey !== params.sessionKey ||
+      view.sessionId !== params.sessionId ||
+      view.agentId !== agentId ||
+      (view.requesterId !== undefined && view.requesterId !== params.requesterId) ||
+      view.readOnly ||
+      view.allowedAppToolNames === undefined
+    ) {
+      continue;
+    }
+    try {
+      view.runtime.assertOwnerCurrent?.();
+      if (view.authorizeAppInteraction && !(await view.authorizeAppInteraction())) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    if (
+      getMcpAppViewLease(view.viewId, view.runtime) !== view ||
+      view.runtime.mcpAppModelContextRevoked
+    ) {
+      continue;
+    }
+    const views = byRuntime.get(view.runtime) ?? new Set<object>();
+    views.add(view);
+    byRuntime.set(view.runtime, views);
+  }
+  const leases = [...byRuntime].flatMap(([runtime, views]) => {
+    const lease = leaseMcpAppModelContextForTurn({ runtime, views });
+    return lease ? [lease] : [];
+  });
+  if (!leases.length) {
+    return undefined;
+  }
+  const modelContext = leases.flatMap((lease) => lease.modelContext);
+  return {
+    project: (imageOffset: number) => projectMcpAppModelContextInput(modelContext, imageOffset),
+    assertCurrent: () => {
+      for (const lease of leases) {
+        lease.assertCurrent();
+      }
+    },
+    commit: () => {
+      for (const lease of leases) {
+        lease.commit();
+      }
+    },
+    rollback: () => {
+      for (const lease of leases) {
+        lease.rollback();
+      }
+    },
+  };
 }
 
 export function acquireMcpAppViewRequest(

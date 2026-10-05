@@ -181,42 +181,48 @@ function prepareOwners() {
 }
 
 describe("prepared channel runtime ownership", () => {
-  it.each(["inbound", "selected"] as const)(
-    "keeps the live transport after config-only reload through the %s producer",
-    async (path) => {
-      const { live, selected, input } = prepareOwners();
-      const registry = withPluginRuntimeRegistryScope(live.registry, () =>
-        path === "inbound"
-          ? loadPreparedInboundPluginRegistry(input, selected.metadataSnapshot)
-          : loadAgentRuntimePluginRegistryHandle(input),
-      );
-      const scope = new PluginInvocationScope(
-        registry,
-        collectRegistryInvocationInstances(registry),
-        {
-          retained: true,
-        },
-      );
-      releases.push(() => scope.release());
-      const entry = registry.channels[0]!;
-      const send = scope.wrap(entry.plugin).outbound!.sendText!;
-      const grant = scope.wrap(entry.captureReadAuthority)?.();
-      const resolveRuntime = scope.wrap(entry.resolveChannelRuntime);
-      expect(grant?.()).toBe(true);
-      await expect(send(sendParams)).resolves.toMatchObject({ messageId: "live transport" });
-      expect(selected.send).not.toHaveBeenCalled();
-      scope.release();
-      expect(live.instance.acceptingCalls).toBe(true);
-      expect(() => send(sendParams)).toThrow("consumer is closed");
-      expect(() => grant?.()).toThrow("consumer is closed");
-      expect(() => resolveRuntime?.()).toThrow("consumer is closed");
-      await expect(
-        live.registry.channels[0]!.plugin.outbound!.sendText!(sendParams),
-      ).resolves.toMatchObject({
-        messageId: "live transport",
-      });
-    },
-  );
+  it.each([
+    { path: "inbound", close: "consumer" },
+    { path: "selected", close: "consumer" },
+    { path: "selected", close: "donor" },
+  ])("retains the live transport through $path until $close closes", async ({ path, close }) => {
+    const { live, selected, input } = prepareOwners();
+    const registry = withPluginRuntimeRegistryScope(live.registry, () =>
+      path === "inbound"
+        ? loadPreparedInboundPluginRegistry(input, selected.metadataSnapshot)
+        : loadAgentRuntimePluginRegistryHandle(input),
+    );
+    const scope = new PluginInvocationScope(
+      registry,
+      collectRegistryInvocationInstances(registry),
+      {
+        retained: true,
+      },
+    );
+    releases.push(() => scope.release());
+    const entry = registry.channels[0]!;
+    const send = scope.wrap(entry.plugin).outbound!.sendText!;
+    const grant = scope.wrap(entry.captureReadAuthority)?.();
+    const resolveRuntime = scope.wrap(entry.resolveChannelRuntime);
+    expect(grant?.()).toBe(true);
+    if (close === "donor") {
+      markPluginRegistryRetired(live.registry);
+      expect(grant?.()).toBe(false);
+      return;
+    }
+    await expect(send(sendParams)).resolves.toMatchObject({ messageId: "live transport" });
+    expect(selected.send).not.toHaveBeenCalled();
+    scope.release();
+    expect(live.instance.acceptingCalls).toBe(true);
+    expect(() => send(sendParams)).toThrow("consumer is closed");
+    expect(() => grant?.()).toThrow("consumer is closed");
+    expect(() => resolveRuntime?.()).toThrow("consumer is closed");
+    await expect(
+      live.registry.channels[0]!.plugin.outbound!.sendText!(sendParams),
+    ).resolves.toMatchObject({
+      messageId: "live transport",
+    });
+  });
 
   it("holds the donor through acquired inspection and closes only its scoped callbacks", async () => {
     const { live, selected, input } = prepareOwners();
@@ -250,25 +256,6 @@ describe("prepared channel runtime ownership", () => {
     expect(() => entry.captureReadAuthority?.()).toThrow();
     expect(live.instance.acceptingCalls).toBe(true);
     expect(live.instance.hasRetainedConsumers).toBe(false);
-  });
-
-  it("revokes a captured official read grant when the donor retires", () => {
-    const { live, input } = prepareOwners();
-    const registry = withPluginRuntimeRegistryScope(live.registry, () =>
-      loadAgentRuntimePluginRegistryHandle(input),
-    );
-    const scope = new PluginInvocationScope(
-      registry,
-      collectRegistryInvocationInstances(registry),
-      {
-        retained: true,
-      },
-    );
-    releases.push(() => scope.release());
-    const grant = scope.wrap(registry.channels[0]!.captureReadAuthority)?.();
-    expect(grant?.()).toBe(true);
-    markPluginRegistryRetired(live.registry);
-    expect(grant?.()).toBe(false);
   });
 
   it.each(["retired", "replaced"] as const)(

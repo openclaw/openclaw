@@ -66,18 +66,6 @@ type CreateTalkTranscriptionRelaySessionParams = {
   providerConfig: RealtimeTranscriptionProviderConfig;
 };
 
-type TalkTranscriptionRelaySessionResult = {
-  provider: string;
-  mode: "transcription";
-  transport: "gateway-relay";
-  transcriptionSessionId: string;
-  audio: {
-    inputEncoding: "g711_ulaw";
-    inputSampleRateHz: 8000;
-  };
-  expiresAt: number;
-};
-
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
 
 function inferSampleRateFromAudioFormat(value: unknown): number | undefined {
@@ -207,7 +195,7 @@ function enforceTranscriptionSessionLimits(connId: string): void {
 /** Creates a transcription relay session and returns its browser audio contract. */
 export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
-): TalkTranscriptionRelaySessionResult {
+) {
   enforceTranscriptionSessionLimits(params.connId);
   assertRelayInputAudioConfig(params.providerConfig);
   const transcriptionSessionId = randomUUID();
@@ -334,13 +322,13 @@ export function createTalkTranscriptionRelaySession(
 
   return {
     provider: params.provider.id,
-    mode: "transcription",
-    transport: "gateway-relay",
+    mode: "transcription" as const,
+    transport: "gateway-relay" as const,
     transcriptionSessionId,
     audio: {
       inputEncoding: RELAY_INPUT_ENCODING,
       inputSampleRateHz: RELAY_INPUT_SAMPLE_RATE_HZ,
-    },
+    } as const,
     expiresAt: Math.floor(expiresAtMs / 1000),
   };
 }

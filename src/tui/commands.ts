@@ -208,10 +208,6 @@ function commandIsVisible(command: TuiCommandDescriptor, local: boolean): boolea
   return command.scope !== (local ? "remote" : "local");
 }
 
-function normalizeSlashCommandName(value: string): string {
-  return value.replace(/^\//, "").trim();
-}
-
 function appendSlashCommand(
   commands: SlashCommand[],
   seen: Map<string, SlashCommand["getArgumentCompletions"]>,
@@ -219,7 +215,7 @@ function appendSlashCommand(
   description: string,
   getArgumentCompletions?: SlashCommand["getArgumentCompletions"],
 ) {
-  const normalizedName = normalizeSlashCommandName(name);
+  const normalizedName = name.replace(/^\//, "").trim();
   if (!normalizedName || seen.has(normalizedName)) {
     return;
   }
@@ -246,11 +242,6 @@ export function parseCommand(input: string): ParsedCommand {
     name: descriptor?.name ?? normalized,
     args: rest.join(" ").trim(),
   };
-}
-
-/** Whether a slash input belongs to the shared Gateway command registry. */
-export function isSharedTextCommand(input: string): boolean {
-  return resolveTextCommand(input) !== null;
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {

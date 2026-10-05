@@ -25,6 +25,8 @@ export type PluginRuntimeRecovery = {
 /** Inputs shared by runtime, snapshot, and CLI-metadata plugin loading. */
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
+  /** Provider lookup config before activation copies; only captured generations may share. */
+  registrationConfigOrigin?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
@@ -65,6 +67,11 @@ export type PluginLoadOptions = {
   /** Staged Gateway candidates expose runtime APIs only after publication or owner preparation. */
   runtimeSideEffects?: boolean;
   previousRegistry?: PluginRegistry;
+  /**
+   * Live runtime registry whose unchanged records a non-activating load lists without
+   * loading its own copies. The lender keeps custody and retirement of those instances.
+   */
+  borrowRegistry?: PluginRegistry;
   replacePluginIds?: readonly string[];
   moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
   /** Preserve host cleanup hooks before failed registration removes its contributions. */

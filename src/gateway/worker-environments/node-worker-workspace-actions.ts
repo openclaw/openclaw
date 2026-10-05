@@ -19,6 +19,7 @@ import type {
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncResult,
+  WorkerWorkspaceSyncRequest,
   WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -47,18 +48,6 @@ export type NodeWorkerWorkspaceBinding = {
   sessionKey?: string;
 };
 
-type NodeWorkerWorkspaceActions = Pick<
-  WorkerWorkspaceTunnelHandle,
-  | "runWorkspaceCommand"
-  | "syncWorkspace"
-  | "quiesceWorkspace"
-  | "reconcileWorkspace"
-  | "stageAttachments"
-> & {
-  validateRestoredWorkspace: (authorize?: () => void) => Promise<void>;
-  getSessionKey: () => string | undefined;
-};
-
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
   ownerEpoch: number;
@@ -71,7 +60,7 @@ export function createNodeWorkerWorkspaceActions(params: {
   runWorkspaceCommand: (
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
   ) => Promise<NodeWorkerWorkspaceExecResult>;
-}): NodeWorkerWorkspaceActions {
+}) {
   const { restoredWorkspace } = params;
   // Transfers revalidate this tunnel binding and its durable environment/credential on use.
   const transferOwner = {
@@ -300,26 +289,35 @@ export function createNodeWorkerWorkspaceActions(params: {
     request: WorkerLocalWorkspaceReconcileRequest,
     metrics: WorkspaceReconcileMetrics,
   ) => {
-    const acceptLocal = await prepareLocalWorkspaceReconciliation({
-      request,
-      hashMemo: placementHashMemo,
-      metrics,
-    });
     const uploadToken = params.workspaceTransfer.prepareUpload(
       params.environmentId,
       request.baseManifestRef,
+      request.assertCurrent,
     );
     let uploaded: ReturnType<NodeWorkspaceTransferService["takeUpload"]>;
+    let acceptLocal: Awaited<ReturnType<typeof prepareLocalWorkspaceReconciliation>>;
     try {
-      await transfer(
-        {
-          direction: "upload",
-          token: uploadToken,
-          baseManifestRef: request.baseManifestRef,
-          referenceManifestRef: request.baseManifestRef,
-        },
-        "Node workspace reconcile upload failed",
-      );
+      // Local recovery and remote upload must settle before releasing custody.
+      const [local, upload] = await Promise.allSettled([
+        prepareLocalWorkspaceReconciliation({ request, hashMemo: placementHashMemo, metrics }),
+        transfer(
+          {
+            direction: "upload",
+            token: uploadToken,
+            baseManifestRef: request.baseManifestRef,
+            referenceManifestRef: request.baseManifestRef,
+          },
+          "Node workspace reconcile upload failed",
+          { assertCurrent: request.assertCurrent },
+        ),
+      ]);
+      if (local.status === "rejected") {
+        throw local.reason;
+      }
+      if (upload.status === "rejected") {
+        throw upload.reason;
+      }
+      acceptLocal = local.value;
       uploaded = params.workspaceTransfer.takeUpload(params.environmentId, request.baseManifestRef);
     } finally {
       await params.workspaceTransfer.revoke(params.environmentId, uploadToken);
@@ -375,9 +373,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
     }
   };
-  const syncRepository = async (
-    request: Parameters<WorkerWorkspaceTunnelHandle["syncWorkspace"]>[0],
-  ) => {
+  const syncRepository = async (request: WorkerWorkspaceSyncRequest) => {
     if (request.source.kind !== "repository") {
       throw new Error("Repository source is required");
     }
@@ -528,7 +524,9 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
     getSessionKey: () => sessionKey,
     validateRestoredWorkspace,
     runWorkspaceCommand: exec,
-    stageAttachments: async (request) => {
+    stageAttachments: async (
+      request: Parameters<NonNullable<WorkerWorkspaceTunnelHandle["stageAttachments"]>>[0],
+    ) => {
       const prepared = await params.workspaceTransfer.prepareAttachments({
         ...request,
         environmentId: params.environmentId,
@@ -555,7 +553,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
       }
     },
-    syncWorkspace: async (request) => {
+    syncWorkspace: async (request: WorkerWorkspaceSyncRequest) => {
       request.authorize?.();
       if (
         request.sessionId !== params.sessionId ||

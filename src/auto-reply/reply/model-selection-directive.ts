@@ -1,4 +1,3 @@
-// Normalizes model selection directives into provider and model ids.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../../agents/model-ref-shared.js";
@@ -73,34 +72,23 @@ function scoreFuzzyMatch(params: {
   const haystack = `${providerLower}/${modelLower}`;
   const key = modelKey(provider, model);
 
-  const scoreFragment = (
-    value: string,
-    weights: { exact: number; starts: number; includes: number },
-  ) => {
+  const scoreFragment = (value: string, exact: number, starts: number, includes: number) => {
     if (!fragment) {
       return 0;
     }
     if (value === fragment) {
-      return weights.exact;
+      return exact;
     }
     if (value.startsWith(fragment)) {
-      return weights.starts;
+      return starts;
     }
-    return value.includes(fragment) ? weights.includes : 0;
+    return value.includes(fragment) ? includes : 0;
   };
 
-  let score = 0;
-  score += scoreFragment(haystack, { exact: 220, starts: 140, includes: 110 });
-  score += scoreFragment(providerLower, {
-    exact: 180,
-    starts: 120,
-    includes: 90,
-  });
-  score += scoreFragment(modelLower, {
-    exact: 160,
-    starts: 110,
-    includes: 80,
-  });
+  let score =
+    scoreFragment(haystack, 220, 140, 110) +
+    scoreFragment(providerLower, 180, 120, 90) +
+    scoreFragment(modelLower, 160, 110, 80);
 
   // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
   // Bounded to keep this cheap across large model sets.
@@ -111,11 +99,7 @@ function scoreFuzzyMatch(params: {
 
   const aliases = params.aliasIndex.byKey.get(key) ?? [];
   for (const alias of aliases) {
-    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), {
-      exact: 140,
-      starts: 90,
-      includes: 60,
-    });
+    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), 140, 90, 60);
   }
 
   if (modelLower.startsWith(providerLower)) {
@@ -139,6 +123,8 @@ function scoreFuzzyMatch(params: {
   }
 
   return {
+    provider: params.provider,
+    model,
     score,
     isDefault,
     variantCount,
@@ -232,33 +218,24 @@ export function resolveModelDirectiveSelection(params: {
     }
 
     const scored = candidates
-      .map((candidate) => {
-        const details = scoreFuzzyMatch({
-          provider: candidate.provider,
-          model: candidate.model,
-          fragment,
-          aliasIndex,
-          defaultProvider,
-          defaultModel,
-        });
-        return Object.assign({ candidate }, details);
-      })
-      .toSorted((a, b) => {
-        // Tie-break deterministically so repeated prompts pick the same model.
-        return (
+      .map((candidate) =>
+        scoreFuzzyMatch({ ...candidate, fragment, aliasIndex, defaultProvider, defaultModel }),
+      )
+      .toSorted(
+        (a, b) =>
+          // Tie-break deterministically so repeated prompts pick the same model.
           b.score - a.score ||
           Number(b.isDefault) - Number(a.isDefault) ||
           b.variantMatchCount - a.variantMatchCount ||
           a.variantCount - b.variantCount ||
           a.modelLength - b.modelLength ||
-          a.key.localeCompare(b.key)
-        );
-      });
+          a.key.localeCompare(b.key),
+      );
 
     const bestScored = scored[0];
     const minScore = providerFilter ? 90 : 120;
     return bestScored && bestScored.score >= minScore
-      ? buildSelection(bestScored.candidate.provider, bestScored.candidate.model)
+      ? buildSelection(bestScored.provider, bestScored.model)
       : undefined;
   };
 

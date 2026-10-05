@@ -47,7 +47,11 @@ function appendArtifactSummary(
   }
 }
 
-function renderAttendance(result: GoogleMeetAttendanceResult, markdown: boolean): string {
+export function renderAttendance(
+  result: GoogleMeetAttendanceResult,
+  format: "summary" | "markdown",
+): string {
+  const markdown = format === "markdown";
   const lines: string[] = markdown ? ["# Google Meet Attendance"] : [];
   const field = (label: string, value: string | number) => {
     lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
@@ -82,14 +86,6 @@ function renderAttendance(result: GoogleMeetAttendanceResult, markdown: boolean)
     }
   }
   return `${lines.join("\n")}\n`;
-}
-
-export function renderAttendanceSummary(result: GoogleMeetAttendanceResult): string {
-  return renderAttendance(result, false);
-}
-
-export function renderAttendanceMarkdown(result: GoogleMeetAttendanceResult): string {
-  return renderAttendance(result, true);
 }
 
 export function writeLatestConferenceRecordSummary(
@@ -159,7 +155,11 @@ function appendArtifactDocuments(
   }
 }
 
-function renderArtifacts(result: GoogleMeetArtifactsResult, markdown: boolean): string {
+export function renderArtifacts(
+  result: GoogleMeetArtifactsResult,
+  format: "summary" | "markdown",
+): string {
+  const markdown = format === "markdown";
   const lines: string[] = markdown ? ["# Google Meet Artifacts"] : [];
   const field = (label: string, value: string | number) => {
     lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
@@ -240,14 +240,6 @@ function renderArtifacts(result: GoogleMeetArtifactsResult, markdown: boolean): 
     appendArtifactDocuments(lines, "Smart Notes", entry.smartNotes);
   }
   return `${lines.join("\n")}\n`;
-}
-
-export function renderArtifactsSummary(result: GoogleMeetArtifactsResult): string {
-  return renderArtifacts(result, false);
-}
-
-export function renderArtifactsMarkdown(result: GoogleMeetArtifactsResult): string {
-  return renderArtifacts(result, true);
 }
 
 function neutralizeSpreadsheetFormulaCell(text: string): string {
@@ -389,31 +381,6 @@ function collectGoogleMeetArtifactWarnings(
   return warnings;
 }
 
-export type GoogleMeetExportManifest = {
-  generatedAt: string;
-  request?: GoogleMeetExportRequest;
-  tokenSource?: "cached-access-token" | "refresh-token";
-  calendarEvent?: GoogleMeetCalendarLookupResult;
-  inputs: {
-    artifacts?: string;
-    attendance?: string;
-  };
-  counts: {
-    conferenceRecords: number;
-    artifacts: number;
-    attendanceRows: number;
-    recordings: number;
-    transcripts: number;
-    transcriptEntries: number;
-    smartNotes: number;
-    warnings: number;
-  };
-  conferenceRecords: string[];
-  files: string[];
-  zipFile?: string;
-  warnings: GoogleMeetExportWarning[];
-};
-
 export function buildGoogleMeetExportManifest(params: {
   artifacts: GoogleMeetArtifactsResult;
   attendance: GoogleMeetAttendanceResult;
@@ -422,17 +389,26 @@ export function buildGoogleMeetExportManifest(params: {
   tokenSource?: "cached-access-token" | "refresh-token";
   calendarEvent?: GoogleMeetCalendarLookupResult;
   zipFile?: string;
-}): GoogleMeetExportManifest {
-  const transcriptEntryCount = params.artifacts.artifacts.reduce(
-    (count, entry) =>
-      count +
-      entry.transcriptEntries.reduce(
-        (entryCount, transcript) => entryCount + transcript.entries.length,
-        0,
-      ),
-    0,
-  );
+}) {
   const warnings = collectGoogleMeetArtifactWarnings(params.artifacts);
+  const counts = {
+    conferenceRecords: params.artifacts.conferenceRecords.length,
+    artifacts: params.artifacts.artifacts.length,
+    attendanceRows: params.attendance.attendance.length,
+    recordings: 0,
+    transcripts: 0,
+    transcriptEntries: 0,
+    smartNotes: 0,
+    warnings: warnings.length,
+  };
+  for (const entry of params.artifacts.artifacts) {
+    counts.recordings += entry.recordings.length;
+    counts.transcripts += entry.transcripts.length;
+    counts.smartNotes += entry.smartNotes.length;
+    for (const transcript of entry.transcriptEntries) {
+      counts.transcriptEntries += transcript.entries.length;
+    }
+  }
   return {
     generatedAt: new Date().toISOString(),
     ...(params.request ? { request: params.request } : {}),
@@ -442,25 +418,7 @@ export function buildGoogleMeetExportManifest(params: {
       ...(params.artifacts.input ? { artifacts: params.artifacts.input } : {}),
       ...(params.attendance.input ? { attendance: params.attendance.input } : {}),
     },
-    counts: {
-      conferenceRecords: params.artifacts.conferenceRecords.length,
-      artifacts: params.artifacts.artifacts.length,
-      attendanceRows: params.attendance.attendance.length,
-      recordings: params.artifacts.artifacts.reduce(
-        (count, entry) => count + entry.recordings.length,
-        0,
-      ),
-      transcripts: params.artifacts.artifacts.reduce(
-        (count, entry) => count + entry.transcripts.length,
-        0,
-      ),
-      transcriptEntries: transcriptEntryCount,
-      smartNotes: params.artifacts.artifacts.reduce(
-        (count, entry) => count + entry.smartNotes.length,
-        0,
-      ),
-      warnings: warnings.length,
-    },
+    counts,
     conferenceRecords: params.artifacts.conferenceRecords.map((record) => record.name),
     files: params.files,
     ...(params.zipFile ? { zipFile: params.zipFile } : {}),
@@ -518,7 +476,7 @@ export async function writeMeetExportBundle(params: {
   const files = [
     {
       name: "summary.md",
-      content: `${renderArtifactsMarkdown(params.artifacts)}\n${renderAttendanceMarkdown(params.attendance)}`,
+      content: `${renderArtifacts(params.artifacts, "markdown")}\n${renderAttendance(params.attendance, "markdown")}`,
     },
     { name: "attendance.csv", content: renderAttendanceCsv(params.attendance) },
     { name: "transcript.md", content: renderTranscriptMarkdown(params.artifacts) },

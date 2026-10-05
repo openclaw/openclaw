@@ -2,13 +2,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core/model-contracts/anthropic";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import {
+  buildEmbeddedRunnerConfig,
+  normalizeLiveUsage,
+} from "./embedded-agent-runner.cache.test-support.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/compact.runtime.js";
 import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
@@ -19,11 +24,11 @@ import {
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
   LIVE_CACHE_TEST_ENABLED,
+  type LiveResolvedModel,
   logLiveCache,
   resolveLiveDirectModel,
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
-import { buildUsageWithNoCost } from "./stream-message-shared.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 
@@ -63,7 +68,6 @@ type CacheTraceEvent = {
     changes?: Array<{ code?: string; detail?: string }>;
   };
 };
-type LiveResolvedModel = Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 
 const NOOP_TOOL: Tool = {
   name: "noop",
@@ -73,13 +77,7 @@ const NOOP_TOOL: Tool = {
 let liveTestPngBase64 = "";
 let liveRunnerPaths: { rootDir: string; agentDir: string; storePath: string } | undefined;
 let liveCacheTraceFile: string | undefined;
-let previousCacheTraceEnv: {
-  enabled?: string;
-  file?: string;
-  messages?: string;
-  prompt?: string;
-  system?: string;
-} | null = null;
+let previousCacheTraceEnv: ReturnType<typeof captureEnv> | undefined;
 
 type UserContent = Extract<Message, { role: "user" }>["content"];
 
@@ -126,11 +124,6 @@ function buildRunnerSessionPaths(sessionId: string) {
   };
 }
 
-function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
-  const candidate = (model as { baseUrl?: unknown }).baseUrl;
-  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
-}
-
 async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
   // Trace events are JSONL so live assertions can inspect cache state transitions
   // after the provider call completes.
@@ -160,136 +153,6 @@ async function expectCacheTraceStages(
   for (const stage of requiredStages) {
     expect(stages.has(stage)).toBe(true);
   }
-}
-
-function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
-  if (model.provider === "anthropic") {
-    return "https://api.anthropic.com/v1";
-  }
-  if (model.provider === "openai") {
-    return "https://api.openai.com/v1";
-  }
-  return "https://example.invalid/v1";
-}
-
-function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
-  // Live model discovery can return partial metadata; embedded runner tests need
-  // a complete config model definition.
-  const contextWindowCandidate = (model as { contextWindow?: unknown }).contextWindow;
-  const maxTokensCandidate = (model as { maxTokens?: unknown }).maxTokens;
-  const reasoningCandidate = (model as { reasoning?: unknown }).reasoning;
-  const inputCandidate = (model as { input?: unknown }).input;
-  const contextWindow =
-    typeof contextWindowCandidate === "number" && Number.isFinite(contextWindowCandidate)
-      ? Math.max(1, Math.trunc(contextWindowCandidate))
-      : 128_000;
-  const maxTokens =
-    typeof maxTokensCandidate === "number" && Number.isFinite(maxTokensCandidate)
-      ? Math.max(1, Math.trunc(maxTokensCandidate))
-      : 8_192;
-  const input =
-    Array.isArray(inputCandidate) &&
-    inputCandidate.every((value) => value === "text" || value === "image")
-      ? [...inputCandidate]
-      : (["text", "image"] as Array<"text" | "image">);
-  return {
-    id: model.id,
-    name: model.id,
-    api: resolveEmbeddedModelApi(model),
-    reasoning: typeof reasoningCandidate === "boolean" ? reasoningCandidate : false,
-    input,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens,
-  };
-}
-
-function resolveEmbeddedModelApi(
-  model: LiveResolvedModel["model"],
-): "anthropic-messages" | "openai-responses" {
-  return model.provider === "anthropic" ? "anthropic-messages" : "openai-responses";
-}
-
-function normalizeLiveUsage(
-  usage:
-    | AssistantMessage["usage"]
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
-): AssistantMessage["usage"] {
-  if (!usage) {
-    return buildUsageWithNoCost({});
-  }
-  const input = usage.input ?? 0;
-  const output = usage.output ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const totalTokens =
-    "totalTokens" in usage && typeof usage.totalTokens === "number"
-      ? usage.totalTokens
-      : "total" in usage && typeof usage.total === "number"
-        ? usage.total
-        : input + output;
-  const cost =
-    "cost" in usage && usage.cost
-      ? usage.cost
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens,
-    cost,
-  };
-}
-
-function buildEmbeddedRunnerConfig(
-  params: LiveResolvedModel & {
-    agentDir: string;
-    cacheRetention: "none" | "short" | "long";
-    compactionModel?: string;
-    modelAlias?: string;
-    transport?: "sse" | "websocket";
-  },
-): OpenClawConfig {
-  const provider = params.model.provider;
-  const modelKey = `${provider}/${params.model.id}`;
-  const providerBaseUrl =
-    resolveProviderBaseUrl(params.model) ?? resolveDefaultProviderBaseUrl(params.model);
-  return {
-    models: {
-      providers: {
-        [provider]: {
-          api: resolveEmbeddedModelApi(params.model),
-          auth: "api-key",
-          apiKey: params.apiKey,
-          baseUrl: providerBaseUrl,
-          models: [buildEmbeddedModelDefinition(params.model)],
-        },
-      },
-    },
-    agents: {
-      entries: { main: { agentDir: params.agentDir } },
-      defaults: {
-        models: {
-          [modelKey]: {
-            ...(params.modelAlias ? { alias: params.modelAlias } : {}),
-            params: {
-              cacheRetention: params.cacheRetention,
-              ...(params.transport ? { transport: params.transport } : {}),
-            },
-          },
-        },
-        ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
-      },
-    },
-  };
 }
 
 function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {
@@ -790,6 +653,14 @@ async function runAnthropicImageCacheProbe(params: {
 
 describeCacheLive("embedded agent runner prompt caching (live)", () => {
   beforeAll(async () => {
+    // Live runs build the real plugin runtime on a shared, often busy host; the
+    // default 120 s publication budget is sized for CI, not for this proof.
+    await import("./prepared-model-runtime.js");
+    (
+      (globalThis as Record<PropertyKey, unknown>)[
+        Symbol.for("openclaw.preparedModelRuntimeTestApi")
+      ] as { setModelRuntimeBuildTimeoutMsForTest(timeoutMs: number): void }
+    ).setModelRuntimeBuildTimeoutMsForTest(10 * 60_000);
     // Database disposal must use the registered path even when the temporary root is a symlink.
     const rootDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cache-")),
@@ -803,13 +674,15 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     };
     liveCacheTraceFile = path.join(rootDir, "cache-trace.jsonl");
     liveTestPngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
-    previousCacheTraceEnv = {
-      enabled: process.env.OPENCLAW_CACHE_TRACE,
-      file: process.env.OPENCLAW_CACHE_TRACE_FILE,
-      messages: process.env.OPENCLAW_CACHE_TRACE_MESSAGES,
-      prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
-      system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
-    };
+    previousCacheTraceEnv = captureEnv([
+      "OPENCLAW_CACHE_TRACE",
+      "OPENCLAW_PROMPT_CACHE_ASSERT",
+      "OPENCLAW_CACHE_TRACE_FILE",
+      "OPENCLAW_CACHE_TRACE_MESSAGES",
+      "OPENCLAW_CACHE_TRACE_PROMPT",
+      "OPENCLAW_CACHE_TRACE_SYSTEM",
+    ]);
+    setTestEnvValue("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
     setTestEnvValue("OPENCLAW_CACHE_TRACE", "1");
     setTestEnvValue("OPENCLAW_CACHE_TRACE_FILE", liveCacheTraceFile);
     setTestEnvValue("OPENCLAW_CACHE_TRACE_MESSAGES", "0");
@@ -818,29 +691,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
   }, 120_000);
 
   afterAll(async () => {
-    if (previousCacheTraceEnv) {
-      const restore = (
-        key:
-          | "OPENCLAW_CACHE_TRACE"
-          | "OPENCLAW_CACHE_TRACE_FILE"
-          | "OPENCLAW_CACHE_TRACE_MESSAGES"
-          | "OPENCLAW_CACHE_TRACE_PROMPT"
-          | "OPENCLAW_CACHE_TRACE_SYSTEM",
-        value: string | undefined,
-      ) => {
-        if (value === undefined) {
-          deleteTestEnvValue(key);
-        } else {
-          setTestEnvValue(key, value);
-        }
-      };
-      restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);
-      restore("OPENCLAW_CACHE_TRACE_FILE", previousCacheTraceEnv.file);
-      restore("OPENCLAW_CACHE_TRACE_MESSAGES", previousCacheTraceEnv.messages);
-      restore("OPENCLAW_CACHE_TRACE_PROMPT", previousCacheTraceEnv.prompt);
-      restore("OPENCLAW_CACHE_TRACE_SYSTEM", previousCacheTraceEnv.system);
-    }
-    previousCacheTraceEnv = null;
+    previousCacheTraceEnv?.restore();
+    previousCacheTraceEnv = undefined;
     liveCacheTraceFile = undefined;
     if (liveRunnerPaths) {
       disposeOpenClawAgentDatabaseByPath(liveRunnerPaths.storePath);
@@ -1329,6 +1181,106 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       8 * 60_000,
+    );
+
+    it(
+      "keeps the cached prefix when workspace instructions change between embedded turns",
+      async ({ skip }) => {
+        if (!supportsClaudeInHistorySystemMessages(fixture.model)) {
+          skip();
+        }
+        const sessionId = `${ANTHROPIC_SESSION_ID}-system-update`;
+        const { workspaceDir } = buildRunnerSessionPaths(sessionId);
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const instructionsFile = path.join(workspaceDir, "AGENTS.md");
+        const payloadFile = path.join(workspaceDir, "anthropic-payload.jsonl");
+        const stableInstructions = buildStableCachePrefix("anthropic-system-update", 96);
+        const originalRule = "Workspace cache probe revision: initial.";
+        const updatedRule = "Workspace cache probe revision: updated.";
+        await fs.writeFile(
+          instructionsFile,
+          `${stableInstructions}\n\n## Cache probe rule\n${originalRule}\n`,
+        );
+
+        await withEnvAsync(
+          {
+            OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1",
+            OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE: payloadFile,
+          },
+          async () => {
+            const probe = {
+              ...fixture,
+              cacheRetention: "short" as const,
+              prefix: ANTHROPIC_PREFIX,
+              providerTag: "anthropic" as const,
+              sessionId,
+            };
+            const warmup = await runEmbeddedCacheProbe({
+              ...probe,
+              suffix: "system-update-warmup",
+            });
+            await fs.writeFile(
+              instructionsFile,
+              `${stableInstructions}\n\n## Cache probe rule\n${updatedRule}\n`,
+            );
+            const hit = await runEmbeddedCacheProbe({ ...probe, suffix: "system-update-hit" });
+            const cachedPrefixTokens =
+              (warmup.usage.cacheRead ?? 0) + (warmup.usage.cacheWrite ?? 0);
+            logLiveCache(
+              `anthropic system update prefix=${cachedPrefixTokens} hit=${hit.usage.cacheRead} input=${hit.usage.input}`,
+            );
+            expect(cachedPrefixTokens).toBeGreaterThan(4_096);
+            expect(hit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(cachedPrefixTokens);
+
+            type RequestEvent = {
+              stage: string;
+              payload: {
+                system: Array<{ type: string; text: string; cache_control?: unknown }>;
+                messages: Array<{
+                  role: string;
+                  content: string | Array<{ type: string; text?: string }>;
+                  clear_at?: string;
+                }>;
+              };
+            };
+            const requests = (await fs.readFile(payloadFile, "utf8"))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as RequestEvent)
+              .filter((event) => event.stage === "request")
+              .map((event) => event.payload);
+            expect(requests).toHaveLength(2);
+            const firstRequest = expectDefined(requests[0], "warmup request");
+            const secondRequest = expectDefined(requests[1], "follow-up request");
+            const firstPrefix = firstRequest.system.find((block) => block.cache_control)?.text;
+            expect(firstPrefix).toContain(originalRule);
+            expect(secondRequest.system.find((block) => block.cache_control)?.text).toBe(
+              firstPrefix,
+            );
+            expect(secondRequest.system.map((block) => block.text).join("\n")).not.toContain(
+              updatedRule,
+            );
+            const lastUserIndex = secondRequest.messages.findLastIndex(
+              (message) => message.role === "user",
+            );
+            expect(lastUserIndex).toBeGreaterThanOrEqual(0);
+            const operatorMessages = secondRequest.messages.slice(lastUserIndex + 1);
+            expect(operatorMessages.length).toBeGreaterThan(0);
+            expect(operatorMessages.every((message) => message.role === "system")).toBe(true);
+            expect(operatorMessages).toContainEqual({
+              role: "system",
+              content: [
+                {
+                  type: "text",
+                  text: expect.stringContaining(`## Cache probe rule\n${updatedRule}`),
+                },
+              ],
+            });
+            await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+          },
+        );
+      },
+      15 * 60_000,
     );
 
     it(

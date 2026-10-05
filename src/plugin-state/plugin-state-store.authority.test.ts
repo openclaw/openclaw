@@ -10,7 +10,10 @@ import type { OpenClawConfig, OpenClawPluginToolContext } from "../plugin-sdk/pl
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginStateKeyedStore } from "./plugin-state-store.js";
@@ -106,6 +109,18 @@ describe("action-bound plugin state", () => {
           };
           const gateway: PluginRuntime["gateway"] = {
             isAvailable: async () => true,
+            async openPluginPanel() {
+              throw new Error("Unexpected plugin panel request");
+            },
+            async readSessionFacts() {
+              throw new Error("Unexpected session facts request");
+            },
+            async withSessionReadScope() {
+              throw new Error("Unexpected session read scope");
+            },
+            subscribeSessionChanges() {
+              throw new Error("Unexpected session changes subscription");
+            },
             async request() {
               throw new Error("Unexpected Gateway request");
             },
@@ -114,7 +129,7 @@ describe("action-bound plugin state", () => {
             expect(method).toBe("users.list");
             return { profiles: [] };
           });
-          const registry = loadAndActivateRootPluginRegistry({
+          const registry = await loadAndActivateRootPluginRegistry({
             config,
             env: state.env,
             workspaceDir: state.workspaceDir,
@@ -242,30 +257,39 @@ describe("action-bound plugin state", () => {
     }
   });
 
-  it.each(["dispatch", "transaction", "commit", "after commit"] as const)(
-    "preserves renewal settlement when manager authority closes at %s",
-    async (revocation) => {
+  it.each([
+    ["manager", "dispatch", "register"],
+    ["manager", "transaction", "register"],
+    ["manager", "commit", "register"],
+    ["manager", "after commit", "register"],
+    ["plugin", "commit", "delete"],
+  ] as const)(
+    "preserves %s authority settlement at %s for %s",
+    async (authority, revocation, operation) => {
       await withOpenClawTestState({ label: "plugin-state-renewal-authority" }, async (state) => {
-        const store = createPluginStateKeyedStore<{ expiresAt: number }>("visitor-access", {
-          namespace: "visitors",
-          maxEntries: 10,
-          overflowPolicy: "reject-new",
-          env: state.env,
+        let current = true;
+        const assertInvocationCurrent = vi.fn(() => {
+          if (!current) {
+            throw new Error(`Synthetic ${authority} authority closed`);
+          }
         });
+        const store = createPluginStateKeyedStore<{ expiresAt: number }>(
+          "visitor-access",
+          {
+            namespace: "visitors",
+            maxEntries: 10,
+            overflowPolicy: "reject-new",
+            env: state.env,
+          },
+          authority === "plugin" ? assertInvocationCurrent : undefined,
+        );
         const email = "visitor@example.test";
         const previous = { expiresAt: Date.now() + 60_000 };
         const renewed = { expiresAt: previous.expiresAt + 60_000 };
-        await store.register(email, previous);
-        let managerCurrent = true;
-        const assertInvocationCurrent = vi.fn();
         const action = store.withCurrent({
-          assertCurrent: () => {
-            assertInvocationCurrent();
-            if (!managerCurrent) {
-              throw new Error("Synthetic manager authority closed");
-            }
-          },
+          assertCurrent: authority === "manager" ? assertInvocationCurrent : () => {},
         });
+        await (authority === "plugin" ? action : store).register(email, previous);
         const stages: string[] = [];
         const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
         vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
@@ -273,11 +297,11 @@ describe("action-bound plugin state", () => {
             createAdmission((request, grant) => {
               stages.push(request.stage);
               if (request.stage === revocation) {
-                managerCurrent = false;
+                current = false;
               }
               admit(request, grant);
               if (request.stage === "commit" && revocation === "after commit") {
-                managerCurrent = false;
+                current = false;
               }
             }, attachment),
         );
@@ -291,20 +315,21 @@ describe("action-bound plugin state", () => {
               asOptionalRecord(deserialize(request.input))?.type === "pluginState.register"
             ) {
               // The caller passed its pre-dispatch check; the write is now queued for SQLite.
-              managerCurrent = false;
+              current = false;
             }
             postMessageSpy.mockRestore();
             return this.postMessage(message, transferList);
           });
         }
 
-        const writing = action.register(email, renewed);
+        const writing =
+          operation === "delete" ? action.delete(email) : action.register(email, renewed);
         if (revocation === "after commit") {
           await expect(writing).resolves.toBeUndefined();
         } else {
           await expect(writing).rejects.toMatchObject({ code: "PLUGIN_STATE_WRITE_FAILED" });
         }
-        expect(managerCurrent).toBe(false);
+        expect(current).toBe(false);
         expect(assertInvocationCurrent).toHaveBeenCalled();
         if (revocation !== "dispatch") {
           expect(stages).toEqual(
@@ -364,40 +389,4 @@ describe("action-bound plugin state", () => {
       );
     },
   );
-
-  it("keeps a bounded action view tied to its original plugin lifetime", async () => {
-    await withOpenClawTestState({ label: "plugin-state-action-lifetime" }, async (state) => {
-      let runtimeCurrent = true;
-      const store = createPluginStateKeyedStore<string>(
-        "visitor-access",
-        {
-          namespace: "visitors",
-          maxEntries: 10,
-          overflowPolicy: "reject-new",
-          env: state.env,
-        },
-        () => {
-          if (!runtimeCurrent) {
-            throw new Error("Synthetic plugin lifetime closed");
-          }
-        },
-      );
-      const action = store.withCurrent({ assertCurrent: () => {} });
-      await action.register("visitor@example.test", "original");
-      const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              runtimeCurrent = false;
-            }
-            admit(request, grant);
-          }, attachment),
-      );
-      await expect(action.delete("visitor@example.test")).rejects.toMatchObject({
-        code: "PLUGIN_STATE_WRITE_FAILED",
-      });
-      expect(await store.lookup("visitor@example.test")).toBe("original");
-    });
-  });
 });

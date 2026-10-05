@@ -1,7 +1,7 @@
 // Covers gateway process discovery across platform process listings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
 import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -53,11 +53,8 @@ vi.mock("../channels/chat-meta.js", () => ({
   getChatChannelMeta: vi.fn(() => null),
 }));
 
-const {
-  findVerifiedGatewayListenerPidsOnPortSync,
-  formatGatewayPidList,
-  signalVerifiedGatewayPidSync,
-} = await import("./gateway-processes.js");
+const { findVerifiedGatewayListenerPidsOnPortSync, signalVerifiedGatewayPidSync } =
+  await import("./gateway-processes.js");
 
 function mockRelativeWindowsGateway(listeners = [500]) {
   mockProcessPlatform("win32");
@@ -99,42 +96,33 @@ describe("gateway-processes", () => {
     vi.restoreAllMocks();
   });
 
-  it("signals only verified gateway processes", () => {
-    mockProcessPlatform("linux");
-    readFileSyncMock.mockReturnValue("openclaw-gateway\0");
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-    signalVerifiedGatewayPidSync(500, "SIGTERM");
-    readFileSyncMock.mockReturnValue("python\0");
-    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
-
-    expect(() => signalVerifiedGatewayPidSync(501, "SIGUSR1")).toThrow(
-      /refusing to signal non-gateway process pid 501/,
-    );
-  });
-
-  it("swallows ESRCH when a verified gateway process exits before the signal", () => {
-    mockProcessPlatform("linux");
-    readFileSyncMock.mockReturnValue("openclaw-gateway\0");
-    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
-      throw esrchErr;
-    });
-
-    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).not.toThrow();
-    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
-  });
-
-  it("re-throws non-ESRCH kill errors", () => {
-    mockProcessPlatform("linux");
-    readFileSyncMock.mockReturnValue("openclaw-gateway\0");
-    const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw epermErr;
-    });
-
-    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).toThrow("permission denied");
-  });
+  it.each([undefined, "ESRCH", "EPERM"] as const)(
+    "signals only verified gateways and handles kill error %s",
+    (code) => {
+      mockProcessPlatform("linux");
+      readFileSyncMock.mockReturnValue("openclaw-gateway\0");
+      const error = Object.assign(new Error("permission denied"), { code });
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+        if (code) {
+          throw error;
+        }
+        return true;
+      });
+      const signal = () => signalVerifiedGatewayPidSync(500, "SIGTERM");
+      if (code === "EPERM") {
+        expect(signal).toThrow(error);
+      } else {
+        expect(signal).not.toThrow();
+      }
+      expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
+      if (!code) {
+        readFileSyncMock.mockReturnValue("python\0");
+        expect(() => signalVerifiedGatewayPidSync(501, "SIGUSR1")).toThrow(
+          /refusing to signal non-gateway process pid 501/,
+        );
+      }
+    },
+  );
 
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
     mockProcessPlatform("linux");
@@ -191,43 +179,38 @@ describe("gateway-processes", () => {
     expect(spawnSyncMock.mock.calls[2]?.[0]).toBe(getWindowsPowerShellExePath());
   });
 
-  it("formats pid lists as comma-separated output", () => {
-    expect(formatGatewayPidList([1, 2, 3])).toBe("1, 2, 3");
-  });
-
   it("recognizes a relative Windows gateway only at its recorded listener PID and port", () => {
     mockRelativeWindowsGateway([500, 600, 500]);
     readGatewayOwnerLeaseMock.mockReturnValue(gatewayOwner());
     const env = { OPENCLAW_STATE_DIR: "C:\\fixture\\state" };
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789, { env })).toEqual([500]);
+    signalVerifiedGatewayPidSync(500, "SIGTERM", { env, port: 18789 });
+    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
     expect(readGatewayOwnerLeaseMock).toHaveBeenCalledWith({ env, port: 18789, current: true });
     expect(findVerifiedGatewayListenerPidsOnPortSync(18890, { env })).toEqual([]);
     mockRelativeWindowsGateway([600]);
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789, { env })).toEqual([]);
   });
 
-  it("signals a relative Windows gateway using freshly verified recorded ownership", () => {
-    mockRelativeWindowsGateway();
-    readGatewayOwnerLeaseMock.mockReturnValue(gatewayOwner());
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const env = { OPENCLAW_STATE_DIR: "C:\\fixture\\state" };
-
-    signalVerifiedGatewayPidSync(500, "SIGTERM", { env, port: 18789 });
-    expect(readGatewayOwnerLeaseMock).toHaveBeenCalledWith({ env, port: 18789, current: true });
-    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
-  });
-
   it.each([
     ["missing", undefined],
+    ["unreadable", undefined],
     ["reused PID", gatewayOwner({ state: "dead" })],
     ["unverified creation time", gatewayOwner({ state: "unknown", startedAt: null })],
     ["foreign host", gatewayOwner({ state: "unknown", host: "other-host" })],
     ["different PID", gatewayOwner({ pid: 501 })],
     ["different port", gatewayOwner({ port: 18890 })],
-  ] as const)("refuses Windows discovery and signaling with a %s owner", (_label, owner) => {
+  ] as const)("refuses Windows discovery and signaling with a %s owner", (label, owner) => {
     mockRelativeWindowsGateway();
-    readGatewayOwnerLeaseMock.mockReturnValue(owner);
+    if (label === "unreadable") {
+      readGatewayOwnerLeaseMock.mockImplementation(() => {
+        throw new Error("database unavailable");
+      });
+    } else {
+      readGatewayOwnerLeaseMock.mockReturnValue(owner);
+    }
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([]);
@@ -244,19 +227,6 @@ describe("gateway-processes", () => {
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([500]);
     expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM", { port: 18789 })).toThrow(
-      "refusing to signal non-gateway process pid 500",
-    );
-    expect(killSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not signal when the Windows owner lease cannot be read", () => {
-    mockRelativeWindowsGateway();
-    readGatewayOwnerLeaseMock.mockImplementation(() => {
-      throw new Error("database unavailable");
-    });
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).toThrow(
       "refusing to signal non-gateway process pid 500",
     );
     expect(killSpy).not.toHaveBeenCalled();

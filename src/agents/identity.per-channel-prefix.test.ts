@@ -8,7 +8,7 @@ function prefixConfig(
   accounts?: Record<string, { responsePrefix?: string }>,
 ): OpenClawConfig {
   return {
-    agents: { list: [{ id: "main", identity: { name: "MyBot" } }] },
+    agents: { entries: { main: { identity: { name: "MyBot" } } } },
     channels: { whatsapp: { responsePrefix, accounts } },
   };
 }

@@ -1,4 +1,3 @@
-// Utility-model narration for channel progress drafts.
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
@@ -126,8 +125,16 @@ function createProgressNarrator(params: {
   }
 
   const generate = async (input: ProgressNarrationInput, abortSignal: AbortSignal) => {
-    preparedPromise ??= prepareNarrationModel({ cfg: params.cfg, agentId: params.agentId });
-    const prepared = await preparedPromise;
+    const preparation = (preparedPromise ??= prepareNarrationModel({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    }));
+    const prepared = await preparation;
+    // Failed or borrowed routes recheck credentials on the next narration. A late
+    // waiter must not clear a newer preparation owned by a queued turn.
+    if ((!prepared || prepared.agentHarnessRuntimeOverride) && preparedPromise === preparation) {
+      preparedPromise = undefined;
+    }
     if (abortSignal.aborted) {
       return null;
     }

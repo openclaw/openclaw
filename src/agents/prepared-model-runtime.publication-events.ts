@@ -16,6 +16,7 @@ type PreparedModelRuntimePublicationEvent =
   | { phase: "invalidated"; modelFactsChanged?: false; replacement?: Promise<void> }
   | { phase: "published"; modelFactsChanged?: false }
   | { phase: "failed"; error: Error }
+  | { phase: "catalog-status"; modelFactsChanged: false }
   // Publication owners alone can prove that model facts stayed unchanged.
   | {
       phase: "catalog-published";
@@ -56,6 +57,7 @@ export function createCatalogAttemptReporter(
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
   beforeProviderFailure: () => void,
+  isPublished?: () => boolean,
 ) {
   // Compatible reloads share live status; replacement sources start without the old error.
   const attempt: PreparedModelCatalogAttempt =
@@ -71,6 +73,10 @@ export function createCatalogAttemptReporter(
   };
   const pendingCount = () =>
     (pendingProviders.provider?.length ?? 0) + (pendingProviders.native?.length ?? 0);
+  const readPendingProviders = () =>
+    pendingCount()
+      ? [...new Set([...(pendingProviders.provider ?? []), ...(pendingProviders.native ?? [])])]
+      : undefined;
   const failed = (
     error: unknown,
     providers?: readonly string[],
@@ -95,11 +101,13 @@ export function createCatalogAttemptReporter(
       }
       pendingProviders[kind] = undefined;
       owner.catalogAttempt = attempt;
-      notifyPreparedModelRuntimePublication({
-        phase: "catalog-failed",
-        error: toStringifiedError(error),
-        modelFactsChanged: false,
-      });
+      if (isPublished?.() !== false) {
+        notifyPreparedModelRuntimePublication({
+          phase: "catalog-failed",
+          error: toStringifiedError(error),
+          modelFactsChanged: false,
+        });
+      }
     }
   };
   const hasFailedProviders = () =>
@@ -109,7 +117,18 @@ export function createCatalogAttemptReporter(
       providers: readonly string[] | undefined,
       kind: PreparedModelCatalogAcquisitionKind = "provider",
     ) => {
+      const previous = readPendingProviders();
       pendingProviders[kind] = providers;
+      if (
+        isCurrent() &&
+        isPublished?.() !== false &&
+        !isDeepStrictEqual(previous, readPendingProviders())
+      ) {
+        notifyPreparedModelRuntimePublication({
+          phase: "catalog-status",
+          modelFactsChanged: false,
+        });
+      }
     },
     withRefreshStatus: (catalog: ModelCatalogSnapshot) => {
       const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {}).flat();
@@ -124,15 +143,7 @@ export function createCatalogAttemptReporter(
       Object.defineProperty(catalog, "pendingProviders", {
         enumerable: true,
         configurable: true,
-        get: () =>
-          pendingCount()
-            ? [
-                ...new Set([
-                  ...(pendingProviders.provider ?? []),
-                  ...(pendingProviders.native ?? []),
-                ]),
-              ]
-            : undefined,
+        get: readPendingProviders,
       });
       // Keep the status live on retained inventory without copying an error into its successor.
       Object.defineProperty(catalog, "refreshFailed", {
@@ -166,10 +177,13 @@ export function createCatalogAttemptReporter(
         attempt.failedProviders[acquisitionKind].clear();
       }
       owner.catalogAttempt = attempt;
-      notifyPreparedModelCatalogPublication(
-        publication?.(),
-        previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
-      );
+      const change = publication?.();
+      if (isPublished?.() !== false) {
+        notifyPreparedModelCatalogPublication(
+          change,
+          previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
+        );
+      }
     },
     failed,
   };
@@ -188,8 +202,4 @@ export function notifyPreparedModelRuntimePublication(
   notifyListeners(publicationListeners, event, (error) => {
     log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
   });
-}
-
-export function resetPreparedModelRuntimePublicationListenersForTest(): void {
-  publicationListeners.clear();
 }

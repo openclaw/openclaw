@@ -64,3 +64,61 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
   });
   expect(user).toMatchObject({ isNewSession: true, sessionId: "daily-session-id" });
 });
+
+it.each([false, true])(
+  "only user interaction spends snooze (system event: %s)",
+  async (isSystemEvent) => {
+    stateDir = tempDirs.make("openclaw-heartbeat-snooze-");
+    const storePath = path.join(stateDir, "sessions.json");
+    const sessionKey = "agent:main:main:user123";
+    const now = Date.now();
+    const snooze = { snoozedUntil: now + 3_600_000, snoozedAt: now - 1_000 };
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "snoozed-session",
+        updatedAt: now,
+        systemSent: true,
+        sessionStartedAt: now,
+        lastInteractionAt: now - 1_000,
+        ...snooze,
+      },
+    );
+
+    const result = await initSessionState({
+      cfg: {
+        agents: { defaults: { workspace: stateDir } },
+        session: { store: storePath, reset: { mode: "idle", idleMinutes: 5 } },
+      },
+      commandAuthorized: true,
+      ctx: finalizeInboundContext({
+        From: "user123",
+        To: "bot123",
+        SessionKey: sessionKey,
+        Provider: "quietchat",
+        Surface: "quietchat",
+        ChatType: "direct",
+        CommandAuthorized: true,
+        Body: "test message",
+        ...(isSystemEvent ? { InternalTurnSource: "heartbeat" } : {}),
+      }),
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe("snoozed-session");
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    if (!persisted) {
+      throw new Error(`Expected persisted session for ${sessionKey}`);
+    }
+    for (const entry of [result.sessionEntry, persisted]) {
+      if (isSystemEvent) {
+        expect(entry).toMatchObject(snooze);
+        expect(entry.lastInteractionAt).toBe(now - 1_000);
+      } else {
+        expect(entry.snoozedUntil).toBeUndefined();
+        expect(entry.snoozedAt).toBeUndefined();
+        expect(entry.lastInteractionAt).toBeGreaterThanOrEqual(now);
+      }
+    }
+  },
+);

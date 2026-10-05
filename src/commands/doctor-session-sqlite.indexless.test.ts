@@ -16,7 +16,7 @@ import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 it("receipts indexless configured history and archives retired history while a plugin is pending", async () => {
   await withOpenClawTestState({ label: "indexless-deferred-fleet" }, async (state) => {
     const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default", "codex");
-    cfg.agents = { entries: { main: { default: true }, active: {} } };
+    cfg.agents = { entries: { main: {}, active: {} } };
     const originalIndex = fs.readFileSync(storePath);
     const sources = new Map<string, string>();
     for (const agentId of ["active", "retired", "trajectory-only"]) {

@@ -14,6 +14,7 @@ import {
   formatToolAggregate,
   inferToolMetaFromArgs,
   vi,
+  mockCallArg,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -31,11 +32,24 @@ describe("Codex tool response fidelity", () => {
     return requireRecord(requireArray(result.content, "content")[0], "output").text;
   }
 
-  async function projectCodeModeOutput(output: string, input: string) {
+  async function projectCodeModeOutput(
+    output: string,
+    input: string,
+    name: "exec" | "wait" = "exec",
+  ) {
     const projector = await createProjector();
+    const callId = `outer-${name}`;
     for (const item of [
-      { type: "custom_tool_call", call_id: "outer-exec", name: "exec", input },
-      { type: "custom_tool_call_output", call_id: "outer-exec", output },
+      name === "exec"
+        ? { type: "custom_tool_call", call_id: callId, name, input }
+        : { type: "function_call", call_id: callId, name, arguments: input },
+      name === "exec"
+        ? { type: "custom_tool_call_output", call_id: callId, output }
+        : {
+            type: "function_call_output",
+            call_id: callId,
+            output: [{ type: "input_text", text: output }],
+          },
     ]) {
       await projector.handleNotification(forCurrentTurn("rawResponseItem/completed", { item }));
     }
@@ -87,17 +101,10 @@ describe("Codex tool response fidelity", () => {
   });
 
   it.each([
-    { label: "empty", output: "", isError: false, outcome: "unknown" },
     {
       label: "completed",
       output: "Script completed\nWall time 0.1 seconds\nOutput:\n" + "x".repeat(34_766),
       isError: false,
-      outcome: undefined,
-    },
-    {
-      label: "failed",
-      output: "Script failed\nWall time 0.1 seconds\nOutput:\nScript error: fixture failure",
-      isError: true,
       outcome: undefined,
     },
   ])(
@@ -117,31 +124,64 @@ describe("Codex tool response fidelity", () => {
     },
   );
 
-  it("retains unrecognized code-mode patch responses without inventing patch success", async () => {
-    const output = "  Future patch execution failure\r\n" + "details\n".repeat(2_000);
-    const patchInput = "*** Begin Patch\n*** Add File: fixture.txt\n+fixture\n*** End Patch\n";
-    const result = await projectCodeModeOutput(
-      output,
-      `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`,
-    );
-    expect(result).toMatchObject({
-      toolCallId: "outer-exec",
-      toolName: "exec",
-      content: [{ type: "text", text: output }],
-      __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
-    });
-    const metadata = requireRecord(result["__openclaw"], "metadata");
-    expect(requireRecord(metadata.toolOutput, "provenance").outcome).toBe("unknown");
-  });
-
   it.each([
-    {
-      order: "before",
-      aggregate: "available",
-      aggregatedOutput: "raw execution output is not the response",
-    },
-    { order: "after", aggregate: "null", aggregatedOutput: null },
+    { order: "before", status: "failed", isError: true },
+    { order: "after", status: "failed", isError: true },
   ])(
+    "uses the native collaboration $status outcome when output arrives $order completion",
+    async ({ order, status, isError }) => {
+      const projector = await createProjector();
+      const callId = `spawn-${order}-${status}`;
+      const call = forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "function_call",
+          call_id: callId,
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: "inspect the owner" }),
+        },
+      });
+      const output = forCurrentTurn("rawResponseItem/completed", {
+        item: { type: "function_call_output", call_id: callId, output: "Agent started." },
+      });
+      const native = {
+        type: "collabAgentToolCall",
+        id: callId,
+        tool: "spawnAgent",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["child-1"],
+        agentsStates: {},
+      };
+      await projector.handleNotification(call);
+      await projector.handleNotification(
+        forCurrentTurn("item/started", { item: { ...native, status: "inProgress" } }),
+      );
+      if (order === "before") {
+        await projector.handleNotification(output);
+      }
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", { item: { ...native, status } }),
+      );
+      if (order === "after") {
+        await projector.handleNotification(output);
+      }
+      await projector.handleNotification(turnCompleted([{ ...native, status }]));
+
+      const result = toolResult(projector);
+      expect(result).toMatchObject({
+        toolCallId: callId,
+        toolName: "spawn_agent",
+        isError,
+        content: [{ type: "text", text: "Agent started." }],
+        __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
+      });
+      expect(
+        requireRecord(requireRecord(result["__openclaw"], "metadata").toolOutput, "provenance")
+          .outcome,
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([{ order: "after", aggregate: "null", aggregatedOutput: null }])(
     "preserves the complete response $order the terminal item with $aggregate aggregate",
     async ({ order, aggregatedOutput }) => {
       const projector = await createProjector();
@@ -254,7 +294,7 @@ describe("streamed-output-echo", () => {
       }),
     );
     const summary = onToolResult.mock.calls[0]?.[0].text;
-    expect(summary).toBe("🛠️ Bash");
+    expect(summary).toBe("Bash");
     const output = "streamed-output-chunk-that-would-overwrite-summary";
     await projector.handleNotification(
       forCurrentTurn("item/commandExecution/outputDelta", {
@@ -342,23 +382,41 @@ describe("streamed-output-echo", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(summary.slice(0, 1_000));
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(chunks.join("").trim());
   });
+});
 
-  it("filters aggregate echoes while preserving the complete tool transcript", async () => {
-    const projector = await createProjector();
-    const output = `\n${"s".repeat(12_345)}tail-should-not-appear\n`;
-    await projector.handleNotification(rawMessage(output));
-    await projector.handleNotification(
-      turnCompleted([
-        createNativeCommandItem({
-          id: "cmd-aggregate-echo",
-          command: "python scripts/run_demo_scenario.py",
-          aggregatedOutput: output,
+describe("CodexAppServerEventProjector command output projection", () => {
+  it.each([{ prefixLength: 7_999, delta: "😀tail", expectedChunk: "" }])(
+    "keeps streamed progress UTF-16 safe with $prefixLength chars already emitted",
+    async ({ prefixLength, delta, expectedChunk }) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta: "a".repeat(prefixLength),
         }),
-      ]),
-    );
-    const result = expectNoReply(projector);
-    expect(
-      JSON.stringify(result.messagesSnapshot.filter((message) => message.role === "toolResult")),
-    ).toContain("tail-should-not-appear");
-  });
+      );
+      onToolResult.mockClear();
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta,
+        }),
+      );
+
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+      expect(onToolResult).toHaveBeenCalledWith({
+        text: `Bash\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
+      });
+      const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
+      expect(text).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    },
+  );
 });

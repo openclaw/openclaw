@@ -20,17 +20,17 @@ import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 import { formatCliRequirements } from "./skills-hooks-cli.format.js";
 
-export type SkillsListOptions = {
+type SkillsListOptions = {
   json?: boolean;
   eligible?: boolean;
   verbose?: boolean;
 };
 
-export type SkillInfoOptions = {
+type SkillInfoOptions = {
   json?: boolean;
 };
 
-export type SkillsCheckOptions = {
+type SkillsCheckOptions = {
   json?: boolean;
   agent?: string;
 };
@@ -182,19 +182,16 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
   }
 
-  const lines: string[] = [];
-  lines.push(
-    `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
+  return appendClawHubHint(
+    [
+      `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
+      renderTable({
+        width: tableWidth,
+        columns,
+        rows,
+      }).trimEnd(),
+    ].join("\n"),
   );
-  lines.push(
-    renderTable({
-      width: tableWidth,
-      columns,
-      rows,
-    }).trimEnd(),
-  );
-
-  return appendClawHubHint(lines.join("\n"));
 }
 
 export function formatSkillInfo(
@@ -222,22 +219,19 @@ export function formatSkillInfo(
     return formatSkillsJson(skill);
   }
 
-  const lines: string[] = [];
   const emoji = normalizeSkillEmoji(skill.emoji);
-  const status = formatSkillStatus(skill, true);
-
   const safeName = sanitizeForLog(skill.name);
   const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;
   const safeSkillKey = sanitizeForLog(skill.skillKey);
-
-  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${status}`);
-  lines.push("");
-  lines.push(sanitizeForLog(skill.description));
-  lines.push("");
-
-  lines.push(theme.heading("Details:"));
-  lines.push(`${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`);
-  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
+  const lines = [
+    `${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${formatSkillStatus(skill, true)}`,
+    "",
+    sanitizeForLog(skill.description),
+    "",
+    theme.heading("Details:"),
+    `${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`,
+    `${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`,
+  ];
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
   }

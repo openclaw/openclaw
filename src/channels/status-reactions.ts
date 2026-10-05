@@ -1,7 +1,5 @@
-// Status-reaction controller helpers for channel-visible agent activity.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { TOOL_DISPLAY_CONFIG } from "../agents/tool-display-config.js";
-import { resolveToolDisplay } from "../agents/tool-display.js";
+import { TOOL_REACTION_EMOJIS } from "./status-reaction-tool-emojis.js";
 
 /** Adapter implemented by channels that expose message reaction status updates. */
 export type StatusReactionAdapter = {
@@ -147,10 +145,7 @@ export function resolveToolEmoji(
   if (emojiOverrides?.[category] !== undefined) {
     return emojis[category];
   }
-  if (Object.hasOwn(TOOL_DISPLAY_CONFIG.tools, normalized)) {
-    return resolveToolDisplay({ name: toolName }).emoji;
-  }
-  return emojis[category];
+  return TOOL_REACTION_EMOJIS.get(normalized) ?? emojis[category];
 }
 
 /** Defer reaction removal until cleanup to avoid flicker without atomic replacement. */

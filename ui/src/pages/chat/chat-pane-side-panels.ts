@@ -1,3 +1,4 @@
+import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -11,7 +12,6 @@ import {
   ChatSessionCompanionThreads,
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
-  requestSessionCompanionState,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -42,13 +42,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     }
     this.requestUpdate();
   };
-
-  protected selectedSessionRailMode(sessionKey: string): "expanded" | "hidden" {
-    const state = this.state;
-    const visible =
-      state?.sessionKey === sessionKey && isSidebarSlotVisible(state.sidebarLayout, "companion");
-    return visible ? "expanded" : "hidden";
-  }
 
   protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
     if (!this.compact) {
@@ -84,14 +77,32 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state) {
       return;
     }
-    const visible = this.selectedSessionRailMode(state.sessionKey) === "expanded";
-    if (intent === "toggle" && visible) {
+    if (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion")) {
       this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
       this.setSessionObserverVisibility(false);
       return;
     }
     this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
     this.setSessionObserverVisibility(true);
+  }
+
+  requestSubagentsPanel(intent: "open" | "toggle"): void {
+    this.requestBackgroundPanel("subagents", intent);
+  }
+
+  protected requestBackgroundPanel(
+    slot: "subagents" | "processes",
+    intent: "open" | "toggle",
+  ): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    this.commitSidebarLayout(
+      intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot)
+        ? closeSlot(state.sidebarLayout, slot)
+        : openSlot(state.sidebarLayout, slot),
+    );
   }
 
   protected syncSessionCompanionPresentation(presented: boolean): void {
@@ -248,7 +259,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.sessionCompanionHydrationKey = hydrationKey;
     void this.sessionCompanionThreads.hydrate(
       sessionKey,
-      (key) => requestSessionCompanionState(state.client!, key, agentId),
+      (key) =>
+        state.client!.request<SessionsCompanionStateResult>("sessions.companion.state", {
+          sessionKey: key,
+          ...(agentId ? { agentId } : {}),
+        }),
       agentId,
     );
   }

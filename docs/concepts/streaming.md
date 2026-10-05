@@ -175,8 +175,11 @@ channel or account sets `*.streaming.block.enabled` explicitly. QQ Bot has no
 For Discord and Telegram, an explicitly configured non-`off` preview mode
 takes precedence over inherited `agents.defaults.blockStreamingDefault: "on"`.
 Set that channel's `streaming.block.enabled: true` when block replies should
-override its preview. If the preview is unavailable for a turn, inherited block
-delivery still applies.
+override its preview. For ordinary single-agent turns, if a reply-modifying
+hook prevents Telegram previews, completed blocks use normal hooked delivery
+unless block streaming is explicitly disabled globally or for Telegram.
+Configured multi-agent group-thread turns do not use this forced fallback; like
+other turns without a preview, they retain the configured block delivery policy.
 
 ## Preview streaming modes
 
@@ -277,7 +280,8 @@ Slack-only:
 ### Discord
 
 - Uses send + edit preview messages.
-- `block` mode uses draft chunking (`draftChunk`).
+- `block` mode updates the preview at chunk boundaries while preserving the
+  answer's paragraph separators and code fences in the edited message.
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,

@@ -27,6 +27,7 @@ import {
   resolveUpdateCommandAdmissionEnv,
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";
@@ -46,6 +47,7 @@ it.each([
 ] as const)(
   "preserves service admission authority ($platform, $outcome)",
   async ({ platform, outcome }) => {
+    stubNodeRuntime();
     const home = dirs.make("update-service-admission-");
     const callerRoot = path.join(home, "caller-package");
     const serviceRoot = path.join(home, "service-package");

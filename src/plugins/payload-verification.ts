@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -13,8 +14,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
@@ -60,15 +61,12 @@ export function isPayloadMissing(env: NodeJS.ProcessEnv, rawInstallPath?: string
 export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
-  skipDisabledPlugins?: boolean;
-  syncOfficialPluginInstalls?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<MissingPluginInstallPayload[]> {
   const env = params.env ?? process.env;
-  const normalizedPluginConfig =
-    params.skipDisabledPlugins && params.config
-      ? normalizePluginsConfig(params.config.plugins)
-      : undefined;
+  const normalizedPluginConfig = params.config
+    ? normalizePluginsConfig(params.config.plugins)
+    : undefined;
   const missing: MissingPluginInstallPayload[] = [];
   for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
     left.localeCompare(right),
@@ -76,12 +74,14 @@ export async function collectMissingPluginInstallPayloads(params: {
     if (!TRACKED_SOURCES.has(record.source)) {
       continue;
     }
-    const officialNpmSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
-      : undefined;
-    const officialClawHubSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
-      : undefined;
+    const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId,
+      record,
+    })?.npmSpec;
+    const officialClawHubSpec = resolveTrustedSourceLinkedOfficialClawHubInstall({
+      pluginId,
+      record,
+    })?.clawhubSpec;
     if (normalizedPluginConfig && params.config) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -244,10 +244,13 @@ async function readPackagePayloadManifest(
     return { status: "unreadable", error: err instanceof Error ? err.message : String(err) };
   }
   try {
+    const manifest: unknown = JSON.parse(packageJson);
+    if (!isRecord(manifest)) {
+      return { status: "invalid", error: "package.json must be an object" };
+    }
     return {
       status: "present",
-      // SAFETY: Package manifest consumers below validate every field they read from parsed JSON.
-      manifest: JSON.parse(packageJson) as PackagePayloadManifest,
+      manifest,
     };
   } catch (err) {
     return { status: "invalid", error: err instanceof Error ? err.message : String(err) };

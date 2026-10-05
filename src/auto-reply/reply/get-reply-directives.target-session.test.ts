@@ -51,7 +51,6 @@ async function resolveHelloWithModelDefaults(params: {
   agentEntries?: Array<{ id?: string; thinkingDefault?: "off" | "low" }>;
   hasConfiguredThinkingDefault?: boolean;
   commandAuthorized?: boolean;
-  hasOneTurnModelOverride?: boolean;
   selectedProvider?: string;
   selectedModel?: string;
   provider?: string;
@@ -133,7 +132,6 @@ async function resolveHelloWithModelDefaults(params: {
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
     provider: params.provider ?? "openai",
     model: params.model ?? "gpt-4o-mini",
-    hasOneTurnModelOverride: params.hasOneTurnModelOverride,
     hasResolvedHeartbeatModelOverride: false,
     typing,
     opts: params.opts,
@@ -283,19 +281,6 @@ describe("resolveReplyDirectives", () => {
       fastAutoOnSeconds: 60,
     }));
     mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
-  });
-
-  it("passes one-turn model override state into model selection", async () => {
-    await resolveHelloWithModelDefaults({
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasOneTurnModelOverride: true,
-    });
-
-    const modelSelectionInput = mockCallInput(mocks.createModelSelectionState);
-    expect(modelSelectionInput.provider).toBe("openai");
-    expect(modelSelectionInput.model).toBe("gpt-4o-mini");
-    expect(modelSelectionInput.hasOneTurnModelOverride).toBe(true);
   });
 
   it("passes persisted session identity into system-event group activation resolution", async () => {

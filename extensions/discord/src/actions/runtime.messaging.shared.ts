@@ -10,7 +10,6 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
-import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
   hasConfiguredDiscordChannels,
@@ -24,6 +23,14 @@ import * as discordMessagingActionRuntime from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import type { DiscordReactOpts } from "../send.types.js";
 import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
+import {
+  filterDiscordActiveThreadList,
+  isDiscordThreadChannel,
+  readDiscordChannelStringField,
+  readDiscordChannelType,
+  type DiscordReadAncestor,
+  type DiscordReadTargetContext,
+} from "./runtime.messaging.thread-list.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
 type ConversationReadInvocationOrigin = NonNullable<
@@ -55,12 +62,21 @@ export type DiscordMessagingActionContext = {
   options?: DiscordMessagingActionOptions;
   accountId?: string;
   resolveChannelId: () => string;
-  assertReadTargetAllowed: (params: { guildId?: string; channelId: string }) => Promise<void>;
+  assertReadTargetAllowed: (params: {
+    guildId?: string;
+    channelId: string;
+    requireGuildMetadata?: boolean;
+  }) => Promise<void>;
   assertGuildReadTargetAllowed: (params: {
     guildId: string;
     channelTargetRequiredMessage?: string;
     filteredResults?: boolean;
   }) => Promise<void>;
+  filterActiveThreadList: (params: {
+    guildId: string;
+    channelId: string;
+    value: unknown;
+  }) => Promise<{ threads: unknown[]; members: unknown[] }>;
   filterGuildChannelList: <T>(params: { guildId: string; channels: T[] }) => Promise<T[]>;
   resolveReactionChannelId: () => Promise<string>;
   withOpts: (extra?: Record<string, unknown>) => { cfg: OpenClawConfig; accountId?: string };
@@ -115,27 +131,6 @@ function resolveDiscordActionGuildEntry(params: {
   return wildcard ? { ...wildcard, id: guildId } : null;
 }
 
-type DiscordReadTargetContext = {
-  channelId: string;
-  metadataKnown: boolean;
-  ancestryComplete: boolean;
-  channelType?: number;
-  guildId?: string;
-  channelName?: string;
-  channelSlug: string;
-  ancestors: DiscordReadAncestor[];
-  parentId?: string;
-  parentName?: string;
-  parentSlug?: string;
-  scope?: "channel" | "thread";
-};
-
-type DiscordReadAncestor = {
-  channelId: string;
-  channelName?: string;
-  channelSlug: string;
-};
-
 async function resolveDiscordReadAncestry(params: {
   channelId: string;
   parentId?: string;
@@ -170,30 +165,42 @@ async function resolveDiscordReadAncestry(params: {
   return { ancestors, complete: !parentId };
 }
 
-function readDiscordChannelStringField(value: unknown, ...keys: string[]): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of keys) {
-    const candidate = record[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
+async function buildDiscordReadTarget(params: {
+  channelId: string;
+  channelInfo: unknown;
+  guildId?: string;
+  fallbackSlug: string;
+  loadChannel: (channelId: string) => Promise<unknown>;
+}): Promise<DiscordReadTargetContext> {
+  const channelName = readDiscordChannelStringField(params.channelInfo, "name");
+  const channelType = readDiscordChannelType(params.channelInfo);
+  const target: DiscordReadTargetContext = {
+    channelId: params.channelId,
+    channelSlug: channelName ? normalizeDiscordSlug(channelName) : params.fallbackSlug,
+    metadataKnown: true,
+    ancestryComplete: true,
+    ancestors: [],
+    ...(params.guildId ? { guildId: params.guildId } : {}),
+    ...(channelName ? { channelName } : {}),
+    ...(channelType !== undefined ? { channelType } : {}),
+    ...(isDiscordThreadChannel(params.channelInfo) ? { scope: "thread" as const } : {}),
+  };
+  const ancestry = await resolveDiscordReadAncestry({
+    channelId: params.channelId,
+    parentId: readDiscordChannelStringField(params.channelInfo, "parent_id", "parentId"),
+    loadChannel: params.loadChannel,
+  });
+  target.ancestors = ancestry.ancestors;
+  target.ancestryComplete = ancestry.complete;
+  const immediateParent = target.ancestors[0];
+  if (immediateParent) {
+    target.parentId = immediateParent.channelId;
+    if (immediateParent.channelName) {
+      target.parentName = immediateParent.channelName;
     }
+    target.parentSlug = immediateParent.channelSlug;
   }
-  return undefined;
-}
-
-function readDiscordChannelType(value: unknown): number | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const type = (value as Record<string, unknown>).type;
-  return typeof type === "number" ? type : undefined;
-}
-
-function isDiscordThreadChannel(value: unknown): boolean {
-  return isDiscordThreadChannelType(readDiscordChannelType(value));
+  return target;
 }
 
 function isDiscordReadAncestryAllowed(params: {
@@ -384,31 +391,11 @@ export function createDiscordMessagingActionContext(params: {
     } catch {
       return fallback;
     }
-    const channelName = readDiscordChannelStringField(channelInfo, "name");
-    const target: DiscordReadTargetContext = {
+    return buildDiscordReadTarget({
       channelId,
-      channelSlug: channelName ? normalizeDiscordSlug(channelName) : fallback.channelSlug,
-      metadataKnown: true,
-      ancestryComplete: true,
-      ancestors: [],
-    };
-    const channelType = readDiscordChannelType(channelInfo);
-    if (channelType !== undefined) {
-      target.channelType = channelType;
-    }
-    const targetGuildId = readDiscordChannelStringField(channelInfo, "guild_id", "guildId");
-    if (targetGuildId) {
-      target.guildId = targetGuildId;
-    }
-    if (channelName) {
-      target.channelName = channelName;
-    }
-    if (isDiscordThreadChannel(channelInfo)) {
-      target.scope = "thread";
-    }
-    const ancestry = await resolveDiscordReadAncestry({
-      channelId,
-      parentId: readDiscordChannelStringField(channelInfo, "parent_id", "parentId"),
+      channelInfo,
+      guildId: readDiscordChannelStringField(channelInfo, "guild_id", "guildId"),
+      fallbackSlug: fallback.channelSlug,
       loadChannel: async (parentId) => {
         try {
           return await discordMessagingActionRuntime.fetchChannelInfoDiscord(parentId, withOpts());
@@ -417,18 +404,6 @@ export function createDiscordMessagingActionContext(params: {
         }
       },
     });
-    target.ancestors = ancestry.ancestors;
-    target.ancestryComplete = ancestry.complete;
-    const immediateParent = target.ancestors[0];
-    if (!immediateParent) {
-      return target;
-    }
-    target.parentId = immediateParent.channelId;
-    if (immediateParent.channelName) {
-      target.parentName = immediateParent.channelName;
-    }
-    target.parentSlug = immediateParent.channelSlug;
-    return target;
   };
   const isExpandedReadTargetEnabled = (
     guildInfo: DiscordGuildEntryResolved | null,
@@ -486,9 +461,15 @@ export function createDiscordMessagingActionContext(params: {
           required: true,
         }),
       ),
-    assertReadTargetAllowed: async ({ guildId, channelId }) => {
+    assertReadTargetAllowed: async ({ guildId, channelId, requireGuildMetadata }) => {
       const targetChannelId = resolveDiscordChannelId(channelId);
       const target = await resolveReadTargetContext(targetChannelId);
+      if (
+        requireGuildMetadata &&
+        (!guildId || !target.metadataKnown || target.guildId !== guildId)
+      ) {
+        throw new Error("Discord active thread parent metadata is unavailable.");
+      }
       const currentConversation = isCurrentReadTarget(targetChannelId);
       if (guildId && target.metadataKnown && target.guildId !== guildId) {
         throw new Error("Discord read target channel is not allowed.");
@@ -568,6 +549,24 @@ export function createDiscordMessagingActionContext(params: {
         );
       }
     },
+    filterActiveThreadList: async ({ guildId, channelId, value }) => {
+      const parent = await resolveReadTargetContext(channelId);
+      if (!parent.metadataKnown || parent.guildId !== guildId) {
+        throw new Error("Discord active thread parent metadata is unavailable.");
+      }
+      const guildInfo = await resolveReadGuildEntry(guildId);
+      return filterDiscordActiveThreadList({
+        value,
+        guildId,
+        channelId,
+        parent,
+        isAllowed: (target) =>
+          (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
+          (isCurrentReadTarget(target.channelId) &&
+            isExpandedReadTargetEnabled(guildInfo, target, true)) ||
+          isDiscordReadTargetAllowedInGuild({ groupPolicy, guildInfo, target }),
+      });
+    },
     filterGuildChannelList: async ({ guildId, channels }) => {
       if (!directOperator) {
         return channels;
@@ -585,34 +584,13 @@ export function createDiscordMessagingActionContext(params: {
         if (!channelId) {
           continue;
         }
-        const channelName = readDiscordChannelStringField(channel, "name");
-        const channelType = readDiscordChannelType(channel);
-        const target: DiscordReadTargetContext = {
+        const target = await buildDiscordReadTarget({
           channelId,
-          channelSlug: channelName ? normalizeDiscordSlug(channelName) : channelId,
+          channelInfo: channel,
           guildId,
-          metadataKnown: true,
-          ancestryComplete: true,
-          ancestors: [],
-          ...(channelName ? { channelName } : {}),
-          ...(channelType !== undefined ? { channelType } : {}),
-          ...(isDiscordThreadChannel(channel) ? { scope: "thread" as const } : {}),
-        };
-        const ancestry = await resolveDiscordReadAncestry({
-          channelId,
-          parentId: readDiscordChannelStringField(channel, "parent_id", "parentId"),
+          fallbackSlug: channelId,
           loadChannel: async (parentId) => channelById.get(parentId),
         });
-        target.ancestors = ancestry.ancestors;
-        target.ancestryComplete = ancestry.complete;
-        const immediateParent = target.ancestors[0];
-        if (immediateParent) {
-          target.parentId = immediateParent.channelId;
-          if (immediateParent.channelName) {
-            target.parentName = immediateParent.channelName;
-          }
-          target.parentSlug = immediateParent.channelSlug;
-        }
         if (!isDiscordReadAncestryAllowed({ guildInfo, target })) {
           continue;
         }

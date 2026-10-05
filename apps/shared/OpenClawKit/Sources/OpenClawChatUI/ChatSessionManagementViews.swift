@@ -145,7 +145,7 @@ struct ChatSessionInspectorSheet: View {
 
     private var displayedSession: OpenClawChatSessionEntry {
         get {
-            var placeholder = OpenClawChatSessionEntry.placeholder(key: self.target.sessionKey)
+            var placeholder = OpenClawChatSessionEntry(key: self.target.sessionKey)
             placeholder.agentId = self.target.agentID
             return self.canonicalSession ?? placeholder
         }
@@ -162,7 +162,7 @@ struct ChatSessionInspectorSheet: View {
         self.viewModel = viewModel
         self.target = OpenClawChatSessionTarget(sessionKey: session.key, agentID: session.agentId)
         self.sessionID = session.sessionId
-        _legacySession = State(initialValue: viewModel.sidebarData == nil ? session : .placeholder(key: session.key))
+        _legacySession = State(initialValue: viewModel.sidebarData == nil ? session : .init(key: session.key))
     }
 
     private var details: ChatSessionInspectorDetails {
@@ -185,7 +185,10 @@ struct ChatSessionInspectorSheet: View {
                         .help("Copy session key")
                     }
                     self.optionalRow("Kind", self.details.kind)
-                    self.optionalRow("Agent", self.details.agentID)
+                    self.optionalRow(
+                        "Agent",
+                        self.details
+                            .agentID ?? (self.viewModel.sidebarData == nil ? nil : self.displayedSession.agentId))
                 }
 
                 Section("Organization") {

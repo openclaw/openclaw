@@ -21,7 +21,6 @@ internal enum class ChatComposerSendStartResult {
 internal data class ChatComposerSendRequest(
   val commandId: String,
   val owner: ChatComposerOwner,
-  val inputSnapshot: String,
   val message: String,
   val attachments: List<PendingAttachment>,
 )
@@ -78,7 +77,7 @@ internal class ChatComposerStateStore(
   ) {
     synchronized(lock) {
       val resolvedOwner = textDrafts.resolveAdmission(commandId, admitted)?.owner ?: fallbackOwner
-      finishActiveSendLocked(setOf(fallbackOwner, resolvedOwner), resolvedOwner, commandId)
+      finishActiveSendLocked(fallbackOwner, resolvedOwner, commandId)
     }
   }
 
@@ -132,7 +131,7 @@ internal class ChatComposerStateStore(
         sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(commandId)))
       ChatComposerSendStart(
         result = ChatComposerSendStartResult.Started,
-        request = ChatComposerSendRequest(commandId, owner, inputSnapshot, inputSnapshot.trim(), attachments),
+        request = ChatComposerSendRequest(commandId, owner, inputSnapshot.trim(), attachments),
       )
     }
 
@@ -143,13 +142,13 @@ internal class ChatComposerStateStore(
     synchronized(lock) {
       if (accepted == null) {
         val currentOwner = textDrafts.pendingAdmission(request.commandId)?.owner ?: request.owner
-        finishActiveSendLocked(setOf(request.owner, currentOwner), currentOwner, request.commandId)
+        finishActiveSendLocked(request.owner, currentOwner, request.commandId)
         return
       }
       val pending = textDrafts.resolveAdmission(request.commandId, accepted)
       val resolvedOwner = pending?.owner ?: request.owner
       if (pending == null) {
-        finishActiveSendLocked(setOf(request.owner), request.owner, request.commandId)
+        finishActiveSendLocked(request.owner, request.owner, request.commandId)
         return
       }
       if (accepted) {
@@ -159,7 +158,7 @@ internal class ChatComposerStateStore(
         )
       }
       finishActiveSendLocked(
-        owners = setOf(request.owner, resolvedOwner),
+        owner = request.owner,
         resolvedOwner = resolvedOwner,
         activeOperationId = request.commandId,
         pendingAdmissionId = request.commandId,
@@ -345,12 +344,12 @@ internal class ChatComposerStateStore(
   }
 
   private fun finishActiveSendLocked(
-    owners: Set<ChatComposerOwner>,
+    owner: ChatComposerOwner,
     resolvedOwner: ChatComposerOwner,
     activeOperationId: String,
     pendingAdmissionId: String? = null,
   ) {
-    val sources = owners + resolvedOwner
+    val sources = setOf(owner, resolvedOwner)
     val merged = mergeSendStatesLocked(sources)
     val pendingAdmissionIds =
       pendingAdmissionId?.let { merged.pendingAdmissionIds + it } ?: merged.pendingAdmissionIds

@@ -1,6 +1,6 @@
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
-import type { SessionRowDatabaseFacts } from "../../config/sessions/session-transcript-worker.types.js";
+import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -15,11 +15,9 @@ import {
   type WorkerPlacementRunnerAvailabilityReader,
   type WorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
-import {
-  canRedispatchFailedWorkerPlacement,
-  isFailedWorkerPlacementEnvironmentGone,
-} from "../worker-environments/session-placement-lifecycle.js";
+import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
@@ -148,7 +146,7 @@ function readSessionRowHasBoard(target: {
 }) {
   const { key, storeTarget } = target;
   const board = withOpenClawAgentDatabaseReadOnly(
-    (database) => readBoardSessionKeys(database, key).length > 0,
+    (database) => readBoardSessionKeys(database, [key]).has(key),
     { agentId: storeTarget.agentId, path: storeTarget.storePath },
   );
   return board.found && board.value;

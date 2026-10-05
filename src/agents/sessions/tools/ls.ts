@@ -1,4 +1,5 @@
 import { readdir } from "node:fs/promises";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import type { DirectoryEntry } from "../../../infra/directory-entries.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -67,7 +68,7 @@ function formatLsContinuation(after: string): string {
   return `\n\n[More entries. Continue with the same path and after=${JSON.stringify(after)}.]`;
 }
 
-export function createLsToolDefinition(
+function createLsToolDefinition(
   cwd: string,
   options?: LsToolOptions,
 ): ToolDefinition<typeof lsSchema, LsToolDetails> {
@@ -141,26 +142,11 @@ export function createLsToolDefinition(
         }
       };
 
-      if (!signal) {
-        return await runListing();
-      }
-
-      // Race the listing with cancellation, but always detach the listener when either wins.
-      let onAbort: (() => void) | undefined;
-      const abortPromise = new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(new Error("Operation aborted"));
-        signal.addEventListener("abort", onAbort, { once: true });
-        if (signal.aborted) {
-          onAbort();
-        }
-      });
-      try {
-        return await Promise.race([runListing(), abortPromise]);
-      } finally {
-        if (onAbort) {
-          signal.removeEventListener("abort", onAbort);
-        }
-      }
+      return await racePromiseWithAbortSignal(
+        runListing,
+        signal,
+        () => new Error("Operation aborted"),
+      );
     },
     renderCall(args, theme, context) {
       return reuseTextComponent(context.lastComponent, formatLsCall(args, theme));

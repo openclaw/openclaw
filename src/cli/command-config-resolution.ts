@@ -8,24 +8,16 @@ import {
 } from "./command-secret-gateway.js";
 
 /** Resolve command-scoped secrets and return both raw resolved and effective config views. */
-export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawConfig>(params: {
-  config: TConfig;
-  commandName: string;
-  targetIds: Set<string>;
-  agentId?: string;
-  mode?: CommandSecretResolutionMode;
-  allowedPaths?: Set<string>;
-  forcedActivePaths?: Set<string>;
-  optionalActivePaths?: Set<string>;
-  allowLocalExecSecretRefs?: boolean;
-  scrubUnresolvedSecretRefs?: boolean;
-  gatewaySecretResolveTimeoutMs?: number;
-  runtime?: RuntimeEnv;
-  autoEnable?: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{
-  resolvedConfig: TConfig;
-  effectiveConfig: TConfig;
+export async function resolveCommandConfigWithSecrets(
+  params: Parameters<typeof resolveCommandSecretRefsViaGateway>[0] & {
+    mode?: CommandSecretResolutionMode;
+    runtime?: RuntimeEnv;
+    autoEnable?: boolean;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<{
+  resolvedConfig: OpenClawConfig;
+  effectiveConfig: OpenClawConfig;
   diagnostics: string[];
 }> {
   const { runtime, autoEnable, env, ...resolution } = params;
@@ -42,8 +34,8 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
       }).config
     : resolvedConfig;
   return {
-    resolvedConfig: resolvedConfig as TConfig,
-    effectiveConfig: effectiveConfig as TConfig,
+    resolvedConfig,
+    effectiveConfig,
     diagnostics,
   };
 }

@@ -25,10 +25,9 @@ type OtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
 export function createDiagnosticsEventHandler(params: {
   logger: OtelLogger;
   recorders: DiagnosticsEventRecorders;
-  recordLogRecord: ReturnType<typeof createDiagnosticsLogExporter>["recordLogRecord"];
-  recordSecurityEvent: ReturnType<typeof createDiagnosticsLogExporter>["recordSecurityEvent"];
+  recordLogEvent: ReturnType<typeof createDiagnosticsLogExporter>["recordLogEvent"];
 }) {
-  const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
+  const { logger, recorders, recordLogEvent } = params;
   return (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
@@ -66,9 +65,8 @@ export function createDiagnosticsEventHandler(params: {
         case "message.delivery.started":
           return recorders.recordMessageDeliveryStarted(evt);
         case "message.delivery.completed":
-          return recorders.recordMessageDeliveryCompleted(evt, metadata);
         case "message.delivery.error":
-          return recorders.recordMessageDeliveryError(evt, metadata);
+          return recorders.recordMessageDeliveryFinished(evt, metadata);
         case "talk.event":
           return recorders.recordTalkEvent(evt, metadata);
         case "queue.lane.enqueue":
@@ -134,9 +132,8 @@ export function createDiagnosticsEventHandler(params: {
         case "exec.approval.followup_suppressed":
           break;
         case "log.record":
-          return recordLogRecord?.(evt, metadata);
         case "security.event":
-          return recordSecurityEvent?.(evt, metadata);
+          return recordLogEvent?.(evt, metadata);
         case "tool.loop":
           return recorders.recordToolLoop(evt);
         case "diagnostic.memory.sample":

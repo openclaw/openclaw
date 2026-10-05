@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -283,10 +284,17 @@ describe("board widget HTTP", () => {
     },
   ])("preserves GET metadata while suppressing the HEAD body for $label", async (testCase) => {
     for (const method of ["GET", "HEAD"] as const) {
-      const response = await request(testCase.name, {
-        method,
-        ticket: await testCase.ticket?.(),
-      });
+      const ticket = await testCase.ticket?.();
+      const host = observeHostDataSql();
+      let response: Response;
+      try {
+        response = await request(testCase.name, { method, ticket });
+        expect(
+          host.queries.filter((sql) => /\bfrom\s+"?board_(?:tabs|widgets)"?\b/iu.test(sql)),
+        ).toEqual([]);
+      } finally {
+        host.restore();
+      }
       const body = Buffer.from(await response.arrayBuffer());
 
       expect(response.status).toBe(testCase.status);
@@ -360,10 +368,11 @@ describe("board widget HTTP", () => {
       content: { kind: "html", html: "handoff" },
     });
     const ticket = await ticketFor("handoff");
-    const order: string[] = [];
+    let servingResponse: ServerResponse | undefined;
+    let responseEndedBeforeRemoval = false;
     const removed = createDeferred();
     server.prependOnceListener("request", (_req, res) => {
-      res.once("finish", () => order.push("sent"));
+      servingResponse = res;
     });
     const read = store.useWidgetDocument.bind(store);
     const readSpy = vi
@@ -371,7 +380,7 @@ describe("board widget HTTP", () => {
       .mockImplementationOnce((target, name, consume) =>
         read(target, name, (document) => {
           queueMicrotask(() => {
-            order.push("removal");
+            responseEndedBeforeRemoval = servingResponse?.writableEnded === true;
             void store
               .applyOps(target, [{ kind: "widget_remove", name }])
               .then(() => removed.resolve(), removed.reject);
@@ -384,7 +393,7 @@ describe("board widget HTTP", () => {
       await removed.promise;
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("handoff");
-      expect(order).toEqual(["sent", "removal"]);
+      expect(responseEndedBeforeRemoval).toBe(true);
       expect(await readBoardHtml(store, mainSession, "handoff")).toBeUndefined();
     } finally {
       readSpy.mockRestore();

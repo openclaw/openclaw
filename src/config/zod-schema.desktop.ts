@@ -28,13 +28,10 @@ const DesktopHostConfigShape = {
     }),
 };
 
-const DesktopHostConfigSchema = z
-  .object(DesktopHostConfigShape)
-  .strict()
-  .register(configUiMetadata, {
-    label: "Local Desktop",
-    help: "Connects to an existing loopback VNC server. Linux Gateways can also use an explicitly enabled managed headless desktop.",
-  });
+const DesktopHostConfigSchema = z.strictObject(DesktopHostConfigShape).register(configUiMetadata, {
+  label: "Local Desktop",
+  help: "Connects to an existing loopback VNC server. Linux Gateways can also use an explicitly enabled managed headless desktop.",
+});
 
 const DesktopConfigShape = {
   host: DesktopHostConfigSchema.optional().register(configUiMetadata, {
@@ -43,7 +40,7 @@ const DesktopConfigShape = {
   }),
 };
 
-export const DesktopConfigSchema = z.object(DesktopConfigShape).strict().optional();
+export const DesktopConfigSchema = z.strictObject(DesktopConfigShape).optional();
 
 export const { labels: DESKTOP_FIELD_LABELS, help: DESKTOP_FIELD_HELP } =
   projectConfigFieldMetadata(DesktopConfigSchema, "desktop");

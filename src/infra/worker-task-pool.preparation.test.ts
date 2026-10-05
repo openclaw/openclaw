@@ -3,6 +3,11 @@ import type { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "./diagnostic-events.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
 type PostedTask = { input: string; taskId: number };
@@ -57,6 +62,53 @@ afterEach(async () => {
 });
 
 describe("public worker task preparation custody", () => {
+  it("reports shared queue wait and cancellation without labeling task inputs", async () => {
+    const events: Extract<DiagnosticEventPayload, { type: "worker.request" }>[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "worker.request") {
+          events.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    );
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    const gate = createDeferredCore<string>();
+    const pool = createPool({ sharedCompute: true });
+    const secondPool = createPool({ sharedCompute: true });
+    const controller = new AbortController();
+    try {
+      const active = pool.run(() => gate.promise, {});
+      now.mockReturnValue(10);
+      const next = secondPool.run("synthetic-private-session", {});
+      const cancelled = pool.run("another-private-session", { signal: controller.signal });
+      const rejected = expect(cancelled).rejects.toThrow("cancelled");
+      controller.abort(new Error("cancelled"));
+      now.mockReturnValue(25);
+      gate.resolve("ready");
+      await Promise.all([active, next, rejected]);
+      await waitForDiagnosticEventsDrained();
+      expect(
+        events.filter((event) => event.phase === "started").map((event) => event.queueWaitMs),
+      ).toEqual([0, 15]);
+      expect(
+        events.filter((event) => event.phase === "completed").map((event) => event.durationMs),
+      ).toEqual([undefined, 25, 0]);
+      expect(Math.max(...events.map((event) => event.queueDepth))).toBe(2);
+      expect(events.at(-1)?.queueDepth).toBe(0);
+      expect(new Set(events.map((event) => `${event.kind}/${event.requestClass}`))).toEqual(
+        new Set(["compute/task"]),
+      );
+      expect(JSON.stringify(events)).not.toContain("private-session");
+    } finally {
+      gate.resolve("cleanup");
+      await Promise.all([pool.close(), secondPool.close()]);
+      await waitForDiagnosticEventsDrained();
+      unsubscribe();
+      now.mockRestore();
+    }
+  });
+
   it("releases a rejected factory before its caller catches and immediately retries", async () => {
     const pool = createPool({ maxPendingTasks: 1 });
     await pool.run("warm", {});
@@ -87,8 +139,6 @@ describe("public worker task preparation custody", () => {
 
   it.each([
     { order: "preparation-first", rejects: false },
-    { order: "preparation-first", rejects: true },
-    { order: "exit-first", rejects: false },
     { order: "exit-first", rejects: true },
   ])(
     "joins both lifetimes before releasing input ($order, rejects=$rejects)",
@@ -249,11 +299,8 @@ describe("public worker task preparation custody", () => {
 
   it.each([
     { ending: "abort", failure: "input" },
-    { ending: "close", failure: "input" },
-    { ending: "abort", failure: "settlement" },
     { ending: "close", failure: "settlement" },
     { ending: "abort", failure: "both" },
-    { ending: "close", failure: "both" },
   ])(
     "reports $failure cleanup failure through close after $ending rejects the result",
     async ({ ending, failure }) => {

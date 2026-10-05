@@ -30,6 +30,7 @@ const sessionId = "cron-cli-diagnostic-session";
 
 function makeParams(): RunCronAgentTurnParams {
   return {
+    deliveryAttemptFence: null,
     cfg: {},
     deps: {},
     job: {
@@ -99,7 +100,7 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
     let continuityCommitted = false;
     const holdContinuityWrite: typeof patchSessionEntryCore = async (scope, update, options) => {
       const assertCommitAllowed = expectDefined(
-        options?.assertCommitAllowed,
+        options?.workerGuard?.assertCurrent,
         "expected continuity commit guard",
       );
       writeStarted.resolve();

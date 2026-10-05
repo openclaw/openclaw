@@ -153,11 +153,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
       normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
   );
-  const runHasLegacyAutoFallbackWithoutOrigin =
-    runHasStoredSessionModelOverride &&
-    hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
   const runHasSessionModelOverride =
-    runHasStoredSessionModelOverride && !runHasLegacyAutoFallbackWithoutOrigin;
+    runHasStoredSessionModelOverride &&
+    !hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
   const runModelOverrideSource = runHasSessionModelOverride
     ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
       ? undefined
@@ -287,9 +285,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       : resolvePersistedUserTurnText(transcriptBody);
   const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
   const conversationRef = conversationIdentity?.conversationRef;
-  const transportMessageId =
-    normalizeOptionalString(sessionCtx.MessageSidFull) ??
-    normalizeOptionalString(sessionCtx.MessageSid);
   const transportReplyToId =
     normalizeOptionalString(sessionCtx.ReplyToIdFull) ??
     normalizeOptionalString(sessionCtx.ReplyToId);
@@ -303,14 +298,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     normalizeOptionalString(sessionCtx.Provider);
   const transport =
     conversationRef ||
-    transportMessageId ||
+    sourceMessageId ||
     transportReplyToId ||
     transportThreadId ||
     transportChannel
       ? {
           ...(transportChannel ? { channel: transportChannel } : {}),
           ...(conversationRef ? { conversationRef } : {}),
-          ...(transportMessageId ? { messageId: transportMessageId } : {}),
+          ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
           ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
           ...(transportThreadId ? { threadId: transportThreadId } : {}),
         }
@@ -409,6 +404,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
+    runObservers: {
+      onAgentRunStart: opts?.onAgentRunStart,
+      onAgentRunTerminalOutcome: opts?.onAgentRunTerminalOutcome,
+      onModelSelected: opts?.onModelSelected,
+      prepareAssistantTranscriptMessage: opts?.prepareAssistantTranscriptMessage,
+      resolveReplyDelivery: opts?.resolveReplyDelivery,
+    },
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),
@@ -432,7 +434,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     imageOrder: currentTurnImages.imageOrder,
     mediaImageLayout: promptMediaImageLayout,
     media: promptMediaForRun,
-    // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
     originatingAccountId: replyRoute.accountId,

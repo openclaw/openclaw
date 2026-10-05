@@ -321,6 +321,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
       first: shared,
       repeated: shared,
       values: [null, undefined, 3],
+      ["__proto__"]: { literalField: "nested-value" },
     };
     nested.self = nested;
     const result = await projectContextEngineAssemblyForCodex({
@@ -353,6 +354,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
               password: 842761,
               attemptsRemaining: 3,
               nested,
+              ["__proto__"]: { topLevelLiteralField: "top-level-value" },
             },
           ],
           timestamp: 2,
@@ -368,6 +370,10 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain('"cmd": "[string]"');
     expect(result.promptText).toContain('"recursive": "[boolean]"');
     expect(result.promptText).toContain('"recursive": true');
+    expect(result.promptText.match(/"__proto__": \{/g)).toHaveLength(3);
+    expect(result.promptText).toContain('"literalField": "[string]"');
+    expect(result.promptText).toContain('"literalField": "nested-value"');
+    expect(result.promptText).toContain('"topLevelLiteralField": "top-level-value"');
     expect(result.promptText.match(/"repeated": "\[Circular\]"/g)).toHaveLength(2);
     expect(result.promptText.match(/"self": "\[Circular\]"/g)).toHaveLength(2);
     expect(result.promptText).toMatch(/\[\s+null,\s+"\[undefined\]",\s+"\[number\]"\s+\]/);

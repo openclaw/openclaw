@@ -32,10 +32,6 @@ const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
 const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 
-function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
-  return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
-}
-
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
@@ -127,29 +123,28 @@ async function buildBrowserStatus(
 
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
   const { descriptor: engine } = resolveBrowserEngine(profileCtx.profile.engine);
-  const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
-    ? await (async () => {
-        const statusStartedAtMs = Date.now();
-        let pageReachable = false;
-        const transportReady = await profileCtx.isTransportAvailable(
-          STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
-          signal,
-          {
-            timeoutMs: () => remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
-            onResult: (tabCount) => (pageReachable = tabCount !== null),
-          },
-        );
-        return [transportReady, transportReady, pageReachable] as const;
-      })()
-    : await (async () => {
-        const [http, ready] = await Promise.all([
-          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS, signal),
-          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal),
-        ]);
-        // For managed CDP profiles, the transport check already includes a WS
-        // handshake against the page, so pageReady mirrors cdpReady.
-        return [http, ready, ready] as const;
-      })();
+  let cdpHttp: boolean;
+  let cdpReady: boolean;
+  let pageReady = false;
+  if (capabilities.usesChromeMcp) {
+    const deadlineMs = Date.now() + STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS;
+    cdpReady = await profileCtx.isTransportAvailable(
+      STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
+      signal,
+      {
+        timeoutMs: () => Math.max(1, deadlineMs - Date.now()),
+        onResult: (tabCount) => (pageReady = tabCount !== null),
+      },
+    );
+    cdpHttp = cdpReady;
+  } else {
+    [cdpHttp, cdpReady] = await Promise.all([
+      profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS, signal),
+      profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal),
+    ]);
+    // Managed CDP transport checks already include a page WebSocket handshake.
+    pageReady = cdpReady;
+  }
 
   const profileState = current.profiles.get(profileCtx.profile.name);
   const lifecycle = profileState ? getProfileLifecycle(profileState) : null;

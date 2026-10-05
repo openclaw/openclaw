@@ -1,5 +1,6 @@
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { StoreWriterQueue } from "openclaw/plugin-sdk/sqlite-runtime";
+import { persistBindingMutation } from "./thread-bindings-persistence.js";
 import { resolveBindingKey } from "./thread-bindings-session.js";
 import { sanitizeStoredBinding } from "./thread-bindings-store.js";
 import type {
@@ -115,6 +116,21 @@ export function captureBindingMutation(
       } finally {
         pending.delete(conversationId);
       }
+    },
+    async commit(
+      binding: TelegramThreadBindingRecord,
+      options: { reason: string; remove?: boolean; throwOnError?: boolean },
+    ) {
+      const next = options.remove ? null : binding;
+      this.prepare(next);
+      const committed = await persistBindingMutation({
+        ...options,
+        accountId: manager.accountId,
+        persist: manager.shouldPersistMutations(),
+        binding,
+        assertCurrent,
+      });
+      this.publish(next, committed);
     },
   };
 }

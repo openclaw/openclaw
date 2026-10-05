@@ -3,6 +3,7 @@ import {
   isCompleteAgentPreamble,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { ClickClackClient } from "./http-client.js";
 
 export type ClickClackItemEventPayload = Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0];
@@ -86,12 +87,6 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
   };
 }
 
-type ClickClackAgentProgressPublisher = {
-  start(): void;
-  onItemEvent(payload: ClickClackItemEventPayload): false;
-  finalize(): Promise<void>;
-};
-
 type QueuedProgressFrame = {
   lineId?: string;
   payload: Record<string, unknown>;
@@ -106,7 +101,7 @@ export function createClickClackAgentProgressPublisher(params: {
   turnId: string;
   agentLabel?: string;
   onError?: (error: unknown) => void;
-}): ClickClackAgentProgressPublisher {
+}) {
   let sequence = 0;
   const queue: QueuedProgressFrame[] = [];
   const queuedLines = new Map<string, QueuedProgressFrame>();
@@ -177,23 +172,15 @@ export function createClickClackAgentProgressPublisher(params: {
   };
 
   const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     let drained = false;
-    try {
-      await Promise.race([
-        pending.then(() => {
-          drained = true;
-        }),
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(resolve, CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS);
-        }),
-      ]);
-      return drained;
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
+    await raceWithTimeout(
+      pending.then(() => {
+        drained = true;
+      }),
+      CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+      () => undefined,
+    );
+    return drained;
   };
 
   const scheduleLineDrain = (): void => {
@@ -242,7 +229,7 @@ export function createClickClackAgentProgressPublisher(params: {
         },
       });
     },
-    onItemEvent(payload) {
+    onItemEvent(payload: ClickClackItemEventPayload): false {
       if (!started || cleared) {
         return false;
       }

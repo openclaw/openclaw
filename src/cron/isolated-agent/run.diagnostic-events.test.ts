@@ -16,9 +16,10 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 
-const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
+const hasAnyAuthProfileStoreSourceAsyncMock = vi.hoisted(() => vi.fn(() => false));
+// mock-isolation: Cron diagnostics simulate missing auth sources without a credential-store owner.
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: hasAnyAuthProfileStoreSourceMock,
+  hasAnyAuthProfileStoreSourceAsync: hasAnyAuthProfileStoreSourceAsyncMock,
 }));
 
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -35,6 +36,7 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function makeParams(cfg: OpenClawConfig = {}) {
   return {
+    deliveryAttemptFence: null,
     cfg,
     deps: {} as never,
     job: {
@@ -63,10 +65,22 @@ function fallbackResult(agentMeta: Record<string, unknown>, text = "test output"
 }
 async function runWithEvents(
   params: Parameters<typeof runCronIsolatedAgentTurn>[0] = makeParams(),
-  subscribe: typeof onDiagnosticEvent = onInternalDiagnosticEvent,
+  subscribe: (
+    listener: (event: DiagnosticEventPayload) => void,
+    filter?: Parameters<typeof onInternalDiagnosticEvent>[1],
+  ) => () => void = onInternalDiagnosticEvent,
   events: DiagnosticEventPayload[] = [],
 ) {
-  const unsubscribe = subscribe((event) => events.push(event));
+  const unsubscribe = subscribe((event) => events.push(event), {
+    include: [
+      "message.queued",
+      "message.dispatch.started",
+      "message.dispatch.completed",
+      "message.processed",
+      "session.state",
+      "model.usage",
+    ],
+  });
   try {
     const result = await runCronIsolatedAgentTurn(params);
     await waitForDiagnosticEventsDrained();
@@ -260,7 +274,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
   it("skips auth-profile override resolution when no sources exist", async () => {
     const result = await runCronIsolatedAgentTurn(makeParams());
     expect(result.status).toBe("ok");
-    expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);
+    expect(hasAnyAuthProfileStoreSourceAsyncMock).toHaveBeenCalledTimes(1);
     expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

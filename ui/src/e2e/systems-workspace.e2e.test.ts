@@ -73,6 +73,7 @@ function installSystemsGateway(
         memoryTotalBytes: 8192,
         memoryFreeBytes: 4096,
       },
+      "backup.status": { targets: [], schedules: [], locations: [] },
       ...methodResponses,
     },
   });

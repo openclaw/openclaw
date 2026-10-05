@@ -12,7 +12,7 @@ import {
 } from "./update-git-runtime.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import {
   readCurrentGitUpdateRecovery,
@@ -255,6 +255,9 @@ export async function updateGitCheckout(params: {
       });
     }
   };
+  if (beforeShaResult.code !== 0 || !beforeSha) {
+    return buildError("git-root-unresolved");
+  }
   const { result: statusCheck, dirty } = await runGitCleanCheckStep(
     step("clean-check", gitCleanCheckArgs(gitRoot), gitRoot),
   );
@@ -446,7 +449,7 @@ export async function updateGitCheckout(params: {
         work: { timeoutMs: opts.timeoutMs },
         onWarning: (warning) => {
           steps.push(warning);
-          opts.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+          return reportUpdateStepCompletion(opts.progress, { ...warning, index: 0, total: 0 });
         },
         retainCleanup: (cleanup) => {
           if (!candidateCleanup) {

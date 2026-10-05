@@ -1,6 +1,4 @@
-// Builds normalized conversation binding inputs from channel and routing facts.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeConversationText } from "../../acp/conversation-id.js";
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCommandConversationResolution } from "../../channels/conversation-resolution.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,7 +29,7 @@ export function resolveConversationBindingChannelFromMessage(
   commandChannel?: string | null,
 ): string {
   const raw = ctx.OriginatingChannel ?? commandChannel ?? ctx.Surface ?? ctx.Provider;
-  return normalizeLowercaseStringOrEmpty(normalizeConversationText(raw));
+  return normalizeStringifiedOptionalString(raw)?.toLowerCase() ?? "";
 }
 
 export function resolveConversationBindingAccountIdFromMessage(params: {
@@ -41,10 +39,9 @@ export function resolveConversationBindingAccountIdFromMessage(params: {
 }): string {
   const channel = resolveConversationBindingChannelFromMessage(params.ctx, params.commandChannel);
   const plugin = getLoadedChannelPluginForRead(channel);
-  const accountId = normalizeConversationText(params.ctx.AccountId);
   return (
-    accountId ||
-    normalizeConversationText(plugin?.config.defaultAccountId?.(params.cfg)) ||
+    normalizeStringifiedOptionalString(params.ctx.AccountId) ??
+    normalizeStringifiedOptionalString(plugin?.config.defaultAccountId?.(params.cfg)) ??
     "default"
   );
 }

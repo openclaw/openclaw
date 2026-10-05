@@ -1,4 +1,3 @@
-// Defines base reply payload helpers shared by delivery and dedupe logic.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
@@ -14,7 +13,7 @@ import {
   resolveImplicitCurrentMessageReplyAllowance,
 } from "./reply-threading.js";
 
-function resolveReplyThreadingForPayload(params: {
+export function applyReplyTagsToPayload(params: {
   payload: ReplyPayload;
   replyToMode?: ReplyToMode;
   implicitReplyToId?: string;
@@ -69,14 +68,6 @@ function resolveReplyThreadingForPayload(params: {
   return resolved;
 }
 
-/** Applies inline reply tags to a single payload. */
-export function applyReplyTagsToPayload(
-  payload: ReplyPayload,
-  currentMessageId?: string,
-): ReplyPayload {
-  return resolveReplyThreadingForPayload({ payload, currentMessageId });
-}
-
 type ReplyThreadingParams = {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
@@ -91,7 +82,7 @@ export function resolveReplyThreadingPayloads(params: ReplyThreadingParams): Rep
   const implicitReplyToId = normalizeOptionalString(currentMessageId);
   return payloads
     .map((payload) =>
-      resolveReplyThreadingForPayload({
+      applyReplyTagsToPayload({
         payload,
         replyToMode,
         implicitReplyToId,

@@ -55,7 +55,7 @@ describe("worker placement dispatch", () => {
 
     await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
 
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
@@ -68,7 +68,7 @@ describe("worker placement dispatch", () => {
       state: "failed",
       turnClaim: null,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).not.toContain("workspace:resume");
 
@@ -154,9 +154,9 @@ describe("worker placement dispatch", () => {
     const publicationOrder: string[] = [];
     const prepareAcceptedWorkspacePublication = vi.fn(async (claim) => {
       expect(
-        placementStore
-          .listPendingWorkspaceResults()
-          .find((pending) => pending.claimId === claim.claimId)?.workspaceAcceptedAtMs,
+        (await placementStore.listPendingWorkspaceResultsAsync()).find(
+          (pending) => pending.claimId === claim.claimId,
+        )?.workspaceAcceptedAtMs,
       ).toBeNull();
       publicationOrder.push("prepare");
     });
@@ -183,7 +183,7 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(claim);
+    await placementStore.markWorkspaceResultPending(claim);
 
     await harness.service.reconcile();
     expect(harness.placements.current()).toMatchObject({
@@ -191,7 +191,7 @@ describe("worker placement dispatch", () => {
       turnClaim: { claimId: claim.claimId },
     });
 
-    placementStore.handoffWorkspaceResultRecovery(claim);
+    await placementStore.handoffWorkspaceResultRecovery(claim);
 
     const otherRequest = {
       ...REQUEST,
@@ -215,7 +215,7 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(otherClaim);
+    await placementStore.markWorkspaceResultPending(otherClaim);
     seedAttachedPlacementEnvironment(database, {
       environmentId: active.environmentId,
       sessionId: REQUEST.sessionId,
@@ -232,7 +232,7 @@ describe("worker placement dispatch", () => {
       turnClaim: null,
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: otherRequest.sessionId, claimId: otherClaim.claimId },
     ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -254,7 +254,7 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(claim);
+    await placementStore.markWorkspaceResultPending(claim);
 
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
     const restartedHarness = createTestHarness({}, restartedStore);
@@ -265,7 +265,7 @@ describe("worker placement dispatch", () => {
       state: "active",
       turnClaim: { claimId: claim.claimId },
     });
-    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
   });
 
@@ -286,15 +286,15 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    const draining = placementStore.startDrain({
+    const draining = await placementStore.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
     expect(draining.generation).not.toBe(claim.placementGeneration);
-    placementStore.markWorkspaceResultPending(claim);
-    placementStore.handoffWorkspaceResultRecovery(claim);
+    await placementStore.markWorkspaceResultPending(claim);
+    await placementStore.handoffWorkspaceResultRecovery(claim);
 
     await harness.service.reconcile();
 
@@ -303,7 +303,7 @@ describe("worker placement dispatch", () => {
       turnClaim: null,
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.log.indexOf("workspace:resume")).toBeLessThan(
       harness.log.indexOf("teardown:destroy"),
     );
@@ -327,8 +327,8 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(claim);
-    placementStore.handoffWorkspaceResultRecovery(claim);
+    await placementStore.markWorkspaceResultPending(claim);
+    await placementStore.handoffWorkspaceResultRecovery(claim);
 
     await harness.service.reconcile();
 
@@ -336,7 +336,7 @@ describe("worker placement dispatch", () => {
       state: "active",
       turnClaim: { claimId: claim.claimId },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
@@ -356,8 +356,8 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(claim);
-    placementStore.handoffWorkspaceResultRecovery(claim);
+    await placementStore.markWorkspaceResultPending(claim);
+    await placementStore.handoffWorkspaceResultRecovery(claim);
     harness.markEnvironmentDestroyed();
 
     await harness.service.reconcile();
@@ -368,7 +368,7 @@ describe("worker placement dispatch", () => {
       terminalReason: "cloud worker disappeared: environment state destroyed",
       terminalAtMs: expect.any(Number),
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("reclaims an accepted pending result after a post-destroy gateway restart", async () => {
@@ -388,13 +388,13 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(claim);
-    placementStore.updateWorkspaceBaseManifest({
+    await placementStore.markWorkspaceResultPending(claim);
+    await placementStore.updateWorkspaceBaseManifest({
       claim,
       manifestRef: harness.reconciledManifestRef,
     });
-    placementStore.acceptWorkspaceResult(claim);
-    placementStore.handoffWorkspaceResultRecovery(claim);
+    await placementStore.acceptWorkspaceResult(claim);
+    await placementStore.handoffWorkspaceResultRecovery(claim);
     harness.markEnvironmentDestroyed();
 
     await harness.service.reconcile();
@@ -405,7 +405,7 @@ describe("worker placement dispatch", () => {
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
     expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("coalesces overlapping reclaim requests and accepts completed retries", async () => {
@@ -450,7 +450,7 @@ describe("worker placement dispatch", () => {
     const harness = createTestHarness({
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
-      verifyFailureCall: 3,
+      verifyFailurePhase: "after-apply",
     });
     await harness.service.dispatch(REQUEST);
 
@@ -468,7 +468,7 @@ describe("worker placement dispatch", () => {
       turnClaim: { owner: "worker" },
     });
     expect(harness.log).toContain("workspace:apply-prepared");
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null },
     ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -560,7 +560,7 @@ describe("worker placement dispatch", () => {
     async (interruptedState) => {
       let interrupted = await placementStore.startDispatch(REQUEST);
       if (interruptedState !== "requested") {
-        interrupted = placementStore.transition({
+        interrupted = await placementStore.transition({
           sessionId: REQUEST.sessionId,
           from: "requested",
           to: "provisioning",
@@ -573,7 +573,7 @@ describe("worker placement dispatch", () => {
         });
       }
       if (interruptedState === "syncing") {
-        interrupted = placementStore.transition({
+        interrupted = await placementStore.transition({
           sessionId: REQUEST.sessionId,
           from: "provisioning",
           to: "syncing",
@@ -741,7 +741,7 @@ describe("worker placement dispatch", () => {
     if (active?.state !== "active") {
       return;
     }
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,

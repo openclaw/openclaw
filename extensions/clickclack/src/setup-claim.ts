@@ -124,13 +124,9 @@ export async function claimClickClackSetupCode(params: {
   fetch?: typeof fetch;
   lookupFn?: LookupFn;
 }): Promise<ClickClackSetupCodeClaim> {
-  let parsedClaimUrl: URL;
-  try {
-    parsedClaimUrl = new URL(params.claimUrl);
-  } catch {
-    throw new Error("ClickClack setup code claim URL must be a valid HTTP(S) endpoint.");
-  }
+  const parsedClaimUrl = URL.parse(params.claimUrl);
   if (
+    !parsedClaimUrl ||
     (parsedClaimUrl.protocol !== "http:" && parsedClaimUrl.protocol !== "https:") ||
     parsedClaimUrl.username ||
     parsedClaimUrl.password ||

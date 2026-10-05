@@ -1,339 +1,261 @@
 import { describe, expect, it } from "vitest";
+import type { OpenAICompletionsOptions } from "../provider-options.js";
+import type { Context, Model, Tool } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import type { OpenAIModeModel } from "./openai-transport-shared.js";
 
-describe("openai completions params", () => {
-  it("omits strict tool shaping for Z.ai default-route completions providers", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "glm-5",
-        name: "GLM 5",
-        provider: "zai",
-        baseUrl: "",
-      }),
+type CompletionsModel = Omit<Model<"openai-completions">, "compat"> &
+  Pick<OpenAIModeModel, "compat">;
+
+const native = makeCompletionsModel({ id: "gpt-5" });
+const proxy = makeCompletionsModel({
+  provider: "vllm",
+  baseUrl: "http://localhost:8000/v1",
+  reasoning: false,
+  contextWindow: 10_000,
+  maxTokens: 10_000,
+});
+function emptyContext(systemPrompt = "system"): Context {
+  return { systemPrompt, messages: [], tools: [] };
+}
+
+function tool(parameters: Record<string, unknown> = { type: "object", properties: {} }): Tool {
+  return { name: "lookup_weather", description: "Get forecast", parameters };
+}
+
+function toolContext(parameters?: Record<string, unknown>): Context {
+  return { ...emptyContext(), tools: [tool(parameters)] };
+}
+
+function historyContext(): Context {
+  return {
+    messages: [
       {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
+        role: "assistant",
+        api: native.api,
+        provider: native.provider,
+        model: native.id,
+        content: [{ type: "toolCall", id: "call_1", name: "lookup_weather", arguments: {} }],
+        usage: createZeroUsage(),
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "lookup_weather",
+        content: [{ type: "text", text: "sunny" }],
+        isError: false,
+        timestamp: 2,
+      },
+    ],
+  };
+}
 
+const brokenTool: Tool = {
+  name: "broken",
+  description: "Unreadable schema",
+  get parameters(): never {
+    throw new Error("parameters exploded");
+  },
+};
+
+function request(
+  model: Partial<CompletionsModel>,
+  context = emptyContext(),
+  options?: OpenAICompletionsOptions,
+) {
+  const { compat, ...fields } = model;
+  return buildOpenAICompletionsParams(
+    { ...makeCompletionsModel(fields), compat },
+    context,
+    options,
+  );
+}
+
+describe("OpenAI completions compatibility and tools", () => {
+  it("keeps implicit tool choice limited to proxy endpoints", () => {
+    const params = request(
+      { provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" },
+      toolContext(),
+      { reasoningEffort: "high" },
+    );
+    expect(params.messages[0]).toEqual({ role: "system", content: "system" });
+    for (const key of ["reasoning_effort", "stream_options", "store"]) {
+      expect(params).not.toHaveProperty(key);
+    }
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+    expect(params.tool_choice).toBe("auto");
+    const nativeParams = request(native, toolContext());
+    expect(nativeParams.tools).toHaveLength(1);
+    expect(nativeParams).not.toHaveProperty("tool_choice");
   });
 
-  it("keeps native completions strict mode for projected tools after dropping bad schemas", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5",
-        name: "GPT-5",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
+  it("applies provider and native-host compatibility defaults", () => {
+    const cases = [
+      [
+        request({
+          id: "kimi-k2.5",
+          provider: "moonshot",
+          baseUrl: "",
+          compat: { supportsUsageInStreaming: false },
+        }),
+        { "messages.0": { role: "system", content: "system" } },
+        ["stream_options"],
+      ],
+      [
+        request(
           {
-            name: "broken",
-            description: "Broken",
-            parameters: {
-              type: "object",
-              get properties(): never {
-                throw new Error("properties exploded");
-              },
-            },
+            id: "mistral-small-latest",
+            provider: "custom-mistral-host",
+            baseUrl: "https://api.mistral.ai/v1",
           },
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: {},
-          },
-        ],
-      } as never,
-      undefined,
-    ) as {
-      tools?: Array<{
-        function?: {
-          name?: string;
-          strict?: boolean;
-          parameters?: Record<string, unknown>;
-        };
-      }>;
-    };
+          emptyContext(),
+          { maxTokens: 2048, reasoningEffort: "high" },
+        ),
+        { max_tokens: 2048 },
+        ["max_completion_tokens", "store", "reasoning_effort"],
+      ],
+      [
+        request({ id: "glm-5", provider: "zai", baseUrl: "" }, toolContext()),
+        { "tools.0.function": expect.any(Object) },
+        ["tools.0.function.strict"],
+      ],
+    ] as const;
+    for (const [params, expected, absent] of cases) {
+      for (const [path, value] of Object.entries(expected)) {
+        expect(params).toHaveProperty(path, value);
+      }
+      for (const path of absent) {
+        expect(params).not.toHaveProperty(path);
+      }
+    }
+  });
 
-    expect(params.tools?.map((tool) => tool.function)).toEqual([
+  it("shapes message content and keys for restrictive backends", () => {
+    const cases: [Partial<CompletionsModel>, Context, unknown[]][] = [
+      [
+        { ...proxy, compat: { requiresStringContent: true } },
+        {
+          ...emptyContext(),
+          messages: [
+            { role: "user", content: [{ type: "text", text: "What is 2 + 2?" }], timestamp: 1 },
+          ],
+        },
+        [
+          { role: "system", content: "system" },
+          { role: "user", content: "What is 2 + 2?" },
+        ],
+      ],
+      [
+        { ...proxy, compat: { strictMessageKeys: true } },
+        { ...historyContext(), tools: [] },
+        [
+          { role: "assistant", content: null },
+          { role: "tool", content: "sunny" },
+        ],
+      ],
+    ];
+    for (const [model, context, expected] of cases) {
+      expect(request(model, context).messages).toEqual(expected);
+    }
+  });
+
+  it("keeps strict projected tools usable by required choice after quarantining bad schemas", () => {
+    const params = request(
+      native,
+      {
+        ...emptyContext(),
+        tools: [
+          tool({
+            type: "object",
+            get properties(): never {
+              throw new Error("properties exploded");
+            },
+          }),
+          tool({}),
+        ],
+      },
+      { toolChoice: "required" },
+    );
+    expect(params.tools?.map((entry) => entry.function)).toEqual([
       {
         name: "lookup_weather",
         description: "Get forecast",
         strict: true,
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
+        parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
       },
     ]);
+    expect(params.tool_choice).toBe("required");
   });
 
-  it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5",
-        name: "GPT-5",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: { path: { type: "string" } },
-              required: [],
+  it("normalizes projected schemas according to strictness and compatibility", () => {
+    const cases = [
+      [
+        request(
+          native,
+          toolContext({
+            type: "object",
+            additionalProperties: false,
+            properties: { path: { type: "string" } },
+            required: [],
+          }),
+        ),
+        { strict: false },
+      ],
+      [
+        request(
+          { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } },
+          toolContext({ type: "object", properties: { forbidden: { not: {} } } }),
+        ),
+        { "parameters.properties.forbidden": {} },
+      ],
+      [
+        request(
+          { ...proxy, compat: { omitEmptyArrayItems: true } },
+          toolContext({
+            type: "object",
+            properties: {
+              hints: { type: "array" },
+              typedHints: { type: "array", items: { type: "string" } },
             },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
-
-    expect(params.tools?.[0]?.function?.strict).toBe(false);
-  });
-
-  it("applies model compat unsupported schema keywords to completions tools", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
-        name: "Kimi K2.5 Turbo",
-        provider: "fireworks",
-        baseUrl: "https://api.fireworks.ai/inference/v1",
-        reasoning: false,
-        contextWindow: 256000,
-        maxTokens: 256000,
-        compat: {
-          unsupportedToolSchemaKeywords: ["not"],
-        } as never,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup",
-            description: "Lookup",
-            parameters: {
-              type: "object",
-              properties: {
-                forbidden: { not: {} },
-              },
-            },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as {
-      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
-    };
-
-    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
-  });
-
-  it("applies model compat empty array items omission after completions normalization", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "mimo-v2.5",
-        name: "MiMo V2.5",
-        provider: "xiaomi",
-        baseUrl: "https://api.xiaomimimo.com/v1",
-        contextWindow: 256000,
-        maxTokens: 256000,
-        compat: {
-          omitEmptyArrayItems: true,
-        } as never,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "collect",
-            description: "Collect hints",
-            parameters: {
-              type: "object",
-              properties: {
-                hints: { type: "array" },
-                typedHints: { type: "array", items: { type: "string" } },
-              },
-            },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as {
-      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
-    };
-
-    expect(params.tools?.[0]?.function?.parameters?.properties?.hints).toStrictEqual({
-      type: "array",
-    });
-    expect(params.tools?.[0]?.function?.parameters?.properties?.typedHints).toStrictEqual({
-      type: "array",
-      items: { type: "string" },
-    });
-  });
-
-  it("omits tools from completions payload when model compat sets supportsTools to false", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "chat-only-model",
-        name: "Chat Only Model",
-        provider: "venice",
-        baseUrl: "https://api.venice.ai/api/v1",
-        reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 4096,
-        compat: {
-          supportsTools: false,
-        } as Record<string, unknown>,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "noop",
-            description: "noop tool",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: unknown; tool_choice?: unknown };
-
-    expect(params).not.toHaveProperty("tools");
-    expect(params).not.toHaveProperty("tool_choice");
-  });
-
-  it("omits tool-history tools:[] fallback when model compat sets supportsTools to false", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "chat-only-model",
-        name: "Chat Only Model",
-        provider: "venice",
-        baseUrl: "https://api.venice.ai/api/v1",
-        reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 4096,
-        compat: {
-          supportsTools: false,
-        } as Record<string, unknown>,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "noop",
-                arguments: {},
-              },
-            ],
-            timestamp: Date.now(),
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_abc",
-            toolName: "noop",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now(),
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: unknown };
-
-    expect(params).not.toHaveProperty("tools");
-  });
-
-  it("fails locally when required Chat Completions has no usable tools", () => {
-    expect(() =>
-      buildOpenAICompletionsParams(
-        makeCompletionsModel({
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          reasoning: false,
-        }),
+          }),
+        ),
         {
-          systemPrompt: "system",
-          messages: [],
-          tools: [
-            {
-              name: "broken",
-              get parameters(): never {
-                throw new Error("parameters exploded");
-              },
-            },
-          ],
-        } as never,
-        { toolChoice: "required" },
-      ),
+          "parameters.properties.hints": { type: "array" },
+          "parameters.properties.typedHints": { type: "array", items: { type: "string" } },
+        },
+      ],
+    ] as const;
+    for (const [params, expected] of cases) {
+      for (const [path, value] of Object.entries(expected)) {
+        expect(params.tools?.[0]?.function).toHaveProperty(path, value);
+      }
+    }
+  });
+
+  it("fails required choice when every schema is quarantined", () => {
+    expect(() =>
+      request(native, { ...emptyContext(), tools: [brokenTool] }, { toolChoice: "required" }),
     ).toThrow("no tools survived schema conversion");
   });
 
-  it("preserves the native empty tools marker for tool history after quarantining every schema", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        reasoning: false,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "lookup",
-                arguments: {},
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            content: [{ type: "text", text: "done" }],
-            toolCallId: "call_abc",
-          },
-          { role: "user", content: "continue", timestamp: 1 },
-        ],
-        tools: [
-          {
-            name: "broken",
-            description: "Broken tool.",
-            get parameters(): never {
-              throw new Error("parameters exploded");
-            },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: unknown[] };
-
-    expect(params.tools).toEqual([]);
+  it("preserves history markers only for native requests with supported tools", () => {
+    const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
+    const cases = [
+      [request(unsupported, { ...historyContext(), tools: [tool()] }), false],
+      [request(native, { ...historyContext(), tools: [brokenTool] }), true],
+      [request(proxy, historyContext()), false],
+    ] as const;
+    for (const [params, marker] of cases) {
+      if (marker) {
+        expect(params.tools).toEqual([]);
+      } else {
+        expect(params).not.toHaveProperty("tools");
+        expect(params).not.toHaveProperty("tool_choice");
+      }
+    }
   });
 });

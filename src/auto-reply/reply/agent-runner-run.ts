@@ -30,10 +30,10 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
 } from "./agent-runner-core.js";
 import {
+  continueStalledReplyTurn,
   createReplyAgentRestartRecoveryController,
   executePreparedReplyAgentRun,
 } from "./agent-runner-execute.js";
-import { resolveReplySteeringAuthority } from "./agent-runner-fallback-authority.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -43,7 +43,7 @@ import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
-import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
   type CompactionNoticePhase,
@@ -220,16 +220,8 @@ export async function runReplyAgent(
   const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
   const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
   const activeReplyOperation = sessionKey
-    ? (replyRunRegistry.get(sessionKey) ?? providedReplyOperation)
+    ? replyRunRegistry.get(sessionKey)
     : providedReplyOperation;
-  const steeringAuthority = resolveReplySteeringAuthority(followupRun, activeReplyOperation);
-  const shouldQueueAuthorityMismatch =
-    effectiveShouldSteer && isActive && steeringAuthority.shouldQueueAuthorityMismatch;
-  if (shouldQueueAuthorityMismatch) {
-    logVerbose(
-      `queue: active session ${activeReplyOperation?.sessionId ?? followupRun.run.sessionId} has different or unknown tool authority; queuing instead of steering`,
-    );
-  }
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -250,7 +242,6 @@ export async function runReplyAgent(
   const shouldQueueTerminalReceiptSteer =
     effectiveShouldSteer &&
     isActive &&
-    !shouldQueueAuthorityMismatch &&
     messageInjectionDisposition === "none" &&
     terminalDeliveryBlockReason !== undefined;
   if (shouldQueueTerminalReceiptSteer) {
@@ -340,7 +331,6 @@ export async function runReplyAgent(
   if (
     effectiveShouldSteer &&
     isActive &&
-    !shouldQueueAuthorityMismatch &&
     !shouldQueueTerminalReceiptSteer &&
     messageInjectionDisposition === "none"
   ) {
@@ -362,9 +352,6 @@ export async function runReplyAgent(
       touchActiveSessionEntry,
       typing,
       typingSignals,
-      toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
-      automaticFallbackRoute: steeringAuthority.automaticFallbackRoute,
-      pendingInputAuthorityFingerprint: steeringAuthority.pendingInputAuthorityFingerprint,
     });
     return result === "handled" ? undefined : result;
   }
@@ -373,7 +360,7 @@ export async function runReplyAgent(
     hasQueuedFollowups,
     isActive,
     isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup || shouldQueueAuthorityMismatch,
+    shouldFollowup: effectiveShouldFollowup,
     resetTriggered: effectiveResetTriggered,
   });
   if (activeRunQueueAction === "drop") {
@@ -483,22 +470,18 @@ export async function runReplyAgent(
         }
       }
     : undefined;
-  const blockReplyCoalescing =
-    blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
-      ? resolveEffectiveBlockStreamingConfig({
-          cfg,
-          provider: sessionCtx.Provider,
-          accountId: sessionCtx.AccountId,
-          chunking: blockReplyChunking,
-        }).coalescing
-      : undefined;
   const blockReplyPipeline =
     blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
       ? createBlockReplyPipeline({
           onBlockReply: (payload, context) => deliverPreparedBlockReply(opts, payload, context),
           timeoutMs: blockReplyTimeoutMs,
-          coalescing: blockReplyCoalescing,
-          buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
+          coalescing: resolveEffectiveBlockStreamingConfig({
+            cfg,
+            provider: sessionCtx.Provider,
+            accountId: sessionCtx.AccountId,
+            chunking: blockReplyChunking,
+          }).coalescing,
+          isAudioPayload,
         })
       : null;
   const resolveVisibleReplyDelivery = async () => {
@@ -592,6 +575,19 @@ export async function runReplyAgent(
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
+  if (replyOperationRunState && !isHeartbeat && replyExpectation === "required") {
+    // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
+    // instead. The same sender's next queued request inherits the guidance; otherwise one
+    // recovery run bound to this turn's route and authority is queued.
+    replyOperationRunState.continueStalledTurn = () =>
+      continueStalledReplyTurn({
+        followupRun,
+        queueKey,
+        resolvedQueue,
+        replyOperation,
+        runFollowupTurn,
+      });
+  }
   const {
     admitUserTurn,
     beginBeforeAgentReply,
@@ -670,6 +666,7 @@ export async function runReplyAgent(
     await cleanupReplyAgentRun({
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
+      isHeartbeat,
       providedReplyOperation,
       queueKey,
       replyOperation,

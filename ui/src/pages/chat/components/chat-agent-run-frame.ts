@@ -4,7 +4,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
 import {
   agentRunFrameActiveStatusParts,
-  agentRunFrameGroups,
+  chatItemGroups,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
@@ -13,12 +13,14 @@ import {
   renderActivityGroup,
   renderMessageGroup,
   renderMessageGroupContent,
+} from "./chat-message-group.ts";
+import {
   renderStreamGroup,
   renderStreamGroupPart,
   renderWorkGroupSummary,
   type StreamGroupOptions,
   type StreamGroupPart,
-} from "./chat-message.ts";
+} from "./chat-message-stream.ts";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { renderChatSourcePreviews } from "./chat-source-previews.ts";
 import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
@@ -40,7 +42,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   if (statusParts) {
     return renderStreamGroup(statusParts, opts.streamOptions);
   }
-  const groups = agentRunFrameGroups(frame);
+  const groups = chatItemGroups(frame);
   const firstAssistant = groups.find((group) => group.role === "assistant");
   const actionOwner = frame.outcome.kind === "completed" ? frame.outcome.actionOwner : null;
   const representative = firstAssistant ?? groups[0];

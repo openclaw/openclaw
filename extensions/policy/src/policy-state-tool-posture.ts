@@ -26,7 +26,6 @@ export function scanPolicyToolPosture(
     sandbox: defaultSandbox,
     inheritedSandbox: {},
     sourceBase: "oc://openclaw.config/tools",
-    inheritedSourceBase: "oc://openclaw.config/tools",
   });
 
   collectPolicyConfiguredAgents(agents).forEach((configured) => {
@@ -43,7 +42,6 @@ export function scanPolicyToolPosture(
       sandbox: asNonArrayRecord(agent.sandbox),
       inheritedSandbox: defaultSandbox,
       sourceBase: `${configured.sourceBase}/tools`,
-      inheritedSourceBase: "oc://openclaw.config/tools",
     });
   });
 
@@ -160,9 +158,7 @@ function pushToolElevatedPosture(
   params: ToolPostureParams,
 ): void {
   const localElevated = asNonArrayRecord(params.tools.elevated);
-  const inheritedElevated = isRecord(params.inheritedTools.elevated)
-    ? params.inheritedTools.elevated
-    : {};
+  const inheritedElevated = asNonArrayRecord(params.inheritedTools.elevated);
   const localEnabled = readBoolean(localElevated.enabled);
   const inheritedEnabled = readBoolean(inheritedElevated.enabled);
   const effectiveEnabled =
@@ -178,9 +174,7 @@ function pushToolElevatedPosture(
   });
 
   const localAllowFrom = asNonArrayRecord(localElevated.allowFrom);
-  const inheritedAllowFrom = isRecord(inheritedElevated.allowFrom)
-    ? inheritedElevated.allowFrom
-    : {};
+  const inheritedAllowFrom = asNonArrayRecord(inheritedElevated.allowFrom);
   const providers = [
     ...new Set([...Object.keys(inheritedAllowFrom), ...Object.keys(localAllowFrom)]),
   ].toSorted((a, b) => a.localeCompare(b));
@@ -191,7 +185,7 @@ function pushToolElevatedPosture(
     entries.push({
       id: `${params.id}-elevated-allow-from-${ocPathSegment(provider)}`,
       kind: "elevatedAllowFrom",
-      source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
+      source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       entries: localEntries.length > 0 ? localEntries : inheritedEntries,
@@ -209,7 +203,6 @@ type ToolPostureParams = {
   readonly sandbox: Record<string, unknown>;
   readonly inheritedSandbox: Record<string, unknown>;
   readonly sourceBase: string;
-  readonly inheritedSourceBase: string;
 };
 
 function pushToolPostureValue(
@@ -227,7 +220,7 @@ function pushToolPostureValue(
   entries.push({
     id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
     kind: entry.kind,
-    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
+    source: `${entry.inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(entry.value === undefined ? {} : { value: entry.value }),
@@ -260,7 +253,7 @@ function pushToolPostureList(
   entries.push({
     id: `${params.id}-${key}`,
     kind: key,
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/${key}`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${key}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     entries: [...inheritedEntries, ...localEntries],
@@ -276,13 +269,13 @@ function pushToolAlsoAllowPostureList(
   const inheritedValue = params.inheritedTools.alsoAllow;
   const localConfigured = Array.isArray(localValue);
   const inheritedConfigured = Array.isArray(inheritedValue);
-  const localEntries = localConfigured ? readStringArray(localValue) : [];
-  const inheritedEntries = inheritedConfigured ? readStringArray(inheritedValue) : [];
+  const localEntries = readStringArray(localValue);
+  const inheritedEntries = readStringArray(inheritedValue);
   const inherited = !localConfigured && inheritedConfigured;
   entries.push({
     id: `${params.id}-alsoAllow`,
     kind: "alsoAllow",
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/alsoAllow`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/alsoAllow`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     entries: inherited ? inheritedEntries : localEntries,

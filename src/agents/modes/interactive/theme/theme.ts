@@ -23,7 +23,6 @@ const ThemeJsonSchema = Type.Object({
   name: Type.String(),
   vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
   colors: Type.Object({
-    // Core UI (10 colors)
     accent: ColorValueSchema,
     border: ColorValueSchema,
     borderAccent: ColorValueSchema,
@@ -35,7 +34,6 @@ const ThemeJsonSchema = Type.Object({
     dim: ColorValueSchema,
     text: ColorValueSchema,
     thinkingText: ColorValueSchema,
-    // Backgrounds & Content Text (11 colors)
     selectedBg: ColorValueSchema,
     userMessageBg: ColorValueSchema,
     userMessageText: ColorValueSchema,
@@ -47,7 +45,6 @@ const ThemeJsonSchema = Type.Object({
     toolErrorBg: ColorValueSchema,
     toolTitle: ColorValueSchema,
     toolOutput: ColorValueSchema,
-    // Markdown (10 colors)
     mdHeading: ColorValueSchema,
     mdLink: ColorValueSchema,
     mdLinkUrl: ColorValueSchema,
@@ -58,11 +55,9 @@ const ThemeJsonSchema = Type.Object({
     mdQuoteBorder: ColorValueSchema,
     mdHr: ColorValueSchema,
     mdListBullet: ColorValueSchema,
-    // Tool Diffs (3 colors)
     toolDiffAdded: ColorValueSchema,
     toolDiffRemoved: ColorValueSchema,
     toolDiffContext: ColorValueSchema,
-    // Syntax Highlighting (9 colors)
     syntaxComment: ColorValueSchema,
     syntaxKeyword: ColorValueSchema,
     syntaxFunction: ColorValueSchema,
@@ -72,14 +67,12 @@ const ThemeJsonSchema = Type.Object({
     syntaxType: ColorValueSchema,
     syntaxOperator: ColorValueSchema,
     syntaxPunctuation: ColorValueSchema,
-    // Thinking Level Borders (6 colors)
     thinkingOff: ColorValueSchema,
     thinkingMinimal: ColorValueSchema,
     thinkingLow: ColorValueSchema,
     thinkingMedium: ColorValueSchema,
     thinkingHigh: ColorValueSchema,
     thinkingXhigh: ColorValueSchema,
-    // Bash Mode (1 color)
     bashMode: ColorValueSchema,
   }),
   export: Type.Optional(
@@ -156,7 +149,6 @@ function colorDistance(
 }
 
 function rgbTo256(r: number, g: number, b: number): number {
-  // Find closest color in the 6x6x6 cube
   const rIdx = findClosestPaletteIndex(r, CUBE_VALUES);
   const gIdx = findClosestPaletteIndex(g, CUBE_VALUES);
   const bIdx = findClosestPaletteIndex(b, CUBE_VALUES);
@@ -169,7 +161,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   const cubeIndex = 16 + 36 * rIdx + 6 * gIdx + bIdx;
   const cubeDist = colorDistance(r, g, b, cubeR, cubeG, cubeB);
 
-  // Find closest grayscale
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   const grayIdx = findClosestPaletteIndex(gray, GRAY_VALUES);
   const grayValue = GRAY_VALUES[grayIdx];
@@ -442,38 +433,24 @@ export const interactiveAgentTheme: Theme = new Proxy({} as Theme, {
   },
 });
 
-type CliHighlightTheme = Record<string, (s: string) => string>;
-
-let cachedHighlightThemeFor: Theme | undefined;
-let cachedCliHighlightTheme: CliHighlightTheme | undefined;
-
-function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
-  return {
-    keyword: (s: string) => t.fg("syntaxKeyword", s),
-    built_in: (s: string) => t.fg("syntaxType", s),
-    literal: (s: string) => t.fg("syntaxNumber", s),
-    number: (s: string) => t.fg("syntaxNumber", s),
-    string: (s: string) => t.fg("syntaxString", s),
-    comment: (s: string) => t.fg("syntaxComment", s),
-    function: (s: string) => t.fg("syntaxFunction", s),
-    title: (s: string) => t.fg("syntaxFunction", s),
-    class: (s: string) => t.fg("syntaxType", s),
-    type: (s: string) => t.fg("syntaxType", s),
-    attr: (s: string) => t.fg("syntaxVariable", s),
-    variable: (s: string) => t.fg("syntaxVariable", s),
-    params: (s: string) => t.fg("syntaxVariable", s),
-    operator: (s: string) => t.fg("syntaxOperator", s),
-    punctuation: (s: string) => t.fg("syntaxPunctuation", s),
-  };
-}
-
-function getCliHighlightTheme(t: Theme): CliHighlightTheme {
-  if (cachedHighlightThemeFor !== t || !cachedCliHighlightTheme) {
-    cachedHighlightThemeFor = t;
-    cachedCliHighlightTheme = buildCliHighlightTheme(t);
-  }
-  return cachedCliHighlightTheme;
-}
+// Resolve the shared proxy at render time so replacing the global theme stays live.
+const cliHighlightTheme: Record<string, (s: string) => string> = {
+  keyword: (s) => interactiveAgentTheme.fg("syntaxKeyword", s),
+  built_in: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  literal: (s) => interactiveAgentTheme.fg("syntaxNumber", s),
+  number: (s) => interactiveAgentTheme.fg("syntaxNumber", s),
+  string: (s) => interactiveAgentTheme.fg("syntaxString", s),
+  comment: (s) => interactiveAgentTheme.fg("syntaxComment", s),
+  function: (s) => interactiveAgentTheme.fg("syntaxFunction", s),
+  title: (s) => interactiveAgentTheme.fg("syntaxFunction", s),
+  class: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  type: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  attr: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  variable: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  params: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  operator: (s) => interactiveAgentTheme.fg("syntaxOperator", s),
+  punctuation: (s) => interactiveAgentTheme.fg("syntaxPunctuation", s),
+};
 
 /**
  * Highlight code with syntax coloring based on file extension or language.
@@ -488,13 +465,8 @@ export function highlightCode(code: string, lang?: string): string[] {
   if (!validLang) {
     return code.split("\n").map((line) => interactiveAgentTheme.fg("mdCodeBlock", line));
   }
-  const opts = {
-    language: validLang,
-    ignoreIllegals: true,
-    theme: getCliHighlightTheme(interactiveAgentTheme),
-  };
   try {
-    return highlight(code, opts).split("\n");
+    return highlight(code, validLang, cliHighlightTheme).split("\n");
   } catch {
     return code.split("\n");
   }

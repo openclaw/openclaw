@@ -7,7 +7,6 @@ import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-han
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   buildSessionCreationStamp,
@@ -15,6 +14,7 @@ import {
 } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
+import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import {
   beginSessionWorkAdmission,
@@ -113,8 +113,9 @@ export async function beginCronSessionWorkAdmission(params: {
     ],
     signal: params.signal,
     onInterrupt: params.onInterrupt,
-    assertAllowed: () => {
-      const currentEntry = loadCronSessionEntryLatest(cronSession.storePath, agentSessionKey);
+    assertAllowed: async (signal) => {
+      const currentEntry = await loadCronSessionEntryLatest(cronSession.storePath, agentSessionKey);
+      signal.throwIfAborted();
       const changed = initialSessionEntry
         ? !currentEntry ||
           !isDeepStrictEqual(
@@ -133,21 +134,23 @@ export async function beginCronSessionWorkAdmission(params: {
   });
 }
 
-function cronTranscriptExists(params: {
+async function cronTranscriptExists(params: {
   entry: SessionEntry;
   sessionKey: string;
   storePath: string;
-}): boolean {
+}): Promise<boolean> {
   const sessionId = params.entry.sessionId?.trim();
   if (!sessionId) {
     return false;
   }
   try {
-    return hasSessionTranscriptEventsSync({
+    const watermark = await readSessionTranscriptWatermarkAsync({
       sessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });
+    // Sequence zero is a real header; cold archives retain their last sequence.
+    return watermark.maxSeq !== null;
   } catch {
     return false;
   }
@@ -191,11 +194,11 @@ export function createPersistCronSessionEntry(params: {
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
-      !cronTranscriptExists({
+      !(await cronTranscriptExists({
         entry: liveEntry,
         sessionKey: params.agentSessionKey,
         storePath: params.cronSession.storePath,
-      })
+      }))
         ? toNonResumableCronSessionEntry(liveEntry)
         : liveEntry;
     let committedEntry = persistedEntry;

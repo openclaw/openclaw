@@ -4,8 +4,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import {
-  expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
   npmCommandFailureCases,
 } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -29,6 +30,7 @@ import {
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { registerNpmUpdateMetadataTests } from "./update-npm-metadata.test-support.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const resolveOpenClawPackageRootSyncMock = vi.fn();
@@ -79,36 +81,19 @@ function successfulSpawn(stdout = "") {
 }
 
 function failedSpawn(stderr: string, stdout = "") {
-  return {
-    code: 1,
-    stdout,
-    stderr,
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-  };
+  return { ...successfulSpawn(stdout), code: 1, stderr };
 }
 
-function npmViewArgv(spec: string): string[] {
-  return [
-    "npm",
-    "view",
-    spec,
-    "name",
-    "version",
-    "dist.integrity",
-    "dist.shasum",
-    "openclaw",
-    "--json",
-  ];
+function npmViewArgs(spec: string): string[] {
+  return ["view", spec, "name", "version", "dist.integrity", "dist.shasum", "openclaw", "--json"];
 }
 
-function npmViewVersionsArgv(spec: string): string[] {
-  return ["npm", "view", spec, "versions", "--json"];
+function npmViewVersionsArgs(spec: string): string[] {
+  return ["view", spec, "versions", "--json"];
 }
 
-function npmPackArchiveMetadataArgv(archivePath: string): string[] {
-  return ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"];
+function npmPackArchiveMetadataArgs(archivePath: string): string[] {
+  return ["pack", archivePath, "--ignore-scripts", "--dry-run", "--json"];
 }
 
 function commandKey(argv: readonly string[]): string {
@@ -124,7 +109,7 @@ function resolveManagedFileDependency(projectRoot: string, dependencySpec: strin
 }
 
 function isNpmInstallCommand(argv: unknown): argv is string[] {
-  return Array.isArray(argv) && argv[0] === "npm" && argv[1] === "install";
+  return Array.isArray(argv) && npmCommandArgs(argv)?.[0] === "install";
 }
 
 function isNpmPeerPlannerInstallCommand(argv: unknown): argv is string[] {
@@ -388,19 +373,23 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   const packPackagesByArgv = new Map(
     packages
       .filter((pkg) => pkg.packArchivePath)
-      .map((pkg) => [commandKey(npmPackArchiveMetadataArgv(pkg.packArchivePath ?? "")), pkg]),
+      .map((pkg) => [commandKey(npmPackArchiveMetadataArgs(pkg.packArchivePath ?? "")), pkg]),
   );
   const viewPackagesByArgv = new Map(
-    packages.filter((pkg) => pkg.spec).map((pkg) => [commandKey(npmViewArgv(pkg.spec ?? "")), pkg]),
+    packages.filter((pkg) => pkg.spec).map((pkg) => [commandKey(npmViewArgs(pkg.spec ?? "")), pkg]),
   );
   const versionsPackagesByArgv = new Map(
     packages
       .filter((pkg) => pkg.versions)
-      .map((pkg) => [commandKey(npmViewVersionsArgv(pkg.packageName)), pkg]),
+      .map((pkg) => [commandKey(npmViewVersionsArgs(pkg.packageName)), pkg]),
   );
   runCommandWithTimeoutMock.mockImplementation(
     async (argv: string[], options?: { cwd?: string }) => {
-      const argvKey = commandKey(argv);
+      const npmArgs = npmCommandArgs(argv);
+      if (!npmArgs) {
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      }
+      const argvKey = commandKey(npmArgs);
       const packPackage = packPackagesByArgv.get(argvKey);
       if (packPackage) {
         return successfulSpawn(
@@ -519,7 +508,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         });
         return successfulSpawn();
       }
-      if (argv[0] === "npm" && argv[1] === "uninstall") {
+      if (npmArgs[0] === "uninstall") {
         const packageName = (argv as string[]).at(-1);
         if (packageName === "openclaw") {
           const projectRoot = options?.cwd;
@@ -578,6 +567,15 @@ beforeEach(() => {
 });
 
 describe("installPluginFromNpmSpec", () => {
+  registerNpmUpdateMetadataTests({
+    getNpmRoot: () => npmRoot,
+    installPluginFromNpmSpec,
+    isManagedNpmInstallCommand,
+    mockNpmViewAndInstallMany,
+    runCommandWithTimeoutMock,
+    writeInstalledNpmPlugin,
+  });
+
   it.each(npmCommandFailureCases.filter(({ label }) => label === "signal without output"))(
     "classifies metadata failures with $label",
     async ({ npmResult, expectedDetail }) => {
@@ -941,13 +939,6 @@ describe("installPluginFromNpmSpec", () => {
       version: "0.0.1",
       pluginId: "voice-call",
     });
-    const mockNpmCommand = runCommandWithTimeoutMock.getMockImplementation()!;
-    runCommandWithTimeoutMock.mockImplementation((argv: string[], options: unknown) =>
-      mockNpmCommand(
-        argv[0] === execPath && argv[1] === npmCliPath ? ["npm", ...argv.slice(2)] : argv,
-        options,
-      ),
-    );
     vi.stubGlobal("process", {
       ...process,
       versions: { ...process.versions, bun: "1.4.2" },
@@ -2151,8 +2142,7 @@ describe("installPluginFromNpmSpec", () => {
       runCommandWithTimeoutMock.mock.calls.some(
         ([argv]) =>
           Array.isArray(argv) &&
-          argv[0] === "npm" &&
-          argv[1] === "uninstall" &&
+          npmCommandArgs(argv)?.[0] === "uninstall" &&
           argv.includes("openclaw"),
       ),
     ).toBe(false);
@@ -2612,33 +2602,8 @@ describe("installPluginFromNpmSpec", () => {
     }
     expect(
       runCommandWithTimeoutMock.mock.calls.some(
-        (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
+        (call) => Array.isArray(call[0]) && npmCommandArgs(call[0])?.[0] === "install",
       ),
-    ).toBe(false);
-  });
-
-  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
-    mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
-      name: "@openclaw/voice-call",
-      version: "0.0.1",
-      integrity: "sha512-new",
-      shasum: "newshasum",
-    });
-
-    const onIntegrityDrift = vi.fn(async () => false);
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call@0.0.1",
-      expectedIntegrity: "sha512-old",
-      onIntegrityDrift,
-    });
-    expectIntegrityDriftRejected({
-      onIntegrityDrift,
-      result,
-      expectedIntegrity: "sha512-old",
-      actualIntegrity: "sha512-new",
-    });
-    expect(
-      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
     ).toBe(false);
   });
 

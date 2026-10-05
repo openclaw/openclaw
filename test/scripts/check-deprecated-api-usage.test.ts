@@ -102,8 +102,8 @@ describe("scripts/check-deprecated-api-usage", () => {
     const result = runRules({
       "src/plugin-sdk/inbound-reply-dispatch.ts":
         'export { runChannelInboundEvent } from "./channel-inbound.js";',
-      "src/plugin-sdk/channel-message.test.ts":
-        'const mod = await import("openclaw/plugin-sdk/channel-message");',
+      "src/plugin-sdk/inbound-reply-dispatch.test.ts":
+        'const mod = await import("openclaw/plugin-sdk/inbound-reply-dispatch");',
     });
 
     expect(result.stderr).toBe("");
@@ -114,11 +114,11 @@ describe("scripts/check-deprecated-api-usage", () => {
     const result = runRules(
       {
         "src/a.ts":
-          'import { x } from "openclaw/plugin-sdk/channel-message";\nimport { y } from "@openclaw/plugin-sdk/channel-message";\ndeliverOutboundPayloads();',
+          'import { x } from "openclaw/plugin-sdk/inbound-reply-dispatch";\nimport { y } from "@openclaw/plugin-sdk/inbound-reply-dispatch";\ndeliverOutboundPayloads();',
         "extensions/probe/src/a.ts":
-          'export { x } from "openclaw/plugin-sdk/channel-reply-pipeline";\ndeliverOutboundPayloads();',
+          'export { x } from "openclaw/plugin-sdk/inbound-reply-dispatch";\ndeliverOutboundPayloads();',
         "packages/a.ts":
-          'import { x } from "openclaw/plugin-sdk/command-auth";\ndeliverOutboundPayloads();',
+          'import { x } from "openclaw/plugin-sdk/agent-media-payload";\ndeliverOutboundPayloads();',
         "src/infra/outbound/deliver.ts": "deliverOutboundPayloads();",
         "src/a.test.ts": "deliverOutboundPayloads();",
       },
@@ -135,13 +135,13 @@ describe("scripts/check-deprecated-api-usage", () => {
     expect(result.stderr).toBe(
       [
         "Deprecated API usage guard failed:",
-        "- plugin-sdk-compat-subpaths: src/a.ts:1: openclaw/plugin-sdk/channel-message (use focused non-deprecated plugin SDK subpaths)",
-        "- plugin-sdk-compat-subpaths: src/a.ts:2: @openclaw/plugin-sdk/channel-message (use focused non-deprecated plugin SDK subpaths)",
-        "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/command-auth (use focused non-deprecated plugin SDK subpaths)",
-        "- extension-plugin-sdk-compat-subpaths: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/channel-reply-pipeline (extensions must use focused non-deprecated plugin SDK subpaths)",
-        "- facade-internal-imports: src/a.ts:1: openclaw/plugin-sdk/channel-message (use openclaw/plugin-sdk/channel-outbound)",
-        "- facade-internal-imports: src/a.ts:2: @openclaw/plugin-sdk/channel-message (use openclaw/plugin-sdk/channel-outbound)",
-        "- facade-internal-imports: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/channel-reply-pipeline (use openclaw/plugin-sdk/channel-outbound)",
+        "- plugin-sdk-compat-subpaths: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
+        "- plugin-sdk-compat-subpaths: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
+        "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/agent-media-payload (use focused non-deprecated plugin SDK subpaths)",
+        "- extension-plugin-sdk-compat-subpaths: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (extensions must use focused non-deprecated plugin SDK subpaths)",
+        "- facade-internal-imports: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
+        "- facade-internal-imports: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
+        "- facade-internal-imports: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
         "- message-api: src/a.ts:3: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
         "- message-api: extensions/probe/src/a.ts:2: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
         "- message-api: packages/a.ts:2: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",

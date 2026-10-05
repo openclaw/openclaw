@@ -1,4 +1,3 @@
-/** Chromium-family executable discovery across supported platforms. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +9,6 @@ import {
 import { execBrowserProbe, WINDOWS_VERSION_DIR_RE } from "./chrome.executable-probe.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 
-/** Browser executable candidate with product metadata and filesystem path. */
 export type BrowserExecutable = {
   kind: "brave" | "canary" | "chromium" | "chrome" | "custom" | "edge";
   path: string;
@@ -474,7 +472,9 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
       if (!entry.startsWith("chromium-")) {
         continue;
       }
-      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
+      // Playwright 1.63 uses Chrome for Testing's ARM64 layout; older installs
+      // still use chrome-linux. Keep both discoverable without a configured path.
+      for (const linuxDir of ["chrome-linux64", "chrome-linux", "chrome-linux-arm64"]) {
         candidates.push({
           kind: "chromium",
           path: path.join(browserPath, entry, linuxDir, "chrome"),
@@ -487,10 +487,11 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
 
 function getPlaywrightBrowserCachePaths(): string[] {
   const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
+  const cacheHome = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
   return [
     ...new Set([
       ...(configured && configured !== "0" ? [configured] : []),
-      path.join(os.homedir(), ".cache", "ms-playwright"),
+      path.join(cacheHome, "ms-playwright"),
     ]),
   ];
 }
@@ -578,7 +579,6 @@ function chromeExecutableCandidates(platform: NodeJS.Platform): BrowserExecutabl
   }
 }
 
-/** Resolve the Google Chrome executable for a named platform when available. */
 export function resolveGoogleChromeExecutableForPlatform(
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
@@ -598,7 +598,6 @@ export function resolveGoogleChromeExecutableForPlatform(
   return findFirstChromeExecutable(candidates, platform);
 }
 
-/** Resolve the preferred Chromium-family executable for a platform. */
 export function resolveBrowserExecutableForPlatform(
   resolved: ResolvedBrowserConfig,
   platform: NodeJS.Platform,

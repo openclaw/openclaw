@@ -1,8 +1,9 @@
 ---
-summary: "Discover and continue Codex, Claude, OpenCode, and Pi sessions on paired nodes"
+summary: "Discover, import, and continue native session transcripts on the Gateway and paired nodes"
 read_when:
   - Browsing Codex or Claude sessions that live on another computer
   - Resuming a native CLI session in its owning terminal
+  - Preserving native transcripts in OpenClaw before source cleanup
   - Configuring session catalog visibility or off-switches
 title: "Node session catalogs"
 sidebarTitle: "Session catalogs"
@@ -22,6 +23,75 @@ provider registration changes and catalog archive operations. Every delivery
 rechecks current visibility and local session identity. The one-second budget
 covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
+
+With diagnostics enabled, slow-provider warnings report elapsed time, including
+queueing and asynchronous I/O. `isMainThread` identifies the calling thread; it
+does not measure CPU time. Debug logging emits each provider ID and its
+`providerIdHash` once per provider registration so warnings can be attributed
+without logging session content.
+
+## Import transcripts
+
+Import a native transcript into OpenClaw's durable session store to keep it after
+the source tool cleans up its history or the source computer becomes unavailable.
+In the sessions sidebar, open a catalog row's menu and choose **Import to OpenClaw**.
+The success notification offers **Open imported session** when the copy is ready.
+
+From the CLI, import one transcript or all visible catalog rows:
+
+```bash
+openclaw sessions import claude <thread-id>
+openclaw sessions import codex <thread-id> --host <host-id>
+openclaw sessions import --all --dry-run
+openclaw sessions import --all --json
+```
+
+Catalog IDs are `claude`, `codex`, `openclaw`, `opencode`, and `pi` for the bundled
+providers. Use `--catalog <id>` to filter a bulk import and `--source-home <id>`
+to select an individual transcript from a particular source home. See
+[sessions CLI](/cli/sessions) for connection options and bulk-import output.
+
+Import works with any readable catalog, including sources on the Gateway,
+headless paired nodes, the macOS app, and the Linux app. The source must be
+reachable during import. The imported copy is an ordinary OpenClaw session owned
+by the selected agent, with source provenance and an untrusted-reference notice.
+Imported copies start as [drafts](/concepts/multi-user#drafts), visible only to
+their creator and Gateway admins. Publish the copy through the existing session
+sharing controls to share it with other people. Re-importing preserves the copy's
+current visibility, including an explicitly published copy.
+When drafts are disabled, imported copies follow the Gateway's default visibility.
+The Control UI and CLI `--all` supply the catalog row's name as the initial title
+when available. A single-session CLI import uses a generic
+`Imported <catalog label> session` title. RPC callers can supply `displayName`
+(1–500 characters) for a new imported session; re-importing never renames an
+existing session. It has no native model lock or node execution binding, and
+importing does not resume or fork the native session. The source transcript
+remains unchanged.
+
+Re-importing the same catalog, host, source home, and thread for that agent
+updates the same OpenClaw session. Only previously unseen transcript items are
+appended; an unchanged source adds zero items. This is an explicit sync: later
+native messages are preserved when you import again.
+
+Import preserves the catalog's projected transcript text, not the original native
+files or raw provider records. Each import retains up to 50,000 transcript items
+or 64 MiB of projected history, whichever comes first, starting with the most
+recent history. Provider truncation and the existing per-item text limit still
+apply. If the history ceiling omits older items,
+the result has `complete: false` and the CLI warns that the copy is incomplete.
+`importedItems` counts newly appended source items; `totalItems` counts source
+items read during this import, including items already preserved. Claude and
+Codex supply stable item IDs; for catalogs whose items lack IDs, re-import
+identifies items by content, so an identical repeated item can be skipped once
+a transcript exceeds the history ceiling. The smaller
+continuation seed remains limited to 200 items and 512 KiB.
+
+Import requires `operator.write` and the same row visibility as reading a
+catalog transcript. In multi-user mode, non-admin callers can import only rows
+they may read. Source read access is checked through each destination write;
+revocation stops further copying, while content already committed remains in the
+imported session. Importing a copy does not adopt the native session or change what
+clicking its catalog row opens.
 
 ## Codex sessions and transcripts
 
@@ -78,8 +148,11 @@ operator catalog and paired-node catalog commands without disabling Anthropic
 models or the Claude CLI backend.
 A remote macOS app node advertises
 `anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
-when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
-the node pairing upgrade when those commands first appear.
+when the Anthropic plugin is enabled and its Claude projects directory exists:
+`$CLAUDE_CONFIG_DIR/projects/` when the app's environment sets
+`CLAUDE_CONFIG_DIR`, otherwise `~/.claude/projects/`. Claude Desktop metadata
+always comes from the user's home directory. Approve the node pairing upgrade
+when those commands first appear.
 
 A native node host with the Claude CLI available also advertises
 `anthropic.claude.terminal.resume.v1`. Eligible CLI and Desktop rows can open
@@ -99,14 +172,14 @@ session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
 Catalog RPCs keep their normal method scopes: `sessions.catalog.list` and
-`sessions.catalog.read` require `operator.read`; `sessions.catalog.continue` and
-`sessions.catalog.archive` require `operator.write`.
+`sessions.catalog.read` require `operator.read`; `sessions.catalog.continue`,
+`sessions.catalog.import`, and `sessions.catalog.archive` require `operator.write`.
 
 Catalog visibility also follows the authenticated caller. An `operator.admin`
 connection sees every discovered row. When the Gateway has durable profiles for
 fewer than two people, catalog visibility is unchanged and rows remain unfiltered.
-On a multi-user Gateway, a non-admin connection sees and can read, continue, or
-archive only rows whose recorded `createdActor.id` matches the caller's Gateway
+On a multi-user Gateway, a non-admin connection sees and can read, continue,
+import, or archive only rows whose recorded `createdActor.id` matches the caller's Gateway
 profile. Unattributed host CLI or desktop sessions are hidden from those callers.
 This is a privacy and coordination boundary inside one trusted Gateway domain,
 not hostile-user isolation; use separate agents or Gateway/host trust boundaries

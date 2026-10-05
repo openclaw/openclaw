@@ -24,7 +24,6 @@ import {
   toDotPath,
   type ConcreteConfigPathSegment,
 } from "../shared/dot-path.js";
-import { formatCliCommand } from "./command-format.js";
 import {
   formatConfigSetPath,
   parseConfigSetPath,
@@ -450,21 +449,6 @@ async function readStdinText(): Promise<string> {
   return bytes.toString("utf8");
 }
 
-async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
-  const file = readNonBlankString(opts.file);
-  const stdin = Boolean(opts.stdin);
-  if (Boolean(file) === stdin) {
-    throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
-  }
-  const sourceLabel = stdin ? "--stdin" : "--file";
-  const raw = file ? readConfigMutationFileSync(file, "--file") : await readStdinText();
-  return parseConfigMutationJson5(raw, `${sourceLabel} as JSON5`);
-}
-
-function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
-  return { ...buildUnsetOperation(path), inputMode: "json" };
-}
-
 export function buildUnsetOperation(
   path: PathSegment[],
   pathTokens?: readonly ConcreteConfigPathSegment[],
@@ -479,36 +463,27 @@ export function buildUnsetOperation(
   };
 }
 
-function buildApplyValueOperation(params: {
-  path: PathSegment[];
-  value: unknown;
-  mutation?: ConfigSetOperation["mutation"];
-}): ConfigSetOperation {
-  const ref = isPlainRecord(params.value) ? coerceSecretRef(params.value) : null;
-  const operation = buildAssignmentOperation({
-    requestedPath: params.path,
-    value: ref
-      ? parseSecretRefFromUnknown(params.value, `patch.${toDotPath(params.path)}`)
-      : params.value,
-    inputMode: "json",
-    validatedRef: Boolean(ref),
-  });
-  return { ...operation, ...(params.mutation ? { mutation: params.mutation } : {}) };
-}
-
-function buildConfigPatchOperations(params: {
-  patch: unknown;
-  replacePaths: PathSegment[][];
-}): ConfigSetOperation[] {
-  if (!isPlainRecord(params.patch)) {
+export async function readConfigPatchOperations(
+  opts: ConfigPatchOptions,
+): Promise<ConfigSetOperation[]> {
+  const file = readNonBlankString(opts.file);
+  const stdin = Boolean(opts.stdin);
+  if (Boolean(file) === stdin) {
+    throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
+  }
+  const sourceLabel = stdin ? "--stdin" : "--file";
+  const raw = file ? readConfigMutationFileSync(file, "--file") : await readStdinText();
+  const patch = parseConfigMutationJson5(raw, `${sourceLabel} as JSON5`);
+  const replacePaths = (opts.replacePath ?? []).map(parseConfigSetPath);
+  if (!isPlainRecord(patch)) {
     throw configPatchModeError("input must be a JSON5 object patch.");
   }
   const operations: ConfigSetOperation[] = [];
   const pathKey = (path: readonly PathSegment[]) => JSON.stringify(path);
-  const replacePathKeys = new Set(params.replacePaths.map(pathKey));
-  const replacePathLengths = new Set(params.replacePaths.map((path) => path.length));
+  const replacePathKeys = new Set(replacePaths.map(pathKey));
+  const replacePathLengths = new Set(replacePaths.map((path) => path.length));
   const matchedReplacePathKeys = new Set<string>();
-  visitConfigValueTree(params.patch, (value, path) => {
+  visitConfigValueTree(patch, (value, path) => {
     const segment = path.at(-1);
     if (segment === undefined) {
       return true;
@@ -519,23 +494,29 @@ function buildConfigPatchOperations(params: {
     if (replace) {
       matchedReplacePathKeys.add(replacementKey);
     }
-    const mergeObject = !replace && isPlainRecord(value) && !coerceSecretRef(value);
+    const ref = isPlainRecord(value) ? coerceSecretRef(value) : null;
+    const mergeObject = !replace && isPlainRecord(value) && !ref;
     if (mergeObject && Object.keys(value).length > 0) {
       return true;
     }
-    operations.push(
-      value === null
-        ? buildDeleteOperation([...path])
-        : buildApplyValueOperation({
-            path: [...path],
-            value,
-            mutation: replace ? "replace" : mergeObject ? "merge" : undefined,
-          }),
-    );
+    if (value === null) {
+      operations.push({ ...buildUnsetOperation([...path]), inputMode: "json" });
+    } else {
+      const operation = buildAssignmentOperation({
+        requestedPath: [...path],
+        value: ref ? parseSecretRefFromUnknown(value, `patch.${toDotPath(path)}`) : value,
+        inputMode: "json",
+        validatedRef: Boolean(ref),
+      });
+      if (replace || mergeObject) {
+        operation.mutation = replace ? "replace" : "merge";
+      }
+      operations.push(operation);
+    }
     return false;
   });
 
-  const unusedReplacePath = params.replacePaths.find(
+  const unusedReplacePath = replacePaths.find(
     (replacePath) => !matchedReplacePathKeys.has(pathKey(replacePath)),
   );
   if (unusedReplacePath) {
@@ -549,24 +530,4 @@ function buildConfigPatchOperations(params: {
     throw configPatchModeError("input patch did not contain any config updates.");
   }
   return operations;
-}
-
-export async function readConfigPatchOperations(
-  opts: ConfigPatchOptions,
-): Promise<ConfigSetOperation[]> {
-  return buildConfigPatchOperations({
-    patch: await readConfigPatchInput(opts),
-    replacePaths: (opts.replacePath ?? []).map(parseConfigSetPath),
-  });
-}
-
-export function formatPluginInstallConfigSetError(): string {
-  return [
-    "plugins.installs is managed by the plugin index and cannot be edited with config set.",
-    "",
-    "Use plugin commands instead:",
-    `  ${formatCliCommand("openclaw plugins install <spec>")}`,
-    `  ${formatCliCommand("openclaw plugins update <plugin-id>")}`,
-    `  ${formatCliCommand("openclaw plugins uninstall <plugin-id>")}`,
-  ].join("\n");
 }

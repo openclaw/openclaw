@@ -15,7 +15,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
@@ -117,7 +120,7 @@ it.each([
       let replacement: Promise<void> | undefined;
       const writeFailure = new Error("terminal session write failed");
       let persistenceSpy:
-        | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+        | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
         | undefined;
       const responseRows: Array<ReturnType<typeof loadSessionEntry>> = [];
       const respond = vi.fn<RespondFn>(() => {
@@ -157,8 +160,10 @@ it.each([
         }
         if (outcome === "write-failed") {
           persistenceSpy = vi
-            .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-            .mockRejectedValueOnce(writeFailure);
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValueOnce(async () => {
+              throw writeFailure;
+            });
         }
         request = Promise.resolve(
           sessionAbortHandlers["sessions.abort"]!({
@@ -205,7 +210,8 @@ it.each([
           return;
         }
         expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        closeOpenClawAgentDatabasesForTest(state.root);
         expect(loadSessionEntry({ ...target, readConsistency: "latest" })).toMatchObject({
           status: "killed",
           abortedLastRun: true,

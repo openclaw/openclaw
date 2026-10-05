@@ -148,6 +148,11 @@ describe("handleMessageUpdate text signatures", () => {
         { text: "Visible\n\nDone.", delta: "\n\nDone." },
       ],
     },
+    {
+      name: "split runtime-context header",
+      chunks: ["OpenClaw runtime cont", "ext:\nprivate\nEnd OpenClaw runtime context.\nVisible"],
+      updates: [{ text: "Visible", delta: "Visible" }],
+    },
 
     {
       name: "split voice directive",

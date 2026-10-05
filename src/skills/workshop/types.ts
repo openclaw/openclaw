@@ -2,6 +2,7 @@ import type {
   SkillProposalEvaluation as ProtocolSkillProposalEvaluation,
   SkillProposalLifecycleEvent,
   SkillsProposalCreateParams,
+  SkillsProposalEventsListResult,
   SkillsProposalRecordResult,
   SkillsProposalsListResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
@@ -185,10 +186,7 @@ export type SkillProposalEventsListInput = {
   limit?: number;
 };
 
-export type SkillProposalEventsListResult = {
-  events: SkillProposalEvent[];
-  nextSequence?: number;
-};
+export type SkillProposalEventsListResult = SkillsProposalEventsListResult;
 
 export type SkillProposalReadResult = {
   record: SkillProposalRecord;

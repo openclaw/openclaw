@@ -47,11 +47,7 @@ export function deniesDeviceTokenRoleManagement(
   authz: DeviceManagementAuthz,
   targetRole: string,
 ): boolean {
-  const normalizedTargetRole = targetRole.trim();
-  if (!normalizedTargetRole || authz.isAdminCaller) {
-    return false;
-  }
-  return normalizedTargetRole !== "operator";
+  return !authz.isAdminCaller && requestsNonOperatorDeviceRole({ role: targetRole });
 }
 
 export function requestsNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {

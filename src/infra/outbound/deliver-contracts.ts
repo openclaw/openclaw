@@ -1,7 +1,7 @@
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 // Shared type contracts for outbound planning, queueing, and transport.
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OutboundReplyFacts } from "../../channels/message/types.js";
+import type { OutboundReplyFacts, RenderedMessageBatchPlan } from "../../channels/message/types.js";
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
@@ -23,14 +23,9 @@ import type {
   OutboundPayloadDeliveryOutcome,
   PlatformSendRoute,
 } from "./deliver-types.js";
-import type {
-  ConversationDeliveryTarget,
-  DurableDeliveryCompletion,
-} from "./delivery-completion.js";
-import type {
-  QueuedReplyPayloadSendingHook,
-  QueuedRenderedMessageBatchPlan,
-} from "./delivery-queue-storage.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
@@ -271,7 +266,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
   deferCommitHooks?: boolean;
   queuePolicy?: OutboundDeliveryQueuePolicy;
-  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
+  renderedBatchPlan?: RenderedMessageBatchPlan;
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
 };
 

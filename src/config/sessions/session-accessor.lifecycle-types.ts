@@ -8,10 +8,15 @@ import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Reset is an append: an empty transcript needs the caller's workspace for its header. */
-export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & { cwd: string };
+export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & {
+  /** Caller-prepared identity when a lifecycle consumer must reopen this exact window. */
+  boundaryId?: string;
+  cwd: string;
+};
 
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   storePath: string;
   archiveRemovedEntryTranscripts?: boolean;
   /** Preserve explicitly foreign plugin-owned state while retaining ownerless legacy rows. */
@@ -153,13 +158,6 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
         expectedEntry?: SessionEntry;
       }
   );
-
-export class SessionEntryLifecycleUpsertConflictError extends Error {
-  constructor(readonly sessionKey: string) {
-    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
-    this.name = "SessionEntryLifecycleUpsertConflictError";
-  }
-}
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;

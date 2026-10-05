@@ -5,11 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  classifyReleaseTrain,
   compareReleaseVersions,
   parsePinnedReleaseVersion,
-  parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
+import { usesStructuredToolSearchAtBaseline } from "../../../lib/upgrade-survivor-policy.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -272,6 +271,12 @@ export function resolveUpgradeSurvivorConfigSteps(
 }
 
 function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null): ConfigStep {
+  if (step.id === "tools-tool-search" && usesStructuredToolSearchAtBaseline(baselineVersion)) {
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify({ mode: "tools" }), ...step.argv.slice(4)],
+    };
+  }
   if (step.id === "agents") {
     const agentsJson = step.argv[3];
     if (agentsJson === undefined) {
@@ -284,14 +289,7 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
       agents.entries.main.default = true;
       delete agents.ownership;
     }
-    // July's extended-stable line branched before keyed rosters shipped.
-    const baselineRelease = parseReleaseVersion(baselineVersion ?? "");
-    if (
-      (baselineRelease?.year === 2026 &&
-        baselineRelease.month === 7 &&
-        classifyReleaseTrain(baselineRelease) === "extended-stable") ||
-      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
-    ) {
+    if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
       agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
         Object.assign(entry, { id }),
       );
@@ -325,6 +323,7 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
 function* adaptRecipeForBaseline(
   steps: ConfigStep[],
   baselineVersion: string | null,
+  scenario: string,
 ): Generator<ConfigStep> {
   // Older and suffixed releases retain their existing command and receipt contract.
   const pinnedVersion = parsePinnedReleaseVersion(baselineVersion ?? "");
@@ -334,6 +333,27 @@ function* adaptRecipeForBaseline(
   for (const [index, step] of steps.entries()) {
     if (index <= batchedThrough) {
       continue;
+    }
+    if (scenario === "base" && pinnedVersion === "2026.9.7" && step.id === "validate") {
+      yield {
+        id: "silent-reply-internal-retirement",
+        intent: "silent-reply-internal-retirement",
+        argv: [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([
+            {
+              path: "agents.defaults.silentReply",
+              value: { group: "allow", internal: "allow" },
+            },
+            {
+              path: "surfaces.discord.silentReply",
+              value: { group: "disallow", internal: "disallow" },
+            },
+          ]),
+        ],
+      };
     }
     if (
       batchChannels &&
@@ -374,7 +394,13 @@ export function resolveUpgradeSurvivorConfigStepsForBaseline(
   scenario = "base",
   baselineVersion: string | null = null,
 ): ConfigStep[] {
-  return [...adaptRecipeForBaseline(resolveUpgradeSurvivorConfigSteps(scenario), baselineVersion)];
+  return [
+    ...adaptRecipeForBaseline(
+      resolveUpgradeSurvivorConfigSteps(scenario),
+      baselineVersion,
+      scenario,
+    ),
+  ];
 }
 
 export function resolveUpgradeSurvivorOpenClawCommand(
@@ -455,7 +481,7 @@ function applyRecipe() {
     steps: [],
   };
 
-  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion)) {
+  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion, scenario)) {
     const outcome = runUpgradeSurvivorOpenClawStep(step);
     summary.steps.push(outcome);
     if (outcome.ok) {

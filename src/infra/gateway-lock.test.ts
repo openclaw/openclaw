@@ -507,6 +507,18 @@ describe("gateway lock", () => {
       } else {
         await expect(strict).resolves.toBeUndefined();
       }
+      const custody = readActiveGatewayLockIdentity({
+        ...options,
+        includeEmbedded: true,
+        requireInspection: true,
+      });
+      if (state === "missing port" || expected === "active") {
+        await expect(custody).resolves.toMatchObject({ pid: process.pid });
+      } else if (expected === "unavailable") {
+        await expect(custody).rejects.toBeInstanceOf(GatewayLockError);
+      } else {
+        await expect(custody).resolves.toBeUndefined();
+      }
     },
   );
 

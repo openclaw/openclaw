@@ -7,7 +7,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeSandboxSecretOwnerId } from "./runtime-sandbox-secret-owner.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,

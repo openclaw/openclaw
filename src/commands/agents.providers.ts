@@ -5,7 +5,6 @@ import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import {
   projectChannelAccountDisplayState,
@@ -59,16 +58,16 @@ function recordProviderAccountStatus(
   }
 }
 
-function resolveProviderChannelId(params: {
-  rawChannelId: string | null | undefined;
-  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
-}): ChannelId | null {
-  const resolved = normalizeChannelId(params.rawChannelId);
+function resolveProviderChannelId(
+  rawChannelId: string,
+  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>,
+): ChannelId | null {
+  const resolved = normalizeChannelId(rawChannelId);
   if (resolved) {
     return resolved;
   }
-  const fallback = normalizeOptionalLowercaseString(params.rawChannelId);
-  return fallback && params.metadataByProvider.has(fallback) ? fallback : null;
+  const fallback = normalizeOptionalLowercaseString(rawChannelId);
+  return fallback && metadataByProvider.has(fallback) ? fallback : null;
 }
 
 export function buildProviderSummaryMetadataIndex(
@@ -108,14 +107,6 @@ export function buildProviderSummaryMetadataIndex(
   return metadata;
 }
 
-function isUnresolvedSecretRefResolutionError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    typeof error.message === "string" &&
-    /unresolved SecretRef/i.test(error.message)
-  );
-}
-
 function formatChannelAccountLabel(params: {
   provider: ChannelId;
   providerLabel?: string;
@@ -127,21 +118,6 @@ function formatChannelAccountLabel(params: {
     ? `${params.accountId} (${params.name.trim()})`
     : params.accountId;
   return `${label} ${account}`;
-}
-
-function formatProviderState(entry: ProviderAccountStatus): string {
-  return `${entry.state}${entry.enabled === false && entry.state !== "disabled" ? ", disabled" : ""}`;
-}
-
-async function resolveReadOnlyAccount(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): Promise<unknown> {
-  if (params.plugin.config.inspectAccount) {
-    return await params.plugin.config.inspectAccount(params.cfg, params.accountId);
-  }
-  return resolveChannelAccount(params);
 }
 
 export async function buildProviderStatusIndex(
@@ -156,9 +132,11 @@ export async function buildProviderStatusIndex(
     for (const accountId of accountIds) {
       let account: unknown;
       try {
-        account = await resolveReadOnlyAccount({ plugin, cfg, accountId });
+        account = plugin.config.inspectAccount
+          ? await plugin.config.inspectAccount(cfg, accountId)
+          : await resolveChannelAccount({ plugin, cfg, accountId });
       } catch (error) {
-        if (!isUnresolvedSecretRefResolutionError(error)) {
+        if (!(error instanceof Error) || !/unresolved SecretRef/i.test(error.message)) {
           throw error;
         }
         recordProviderAccountStatus(map, {
@@ -240,23 +218,8 @@ function resolveBindingAccountId(binding: AgentBinding): string {
   return accountId === "*" ? accountId : normalizeAccountId(accountId);
 }
 
-function shouldShowProviderEntry(params: {
-  entry: ProviderAccountStatus;
-  cfg: OpenClawConfig;
-  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
-}): boolean {
-  const visibleInConfiguredLists =
-    params.entry.visibleInConfiguredLists ??
-    params.metadataByProvider.get(params.entry.provider)?.visibleInConfiguredLists;
-  if (visibleInConfiguredLists === false) {
-    const providerConfig = (params.cfg as Record<string, unknown>)[params.entry.provider];
-    return Boolean(params.entry.configured) || Boolean(providerConfig);
-  }
-  return Boolean(params.entry.configured);
-}
-
 function formatProviderEntry(entry: ProviderAccountStatus): string {
-  return `${formatChannelAccountLabel(entry)}: ${formatProviderState(entry)}`;
+  return `${formatChannelAccountLabel(entry)}: ${entry.state}${entry.enabled === false && entry.state !== "disabled" ? ", disabled" : ""}`;
 }
 
 function formatMissingProviderEntry(params: {
@@ -282,10 +245,7 @@ export function summarizeBindings(
 ): string[] {
   const seen = new Map<string, string>();
   for (const binding of bindings) {
-    const channel = resolveProviderChannelId({
-      rawChannelId: binding.match.channel,
-      metadataByProvider,
-    });
+    const channel = resolveProviderChannelId(binding.match.channel, metadataByProvider);
     if (!channel) {
       continue;
     }
@@ -317,10 +277,7 @@ export function listProvidersForAgent(params: {
     // Keep first-seen account order; empty wildcard scopes retain the existing diagnostic.
     const linesByAccount = new Map<string, string>();
     for (const binding of params.bindings) {
-      const channel = resolveProviderChannelId({
-        rawChannelId: binding.match.channel,
-        metadataByProvider,
-      });
+      const channel = resolveProviderChannelId(binding.match.channel, metadataByProvider);
       if (!channel) {
         continue;
       }
@@ -351,7 +308,14 @@ export function listProvidersForAgent(params: {
   if (params.summaryIsDefault) {
     const seenProviders = new Set<ChannelId>();
     for (const entry of params.providerStatus.values()) {
-      if (shouldShowProviderEntry({ entry, cfg: params.cfg, metadataByProvider })) {
+      const visibleInConfiguredLists =
+        entry.visibleInConfiguredLists ??
+        metadataByProvider.get(entry.provider)?.visibleInConfiguredLists;
+      if (
+        entry.configured ||
+        (visibleInConfiguredLists === false &&
+          (params.cfg as Record<string, unknown>)[entry.provider])
+      ) {
         providerLines.push(formatProviderEntry(entry));
         seenProviders.add(entry.provider);
       }

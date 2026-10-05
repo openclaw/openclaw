@@ -3,6 +3,7 @@ import {
   noteActiveCronJobTriggerMutation,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import {
@@ -40,6 +41,11 @@ export async function persistUpdatedJob(params: {
   if (!snapshot.store) {
     throw new Error("Cron update has no loaded store");
   }
+  const defaultAgentId = state.deps.resolveDefaultAgentId
+    ? state.deps.resolveDefaultAgentId()
+    : state.deps.defaultAgentId;
+  resolveCronJobEffectiveAgentId(previousJob, defaultAgentId);
+  resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
   const reservation = state.queuedRunReservationsByJobId.get(nextJob.id);
   const preservesOnExitRearm =
     reservation?.onExit === true &&
@@ -89,6 +95,11 @@ export async function persistUpdatedJob(params: {
     assertCurrent: () => {
       params.commitGuard?.();
       params.ownerMutation?.assertCurrent();
+      const currentDefaultAgentId = state.deps.resolveDefaultAgentId
+        ? state.deps.resolveDefaultAgentId()
+        : state.deps.defaultAgentId;
+      resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
+      resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,

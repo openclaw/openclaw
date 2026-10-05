@@ -12,7 +12,44 @@ export type MemoryOriginDeletion = {
   sessionIds?: readonly string[];
 };
 
+export type MemoryEntryOriginBinding =
+  | { kind: "origin" }
+  | { kind: "forget"; prepareTombstones: boolean; extensionPath?: string };
+
+export type MemoryForgetLineage = {
+  agentId: string;
+  sessionIds: readonly string[];
+  entryKeys: readonly string[];
+  identity: string;
+};
+
+export type MemoryForgetLineageResult =
+  | { current: true }
+  | { current: false; origins: MemoryEntryOrigin[] };
+
+export function selectedMemoryLineageIdentity(
+  origins: readonly MemoryEntryOrigin[],
+  sessionIds: ReadonlySet<string>,
+  entryKeys: ReadonlySet<string>,
+): string {
+  // Selected sessions and every contributor to their entries determine the purge.
+  return JSON.stringify(
+    origins
+      .filter((origin) => sessionIds.has(origin.sessionId) || entryKeys.has(origin.entryKey))
+      .map(({ entryKey, sessionId }) => [entryKey, sessionId]),
+  );
+}
+
 export type MemoryEntryOriginOperations = {
+  "forget.mark": { input: MemoryForgetLineage; output: MemoryForgetLineageResult };
+  "forget.purge": {
+    input: MemoryForgetLineage & {
+      chunkIds: readonly string[];
+      sources: readonly { path: string; source: string }[];
+      hasVectorTable: boolean;
+    };
+    output: MemoryForgetLineageResult;
+  };
   record: { input: MemoryOriginRecord; output: MemoryEntryOrigin[] };
   delete: { input: MemoryOriginDeletion; output: number };
 };

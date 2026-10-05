@@ -1,21 +1,52 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { groupToolCalls, type ToolCallIdentity } from "../chat/tool-call-grouping.js";
+import {
+  groupToolCalls,
+  type ToolCallGroup,
+  type ToolCallIdentity,
+} from "../chat/tool-call-grouping.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 
-/** Only recorded, unambiguous children replace a successfully completed wrapper. */
+/**
+ * A successfully completed wrapper is replaced only by a recorded call beneath it
+ * that stays visible in progress. A wrapper whose recorded calls are all routine
+ * stays the operation instead of leaving none.
+ */
 export function resolveCompletedActivityWrappers<
-  Call extends ToolCallIdentity & { activity?: { status?: string } },
+  Call extends ToolCallIdentity & {
+    activity?: {
+      status?: string;
+      hideFromChannelProgress?: boolean;
+      suppressChannelProgress?: boolean;
+    };
+  },
 >(calls: readonly Call[]): Set<Call> {
   const wrappers = new Set<Call>();
+  const parentsFirst: ToolCallGroup<Call>[] = [];
   const pending = groupToolCalls(calls);
   while (pending.length > 0) {
     const group = pending.pop()!;
-    if (group.children.length > 0 && group.card.activity?.status === "completed") {
-      wrappers.add(group.card);
-    }
+    parentsFirst.push(group);
     for (const child of group.children) {
       pending.push(child);
+    }
+  }
+  // Children settle before their parent: a nested wrapper kept for its own routine
+  // calls stands for the wrapper above it, and so does a visible call under a hidden one.
+  const shown = new Set<ToolCallGroup<Call>>();
+  for (const group of parentsFirst.toReversed()) {
+    const { activity } = group.card;
+    const childShown = group.children.some((child) => shown.has(child));
+    if (childShown && activity?.status === "completed") {
+      wrappers.add(group.card);
+    }
+    // A call still active at settlement has no recorded outcome, so on its own it does
+    // not stand for its wrapper; a visible call beneath it still does.
+    if (
+      childShown ||
+      (activity && !activity.hideFromChannelProgress && !activity.suppressChannelProgress)
+    ) {
+      shown.add(group);
     }
   }
   return wrappers;
@@ -88,7 +119,7 @@ export function summarizeAgentActivity(
   const outcomes = { failed: 0, blocked: 0, skipped: 0, unknown: 0 };
   let total = 0;
   for (const item of operations.values()) {
-    if (item.hideFromChannelProgress || item.suppressChannelProgress) {
+    if (item.hideFromChannelProgress) {
       continue;
     }
     // Prepared names describe operations, not successful effects or distinct

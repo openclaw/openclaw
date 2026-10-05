@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { PluginConfigUiHint } from "../plugins/manifest-types.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
@@ -58,13 +59,7 @@ export type PluginUiMetadata = {
   description?: string;
   configSecretInputPaths?: readonly string[];
   configGroups?: ConfigUiHint["groups"];
-  configUiHints?: Record<
-    string,
-    Pick<
-      ConfigUiHint,
-      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
-    >
-  >;
+  configUiHints?: Record<string, PluginConfigUiHint>;
   configSchema?: JsonSchemaNode;
 };
 
@@ -162,16 +157,8 @@ function collectExtensionHintKeys(
     if (node.additionalProperties && typeof node.additionalProperties === "object") {
       collectSchemaKeys(node.additionalProperties, `${basePath}.*`);
     }
-    if (Array.isArray(node.items)) {
-      for (const item of node.items) {
-        if (item && typeof item === "object") {
-          collectSchemaKeys(item, `${basePath}[]`);
-        }
-      }
-      return;
-    }
-    if (node.items && typeof node.items === "object") {
-      collectSchemaKeys(node.items, `${basePath}[]`);
+    for (const item of Array.isArray(node.items) ? node.items : [node.items]) {
+      collectSchemaKeys(item, `${basePath}[]`);
     }
   };
 

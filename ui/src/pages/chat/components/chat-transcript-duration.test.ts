@@ -60,13 +60,13 @@ describe("completed-work duration", () => {
         transcript.hostConnected();
         await flushDeferredRowPrune();
         const duration = () => container.querySelector(".chat-activity-group__label");
-        expect(duration()?.textContent).toBe("Worked for 27m 35s");
+        expect(duration()?.textContent).toBe("Worked for 27 minutes, 35 seconds");
         props.selectedSession.runtimeMs = 1_660_000;
         rerender();
-        expect(duration()?.textContent).toBe("Worked for 27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27 minutes, 40 seconds");
         props.messages = messages.slice(1);
         rerender();
-        expect(duration()?.textContent).toBe("Worked for 27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27 minutes, 40 seconds");
         props.messages = messages;
         props.selectedSession.lastRunId = "unrelated-run";
         rerender();
@@ -216,7 +216,11 @@ describe("completed-work duration", () => {
           summaries.map(
             (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
           ),
-        ).toEqual(steer ? ["Worked for 20s", "Worked for 20s"] : ["Worked", "Worked for 20s"]);
+        ).toEqual(
+          steer
+            ? ["Worked for 20 seconds", "Worked for 20 seconds"]
+            : ["Worked", "Worked for 20 seconds"],
+        );
       } finally {
         transcript.hostDisconnected();
         container.remove();

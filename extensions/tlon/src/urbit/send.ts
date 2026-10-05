@@ -121,38 +121,15 @@ export async function sendGroupMessageWithStory({
     }
   }
 
+  const memo = { content: story, author: fromShip, sent: sentAt };
   const action = {
     channel: {
       nest: `chat/${hostShip}/${channelName}`,
-      action: formattedReplyId
-        ? {
-            // Thread reply - needs post wrapper around reply action
-            // ReplyActionAdd takes Memo: {content, author, sent} - no kind/blob/meta
-            post: {
-              reply: {
-                id: formattedReplyId,
-                action: {
-                  add: {
-                    content: story,
-                    author: fromShip,
-                    sent: sentAt,
-                  },
-                },
-              },
-            },
-          }
-        : {
-            post: {
-              add: {
-                content: story,
-                author: fromShip,
-                sent: sentAt,
-                kind: "/chat",
-                blob: null,
-                meta: null,
-              },
-            },
-          },
+      action: {
+        post: formattedReplyId
+          ? { reply: { id: formattedReplyId, action: { add: memo } } }
+          : { add: { ...memo, kind: "/chat", blob: null, meta: null } },
+      },
     },
   };
 

@@ -52,7 +52,6 @@ export async function queryBuzzDirectoryProfiles(params: {
   relay: Relay;
   state: BuzzDirectoryState;
   publicKeys: string[];
-  onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<void> {
   for (const authors of chunkItems(params.publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE)) {
@@ -66,7 +65,6 @@ export async function queryBuzzDirectoryProfiles(params: {
       onEvent: (event) => {
         params.state.applyProfileEvent(event);
       },
-      onTimeout: params.onTimeout,
       signal: params.signal,
     });
   }

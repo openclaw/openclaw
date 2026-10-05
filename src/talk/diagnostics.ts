@@ -5,19 +5,14 @@
  * but must not export raw provider payloads, transcripts, or audio content.
  */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  emitTrustedDiagnosticEvent,
-  type DiagnosticEventInput,
-} from "../infra/diagnostic-events.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { firstFiniteTalkEventNumber } from "./event-metrics.js";
 import type { TalkEvent } from "./talk-events.js";
 
-type TalkDiagnosticEventInput = Extract<DiagnosticEventInput, { type: "talk.event" }>;
-
-/** Convert a Talk event into the bounded diagnostic payload shape. */
-export function createTalkDiagnosticEvent(event: TalkEvent): TalkDiagnosticEventInput {
+/** Emit a trusted internal diagnostic event for one Talk event. */
+export function recordTalkDiagnosticEvent(event: TalkEvent): void {
   const payload = asOptionalRecord(event.payload);
-  return {
+  emitTrustedDiagnosticEvent({
     type: "talk.event",
     sessionId: event.sessionId,
     turnId: event.turnId,
@@ -32,10 +27,5 @@ export function createTalkDiagnosticEvent(event: TalkEvent): TalkDiagnosticEvent
     // and audio bytes stay out of diagnostics.
     durationMs: firstFiniteTalkEventNumber(payload, ["durationMs", "latencyMs", "elapsedMs"]),
     byteLength: firstFiniteTalkEventNumber(payload, ["byteLength", "audioBytes"]),
-  };
-}
-
-/** Emit a trusted internal diagnostic event for one Talk event. */
-export function recordTalkDiagnosticEvent(event: TalkEvent): void {
-  emitTrustedDiagnosticEvent(createTalkDiagnosticEvent(event));
+  });
 }

@@ -96,3 +96,20 @@ test.each([
     `→ res ✓ health detail=${expected} id=frame`,
   ]);
 });
+
+test("redacts and bounds WS frame values when JSON serialization fails", () => {
+  const detail = {
+    toJSON() {
+      throw new Error("diagnostic serialization failed");
+    },
+    toString() {
+      return `token=synthetic-value ${"x".repeat(300)}`;
+    },
+  };
+
+  logFrame(detail);
+
+  expect(output.mock.calls.map(([line]) => stripVTControlCharacters(line))).toEqual([
+    `→ res ✓ health detail=token=*** ${"x".repeat(230)}... id=frame`,
+  ]);
+});

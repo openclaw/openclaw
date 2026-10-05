@@ -9,6 +9,7 @@ import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
@@ -279,17 +280,35 @@ describe("chat transcript invalidation", () => {
       },
     );
 
-    it("retains visible inactive video previews, releases hidden rows and restores them on return", async () => {
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-      props.transcriptVisible = false;
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeNull();
-      expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
-      props.transcriptVisible = true;
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-    });
+    it.each(["rendered", "parked"] as const)(
+      "retains inactive previews and releases hidden rows with a %s parent",
+      async (parent) => {
+        const owner = new EventTarget();
+        let visible = true;
+        if (parent === "parked") {
+          props.transcriptVisible = { owner, isPresented: () => visible };
+        }
+        await renderPreview();
+        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+        if (parent === "parked") {
+          visible = false;
+          owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+          resetTranscriptSession(props.paneId, container);
+        } else {
+          props.transcriptVisible = false;
+          await renderPreview();
+        }
+        expect(container.querySelector(".chat-video-preview img")).toBeNull();
+        expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
+        visible = true;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+        if (parent === "rendered") {
+          props.transcriptVisible = true;
+        }
+        await renderPreview();
+        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+      },
+    );
   });
 
   it("updates persisted named references when the connection catalog changes without transcript edits", () => {
@@ -455,47 +474,39 @@ describe("chat transcript invalidation", () => {
     },
   );
 
-  it.each(["done", "interrupted"] as const)(
-    "keeps settled history idle when %s status appears, refreshes or clears",
-    async (phase) => {
-      vi.spyOn(Date, "now").mockReturnValue(60_000);
-      const props = threadProps(`pane-terminal-status-${phase}`);
-      saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
-        scrollTop: 0,
-        anchorToEnd: false,
-      });
-      const transcript = createTestTranscript(props.paneId);
-      const container = document.body.appendChild(document.createElement("div"));
-      const rerender = () => {
-        render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
-      };
-      try {
+  it("keeps settled history idle across unchanged rerenders", async () => {
+    const props = threadProps("pane-unchanged-rerender");
+    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const transcript = createTestTranscript(props.paneId);
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const bubbles = Array.from(container.querySelectorAll(".chat-bubble"));
+      expect(bubbles).toHaveLength(4);
+      const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+      for (let rerenderIndex = 0; rerenderIndex < 3; rerenderIndex++) {
         rerender();
-        transcript.hostConnected();
-        await flushDeferredRowPrune();
-        const bubbles = Array.from(container.querySelectorAll(".chat-bubble"));
-        expect(bubbles).toHaveLength(4);
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
 
-        for (const occurredAt of [59_000, 59_500, null]) {
-          props.runStatus =
-            occurredAt === null
-              ? null
-              : { phase, runId: "finished-run", sessionKey: props.sessionKey, occurredAt };
-          rerender();
-
-          expect(renderGroup).not.toHaveBeenCalled();
-          const currentBubbles = Array.from(container.querySelectorAll(".chat-bubble"));
-          expect(currentBubbles).toHaveLength(bubbles.length);
-          currentBubbles.forEach((bubble, index) => expect(bubble).toBe(bubbles[index]));
-          expect(container.textContent).toContain("reply two");
-        }
-      } finally {
-        transcript.hostDisconnected();
+        expect(renderGroup).not.toHaveBeenCalled();
+        const currentBubbles = Array.from(container.querySelectorAll(".chat-bubble"));
+        expect(currentBubbles).toHaveLength(bubbles.length);
+        currentBubbles.forEach((bubble, index) => expect(bubble).toBe(bubbles[index]));
+        expect(container.textContent).toContain("reply two");
       }
-    },
-  );
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";

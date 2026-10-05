@@ -85,8 +85,7 @@ func runDiscover(_ args: [String]) async {
         model.start()
     }
 
-    let nanos = UInt64(max(100, opts.timeoutMs)) * 1_000_000
-    try? await Task.sleep(nanoseconds: nanos)
+    try? await Task.sleep(for: .milliseconds(max(100, opts.timeoutMs)))
 
     let gateways = await MainActor.run { model.gateways }
     let status = await MainActor.run { model.statusText }
@@ -122,8 +121,6 @@ func runDiscover(_ args: [String]) async {
     print("Gateway Discovery (macOS NWBrowser)")
     print("Status: \(status)")
     print("Found \(gateways.count) gateway(s)\(opts.includeLocal ? "" : " (local filtered)")")
-    if gateways.isEmpty { return }
-
     for gateway in gateways {
         let hosts = [gateway.tailnetDns, gateway.lanHost]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }

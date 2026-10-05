@@ -6,11 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  listAgentEntries,
-  readAgentRosterProperty,
-  toAgentEntriesRecord,
-} from "../agents/agent-scope-config.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   normalizeAgentModelMapForConfig,
@@ -47,11 +43,10 @@ export function pickAuthMethod(
   provider: ProviderPlugin,
   rawMethod?: string,
 ): ProviderAuthMethod | null {
-  const raw = normalizeOptionalString(rawMethod);
-  if (!raw) {
+  const normalized = normalizeOptionalLowercaseString(rawMethod);
+  if (!normalized) {
     return null;
   }
-  const normalized = normalizeOptionalLowercaseString(raw);
   return (
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.id) === normalized) ??
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.label) === normalized) ??
@@ -78,34 +73,22 @@ function sanitizeConfigPatchValue(value: unknown): unknown {
 }
 
 function mergeConfigPatch<T>(base: T, patch: unknown): T {
-  if (!isPlainRecord(base) || !isPlainRecord(patch)) {
+  if (!isPlainRecord(patch)) {
     return sanitizeConfigPatchValue(patch) as T;
   }
 
-  const next: Record<string, unknown> = { ...base };
+  const next: Record<string, unknown> = isPlainRecord(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch)) {
     if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    if (value === undefined) {
+      delete next[key];
       continue;
     }
     next[key] = mergeConfigPatch(next[key], value);
   }
   return next as T;
-}
-
-function deleteUndefinedPatchLeaves<T>(target: T, patch: unknown): T {
-  if (!isPlainRecord(target) || !isPlainRecord(patch)) {
-    return target;
-  }
-
-  const targetRecord = target as Record<string, unknown>;
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) {
-      delete targetRecord[key];
-      continue;
-    }
-    deleteUndefinedPatchLeaves(targetRecord[key], value);
-  }
-  return target;
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
@@ -254,7 +237,6 @@ function normalizeConfigModelRefsForWrite(
   const providerNormalized = normalizeModelProviderConfigsForWrite(cfg, providerConfigNormalizer);
   const defaults = providerNormalized.agents?.defaults;
   const agentsList = listAgentEntries(providerNormalized);
-  const roster = readAgentRosterProperty(providerNormalized);
 
   let nextDefaults = defaults;
   if (defaults) {
@@ -286,11 +268,9 @@ function normalizeConfigModelRefsForWrite(
     agents: {
       ...providerNormalized.agents,
       ...(nextDefaults ? { defaults: nextDefaults } : {}),
-      ...(nextAgentsList !== agentsList && roster?.kind === "entries"
+      ...(nextAgentsList !== agentsList
         ? { entries: toAgentEntriesRecord(nextAgentsList as typeof agentsList) }
-        : nextAgentsList !== agentsList && roster?.kind === "list"
-          ? { list: nextAgentsList as typeof agentsList }
-          : {}),
+        : {}),
     },
   };
 }
@@ -306,7 +286,7 @@ export function applyProviderAuthConfigPatch(
   const providerConfigNormalizer =
     options?.providerConfigNormalizer ?? normalizeProviderConfigForConfigDefaults;
   const merged = normalizeConfigModelRefsForWrite(
-    deleteUndefinedPatchLeaves(mergeConfigPatch(cfg, patch), patch),
+    mergeConfigPatch(cfg, patch),
     providerConfigNormalizer,
   );
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {

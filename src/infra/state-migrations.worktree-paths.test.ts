@@ -98,9 +98,9 @@ describe("managed worktree path state migrations", () => {
         path: movedPath,
         branch: "openclaw/moved",
       };
-      insertRegistryWorktree(env, removed, { provisionedPaths: [] });
-      insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
-      insertRegistryWorktree(env, moved, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, removed, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, moved, { provisionedPaths: [] });
 
       await closeOpenClawStateDatabaseAsync();
       const { DatabaseSync } = requireNodeSqlite();

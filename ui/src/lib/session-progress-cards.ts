@@ -160,7 +160,13 @@ function progressCardRequestTarget(target: ProgressCardGetParams): ProgressCardG
   return parseAgentSessionKey(target.sessionKey) ? { sessionKey: target.sessionKey } : target;
 }
 
-function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
+export function sessionProgressCardsForGateway(
+  gateway: ApplicationGateway,
+): SessionProgressCardStore {
+  const existing = stores.get(gateway);
+  if (existing) {
+    return existing;
+  }
   const watchedByOwner = new Map<
     object,
     ProgressCardWatchOptions & { targets: readonly ProgressCardGetParams[] }
@@ -527,7 +533,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       }
     }
   };
-  return {
+  const store: SessionProgressCardStore = {
     watch,
     unwatch: (owner) => watch(owner, []),
     load,
@@ -686,16 +692,6 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       };
     },
   };
-}
-
-export function sessionProgressCardsForGateway(
-  gateway: ApplicationGateway,
-): SessionProgressCardStore {
-  const existing = stores.get(gateway);
-  if (existing) {
-    return existing;
-  }
-  const store = createStore(gateway);
   stores.set(gateway, store);
   return store;
 }

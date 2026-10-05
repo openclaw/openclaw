@@ -494,13 +494,6 @@ export async function switchChatModel(
   }
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
-  const clearPendingSwitch = () => {
-    if (host.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
-      const nextSwitches = { ...host.chatModelSwitchPromises };
-      delete nextSwitches[targetSessionKey];
-      host.chatModelSwitchPromises = nextSwitches;
-    }
-  };
   const switchPromise: Promise<boolean> = (async () => {
     try {
       const patched = await patchChatSessionSettings(host, targetSessionKey, patch, {
@@ -532,7 +525,11 @@ export async function switchChatModel(
         () => !runtimeSelection || runtimeSelection === restriction.runtimeId,
       );
     } finally {
-      clearPendingSwitch();
+      if (host.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
+        const nextSwitches = { ...host.chatModelSwitchPromises };
+        delete nextSwitches[targetSessionKey];
+        host.chatModelSwitchPromises = nextSwitches;
+      }
       host.requestUpdate?.();
     }
   })();

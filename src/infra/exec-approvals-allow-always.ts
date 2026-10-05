@@ -1,5 +1,4 @@
 import { sha256HexPrefixCore } from "./crypto-digest.js";
-// Owns durable approval matching and allow-always persistence.
 import {
   buildExecApprovalPolicyRuleKey,
   canonicalizeExecApprovalPolicyRules,
@@ -13,7 +12,6 @@ import type {
 } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
-import { replaceExecApprovalsSnapshot, updateExecApprovalsSync } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import { isCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
@@ -38,10 +36,9 @@ export function hasDurableExecApproval(params: {
       allowlist: params.allowlist,
       commandText: params.commandText,
     }) ||
-    hasSegmentDurableExecApproval({
-      analysisOk: params.analysisOk,
-      segmentAllowlistEntries: params.segmentAllowlistEntries,
-    })
+    (params.analysisOk &&
+      params.segmentAllowlistEntries.length > 0 &&
+      params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always"))
   );
 }
 
@@ -106,30 +103,10 @@ export function resolveDurableExecApprovalRequirement(params: {
     : "segment-allowlist";
 }
 
-function hasSegmentDurableExecApproval(params: {
-  analysisOk: boolean;
-  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
-}): boolean {
-  return (
-    params.analysisOk &&
-    params.segmentAllowlistEntries.length > 0 &&
-    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always")
-  );
-}
-
 export function buildAllowlistEntryMatchKey(
   entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
 ): string {
   return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
-}
-
-function buildAllowAlwaysUpgradeRuleKey(
-  rule: Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">,
-): string | null {
-  if (rule.source !== undefined) {
-    return null;
-  }
-  return buildExecApprovalPolicyRuleKey({ ...rule, source: "allow-always" });
 }
 
 /** Captures effective file policy while excluding ids and mutable usage metadata. */
@@ -143,22 +120,25 @@ export function createExecApprovalPolicySnapshot(params: {
     file: params.file,
     agentId: params.agentId,
   });
-  const allowlistRulesByKey = new Map(
-    resolved.allowlist.map((entry) => {
-      const rule = {
-        pattern: entry.pattern,
-        ...(entry.argPattern !== undefined ? { argPattern: entry.argPattern } : {}),
-        ...(entry.source === "allow-always" ? { source: entry.source } : {}),
-      };
-      return [buildExecApprovalPolicyRuleKey(rule), rule] as const;
-    }),
-  );
   return {
     security: resolved.agent.security,
     ask: resolved.agent.ask,
     askFallback: resolved.agent.askFallback,
     autoAllowSkills: resolved.agent.autoAllowSkills,
-    allowlistRules: canonicalizeExecApprovalPolicyRules([...allowlistRulesByKey.values()]),
+    allowlistRules: canonicalizeExecApprovalPolicyRules(
+      resolved.allowlist.map((entry) => {
+        const rule: ExecApprovalPolicySnapshot["allowlistRules"][number] = {
+          pattern: entry.pattern,
+        };
+        if (entry.argPattern !== undefined) {
+          rule.argPattern = entry.argPattern;
+        }
+        if (entry.source === "allow-always") {
+          rule.source = entry.source;
+        }
+        return rule;
+      }),
+    ),
   };
 }
 
@@ -180,105 +160,12 @@ export function isExecApprovalPolicySnapshotCurrent(
       if (currentRuleKeys.has(key)) {
         return true;
       }
-      const upgradedKey = buildAllowAlwaysUpgradeRuleKey(rule);
-      return upgradedKey !== null && currentRuleKeys.has(upgradedKey);
+      return (
+        rule.source === undefined &&
+        currentRuleKeys.has(buildExecApprovalPolicyRuleKey({ ...rule, source: "allow-always" }))
+      );
     })
   );
-}
-
-function applyAllowlistEntryUpdate(params: {
-  file: ExecApprovalsFile;
-  agentId: string | undefined;
-  pattern: string;
-  options?: {
-    argPattern?: string;
-    source?: ExecAllowlistEntry["source"];
-  };
-}): ExecApprovalsFile | null {
-  if (!params.agentId) {
-    throw new Error("Exec allowlist update requires an explicit agent id.");
-  }
-  const target = params.agentId;
-  const agents = params.file.agents ?? {};
-  const existing = agents[target] ?? {};
-  const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
-  const trimmed = params.pattern.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const argPattern = params.options?.argPattern === "" ? undefined : params.options?.argPattern;
-  const existingEntry = allowlist.find(
-    (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === argPattern,
-  );
-  if (
-    existingEntry &&
-    (!params.options?.source || existingEntry.source === params.options.source)
-  ) {
-    return null;
-  }
-  const now = Date.now();
-  const nextAllowlist = existingEntry
-    ? allowlist.map((entry) =>
-        entry.pattern === trimmed && (entry.argPattern ?? undefined) === argPattern
-          ? {
-              ...entry,
-              argPattern,
-              source: params.options?.source ?? entry.source,
-              lastUsedAt: now,
-            }
-          : entry,
-      )
-    : [
-        ...allowlist,
-        {
-          id: crypto.randomUUID(),
-          pattern: trimmed,
-          argPattern,
-          source: params.options?.source,
-          lastUsedAt: now,
-        },
-      ];
-  return {
-    ...params.file,
-    agents: { ...agents, [target]: { ...existing, allowlist: nextAllowlist } },
-  };
-}
-
-export function addAllowlistEntry(
-  approvals: ExecApprovalsFile,
-  agentId: string | undefined,
-  pattern: string,
-  options?: {
-    argPattern?: string;
-    source?: ExecAllowlistEntry["source"];
-  },
-): void {
-  const snapshot = updateExecApprovalsSync({
-    update: (file) =>
-      applyAllowlistEntryUpdate({
-        file,
-        agentId,
-        pattern,
-        options,
-      }),
-  });
-  if (snapshot) {
-    replaceExecApprovalsSnapshot(approvals, snapshot.file);
-  }
-}
-
-export function addDurableCommandApproval(
-  approvals: ExecApprovalsFile,
-  agentId: string | undefined,
-  commandText: string,
-): void {
-  const normalized = commandText.trim();
-  if (!normalized) {
-    return;
-  }
-  addAllowlistEntry(approvals, agentId, buildDurableCommandApprovalPattern(normalized), {
-    source: "allow-always",
-  });
 }
 
 export function resolveAllowAlwaysPatternCoverage(params: {
@@ -316,30 +203,6 @@ export function resolveAllowAlwaysPatternCoverage(params: {
     complete: params.segments.length > 0 && representedSegmentCount === params.segments.length,
     patterns: [...byKey.values()],
   };
-}
-
-export function persistAllowAlwaysPatterns(params: {
-  approvals: ExecApprovalsFile;
-  agentId: string | undefined;
-  segments: ExecCommandSegment[];
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: string | null;
-  commandText?: string;
-  strictInlineEval?: boolean;
-}): ReturnType<typeof resolveAllowAlwaysPatternEntries> {
-  const coverage = resolveAllowAlwaysPatternCoverage(params);
-  const commandText = params.commandText?.trim();
-  persistAllowAlwaysDecision({
-    approvals: params.approvals,
-    agentId: params.agentId,
-    decision: {
-      kind: "patterns",
-      patterns: coverage.patterns,
-      ...(commandText && coverage.complete && coverage.patterns.length > 0 ? { commandText } : {}),
-    },
-  });
-  return coverage.patterns;
 }
 
 function hasRuntimeShellPayload(argv: readonly string[]): boolean {
@@ -445,62 +308,22 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
   return { kind: "one-shot", reasons: [...reasons] };
 }
 
-export function persistAllowAlwaysDecision(params: {
-  approvals: ExecApprovalsFile;
-  agentId: string | undefined;
-  decision: AllowAlwaysPersistenceDecision;
-}): void {
-  const decision = params.decision;
-  if (decision.kind === "one-shot") {
-    return;
-  }
-  const snapshot = updateExecApprovalsSync({
-    update: (file) =>
-      applyAllowAlwaysDecision({
-        file,
-        agentId: params.agentId,
-        decision,
-      }),
-  });
-  if (snapshot) {
-    replaceExecApprovalsSnapshot(params.approvals, snapshot.file);
-  }
-}
-
 export function applyAllowAlwaysDecision(params: {
   file: ExecApprovalsFile;
   agentId: string | undefined;
   decision: Exclude<AllowAlwaysPersistenceDecision, { kind: "one-shot" }>;
 }): ExecApprovalsFile | null {
-  const entries: Array<{
-    pattern: string;
-    argPattern?: string;
-    source: "allow-always";
-  }> =
-    params.decision.kind === "exact-command"
-      ? params.decision.commandText.trim()
-        ? [
-            {
-              pattern: buildDurableCommandApprovalPattern(params.decision.commandText.trim()),
-              source: "allow-always" as const,
-            },
-          ]
-        : []
-      : [
-          ...params.decision.patterns.map((pattern) => ({
-            pattern: pattern.pattern,
-            argPattern: pattern.argPattern,
-            source: "allow-always" as const,
-          })),
-          ...(params.decision.commandText?.trim()
-            ? [
-                {
-                  pattern: buildNodeCommandApprovalPattern(params.decision.commandText.trim()),
-                  source: "allow-always" as const,
-                },
-              ]
-            : []),
-        ];
+  const entries: Array<Pick<ExecAllowlistEntry, "pattern" | "argPattern">> =
+    params.decision.kind === "patterns" ? [...params.decision.patterns] : [];
+  const commandText = params.decision.commandText?.trim();
+  if (commandText) {
+    entries.push({
+      pattern:
+        params.decision.kind === "exact-command"
+          ? buildDurableCommandApprovalPattern(commandText)
+          : buildNodeCommandApprovalPattern(commandText),
+    });
+  }
   if (!params.agentId) {
     throw new Error("Exec allowlist update requires an explicit agent id.");
   }
@@ -511,7 +334,7 @@ export function applyAllowAlwaysDecision(params: {
   );
   const existingAgent = params.file.agents?.[params.agentId];
   const existingAllowlist = existingAgent?.allowlist ?? [];
-  const retainedAllowlist = existingAllowlist.filter(
+  let allowlist = existingAllowlist.filter(
     (entry) =>
       !(
         generatedPatterns.has(entry.pattern) &&
@@ -519,28 +342,41 @@ export function applyAllowAlwaysDecision(params: {
         !isCwdBoundHashedArgPattern(entry.argPattern)
       ),
   );
-  let next =
-    retainedAllowlist.length === existingAllowlist.length
-      ? params.file
-      : {
-          ...params.file,
-          agents: {
-            ...params.file.agents,
-            [params.agentId]: { ...existingAgent, allowlist: retainedAllowlist },
-          },
-        };
-  let changed = next !== params.file;
+  let changed = allowlist.length !== existingAllowlist.length;
   for (const entry of entries) {
-    const updated = applyAllowlistEntryUpdate({
-      file: next,
-      agentId: params.agentId,
-      pattern: entry.pattern,
-      options: { argPattern: entry.argPattern, source: entry.source },
-    });
-    if (updated) {
-      next = updated;
-      changed = true;
+    const pattern = entry.pattern.trim();
+    if (!pattern) {
+      continue;
     }
+    const argPattern = entry.argPattern === "" ? undefined : entry.argPattern;
+    const matches = (candidate: ExecAllowlistEntry) =>
+      candidate.pattern === pattern && (candidate.argPattern ?? undefined) === argPattern;
+    const existingEntry = allowlist.find(matches);
+    if (existingEntry?.source === "allow-always") {
+      continue;
+    }
+    const lastUsedAt = Date.now();
+    if (existingEntry) {
+      allowlist = allowlist.map((candidate) =>
+        matches(candidate)
+          ? { ...candidate, argPattern, source: "allow-always", lastUsedAt }
+          : candidate,
+      );
+    } else {
+      allowlist.push({
+        id: crypto.randomUUID(),
+        pattern,
+        argPattern,
+        source: "allow-always",
+        lastUsedAt,
+      });
+    }
+    changed = true;
   }
-  return changed ? next : null;
+  return changed
+    ? {
+        ...params.file,
+        agents: { ...params.file.agents, [params.agentId]: { ...existingAgent, allowlist } },
+      }
+    : null;
 }

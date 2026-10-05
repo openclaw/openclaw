@@ -68,8 +68,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const reasoningValueLabel = hasThinkingOverride
     ? reasoningValueText
     : t("chat.modelControls.defaultWithLevel", { level: defaultLevelLabel });
-  const ultrafast =
-    params.fastMode.currentOverride === "ultrafast" && params.fastMode.ultrafastSupported === true;
+  const ultrafast = params.fastMode.currentOverride === "ultrafast";
   const speedLabel = ultrafast
     ? t("chat.modelControls.ultrafast")
     : params.fastMode.currentOverride === "auto"
@@ -93,7 +92,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
-  const speedOptions: { value: ChatFastModeSelectValue; label: string }[] = [
+  const speedOptions: { value: ChatFastModeSelectValue; label: string; disabled?: boolean }[] = [
     {
       value: params.fastMode.nextValue === "" ? "" : "off",
       label: t("chat.modelControls.standard"),
@@ -101,8 +100,14 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     ...(params.fastMode.nextValue === ""
       ? []
       : [{ value: "on" as const, label: t("chat.modelControls.fast") }]),
-    ...(params.fastMode.ultrafastSupported
-      ? [{ value: "ultrafast" as const, label: t("chat.modelControls.ultrafast") }]
+    ...(params.fastMode.ultrafastSupported !== undefined || ultrafast
+      ? [
+          {
+            value: "ultrafast" as const,
+            label: t("chat.modelControls.ultrafast"),
+            disabled: !params.fastMode.ultrafastSupported,
+          },
+        ]
       : []),
   ];
   const selectedSpeed =
@@ -113,6 +118,13 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
         : params.fastMode.active
           ? "on"
           : "off";
+  const selectedSpeedIndex = speedOptions.findIndex(
+    (option) => option.value === selectedSpeed && !option.disabled,
+  );
+  const tabbableSpeedIndex =
+    selectedSpeedIndex >= 0
+      ? selectedSpeedIndex
+      : speedOptions.findIndex((option) => !option.disabled);
   const onSpeedKeyDown = (event: KeyboardEvent) => {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
       return;
@@ -207,7 +219,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     >
       <summary
         class="chat-controls__inline-select-trigger chat-controls__effort-trigger ${
-          params.fastMode.active ? "chat-controls__effort-trigger--fast" : ""
+          ultrafast ? "chat-controls__effort-trigger--ultrafast" : ""
         } ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-thinking-select="true"
         data-chat-thinking-value=${selectedThinkingValue}
@@ -251,15 +263,19 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
               `
             : html`<span class="chat-controls__effort-speed" aria-hidden="true">${icons.zap}</span>`
         }
-        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         ${
           params.fastMode.active
-            ? html`<span class="chat-controls__effort-tier">
-                <span class="chat-controls__effort-zap" aria-hidden="true">${icons.zap}</span>
-                ${speedLabel}
+            ? html`<span
+                class="chat-controls__effort-zap ${
+                  ultrafast ? "chat-controls__effort-zap--ultrafast" : ""
+                }"
+                aria-hidden="true"
+              >
+                ${ultrafast ? icons.zap : nothing}${icons.zap}
               </span>`
             : nothing
         }
+        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"
           >${icons.chevronUp}</span
         >
@@ -397,12 +413,13 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                           class="chat-controls__speed-option"
                           data-chat-speed-option=${option.value}
                           aria-checked=${String(selected)}
-                          tabindex=${selected || (!speedOptions.some((entry) => entry.value === selectedSpeed) && index === 0) ? "0" : "-1"}
-                          ?disabled=${params.fastMode.disabled}
+                          tabindex=${index === tabbableSpeedIndex ? "0" : "-1"}
+                          ?disabled=${params.fastMode.disabled || option.disabled}
                           @click=${(event: MouseEvent) => {
                             event.stopPropagation();
                             if (
                               !params.fastMode.disabled &&
+                              !option.disabled &&
                               option.value !== params.fastMode.currentOverride
                             ) {
                               commitFastMode(option.value);

@@ -1,9 +1,5 @@
 import { aroundEach, describe, expect, it } from "vitest";
-import {
-  classifyFailoverReason,
-  isFailoverErrorMessage,
-  isTimeoutErrorMessage,
-} from "../failover/classify.js";
+import { classifyFailoverReason, isTimeoutErrorMessage } from "../failover/classify.js";
 import { withPreparedFailoverProviders } from "../test-helpers/provider-failover-generation.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 
@@ -226,6 +222,5 @@ describe("classifyProviderRuntimeFailureKind", () => {
       'got status: INTERNAL. {"error":{"code":400,"message":"Request malformed","status":"INTERNAL"}}';
     expect(isTimeoutErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
-    expect(isFailoverErrorMessage(sample)).toBe(false);
   });
 });

@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequireRecord } from "../../test/helpers/record.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import {
   loadExecApprovals,
-  saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsAgent,
 } from "../infra/exec-approvals.js";

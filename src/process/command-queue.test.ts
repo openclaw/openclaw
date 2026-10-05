@@ -171,9 +171,10 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
-  it("runs queued tasks in their enqueue-time async context", async () => {
+  it("runs queued tasks and their lifecycle callbacks in their enqueue-time async context", async () => {
     const context = new AsyncLocalStorage<string>();
     const blocker = createDeferred();
+    const callbacks: Array<[string, string | undefined]> = [];
     const first = context.run("first", () =>
       enqueueCommandInLane(CommandLane.Main, async () => {
         await blocker.promise;
@@ -181,13 +182,31 @@ describe("command queue", () => {
       }),
     );
     const second = context.run("second", () =>
-      enqueueCommandInLane(CommandLane.Main, async () => context.getStore()),
+      enqueueCommandInLane(CommandLane.Main, async () => context.getStore(), {
+        warnAfterMs: 0,
+        onWait: () => callbacks.push(["wait", context.getStore()]),
+        taskTimeoutMs: 60_000,
+        taskTimeoutProgressAtMs: () => {
+          callbacks.push(["progress", context.getStore()]);
+          return Date.now();
+        },
+        taskTimeoutSubscribe: () => {
+          callbacks.push(["subscribe", context.getStore()]);
+          return () => callbacks.push(["unsubscribe", context.getStore()]);
+        },
+      }),
     );
 
     blocker.resolve();
 
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
+    expect(callbacks).toEqual([
+      ["wait", "second"],
+      ["progress", "second"],
+      ["subscribe", "second"],
+      ["unsubscribe", "second"],
+    ]);
   });
 
   it("runs foreground work before already queued background work", async () => {

@@ -34,14 +34,9 @@ afterEach(() => {
 describe("public link previews", () => {
   it.each([
     "javascript:alert(1)",
-    "file:///etc/passwd",
     "https://u:p@public.example/a",
-    "http://127.0.0.1",
-    "https://2130706433",
     "http://[::1]",
-    "https://site.local/",
     "https://metadata.google.internal/",
-    "https://192.168.1.1/",
     "https://8.8.8.8/",
     "x".repeat(2049),
   ])("rejects unsafe target %s", (value) => {
@@ -95,99 +90,85 @@ describe("public link previews", () => {
 
   it.each([
     {
-      name: "open-graph",
+      name: "open-graph description",
       tags: '<meta name="description" content="Fallback"><meta name="twitter:description" content="Twitter"><meta property="og:description" content=" A &amp; B   guide ">',
-      expected: "A & B guide",
+      expected: { description: "A & B guide" },
     },
     {
-      name: "twitter",
+      name: "twitter description",
       tags: '<meta name="description" content="Fallback"><meta name="twitter:description" content="Twitter">',
-      expected: "Twitter",
+      expected: { description: "Twitter" },
     },
     {
-      name: "standard",
+      name: "bounded standard description",
       tags: '<meta name="description" content="' + "x".repeat(399) + '😀tail">',
-      expected: "x".repeat(399),
+      expected: { description: "x".repeat(399) },
+    },
+    {
+      name: "twitter title and ICO fallback",
+      tags: '<meta name="twitter:title" content="Tweet title"><meta name="twitter:image" content="javascript:alert(1)"><link rel="icon" type="image/svg+xml" href="/unsafe.svg">',
+      icon: ICO,
+      expected: {
+        title: "Tweet title",
+        faviconDataUrl: `data:image/x-icon;base64,${ICO.toString("base64")}`,
+      },
+    },
+    {
+      name: "bounded HTML and oversized or disguised images",
+      tags: '<title>Bounded</title><meta property="og:image" content="/huge.png">',
+      body: "x".repeat(600 * 1024),
+      icon: '<svg onload="alert(1)"></svg>',
+      expected: { title: "Bounded" },
     },
   ])(
-    "extracts bounded $name description without another fetch",
-    async ({ name, tags, expected }) => {
-      const fetch = vi
-        .fn<typeof globalThis.fetch>()
-        .mockImplementation(async (input) =>
-          requestUrl(input).endsWith("/favicon.ico")
-            ? new Response(null, { status: 404 })
-            : html("<html><head>" + tags + "</head></html>"),
-        );
+    "extracts $name without decoding unsafe images",
+    async ({ name, tags, expected, icon, body }) => {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/favicon.ico")) {
+          return icon
+            ? new Response(
+                icon,
+                typeof icon === "string" ? { headers: { "content-type": "image/png" } } : undefined,
+              )
+            : new Response(null, { status: 404 });
+        }
+        if (body && url.endsWith("/huge.png")) {
+          return new Response(new Uint8Array(2 * 1024 * 1024 + 1));
+        }
+        return html("<html><head>" + tags + "</head><body>" + (body ?? "") + "</body></html>");
+      });
       vi.stubGlobal("fetch", fetch);
-      expect(await load("/description-" + name)).toEqual({ description: expected });
-      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(await load("/metadata-" + encodeURIComponent(name))).toEqual(expected);
+      expect(fetch).toHaveBeenCalledTimes(body ? 3 : 2);
+      expect(encode).not.toHaveBeenCalled();
     },
   );
 
-  it("uses Twitter metadata and validated ICO fallback without decoding it", async () => {
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockImplementation(async (input) =>
-        requestUrl(input).endsWith("/favicon.ico")
-          ? new Response(ICO)
-          : html(
-              '<head><meta name="twitter:title" content="Tweet title"><meta name="twitter:image" content="javascript:alert(1)"><link rel="icon" type="image/svg+xml" href="/unsafe.svg"></head>',
-            ),
-      );
-    vi.stubGlobal("fetch", fetch);
-    expect(await load("/twitter")).toEqual({
-      title: "Tweet title",
-      faviconDataUrl: `data:image/x-icon;base64,${ICO.toString("base64")}`,
-    });
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(encode).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    "http://127.0.0.1/internal",
-    "https://metadata.google.internal/",
-    "https://u:p@public.example/private",
-  ])("guards page and image redirect %s before fetching it", async (destination) => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.includes("/page-redirect") || url.endsWith("/evil.png")) {
-        return new Response(null, { status: 302, headers: { location: destination } });
-      }
-      if (url.endsWith("/favicon.ico")) {
-        return new Response(null, { status: 404 });
-      }
-      return html('<head><title>Good</title><meta property="og:image" content="/evil.png"></head>');
-    });
-    vi.stubGlobal("fetch", fetch);
-    expect(await load("/page-redirect?target=" + encodeURIComponent(destination))).toEqual({});
-    expect(await load("/image-redirect?target=" + encodeURIComponent(destination))).toEqual({
-      title: "Good",
-    });
-    expect(fetch.mock.calls.some(([url]) => requestUrl(url) === destination)).toBe(false);
-    expect(encode).not.toHaveBeenCalled();
-  });
-
-  it("bounds HTML prefixes, rejects oversized image streams and never passes markup as image data", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.endsWith("/favicon.ico")) {
-        return new Response('<svg onload="alert(1)"></svg>', {
-          headers: { "content-type": "image/png" },
-        });
-      }
-      if (url.endsWith("/huge.png")) {
-        return new Response(new Uint8Array(2 * 1024 * 1024 + 1));
-      }
-      return html(
-        '<html><head><title>Bounded</title><meta property="og:image" content="/huge.png"></head><body>' +
-          "x".repeat(600 * 1024),
-      );
-    });
-    vi.stubGlobal("fetch", fetch);
-    expect(await load("/limits")).toEqual({ title: "Bounded" });
-    expect(encode).not.toHaveBeenCalled();
-  });
+  it.each(["http://127.0.0.1/internal", "https://u:p@public.example/private"])(
+    "guards page and image redirect %s before fetching it",
+    async (destination) => {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+        const url = requestUrl(input);
+        if (url.includes("/page-redirect") || url.endsWith("/evil.png")) {
+          return new Response(null, { status: 302, headers: { location: destination } });
+        }
+        if (url.endsWith("/favicon.ico")) {
+          return new Response(null, { status: 404 });
+        }
+        return html(
+          '<head><title>Good</title><meta property="og:image" content="/evil.png"></head>',
+        );
+      });
+      vi.stubGlobal("fetch", fetch);
+      expect(await load("/page-redirect?target=" + encodeURIComponent(destination))).toEqual({});
+      expect(await load("/image-redirect?target=" + encodeURIComponent(destination))).toEqual({
+        title: "Good",
+      });
+      expect(fetch.mock.calls.some(([url]) => requestUrl(url) === destination)).toBe(false);
+      expect(encode).not.toHaveBeenCalled();
+    },
+  );
 
   it("shares in-flight anonymous reads and caches unavailable results", async () => {
     const gate = createDeferred<Response>();

@@ -497,8 +497,14 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
           synthesis,
           latencyMs,
           provider,
-          providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
-          providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
+          providerModel: resolveTtsResultDetail(prepared, ["modelId", "model"]),
+          providerVoice: resolveTtsResultDetail(prepared, [
+            "speakerVoiceId",
+            "speakerVoice",
+            "voiceId",
+            "voiceName",
+            "voice",
+          ]),
           persona: persona?.id,
           fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
           attemptedProviders,
@@ -543,34 +549,19 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   };
 }
 
-function resolveTtsResultModel(
-  providerConfig: SpeechProviderConfig,
-  providerOverrides?: SpeechProviderOverrides,
+function resolveTtsResultDetail(
+  prepared: Pick<SpeechSynthesisRequest, "providerConfig" | "providerOverrides">,
+  keys: readonly string[],
 ): string | undefined {
-  return (
-    readTtsResultString(providerOverrides?.modelId) ??
-    readTtsResultString(providerOverrides?.model) ??
-    readTtsResultString(providerConfig.modelId) ??
-    readTtsResultString(providerConfig.model)
-  );
-}
-
-function resolveTtsResultVoice(
-  providerConfig: SpeechProviderConfig,
-  providerOverrides?: SpeechProviderOverrides,
-): string | undefined {
-  return (
-    readTtsResultString(providerOverrides?.speakerVoiceId) ??
-    readTtsResultString(providerOverrides?.speakerVoice) ??
-    readTtsResultString(providerOverrides?.voiceId) ??
-    readTtsResultString(providerOverrides?.voiceName) ??
-    readTtsResultString(providerOverrides?.voice) ??
-    readTtsResultString(providerConfig.speakerVoiceId) ??
-    readTtsResultString(providerConfig.speakerVoice) ??
-    readTtsResultString(providerConfig.voiceId) ??
-    readTtsResultString(providerConfig.voiceName) ??
-    readTtsResultString(providerConfig.voice)
-  );
+  for (const config of [prepared.providerOverrides, prepared.providerConfig]) {
+    for (const key of keys) {
+      const value = readTtsResultString(config?.[key]);
+      if (value !== undefined) {
+        return value;
+      }
+    }
+  }
+  return undefined;
 }
 
 function resolvePersonaBinding(

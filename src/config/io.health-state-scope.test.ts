@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as sharedWorker from "../state/openclaw-state-worker-store.js";
 import {
   captureConfigHealthStateStore,
@@ -39,6 +42,32 @@ function fixture() {
   });
   return { deps, configPath };
 }
+
+it("reads recovery health from the admitted snapshot without overwriting a foreign commit", async () => {
+  const { deps, configPath } = fixture();
+  await closeOpenClawStateDatabaseAsync();
+  using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(deps.env));
+  using observation = captureConfigHealthStateStore(deps, configPath);
+  const before = await withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      writer
+        .prepare(
+          "UPDATE config_health_entries SET last_observed_suspicious_signature = ? WHERE config_path = ?",
+        )
+        .run("foreign commit", configPath);
+      return observation.read();
+    },
+    { env: deps.env },
+  );
+  expect(before?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
+  if (!before) {
+    throw new Error("Expected a current recovery observation");
+  }
+  await observation.update({ lastObservedSuspiciousSignature: "stale recovery" }, before);
+  expect(
+    readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
+  ).toBe("foreign commit");
+});
 
 it.each([false, true])(
   "publishes nested health invalidation only on outer commit (rollback: %s)",

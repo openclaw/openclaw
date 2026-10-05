@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { localWorkspaceStore } from "../../../gateway/worker-environments/local-workspace-store.js";
+import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
@@ -184,7 +184,7 @@ it.each(dispatchCases)(
           createdAt: Date.now(),
           lastActiveAt: Date.now(),
         };
-        insertRegistryWorktree(process.env, realWorktree, { provisionedPaths: [] });
+        await insertRegistryWorktree(process.env, realWorktree, { provisionedPaths: [] });
         await upsertSessionEntryCore(
           { agentId, sessionKey: "global" },
           {
@@ -460,7 +460,9 @@ it.each(dispatchCases)(
           },
           runShellCommand: remoteBridgeCommand,
         };
-        remoteSandbox.fsBridge = createSandboxFsBridge({ sandbox: remoteSandbox });
+        remoteSandbox.fsBridge = createSandboxFsBridge({
+          sandbox: { ...remoteSandbox, backend: remoteSandbox.backend },
+        });
       }
       const remoteImageRead = remoteSandbox?.fsBridge
         ? vi.spyOn(remoteSandbox.fsBridge, "readFile")
@@ -521,7 +523,7 @@ it.each(dispatchCases)(
             (result) => ({ result, error: undefined }),
             (error: unknown) => ({ result: undefined, error }),
           );
-          const projectionRecord = localWorkspaceStore().get(realWorktree.id);
+          const projectionRecord = await readLocalWorkspaceProjection(realWorktree.id);
           if (!remoteSkills) {
             expect(outcome.error).toMatchObject({
               code: "sandbox_provisioning",

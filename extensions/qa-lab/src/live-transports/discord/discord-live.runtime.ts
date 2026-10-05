@@ -110,11 +110,8 @@ type DiscordVoiceState = {
 
 type DiscordStatusReactionTimeline = {
   expectedSequence: string[];
-  htmlPath?: string;
   scenarioId: string;
   scenarioTitle: string;
-  screenshotPath?: string;
-  screenshotWarning?: string;
   seenSequence: string[];
   snapshots: DiscordReactionSnapshot[];
   triggerMessageId: string;
@@ -126,14 +123,11 @@ type DiscordThreadReplyAttachmentEvidence = {
   discordWebUrl?: string;
   expectedAttachmentFilename: string;
   guildId?: string;
-  htmlPath?: string;
   messageContent?: string;
   messageId?: string;
   parentMessageId?: string;
   scenarioId: string;
   scenarioTitle: string;
-  screenshotPath?: string;
-  screenshotWarning?: string;
   status: "pass" | "fail";
   threadId: string;
   threadName: string;
@@ -727,29 +721,10 @@ async function writeDiscordThreadReplyAttachmentEvidence(params: {
   const html = renderDiscordThreadReplyAttachmentHtml(params.evidence);
   await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
   if (uiPath) {
-    await fs.writeFile(
-      uiPath,
-      `${JSON.stringify(
-        {
-          attachmentFilenames: params.evidence.attachmentFilenames,
-          channelId: params.evidence.channelId,
-          discordWebUrl: params.evidence.discordWebUrl,
-          expectedAttachmentFilename: params.evidence.expectedAttachmentFilename,
-          guildId: params.evidence.guildId,
-          messageContent: params.evidence.messageContent,
-          messageId: params.evidence.messageId,
-          parentMessageId: params.evidence.parentMessageId,
-          scenarioId: params.evidence.scenarioId,
-          scenarioTitle: params.evidence.scenarioTitle,
-          status: params.evidence.status,
-          threadId: params.evidence.threadId,
-          threadName: params.evidence.threadName,
-        },
-        null,
-        2,
-      )}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    );
+    await fs.writeFile(uiPath, `${JSON.stringify(params.evidence, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
   }
   const screenshot = await writeHtmlScreenshot({ htmlPath, screenshotPath });
   return { htmlPath, ...(uiPath ? { uiPath } : {}), ...screenshot };
@@ -953,17 +928,13 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     });
     const evidence: DiscordThreadReplyAttachmentEvidence = {
       attachmentFilenames,
-      ...(captureUiMetadata
-        ? {
-            channelId: params.runtimeEnv.channelId,
-            discordWebUrl,
-            guildId: params.runtimeEnv.guildId,
-            parentMessageId: parent.id,
-          }
-        : {}),
+      channelId: captureUiMetadata ? params.runtimeEnv.channelId : undefined,
+      discordWebUrl: captureUiMetadata ? discordWebUrl : undefined,
       expectedAttachmentFilename: params.scenarioRun.expectedAttachmentFilename,
+      guildId: captureUiMetadata ? params.runtimeEnv.guildId : undefined,
       messageContent: reply?.content,
       messageId: reply?.id,
+      parentMessageId: captureUiMetadata ? parent.id : undefined,
       scenarioId: params.scenario.id,
       scenarioTitle: params.scenario.title,
       status,

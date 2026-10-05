@@ -1,25 +1,6 @@
 // Startup policy helpers for config guards, plugin loading, banners, and CLI path checks.
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { CliCommandPluginLoadPolicy } from "./command-catalog-types.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
-
-function shouldLoadPlugins(params: {
-  argv?: string[];
-  commandPath: string[];
-  jsonOutputMode: boolean;
-  loadPlugins: CliCommandPluginLoadPolicy;
-}): boolean {
-  // Some commands need plugin text/help in human output but not in JSON mode.
-  const loadPlugins = params.loadPlugins;
-  if (typeof loadPlugins === "function") {
-    return loadPlugins({
-      argv: params.argv ?? [],
-      commandPath: params.commandPath,
-      jsonOutputMode: params.jsonOutputMode,
-    });
-  }
-  return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
-}
 
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
@@ -51,21 +32,18 @@ export function resolveCliStartupPolicy(params: {
   return {
     suppressDoctorStdout,
     hideBanner: hideBanner || isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER),
-    skipConfigGuard:
-      nativeCheck ||
-      configGuard === "skip" ||
-      configGuard === "defer" ||
-      (configGuard === "when-suppressed" && suppressDoctorStdout),
+    skipConfigGuard: nativeCheck || configGuard === "skip" || configGuard === "defer",
     // Deferred actions own full preparation; early routing/proxy reads need only core config.
     ...(configGuard === "validate" || configGuard === "defer" ? { validateConfigOnly: true } : {}),
     loadPlugins:
       !nativeCheck &&
-      shouldLoadPlugins({
-        argv: params.argv,
-        commandPath: params.commandPath,
-        jsonOutputMode: params.jsonOutputMode,
-        loadPlugins: commandPolicy.loadPlugins,
-      }),
+      (typeof commandPolicy.loadPlugins === "function"
+        ? commandPolicy.loadPlugins({
+            argv: params.argv ?? [],
+            commandPath: params.commandPath,
+            jsonOutputMode: params.jsonOutputMode,
+          })
+        : commandPolicy.loadPlugins === "always"),
     pluginRegistry: commandPolicy.pluginRegistry,
   };
 }

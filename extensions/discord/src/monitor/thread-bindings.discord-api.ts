@@ -212,10 +212,7 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
   webhookId?: string;
   webhookToken?: string;
 } {
-  const reusableKey = toReusableWebhookKey({
-    accountId: params.accountId,
-    channelId: params.channelId,
-  });
+  const reusableKey = toReusableWebhookKey(params);
   const cached = REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.get(reusableKey);
   if (cached) {
     return {
@@ -224,13 +221,12 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
     };
   }
   for (const record of BINDINGS_BY_THREAD_ID.values()) {
-    if (record.accountId !== params.accountId) {
-      continue;
-    }
-    if (record.channelId !== params.channelId) {
-      continue;
-    }
-    if (!record.webhookId || !record.webhookToken) {
+    if (
+      record.accountId !== params.accountId ||
+      record.channelId !== params.channelId ||
+      !record.webhookId ||
+      !record.webhookToken
+    ) {
       continue;
     }
     rememberReusableWebhook(record);

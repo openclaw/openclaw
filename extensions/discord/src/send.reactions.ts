@@ -16,11 +16,6 @@ function resolveDiscordReactionClient(opts: DiscordReactOpts) {
   if (opts.rest && opts.cfg && opts.accountId) {
     return createDiscordClient(opts);
   }
-  if (!opts.cfg) {
-    throw new Error(
-      "Discord reactions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
   const cfg = requireRuntimeConfig(opts.cfg, "Discord reactions");
   return createDiscordClient({ ...opts, cfg });
 }

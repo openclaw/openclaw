@@ -1,3 +1,7 @@
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -14,11 +18,11 @@ import {
   getInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
   hasSessionControlAuthority,
   readSessionControlAuthority,
-  prepareSessionControlTarget,
-} from "./sessions-control-authority.js";
+} from "./sessions-operator-authority.js";
 
 type ControlTarget = {
   cfg: OpenClawConfig;
@@ -26,6 +30,7 @@ type ControlTarget = {
   key: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
+  operation: "archive" | "restore" | "stop";
   restricted: boolean;
 };
 
@@ -40,6 +45,7 @@ export async function prepareSessionToolControlTarget(target: ControlTarget) {
     sessionKey: target.key,
     expectedSessionId: target.expectedSessionId,
     expectedLifecycleRevision: target.expectedLifecycleRevision,
+    operation: target.operation,
     authority,
   });
 }
@@ -54,10 +60,10 @@ export async function callSessionToolControl<T>(
   try {
     return await callGateway<T>({
       ...request,
-      sessionMutationCommitGuard: () => {
-        request.sessionMutationCommitGuard?.();
-        control.assertCurrent();
-      },
+      sessionMutationCommitGuard: composeSessionSourceAssertion([
+        captureExternalSessionCommitGuard(request.sessionMutationCommitGuard),
+        control.assertCurrent,
+      ]),
     });
   } finally {
     control.release();

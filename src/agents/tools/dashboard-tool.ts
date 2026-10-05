@@ -92,27 +92,11 @@ const DashboardToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type DashboardCommandEmitter = (
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    command: BoardCommand;
-  },
-  resolveGatewayContext?: GatewayContextResolver,
-) => number;
-
-type DashboardGatewayContext = {
-  getClientConnIds?: (
-    predicate: (client: { connect: { client: { id: string } } }) => boolean,
-  ) => Set<string>;
-  broadcastToConnIds: (event: "board.command", payload: unknown, connIds: Set<string>) => void;
-};
-
 type DashboardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
   callGateway?: InProcessGatewayCaller;
-  emitCommand?: DashboardCommandEmitter;
+  emitCommand?: typeof emitBoardCommand;
 };
 
 function requireSessionKey(value: string | undefined): string {
@@ -229,9 +213,7 @@ function emitBoardCommand(
   },
   resolveGatewayContext?: GatewayContextResolver,
 ): number {
-  const context = getInProcessGatewayToolContext(resolveGatewayContext) as
-    | DashboardGatewayContext
-    | undefined;
+  const context = getInProcessGatewayToolContext(resolveGatewayContext);
   if (!context) {
     throw new ToolInputError("dashboard command unavailable outside gateway runtime");
   }

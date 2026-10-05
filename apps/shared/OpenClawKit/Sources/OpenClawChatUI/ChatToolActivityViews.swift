@@ -159,6 +159,7 @@ private struct ChatToolActivityRowContent: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: ChatToolActivityItem
+    private let displayCall: (name: String?, args: AnyCodable?)
     private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
     @State private var showsFullResult = false
@@ -167,7 +168,7 @@ private struct ChatToolActivityRowContent: View {
     private static let expandedLineLimit = 40
 
     private var display: ToolDisplaySummary {
-        ToolDisplayRegistry.resolve(name: self.item.name ?? "tool", args: self.item.arguments)
+        ToolDisplayRegistry.resolve(name: self.displayCall.name, args: self.displayCall.args)
     }
 
     private var detailLine: String? {
@@ -177,7 +178,7 @@ private struct ChatToolActivityRowContent: View {
 
     private var formattedResult: String {
         guard let resultText = self.item.resultText else { return "" }
-        return ToolResultTextFormatter.format(text: resultText, toolName: self.item.name)
+        return ToolResultTextFormatter.format(text: resultText, toolName: self.displayCall.name)
     }
 
     private var expandable: Bool {
@@ -217,9 +218,11 @@ private struct ChatToolActivityRowContent: View {
 
     init(item: ChatToolActivityItem) {
         self.item = item
+        let displayCall = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
+        self.displayCall = displayCall
         self.resolvedDiff = ChatToolDiff.resolveDiff(
-            name: item.name,
-            arguments: item.arguments,
+            name: displayCall.name,
+            arguments: displayCall.args,
             details: item.details,
             isError: item.isError)
     }
@@ -319,7 +322,7 @@ private struct ChatToolActivityRowContent: View {
             }
             .frame(width: Self.disclosureWidth, height: 12)
 
-            Image(systemName: Self.symbol(forToolName: self.item.name))
+            Image(systemName: ChatToolIcon.symbol(for: self.display.name, icon: self.display.icon))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : Color.secondary)
 
@@ -461,33 +464,6 @@ private struct ChatToolActivityRowContent: View {
         case .ctx, .file, .skip:
             .clear
         }
-    }
-
-    private static func symbol(forToolName name: String?) -> String {
-        let normalized = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        switch normalized {
-        case "create_file": return "square.and.pencil"
-        case "ls": return "magnifyingglass"
-        default: break
-        }
-
-        let fallbacks: [([String], String)] = [
-            (["canvas", "image", "screenshot", "photo"], "photo"),
-            (["browser"], "safari"),
-            (["message", "send", "reply"], "bubble.left"),
-            (["node", "gateway"], "server.rack"),
-            (["cron", "schedule", "clock"], "clock"),
-            (["memory"], "brain"),
-            (["session", "agent"], "rectangle.stack"),
-            (["exec", "bash", "shell", "command", "terminal"], "terminal"),
-            (["edit", "patch"], "pencil.line"),
-            (["write"], "square.and.pencil"),
-            (["grep", "glob", "find", "search", "list"], "magnifyingglass"),
-            (["read"], "doc.text"),
-            (["fetch", "web"], "globe"),
-        ]
-        return fallbacks.first { keys, _ in keys.contains(where: normalized.contains) }?.1
-            ?? "wrench.and.screwdriver"
     }
 }
 

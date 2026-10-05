@@ -11,9 +11,8 @@ import { canReviewOperatorApproval } from "../operator-approval-authorization.js
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
-import { resolveSessionStoreKey } from "../session-utils.js";
 import { canAccessApprovalSession } from "./approval-record-lookup.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -72,7 +71,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const requested = resolveRequestedSessionAgentId(
+        const requested = resolveRequestedSessionStoreTarget(
           cfg,
           trimmed,
           parseAgentSessionKey(trimmed) ? undefined : params.agentId,
@@ -81,12 +80,9 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           respond(false, undefined, requested.error);
           return;
         }
-        const canonicalKey = resolveSessionStoreKey({
-          cfg,
-          sessionKey: trimmed,
-          storeAgentId: requested.agentId,
-        });
-        canonicalKeys.push(sessionObserverScopeKey(canonicalKey, requested.agentId));
+        canonicalKeys.push(
+          sessionObserverScopeKey(requested.value.sessionKey, requested.value.agentId),
+        );
       }
       const sessionKeys = declarations.replace(connId, canonicalKeys);
       respond(true, { sessionKeys }, undefined);
@@ -104,6 +100,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         sessionMutationAuthorization,
         hasCurrentClientAuthority,
         signal,
+        markSessionSubscribePhase: mark,
       } = options;
 
       const connId = client?.connId?.trim();
@@ -124,28 +121,27 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, p.agentId);
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
       }
-      const requestedAgentId = requestedAgent.agentId;
-      const canonicalKey = resolveSessionStoreKey({
-        cfg,
-        sessionKey: key,
-        storeAgentId: requestedAgentId,
-      });
+      const { agentId: requestedAgentId, sessionKey: canonicalKey } = requestedAgent.value;
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
       let read: ReturnType<typeof retainSessionScopedRead>;
       let prepared: PreparedSessionApprovalReplay | undefined;
       try {
+        mark?.("retainedReadAdmission");
         sessionMutationAuthorization?.assertCurrent();
         read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+          // Activity and labels may change while approvals load without revoking access.
+          allowMetadataChanges: true,
           requireMaterialized:
             readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
         });
         options.sessionMutationCommitGuard?.();
         if (connId) {
+          mark?.("observerCommit");
           let approvalReplay;
           if (p.includeApprovals === true) {
             // Subscribe before the authoritative snapshot so a transition cannot
@@ -161,6 +157,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               },
             );
             try {
+              mark?.("replayPreparation");
               prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
@@ -173,6 +170,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               if (prepared && !prepared.isCurrent()) {
                 throw new Error("session approval replay changed during preparation");
               }
+              mark?.("observerCommit");
               approvalReplay = prepared?.replay;
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
@@ -225,6 +223,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               throw error;
             }
           }
+          mark?.("response");
           respond(
             true,
             {
@@ -241,6 +240,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        mark?.("response");
         respond(
           true,
           { subscribed: false, key: canonicalKey, agentId: requestedAgentId },
@@ -252,6 +252,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         }
         respond(false, undefined, error.error);
       } finally {
+        mark?.("cleanup");
         prepared?.release();
         read?.release();
       }
@@ -268,17 +269,12 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, p.agentId);
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
       }
-      const requestedAgentId = requestedAgent.agentId;
-      const canonicalKey = resolveSessionStoreKey({
-        cfg,
-        sessionKey: key,
-        storeAgentId: requestedAgentId,
-      });
+      const { agentId: requestedAgentId, sessionKey: canonicalKey } = requestedAgent.value;
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
       if (connId) {
         context.unsubscribeSessionMessageEvents(connId, subscriptionKey, p.subscriptionId);

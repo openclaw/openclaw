@@ -153,32 +153,6 @@ describe("MeetingSessionRuntime startup custody", () => {
     await runtime.leave(session.id);
   }
 
-  it("settles a connecting provider before reporting leave completion", async () => {
-    const f = await createStartupFixture();
-    const speaking = f.runtime.speak(f.session.id, "Hello");
-    let leaving: Promise<unknown> | undefined;
-    let liveAtLeave: boolean | undefined;
-    try {
-      await f.connectStarted.promise;
-      expect(f.liveProviders.has(f.session.id)).toBe(true);
-      expect(f.liveInputs.has(f.session.id)).toBe(true);
-      leaving = f.runtime.leave(f.session.id).then((result) => {
-        liveAtLeave = f.liveProviders.has(f.session.id) || f.liveInputs.has(f.session.id);
-        return result;
-      });
-      // Independent public work advances while this provider's connect is held.
-      // A correct owner may close it now or wait for connect before settling leave.
-      await completeUnrelatedMeeting(f.runtime);
-      f.connectAllowed.resolve();
-      await Promise.all([leaving, speaking]);
-      expect(liveAtLeave).toBe(false);
-    } finally {
-      f.connectAllowed.resolve();
-      await Promise.all([speaking, leaving]);
-      await f.runtime.leave(f.session.id);
-    }
-  });
-
   it("settles prior connecting work before admitting a same-URL replacement", async () => {
     const f = await createStartupFixture();
     const speaking = f.runtime.speak(f.session.id, "Hello");
@@ -231,44 +205,46 @@ describe("MeetingSessionRuntime startup custody", () => {
     }
   });
 
-  it("stops late successful startup once without publishing speech", async () => {
-    const f = await createStartupFixture();
-    const speaking = f.runtime.speak(f.session.id, "Hello");
-    try {
-      await f.connectStarted.promise;
-      const leaving = f.runtime.leave(f.session.id);
-      await completeUnrelatedMeeting(f.runtime);
-      f.connectAllowed.resolve();
-      await leaving;
-      await expect(speaking).resolves.toMatchObject({ found: true, spoken: false });
-      expect(f.liveProviders.size).toBe(0);
-      expect(f.liveInputs.size).toBe(0);
-      expect(f.closedProviders).toEqual([f.session.id]);
-      expect(f.spoken).toEqual([]);
-      await f.runtime.leave(f.session.id);
-      expect(f.closedProviders).toEqual([f.session.id]);
-    } finally {
-      f.connectAllowed.resolve();
-      await speaking;
-      await f.runtime.leave(f.session.id);
-    }
-  });
+  it.each(["leave", "external end", "connect failure"] as const)(
+    "settles pending startup once without publishing speech after %s",
+    async (outcome) => {
+      const f = await createStartupFixture({ failConnect: outcome === "connect failure" });
+      const speaking = f.runtime.speak(f.session.id, "Hello");
+      const settled =
+        outcome === "connect failure"
+          ? expect(speaking).rejects.toThrow("synthetic connect failure")
+          : expect(speaking).resolves.toMatchObject({ found: true, spoken: false });
+      let leaving: Promise<unknown> | undefined;
+      let liveAtLeave: boolean | undefined;
+      try {
+        await f.connectStarted.promise;
+        expect(f.liveProviders.has(f.session.id)).toBe(true);
+        expect(f.liveInputs.has(f.session.id)).toBe(true);
+        if (outcome === "external end") {
+          f.runtime.markSessionEnded(f.session, "External session ended");
+        }
+        leaving = f.runtime.leave(f.session.id).then((result) => {
+          liveAtLeave = f.liveProviders.has(f.session.id) || f.liveInputs.has(f.session.id);
+          return result;
+        });
+        await completeUnrelatedMeeting(f.runtime);
+        f.connectAllowed.resolve();
+        await Promise.all([leaving, settled]);
+        expect(liveAtLeave).toBe(false);
+        expect(f.liveProviders.size).toBe(0);
+        expect(f.liveInputs.size).toBe(0);
+        expect(f.closedProviders).toEqual([f.session.id]);
+        expect(f.spoken).toEqual([]);
+        await f.runtime.leave(f.session.id);
+        expect(f.closedProviders).toEqual([f.session.id]);
+      } finally {
+        f.connectAllowed.resolve();
+        await Promise.all([settled, leaving]);
+        await f.runtime.leave(f.session.id);
+      }
+    },
+  );
 
-  it("closes a normally connected provider once on leave", async () => {
-    const f = await createStartupFixture();
-    f.connectAllowed.resolve();
-    try {
-      await f.runtime.speak(f.session.id, "Hello");
-      expect(f.liveProviders.has(f.session.id)).toBe(true);
-      await f.runtime.leave(f.session.id);
-      await f.runtime.leave(f.session.id);
-      expect(f.liveProviders.size).toBe(0);
-      expect(f.liveInputs.size).toBe(0);
-      expect(f.closedProviders).toEqual([f.session.id]);
-    } finally {
-      await f.runtime.leave(f.session.id);
-    }
-  });
   it("coalesces simultaneous speaks before invoking provider setup", async () => {
     const f = await createStartupFixture();
     const first = f.runtime.speak(f.session.id, "First");
@@ -282,50 +258,6 @@ describe("MeetingSessionRuntime startup custody", () => {
     } finally {
       f.connectAllowed.resolve();
       await Promise.all([first, second]);
-      await f.runtime.leave(f.session.id);
-    }
-  });
-
-  it("retains pending startup after an external end marker", async () => {
-    const f = await createStartupFixture();
-    const speaking = f.runtime.speak(f.session.id, "Hello");
-    let leaving: Promise<unknown> | undefined;
-    let liveAtLeave: boolean | undefined;
-    try {
-      await f.connectStarted.promise;
-      f.runtime.markSessionEnded(f.session, "External session ended");
-      leaving = f.runtime.leave(f.session.id).then((result) => {
-        liveAtLeave = f.liveProviders.has(f.session.id);
-        return result;
-      });
-      await completeUnrelatedMeeting(f.runtime);
-      f.connectAllowed.resolve();
-      await Promise.all([speaking, leaving]);
-      expect(liveAtLeave).toBe(false);
-      expect(f.closedProviders).toEqual([f.session.id]);
-    } finally {
-      f.connectAllowed.resolve();
-      await Promise.all([speaking, leaving]);
-      await f.runtime.leave(f.session.id);
-    }
-  });
-
-  it("joins rejected startup cleanup while preserving its original failure", async () => {
-    const f = await createStartupFixture({ failConnect: true });
-    const speaking = f.runtime.speak(f.session.id, "Hello");
-    const rejected = expect(speaking).rejects.toThrow("synthetic connect failure");
-    let leaving: Promise<unknown> | undefined;
-    try {
-      await f.connectStarted.promise;
-      leaving = f.runtime.leave(f.session.id);
-      f.connectAllowed.resolve();
-      await Promise.all([rejected, leaving]);
-      expect(f.liveProviders.size).toBe(0);
-      expect(f.liveInputs.size).toBe(0);
-      expect(f.closedProviders).toEqual([f.session.id]);
-    } finally {
-      f.connectAllowed.resolve();
-      await Promise.all([rejected, leaving]);
       await f.runtime.leave(f.session.id);
     }
   });

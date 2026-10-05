@@ -1,10 +1,10 @@
 import { afterEach, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
@@ -16,10 +16,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-it("discovers the ownership table for an injected handle at transaction admission", () => {
+it("keeps a raw handle to a cached database on conservative ownership admission", () => {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-injected-admission-") } };
   const pathname = openOpenClawStateDatabase(options).path;
-  closeOpenClawStateDatabaseForTest();
   const { constants, DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(pathname);
   let schemaReads = 0;
@@ -30,6 +29,7 @@ it("discovers the ownership table for an injected handle at transaction admissio
     return constants.SQLITE_OK;
   });
 
+  const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
   try {
     runOpenClawStateWriteTransaction(() => undefined, {
       ...options,
@@ -37,13 +37,21 @@ it("discovers the ownership table for an injected handle at transaction admissio
         db,
         path: pathname,
         walMaintenance: {
+          stop: async () => {},
           checkpoint: () => false,
           close: () => false,
           reclaimFreePages: createSqliteWalReclamationResult,
         },
       },
     });
+    expect(
+      reads.queries.filter((sql) => sql.includes("SELECT value_json FROM config_machine_state")),
+    ).toEqual([
+      "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1",
+      "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1",
+    ]);
   } finally {
+    reads.restore();
     db.setAuthorizer(null);
     db.close();
   }

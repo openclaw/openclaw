@@ -2,6 +2,7 @@ import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/sr
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   readSessionMethodAccess,
@@ -18,6 +19,7 @@ import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
+import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
@@ -31,17 +33,12 @@ import type {
   DraftSubmissionCallbacks,
   DraftSubmissionSnapshot,
 } from "./draft-submission-contract.ts";
-import {
-  buildDraftSubmissionCreateParams,
-  prepareDraftSubmission,
-  prepareDraftSubmissionTurn,
-} from "./draft-submission-input.ts";
+import { prepareDraftSubmission } from "./draft-submission-input.ts";
 import { completeInitialSessionTurn } from "./initial-session-turn-handoff.ts";
 import {
   type InstantThreadHandoff,
   prepareInstantThreadHandoff,
 } from "./instant-thread-handoff.ts";
-import { NewSessionPermissionSelection } from "./permission-selection.ts";
 import {
   PendingSessionPlacementRecoveryState,
   type SubmissionOutcomeReason,
@@ -91,7 +88,7 @@ export class DraftSubmissionFlow {
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerTextarea = new NewSessionComposerTextareaController();
-  readonly permission = new NewSessionPermissionSelection(() => this.callbacks.requestUpdate());
+  permissionMode: SessionCreateParams["permissionMode"];
   readonly draftPersistence: NewSessionDraftPersistence;
   readonly capabilities: NewSessionCapabilityController;
 
@@ -101,9 +98,10 @@ export class DraftSubmissionFlow {
     private readonly read: () => DraftSubmissionSnapshot,
     private readonly callbacks: DraftSubmissionCallbacks,
   ) {
-    this.capabilities = new NewSessionCapabilityController(callbacks.requestUpdate);
-    this.capabilities.setMutationCallback(() => (this.startedSession.current = null));
-    this.permission.setMutationCallback(() => (this.startedSession.current = null));
+    this.capabilities = new NewSessionCapabilityController(
+      callbacks.requestUpdate,
+      () => (this.startedSession.current = null),
+    );
     this.sessionStartup = new DraftSessionStartup(gateway);
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
@@ -214,9 +212,15 @@ export class DraftSubmissionFlow {
     this.visibilityValue = state.visibility;
     this.capabilities.restoreToolOverrides(state.toolOverrides);
     if ("permissionMode" in state) {
-      this.permission.restore(state.permissionMode);
+      this.permissionMode = state.permissionMode;
     }
     this.attachmentDraft.restore(state.attachments);
+  }
+
+  setPermissionMode(permissionMode: SessionCreateParams["permissionMode"]) {
+    this.permissionMode = permissionMode;
+    this.startedSession.current = null;
+    this.callbacks.requestUpdate();
   }
 
   setVisibility(visibility: NewSessionVisibility) {
@@ -263,7 +267,15 @@ export class DraftSubmissionFlow {
   }
 
   private buildDraftSessionCreateParams = (options: DraftSessionCreateOverrides = {}) =>
-    buildDraftSubmissionCreateParams(this.place, this.gateway, this, this.read(), options);
+    buildSelectedSessionCreateParams(this.place, {
+      ...options,
+      message: options.message ?? "",
+      toolOverrides: this.capabilities.toolOverrides,
+      permissionMode: this.permissionMode,
+      visibility: options.visibility ?? this.visibility,
+      catalogId: this.read().data?.catalogId,
+      category: this.gateway.resolvedGroupCategory(),
+    });
 
   submissionAccess = (
     createParams: Record<string, unknown> = this.pendingPlacement.createParams ??
@@ -296,7 +308,7 @@ export class DraftSubmissionFlow {
     }
     if (
       !catalog.isTarget(this.read().data) &&
-      this.attachmentDraft.pendingReads === 0 &&
+      this.attachmentDraft.reads.pendingReads === 0 &&
       this.startedSession.isCurrent(this.read().context, this.place.agentId)
     ) {
       return this.activeSubmission ? { gate: "submitting" } : undefined;
@@ -342,7 +354,7 @@ export class DraftSubmissionFlow {
       : null;
     this.visibilityValue = "normal";
     this.capabilities.reset();
-    this.permission.reset();
+    this.permissionMode = undefined;
     this.attachmentDraft.reset({ release: true });
     if (preservePendingPlacement) {
       if (!this.pendingPlacement.restored) {
@@ -405,7 +417,14 @@ export class DraftSubmissionFlow {
     const requestId = ++this.submitRequestToken;
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedAt = startup?.startedAt ?? Date.now();
-    const turn = prepareDraftSubmissionTurn(context, input, submittedAt);
+    const { hello, selfUser } = context.gateway.snapshot;
+    const turn = {
+      text: input.message,
+      mentions: input.mentions,
+      attachments: input.attachments,
+      createdAt: submittedAt,
+      sender: resolveCurrentUserIdentity(hello, input.client.instanceId, selfUser) ?? undefined,
+    };
     const submittedMessage = this.startedSession.messageForTurn(context, this.place.agentId, turn);
     const retainSubmittedSession = this.startedSession.captureSubmission(
       context,
@@ -433,7 +452,7 @@ export class DraftSubmissionFlow {
       this.startedSession.current = null;
       const placementTarget = startup
         ? null
-        : resolveDraftSessionPlacement(this.pendingPlacement, this.place).target;
+        : resolveDraftSessionPlacement(this.pendingPlacement, this.place);
       promptNewSessionNotifications(
         context,
         input.message,

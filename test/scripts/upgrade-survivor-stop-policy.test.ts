@@ -1,11 +1,24 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import vm from "node:vm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 function fixture() {
   const home = tempDirs.make("survivor-stop-policy-");
@@ -33,27 +46,34 @@ function fixture() {
   return { home, env, unit, systemctl, manager };
 }
 
-function waitForFixtureState(directory: string, settled: () => boolean) {
-  return new Promise<void>((complete, reject) => {
-    const inspect = () => {
-      try {
-        if (!settled()) {
-          return;
+function virtualClock() {
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  let now = 0;
+  let serial = 0;
+  return {
+    timers,
+    get now() {
+      return now;
+    },
+    setTimeout: (callback: () => void, delay: number) => {
+      const id = ++serial;
+      timers.set(id, { at: now + delay, callback });
+      return id;
+    },
+    clearTimeout: (id: number) => timers.delete(id),
+    advance(this: void, until: number) {
+      while (true) {
+        const next = [...timers].toSorted((a, b) => a[1].at - b[1].at)[0];
+        if (!next || next[1].at > until) {
+          break;
         }
-      } catch {
-        return;
+        now = next[1].at;
+        timers.delete(next[0]);
+        next[1].callback();
       }
-      watcher.close();
-      clearTimeout(deadline);
-      complete();
-    };
-    const watcher = watch(directory, inspect);
-    const deadline = setTimeout(() => {
-      watcher.close();
-      reject(new Error("fixture state did not settle"));
-    }, 5_000);
-    inspect();
-  });
+      now = until;
+    },
+  };
 }
 
 describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () => {
@@ -105,25 +125,28 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     { policy: "", value: "90000", display: "90s" },
     { policy: "TimeoutStopSec=0", value: "Infinity", display: "infinity" },
     { policy: "TimeoutStopSec=infinity", value: "Infinity", display: "infinity" },
-  ])("handles generated stop policy $policy deliberately", ({ policy, value, display }) => {
+    ...["-1", "bogus", "1ms", "2147484", "9".repeat(400), "30\nTimeoutStopSec=330"].map(
+      (policy) => ({
+        policy: "TimeoutStopSec=" + policy,
+        value: "",
+        display: "",
+      }),
+    ),
+  ])("admits only supported generated stop policy $policy", ({ policy, value, display }) => {
     const { unit, systemctl, manager } = fixture();
     writeFileSync(unit, "[Service]\nExecStart=/usr/bin/true\n" + policy + "\n");
-    expect(systemctl("daemon-reload").status).toBe(0);
+    const loaded = systemctl("daemon-reload");
+    if (!value) {
+      expect(loaded.status).not.toBe(0);
+      expect(existsSync(unit + ".loaded-unit")).toBe(false);
+      return;
+    }
+    expect(loaded.status).toBe(0);
     expect(manager("stop-timeout-ms")).toMatchObject({ status: 0, stdout: value + "\n" });
     expect(
       systemctl("show", "openclaw-gateway.service", "--property=LoadState,TimeoutStopUSec").stdout,
     ).toBe("LoadState=loaded\nTimeoutStopUSec=" + display + "\n");
   });
-
-  it.each(["-1", "bogus", "1ms", "2147484", "9".repeat(400), "30\nTimeoutStopSec=330"])(
-    "refuses unsupported stop policy %j at load",
-    (policy) => {
-      const { unit, systemctl } = fixture();
-      writeFileSync(unit, "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=" + policy + "\n");
-      expect(systemctl("daemon-reload").status).not.toBe(0);
-      expect(existsSync(unit + ".loaded-unit")).toBe(false);
-    },
-  );
 
   // Execute the unchanged supervisor body with native boundaries substituted. The
   // virtual clock advances policy-sized deadlines without launching or killing PIDs.
@@ -143,12 +166,9 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       const body = source.split("<<'SUPERVISOR'\n")[1]?.split("\nSUPERVISOR")[0];
       expect(body).toBeDefined();
       const signals: Array<string | number> = [];
-      const handlers = new Map<string, () => void>();
-      const timers = new Map<number, { at: number; callback: () => void }>();
-      let now = 0;
-      let serial = 0;
+      const clock = virtualClock();
+      const { timers, advance } = clock;
       let alive = true;
-      const exit = vi.fn();
       const fs = {
         openSync: () => 1,
         closeSync: () => {},
@@ -156,12 +176,14 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
         renameSync: () => {},
         writeSync: () => {},
       };
+      const handlers = new Map<string, () => void>();
+      const exit = vi.fn();
       vm.runInNewContext(body!.replace(/^import .*;\n/gm, ""), {
         fs,
         spawn: () => ({ pid: 42, on: () => {}, once: () => {} }),
         execFileSync: (_binary: string, args: string[]) => {
-          expect(args).toEqual([join(f.home, "bin/systemd-fixture.mjs"), "stop-timeout-ms"]);
-          const result = f.manager("stop-timeout-ms");
+          expect(args).toEqual([join(f.home, "bin/systemd-fixture.mjs"), "stop-context"]);
+          const result = f.manager("stop-context");
           expect(result.status, result.stderr).toBe(0);
           return result.stdout;
         },
@@ -188,25 +210,10 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
             }
           },
         },
-        setTimeout: (callback: () => void, delay: number) => {
-          const id = ++serial;
-          timers.set(id, { at: now + delay, callback });
-          return id;
-        },
-        clearTimeout: (id: number) => timers.delete(id),
+        setTimeout: clock.setTimeout,
+        clearTimeout: clock.clearTimeout,
       });
-      const advance = (until: number) => {
-        while (true) {
-          const next = [...timers].toSorted((a, b) => a[1].at - b[1].at)[0];
-          if (!next || next[1].at > until) {
-            break;
-          }
-          now = next[1].at;
-          timers.delete(next[0]);
-          next[1].callback();
-        }
-        now = until;
-      };
+
       if (seconds === 330) {
         // Repair the manager policy after supervisor launch, before its stop.
         writeFileSync(f.unit, "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=330\n");
@@ -260,18 +267,165 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     },
   );
 
+  it.each(["main-exit", "deadline"])(
+    "settles detached cgroup members after mixed-mode %s before releasing custody",
+    (trigger) => {
+      const f = fixture();
+      const controlGroup = "/openclaw-gateway.service";
+      const runtimePath = join(f.home, "bin/systemd-fixture-runtime.json");
+      writeFileSync(
+        runtimePath,
+        JSON.stringify({ ...JSON.parse(readFileSync(runtimePath, "utf8")), controlGroup }),
+      );
+      writeFileSync(
+        f.unit,
+        "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=30\nKillMode=mixed\n",
+      );
+      expect(f.systemctl("daemon-reload").status).toBe(0);
+      // Both the signal policy and deadline must come from the loaded definition.
+      writeFileSync(
+        f.unit,
+        "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=1\nKillMode=control-group\n",
+      );
+      const body = readFileSync(owner, "utf8")
+        .split("<<'SUPERVISOR'\n")[1]
+        ?.split("\nSUPERVISOR")[0];
+      expect(body).toBeDefined();
+      const files = new Map<string, string>();
+      const signals: Array<[number, string | number]> = [];
+      const clock = virtualClock();
+      const { timers, advance } = clock;
+      let closeChild: ((code: number, signal: string | null) => void) | undefined;
+      let groupAlive = true;
+      let descendantAlive = true;
+      let lateDescendantAlive = false;
+      const spawn = vi.fn(() => ({
+        pid: 42,
+        on: () => {},
+        once: (_event: string, callback: (code: number, signal: string | null) => void) => {
+          closeChild = callback;
+        },
+      }));
+      const handlers = new Map<string, () => void>();
+      const exit = vi.fn();
+      vm.runInNewContext(body!.replace(/^import .*;\n/gm, ""), {
+        fs: {
+          openSync: () => 1,
+          closeSync: () => {},
+          writeSync: () => {},
+          writeFileSync: (file: string, contents: string) => files.set(file, contents),
+          renameSync: (from: string, to: string) => files.set(to, files.get(from)!),
+          readFileSync: (file: string) => {
+            if (file === `/sys/fs/cgroup${controlGroup}/cgroup.events`) {
+              return `populated ${groupAlive || descendantAlive || lateDescendantAlive ? 1 : 0}\n`;
+            }
+            if (file === `/sys/fs/cgroup${controlGroup}/cgroup.procs`) {
+              // PID 45 moved out between enumeration and membership validation.
+              return `${groupAlive ? "42\n" : ""}${descendantAlive ? "44\n" : ""}45\n${lateDescendantAlive ? "46\n" : ""}`;
+            }
+            if (
+              file === "/proc/42/cgroup" ||
+              file === "/proc/44/cgroup" ||
+              file === "/proc/46/cgroup"
+            ) {
+              return `0::${controlGroup}\n`;
+            }
+            if (file === "/proc/45/cgroup") {
+              return "0::/unrelated.service\n";
+            }
+            const member = /^\/proc\/(42|44|45|46)\/stat$/.exec(file)?.[1];
+            if (member) {
+              return `${member} (fixture child) S ${Array(18).fill("0").join(" ")} 100 0 0\n`;
+            }
+            throw new Error(`Unexpected fixture read: ${file}`);
+          },
+        },
+        spawn,
+        execFileSync: (_binary: string, args: string[]) => {
+          expect(args[0]).toBe(join(f.home, "bin/systemd-fixture.mjs"));
+          const result = f.manager(...args.slice(1));
+          expect(result.status, result.stderr).toBe(0);
+          return result.stdout;
+        },
+        process: {
+          pid: 43,
+          execPath: process.execPath,
+          cwd: () => "/fixture",
+          env: {
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: join(f.home, "bin/systemd-fixture.mjs"),
+            OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: "/usr/bin/true",
+            OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: "/fixture/log",
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+          },
+          hrtime: { bigint: () => 1n },
+          exit,
+          on: (signal: string, callback: () => void) => handlers.set(signal, callback),
+          kill: (pid: number, signal: string | number) => {
+            if (signal === 0) {
+              expect(pid).toBe(-42);
+              if (!groupAlive) {
+                throw Object.assign(new Error("gone"), { code: "ESRCH" });
+              }
+            } else {
+              signals.push([pid, signal]);
+            }
+          },
+        },
+        setTimeout: clock.setTimeout,
+        clearTimeout: clock.clearTimeout,
+      });
+
+      const runtime = () => JSON.parse(files.get("/fixture/log.runtime.json")!);
+      const expectedSignals: Array<[number, string]> = [[42, "SIGTERM"]];
+      handlers.get("SIGTERM")!();
+      expect(signals).toEqual(expectedSignals);
+      expect(timers.size).toBe(2);
+      if (trigger === "deadline") {
+        advance(29_999);
+        expect(signals).toEqual(expectedSignals);
+        expect(exit).not.toHaveBeenCalled();
+        advance(30_000);
+        expectedSignals.push([42, "SIGKILL"], [44, "SIGKILL"]);
+        expect(signals).toEqual(expectedSignals);
+        expect(exit).not.toHaveBeenCalled();
+      }
+      groupAlive = false;
+      closeChild!(0, null);
+      advance(clock.now + 25);
+      if (trigger === "main-exit") {
+        expectedSignals.push([44, "SIGKILL"]);
+      }
+      expect(signals).toEqual(expectedSignals);
+      expect(exit).not.toHaveBeenCalled();
+      expect(runtime()).toMatchObject({ pid: 0, groupPid: 42, supervisorPid: 43 });
+      // A fork first observed during settlement is owned work too. The previous
+      // member stays live, but must not receive a second signal attempt.
+      lateDescendantAlive = true;
+      advance(clock.now + 25);
+      expectedSignals.push([46, "SIGKILL"]);
+      expect(signals).toEqual(expectedSignals);
+      expect(exit).not.toHaveBeenCalled();
+      expect(runtime()).toMatchObject({ pid: 0, groupPid: 42, supervisorPid: 43 });
+      descendantAlive = false;
+      lateDescendantAlive = false;
+      advance(clock.now + 25);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(runtime()).toMatchObject({ pid: 0, groupPid: 0, supervisorPid: 0 });
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(timers.size).toBe(0);
+    },
+  );
+
   it.each(["signal", "child-close"])(
     "retains custody when the policy read fails during %s drain",
     (entry) => {
       const source = readFileSync(owner, "utf8");
       const body = source.split("<<'SUPERVISOR'\n")[1]?.split("\nSUPERVISOR")[0];
       expect(body).toBeDefined();
-      const handlers = new Map<string, () => void>();
       let closeChild: ((code: number, signal: string | null) => void) | undefined;
       const timers: Array<() => void> = [];
       const signals: Array<string | number> = [];
       let alive = true;
-      const exit = vi.fn();
       const log = vi.fn();
       const files = new Map<string, string>();
       const spawn = vi.fn(() => ({
@@ -281,6 +435,8 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
           closeChild = callback;
         },
       }));
+      const handlers = new Map<string, () => void>();
+      const exit = vi.fn();
       vm.runInNewContext(body!.replace(/^import .*;\n/gm, ""), {
         fs: {
           openSync: () => 1,
@@ -353,9 +509,9 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     },
   );
 
-  it.each([false, true])(
+  it.for([false, true])(
     "joins the installed outer stop after removed-unit reload=%s",
-    async (removed) => {
+    async (removed, { signal }) => {
       const f = fixture();
       const bin = join(f.home, "bin");
       const ready = join(f.home, "ready");
@@ -364,11 +520,14 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       const runtime = () => JSON.parse(readFileSync(runtimeFile, "utf8"));
       writeFileSync(
         program,
-        'import fs from "node:fs"; process.on("SIGTERM", () => ' +
+        fixtureReceiptClientSource(receipts.endpoint) +
+          '\nimport fs from "node:fs"; process.on("SIGTERM", () => ' +
           (removed ? "{}" : "process.exit(0)") +
           "); fs.writeFileSync(" +
           JSON.stringify(ready) +
-          ", String(process.pid)); setInterval(() => {}, 1000);",
+          ", String(process.pid)); sendReceipt(" +
+          JSON.stringify(ready) +
+          ', "ready"); setInterval(() => {}, 1000);',
       );
       writeFileSync(
         f.unit,
@@ -382,10 +541,7 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       try {
         const started = f.systemctl("start", "openclaw-gateway.service");
         expect(started.status, started.stderr).toBe(0);
-        await waitForFixtureState(
-          f.home,
-          () => existsSync(ready) && readFileSync(ready, "utf8").length > 0,
-        );
+        await withinTest(receipts.waitFor(ready, "ready"), signal);
         const pid = Number(readFileSync(ready, "utf8"));
         if (removed) {
           rmSync(f.unit);
@@ -418,10 +574,15 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
               process.kill(-owned.groupPid, "SIGKILL");
             } catch {}
           }
-          await waitForFixtureState(bin, () => {
-            const observed = runtime();
-            return observed.pid === 0 && observed.supervisorPid === 0 && observed.groupPid === 0;
-          });
+          if (owned.supervisorPid || owned.groupPid) {
+            // The installed stop joins supervisor retirement; finish() commits zero IDs
+            // before exiting. A failed policy still joins its forced cleanup owner.
+            f.systemctl("stop", "openclaw-gateway.service");
+          }
+          expect(runtime()).toMatchObject({ pid: 0, supervisorPid: 0, groupPid: 0 });
+        } else {
+          // Startup may have published only the supervisor PID when the test aborts.
+          f.systemctl("stop", "openclaw-gateway.service");
         }
       }
     },

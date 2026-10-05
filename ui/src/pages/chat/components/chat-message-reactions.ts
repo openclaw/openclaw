@@ -15,7 +15,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 
 export type MessageReactionAction = (messageId: string, emoji: string, remove: boolean) => void;
-export type MessageReactionPlacement = "bottom-start" | "bottom-end";
+type MessageReactionPlacement = "bottom-start" | "bottom-end";
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
 const TOOLTIP_NAME_LIMIT = 3;
@@ -24,7 +24,6 @@ const addReactionIcon = strokeIcon(svg`<path d="M21 11.5a9 9 0 1 1-8.5-8.5"/>
   <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6"/>
   <path d="M9 9h.01M15 9h.01"/>`);
 
-/** Emoji the current user already placed on a message; the pickers show these pressed. */
 export function ownReactionEmoji(
   reactions: readonly MessageReactionSummary[] | undefined,
   userId: string | null | undefined,
@@ -41,7 +40,6 @@ function reactorsLabel(reaction: MessageReactionSummary, userId: string | null |
     .map((identity) =>
       identity.id === userId ? t("chat.reactions.you") : (identity.label ?? identity.id),
     )
-    // The reader's own name reads first, as in every chat product they know.
     .toSorted(
       (a, b) => Number(b === t("chat.reactions.you")) - Number(a === t("chat.reactions.you")),
     );
@@ -76,20 +74,14 @@ export function messageReactionOptions(
   };
 }
 
-/** The reaction row under one message of a group: persisted messages only, never while streaming. */
 export function renderGroupMessageReactions(
   group: Parameters<typeof messageReactionOptions>[0],
   actionDetails: { reactionMessageId?: string } | null | undefined,
   isStreaming: boolean,
   opts: MessageReactionOptions,
 ) {
-  return renderMessageReactions(
-    isStreaming ? undefined : actionDetails?.reactionMessageId,
-    messageReactionOptions(group, opts),
-  );
-}
-
-function renderMessageReactions(messageId: string | undefined, options: MessageReactionOptions) {
+  const messageId = isStreaming ? undefined : actionDetails?.reactionMessageId;
+  const options = messageReactionOptions(group, opts);
   const reactions = messageId ? options.messageReactions?.get(messageId) : undefined;
   if (!messageId || !reactions?.length) {
     return nothing;
@@ -238,15 +230,19 @@ class MessageReactionPicker extends OpenClawLitElement {
       margin: 0 3px;
       background: var(--border);
     }
-    .more {
-      width: 30px;
-      height: 30px;
+    .more,
+    .back {
       border-radius: var(--radius-full);
       color: var(--muted);
     }
-    .more:hover {
+    .more:hover,
+    .back:hover {
       color: var(--text);
       background: var(--bg-hover);
+    }
+    .more {
+      width: 30px;
+      height: 30px;
     }
     .more svg {
       width: 16px;
@@ -265,12 +261,6 @@ class MessageReactionPicker extends OpenClawLitElement {
       flex: 0 0 auto;
       width: 28px;
       height: 28px;
-      border-radius: var(--radius-full);
-      color: var(--muted);
-    }
-    .back:hover {
-      color: var(--text);
-      background: var(--bg-hover);
     }
     .back svg {
       width: 14px;

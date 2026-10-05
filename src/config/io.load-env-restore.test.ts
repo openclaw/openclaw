@@ -88,10 +88,11 @@ describe("loadConfig env restoration", () => {
       await writeOpenClawConfig(home, {
         env: { vars: { DUP_DIR_TEST_VAR: "injected-value" } },
         agents: {
-          list: [
-            { id: "agent-a", agentDir: "/tmp/dup-agent-dir" },
-            { id: "agent-b", agentDir: "/tmp/dup-agent-dir" },
-          ],
+          ownership: "explicit",
+          entries: {
+            "agent-a": { agentDir: "/tmp/dup-agent-dir" },
+            "agent-b": { agentDir: "/tmp/dup-agent-dir" },
+          },
         },
       });
 

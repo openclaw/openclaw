@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
@@ -7,6 +8,7 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import {
   isRestartRecoveryTombstone,
@@ -37,6 +39,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createReplyOperation,
   isReplyRunSuccessorAdmissionBlocked,
@@ -55,6 +58,7 @@ import {
 } from "./reply-run-registry.js";
 import {
   expireVisibleStaleOperation,
+  getAttachedBackend,
   lifecycleAdmissionByOperation,
   resolveVisibleActiveWaitMs,
 } from "./reply-run-registry.state.js";
@@ -139,7 +143,6 @@ function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
 }
 
 type ReplyTurnAdmissionParams = {
-  runId?: string;
   assertRequestCurrent?: () => void;
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   agentId?: string;
@@ -173,6 +176,7 @@ type ReplyTurnAdmissionParams = {
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
+  const workSignal = getAsyncWorkSignal();
   const activeAtAdmission = replyRunRegistry.get(params.sessionKey);
   const releaseForeground =
     params.kind === "visible"
@@ -564,6 +568,36 @@ export async function admitReplyTurn(
         const releaseWorkerDatabaseClaim =
           databaseClaim && "kind" in databaseClaim ? () => databaseClaim.release() : undefined;
         if (releaseWorkerDatabaseClaim) {
+          const admittedOperation = operation;
+          let releasingForRestart = false;
+          const releaseForRestart = (signal: AbortSignal) => {
+            if (releasingForRestart || !isAgentRunRestartAbortReason(signal.reason)) {
+              return;
+            }
+            releasingForRestart = true;
+            const runId = getAttachedBackend(admittedOperation)?.runId ?? "unbound";
+            // Admission's read has settled; model/tool finalization owns no native work here.
+            void releaseWorkerDatabaseClaim().then(
+              () =>
+                log.info(
+                  `lease released: reason=restart-abort runId=${runId} kind=reply-admission`,
+                  { sessionId },
+                ),
+              (error: unknown) =>
+                log.warn(
+                  `failed to release restart-aborted reply database owner: ${formatErrorMessage(error)}`,
+                ),
+            );
+          };
+          // Shutdown can cancel the owning work after terminal settlement freezes reply abort.
+          const restartReleases = [...new Set([operation.abortSignal, workSignal])].flatMap(
+            (signal) => (signal ? [addAbortListener(signal, () => releaseForRestart(signal))] : []),
+          );
+          runAfterReplyOperationClear(operation, () => {
+            for (const listener of restartReleases) {
+              listener[Symbol.dispose]();
+            }
+          });
           registerReplyOperationSuccessorBarrier({
             operation,
             sessionId,
@@ -669,11 +703,8 @@ export async function admitReplyTurn(
         if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
           continue;
         }
-        if (params.kind === "heartbeat") {
-          return { status: "skipped", reason: "active-run", activeOperation };
-        }
         // Visible and queued turns may wait for active runs when waitForActive is set.
-        if (params.waitForActive === false) {
+        if (params.kind === "heartbeat" || params.waitForActive === false) {
           return { status: "skipped", reason: "active-run", activeOperation };
         }
         const activeWaitTimeoutMs =

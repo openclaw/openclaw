@@ -49,62 +49,45 @@ export function modelProviderFindings(
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
   const denied = new Set(readModelProviderPolicyList(policy, ["models", "providers", "deny"]));
-  const allowed = readModelProviderPolicyList(policy, ["models", "providers", "allow"]);
-  const allowedSet = new Set(allowed);
-  const findings: HealthFinding[] = [];
-
+  const allowed = new Set(readModelProviderPolicyList(policy, ["models", "providers", "allow"]));
   // Provider declarations precede model refs in the attested findings order.
-  for (const provider of evidence.modelProviders) {
-    findings.push(...modelProviderConformanceFindings(provider, denied, allowedSet, policyDocName));
-  }
-  for (const modelRef of evidence.modelRefs) {
-    findings.push(...modelProviderConformanceFindings(modelRef, denied, allowedSet, policyDocName));
-  }
-
-  return findings;
+  return [...evidence.modelProviders, ...evidence.modelRefs].flatMap((entry) => {
+    const isModelRef = "ref" in entry;
+    const provider = isModelRef ? entry.provider : entry.id;
+    if (denied.has(provider)) {
+      return [
+        policyEvidenceFinding(entry, {
+          checkId: CHECK_IDS.policyDeniedModelProvider,
+          message: isModelRef
+            ? `Model ref '${entry.ref}' uses denied provider '${provider}'.`
+            : `Model provider '${provider}' is denied by policy.`,
+          requirement: `oc://${policyDocName}/models/providers/deny`,
+          fixHint: isModelRef
+            ? "Select an approved model provider or update the policy after review."
+            : "Remove this configured provider or update the policy after review.",
+        }),
+      ];
+    }
+    if (allowed.size === 0 || allowed.has(provider)) {
+      return [];
+    }
+    return [
+      policyEvidenceFinding(entry, {
+        checkId: CHECK_IDS.policyUnapprovedModelProvider,
+        message: isModelRef
+          ? `Model ref '${entry.ref}' uses unapproved provider '${provider}'.`
+          : `Model provider '${provider}' is not in the policy allowlist.`,
+        requirement: `oc://${policyDocName}/models/providers/allow`,
+        fixHint: isModelRef
+          ? "Select an approved model provider or update the policy after review."
+          : "Use an approved model provider or update the policy after review.",
+      }),
+    ];
+  });
 }
 
 function readModelProviderPolicyList(policy: unknown, path: readonly string[]): readonly string[] {
   return readStringList(policy, path).map((provider) => normalizeProviderId(provider));
-}
-
-function modelProviderConformanceFindings(
-  entry: PolicyEvidence["modelProviders"][number] | PolicyEvidence["modelRefs"][number],
-  denied: ReadonlySet<string>,
-  allowed: ReadonlySet<string>,
-  policyDocName: string,
-): readonly HealthFinding[] {
-  const isModelRef = "ref" in entry;
-  const provider = isModelRef ? entry.provider : entry.id;
-  if (denied.has(provider)) {
-    return [
-      policyEvidenceFinding(entry, {
-        checkId: CHECK_IDS.policyDeniedModelProvider,
-        message: isModelRef
-          ? `Model ref '${entry.ref}' uses denied provider '${provider}'.`
-          : `Model provider '${provider}' is denied by policy.`,
-        requirement: `oc://${policyDocName}/models/providers/deny`,
-        fixHint: isModelRef
-          ? "Select an approved model provider or update the policy after review."
-          : "Remove this configured provider or update the policy after review.",
-      }),
-    ];
-  }
-  if (allowed.size === 0 || allowed.has(provider)) {
-    return [];
-  }
-  return [
-    policyEvidenceFinding(entry, {
-      checkId: CHECK_IDS.policyUnapprovedModelProvider,
-      message: isModelRef
-        ? `Model ref '${entry.ref}' uses unapproved provider '${provider}'.`
-        : `Model provider '${provider}' is not in the policy allowlist.`,
-      requirement: `oc://${policyDocName}/models/providers/allow`,
-      fixHint: isModelRef
-        ? "Select an approved model provider or update the policy after review."
-        : "Use an approved model provider or update the policy after review.",
-    }),
-  ];
 }
 
 export function networkFindings(

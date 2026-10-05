@@ -219,7 +219,8 @@ struct ChatMarkdownListView: View {
 
                     VStack(alignment: .leading, spacing: 7) {
                         if self.list.items[index].content.isEmpty {
-                            ChatMarkdownRenderer.styledText(" ", font: self.typography.proseFont)
+                            Text(verbatim: " ")
+                                .font(self.typography.proseFont)
                         } else {
                             ForEach(self.list.items[index].content.indices, id: \.self) { contentIndex in
                                 self.content(self.list.items[index].content[contentIndex])
@@ -241,7 +242,8 @@ struct ChatMarkdownListView: View {
         let marker = self.list.marker(for: item, at: index)
         HStack(spacing: 4) {
             if let text = marker.text {
-                ChatMarkdownRenderer.styledText(text, font: self.typography.proseFont)
+                Text(verbatim: text)
+                    .font(self.typography.proseFont)
                     .foregroundStyle(self.textColor)
                     .monospacedDigit()
                     .accessibilityLabel(self.markerAccessibilityLabel(at: index))

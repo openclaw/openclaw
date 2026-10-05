@@ -382,8 +382,6 @@ describe("native Control UI browser assets", () => {
               setControlUiPluginAuthCookieForRequest(
                 request,
                 response.res,
-                "token",
-                false,
                 resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
                 getRuntimeConfig(),
                 ["operator.read"],

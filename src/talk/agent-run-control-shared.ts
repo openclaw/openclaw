@@ -14,12 +14,7 @@ import type { RealtimeVoiceTool } from "./provider-types.js";
 import type { TalkEvent } from "./talk-events.js";
 
 /** Provider-facing control modes for status, steering, cancellation, and follow-up work. */
-export const REALTIME_VOICE_AGENT_CONTROL_MODES = [
-  "status",
-  "steer",
-  "cancel",
-  "followup",
-] as const;
+const REALTIME_VOICE_AGENT_CONTROL_MODES = ["status", "steer", "cancel", "followup"] as const;
 
 /** Closed set of realtime voice agent-control modes. */
 export type RealtimeVoiceAgentControlMode = (typeof REALTIME_VOICE_AGENT_CONTROL_MODES)[number];
@@ -58,7 +53,7 @@ export const REALTIME_VOICE_AGENT_CONTROL_TOOL: RealtimeVoiceTool = {
 };
 
 /** Classified control intent plus whether automatic tool routing is safe. */
-export type RealtimeVoiceAgentControlIntent = {
+type RealtimeVoiceAgentControlIntent = {
   mode: RealtimeVoiceAgentControlMode;
   confidence: "high" | "medium" | "low";
   reason:
@@ -103,7 +98,7 @@ export type RealtimeVoiceAgentControlResult = {
 };
 
 /** Normalize user/config/provider supplied control modes. */
-export function normalizeRealtimeVoiceAgentControlMode(
+function normalizeRealtimeVoiceAgentControlMode(
   value: unknown,
 ): RealtimeVoiceAgentControlMode | undefined {
   const normalized = normalizeOptionalLowercaseString(value);

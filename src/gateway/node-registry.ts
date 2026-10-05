@@ -24,6 +24,7 @@ import {
   type NodeApprovalSurface,
 } from "../infra/node-pairing-surface.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { parseComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 import {
@@ -38,11 +39,7 @@ import {
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { isSerializedEventPayload, type SerializedEventPayload } from "./node-event-payload.js";
 import { sendNodeWebSocketEvent } from "./node-event-send.js";
-import {
-  buildNodeInvokeCancel,
-  buildNodeInvokeInput,
-  serializeNodeEvent,
-} from "./node-invoke-request.js";
+import { serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
@@ -208,11 +205,10 @@ export class NodeRegistry {
       ) {
         return;
       }
-      this.sendEventToSession(
-        node,
-        "node.invoke.cancel",
-        buildNodeInvokeCancel({ invokeId: requestId, nodeId: pending.nodeId }),
-      );
+      this.sendEventToSession(node, "node.invoke.cancel", {
+        invokeId: requestId,
+        nodeId: pending.nodeId,
+      });
     },
     isConnectionActive: (pending) => {
       const node = this.nodesById.get(pending.nodeId);
@@ -226,16 +222,12 @@ export class NodeRegistry {
     sendInput: (invokeId, pending, seq, payloadJSON) => {
       const node = this.nodesById.get(pending.nodeId);
       return node
-        ? this.sendEventToSession(
-            node,
-            "node.invoke.input",
-            buildNodeInvokeInput({
-              invokeId,
-              nodeId: pending.nodeId,
-              seq,
-              payloadJSON,
-            }),
-          )
+        ? this.sendEventToSession(node, "node.invoke.input", {
+            id: invokeId,
+            nodeId: pending.nodeId,
+            seq,
+            payloadJSON,
+          })
         : false;
     },
     onFailedResult: (pending) => {
@@ -510,10 +502,6 @@ export class NodeRegistry {
         })
       : connect.permissions;
     connect.permissions = permissions;
-    const pathEnv = connect.pathEnv;
-    const declaredNodePluginTools: NodePluginToolDescriptor[] = [];
-    const nodePluginTools: NodePluginToolDescriptor[] = [];
-    const nodeSkills: NodeSkillDescriptor[] = [];
     const session: PairingBoundNodeSession = {
       nodeId,
       connId: client.connId,
@@ -538,12 +526,12 @@ export class NodeRegistry {
       commands,
       ...(declaredComputerUse ? { declaredComputerUse } : {}),
       ...(computerUse ? { computerUse } : {}),
-      declaredNodePluginTools,
-      nodePluginTools,
-      nodeSkills,
+      declaredNodePluginTools: [],
+      nodePluginTools: [],
+      nodeSkills: [],
       declaredPermissions,
       permissions,
-      pathEnv,
+      pathEnv: connect.pathEnv,
       connectedAtMs: Date.now(),
     };
     // Preserve the approved declaration independently of policy, so re-enabling
@@ -996,8 +984,8 @@ export class NodeRegistry {
     connId: string | undefined,
     tools: readonly NodePluginToolDescriptor[],
   ): NodeSession | null {
-    const node = this.nodesById.get(nodeId);
-    if (!node || node.connId !== connId || node.client.invalidated === true) {
+    const node = this.getRegisteredSession(nodeId);
+    if (!node || node.connId !== connId) {
       return null;
     }
     node.declaredNodePluginTools = [...tools];
@@ -1010,8 +998,8 @@ export class NodeRegistry {
     connId: string | undefined,
     skills: readonly NodeSkillDescriptor[],
   ): NodeSession | null {
-    const node = this.nodesById.get(nodeId);
-    if (!node || node.connId !== connId || node.client.invalidated === true) {
+    const node = this.getRegisteredSession(nodeId);
+    if (!node || node.connId !== connId) {
       return null;
     }
     expectDefined(NODE_SESSION_POLICIES.get(node), "registered node policy missing").skills =
@@ -1036,10 +1024,9 @@ export class NodeRegistry {
       nextPairingGeneration: string;
     },
   ): NodeSession | null {
-    const node = this.nodesById.get(nodeId);
+    const node = this.getRegisteredSession(nodeId);
     if (
       !node ||
-      node.client.invalidated === true ||
       (generationTransition !== undefined &&
         (node.connId !== generationTransition.expectedConnId ||
           node.pairingIdentity !== generationTransition.expectedPairingIdentity ||
@@ -1324,28 +1311,18 @@ export class NodeRegistry {
     payloadJSON?: SerializedEventPayload | null,
     preparePayload?: NodeEventPayloadPreparation,
   ): Promise<boolean> {
-    const previous = this.pairingGenerationEventChains.get(nodeId) ?? Promise.resolve();
-    const send = previous.then(() =>
-      this.sendEventRawForPairingGenerationNow(
-        nodeId,
-        pairingGeneration,
-        event,
-        payloadJSON,
-        preparePayload,
-      ),
-    );
-    const tail = send.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.pairingGenerationEventChains.set(nodeId, tail);
-    try {
-      return await send;
-    } finally {
-      if (this.pairingGenerationEventChains.get(nodeId) === tail) {
-        this.pairingGenerationEventChains.delete(nodeId);
-      }
-    }
+    return await enqueueKeyedTask({
+      tails: this.pairingGenerationEventChains,
+      key: nodeId,
+      task: () =>
+        this.sendEventRawForPairingGenerationNow(
+          nodeId,
+          pairingGeneration,
+          event,
+          payloadJSON,
+          preparePayload,
+        ),
+    });
   }
 
   private async sendEventRawForPairingGenerationNow(

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import * as programArgs from "../daemon/program-args.js";
@@ -12,6 +13,7 @@ import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createRuntimeProbeResult,
   expectNoteContains,
   expectNoteTitleNotCalled,
   withPlatform,
@@ -363,7 +365,6 @@ function createFinalizeArgs(
       bind: "loopback",
       authMode: "token",
       gatewayToken: undefined,
-      tailscaleMode: "off",
       ...settings,
     },
     prompter: createLaterPrompter(),
@@ -387,7 +388,7 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runExec.mockReset();
+    runExec.mockReset().mockResolvedValue(createRuntimeProbeResult());
     runTui.mockClear();
     setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset().mockReturnValue(setupCleanupExitTimer);
@@ -707,7 +708,7 @@ describe("finalizeSetupWizard", () => {
     const nextConfig = {
       agents: {
         defaults: { model: "openai/gpt-5.4-nano" },
-        list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+        entries: { main: { agentDir: "/tmp/custom-agent" } },
       },
     } satisfies OpenClawConfig;
 
@@ -743,7 +744,7 @@ describe("finalizeSetupWizard", () => {
       prompter,
       nextConfig: {
         agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+          entries: { main: { agentDir: "/tmp/custom-agent" } },
         },
       },
     });
@@ -752,7 +753,7 @@ describe("finalizeSetupWizard", () => {
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+          entries: { main: { agentDir: "/tmp/custom-agent" } },
         },
       }),
       { agentDir: "/tmp/custom-agent" },
@@ -996,16 +997,15 @@ describe("finalizeSetupWizard", () => {
           return;
         }
         const managedStartup = action !== "reused";
+        const startupTiming = resolveGatewayStartupTiming(platform);
         expect(waitForGatewayReachable).toHaveBeenCalledOnce();
         const timing = requireMockArg(waitForGatewayReachable) as {
           deadlineMs?: number;
           probeTimeoutMs?: number;
         };
-        expect(timing.deadlineMs).toBe(
-          managedStartup ? (platform === "win32" ? 90_000 : 45_000) : 15_000,
-        );
+        expect(timing.deadlineMs).toBe(managedStartup ? startupTiming.deadlineMs : 15_000);
         expect(timing.probeTimeoutMs ?? 1_500).toBe(
-          managedStartup ? (platform === "win32" ? 15_000 : 10_000) : 1_500,
+          managedStartup ? startupTiming.probeTimeoutMs : 1_500,
         );
       });
     },
@@ -1363,14 +1363,7 @@ describe("finalizeSetupWizard", () => {
     "reinstalls recorded Bun through $flow with choice=$choice",
     async ({ flow, choice }) => {
       const recordedPath = "/opt/recorded/bin/bun";
-      runExec.mockResolvedValue({
-        stdout: JSON.stringify({
-          bunVersion: "1.4.2",
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        }),
-        stderr: "",
-      });
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.2"));
       gatewayServiceIsLoaded.mockResolvedValue(true);
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],

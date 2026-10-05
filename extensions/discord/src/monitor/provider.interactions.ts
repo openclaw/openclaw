@@ -48,7 +48,6 @@ export function createDiscordProviderInteractionSurface(params: {
   nativeEnabled: boolean;
   voiceEnabled: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";
-  useAccessGroups: boolean;
   sessionPrefix: string;
   ephemeralDefault: boolean;
   threadBindings: ThreadBindingManager;
@@ -88,7 +87,6 @@ export function createDiscordProviderInteractionSurface(params: {
         discordConfig: params.discordConfig,
         accountId: params.accountId,
         groupPolicy: params.groupPolicy,
-        useAccessGroups: params.useAccessGroups,
         getManager: () => params.voiceManagerRef.current,
         ephemeralDefault: params.ephemeralDefault,
       });

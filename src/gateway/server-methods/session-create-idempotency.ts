@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
@@ -77,9 +77,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       }
     }
     let entries = entriesByOwner.get(owner);
-    const requestIdentity = createHash("sha256")
-      .update(stableStringify(request.params))
-      .digest("hex");
+    const requestIdentity = sha256Hex(stableStringify(request.params));
     const authorization: SessionCreateAuthorization = {
       role: request.client?.connect.role ?? null,
       scopes: request.client?.connect.scopes?.toSorted() ?? [],

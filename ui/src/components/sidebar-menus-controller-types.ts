@@ -42,10 +42,15 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      "sessionsLoading" | "sessionsResult" | "archiveSessionCatalog" | "sessionScopeGeneration"
+      | "sessionsLoading"
+      | "sessionsResult"
+      | "archiveSessionCatalog"
+      | "importSessionCatalog"
+      | "sessionScopeGeneration"
     >;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
+  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;

@@ -6,17 +6,10 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
-
-const statusUsageModuleLoader = createLazyImportLoader(() => import("./status-usage.runtime.js"));
-const securityAuditModuleLoader = createLazyImportLoader(
-  () => import("../security/audit.runtime.js"),
-);
-const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
 /** Runs the lightweight security audit used by status JSON/all output. */
 export async function resolveStatusSecurityAudit(params: {
@@ -24,7 +17,7 @@ export async function resolveStatusSecurityAudit(params: {
   sourceConfig: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  const { runSecurityAudit } = await securityAuditModuleLoader.load();
+  const { runSecurityAudit } = await import("../security/audit.runtime.js");
   // The audit owns setup-backed capabilities; inventory projections can name
   // accounts without carrying their channel security adapters.
   return await runSecurityAudit({
@@ -40,7 +33,7 @@ export async function resolveStatusSecurityAudit(params: {
 
 /** Loads optional usage and its credential resolver only when requested. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
-  return (await statusUsageModuleLoader.load()).resolveStatusUsageSummary(params);
+  return (await import("./status-usage.runtime.js")).resolveStatusUsageSummary(params);
 }
 
 /** Calls gateway health and lets errors propagate to deep status callers. */
@@ -49,7 +42,7 @@ export async function resolveStatusGatewayHealth(params: {
   timeoutMs?: number;
   gatewayProbeDeadlineMs: number;
 }) {
-  const { callGateway } = await gatewayCallModuleLoader.load();
+  const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
     throw new Error("Gateway probe budget exhausted before health check.");
@@ -79,7 +72,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
     // Preserve the probe error so status-all can explain why health was not called.
     return { error: params.gatewayProbeError ?? "gateway unreachable" };
   }
-  const { callGateway } = await gatewayCallModuleLoader.load();
+  const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
     return { error: "Gateway probe budget exhausted before health check." };
@@ -111,7 +104,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   if (!params.gatewayReachable) {
     return { ok: false, error: "gateway unreachable" };
   }
-  const { callGateway } = await gatewayCallModuleLoader.load();
+  const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
     return { ok: false, error: "Gateway probe budget exhausted before diagnostics." };
@@ -138,7 +131,7 @@ async function resolveStatusLastHeartbeat(params: {
   if (!params.gatewayReachable) {
     return null;
   }
-  const { callGateway } = await gatewayCallModuleLoader.load();
+  const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
     return null;
@@ -187,7 +180,6 @@ type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
-/** Resolves the full runtime snapshot, including optional security audit, for status JSON/text. */
 export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;

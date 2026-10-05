@@ -1028,7 +1028,7 @@ describe("tryDispatchAcpReplyCore", () => {
     await runDispatch({
       bodyForAgent: "describe image",
       cfg: createAcpTestConfig({
-        agents: { list: [{ id: "codex-acp", agentDir }] },
+        agents: { entries: { "codex-acp": { agentDir } } },
         channels: { imessage: { attachmentRoots: ["/tmp/acp-inbound"] } },
       }),
       ctxOverrides: {

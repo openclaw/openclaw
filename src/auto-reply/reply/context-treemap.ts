@@ -1,4 +1,3 @@
-// Builds deterministic compact treemaps for context file summaries.
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -16,11 +15,10 @@ type Rect = {
   height: number;
 };
 
-type Rgba = {
+type Rgb = {
   r: number;
   g: number;
   b: number;
-  a: number;
 };
 
 type TreemapLeaf = {
@@ -31,7 +29,7 @@ type TreemapLeaf = {
 type TreemapGroup = {
   name: string;
   value: number;
-  color: Rgba;
+  color: Rgb;
   leaves: TreemapLeaf[];
 };
 
@@ -98,18 +96,13 @@ const FONT: Record<string, string[]> = {
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
 };
 
-function rgba(r: number, g: number, b: number, a = 255): Rgba {
-  return { r, g, b, a };
+function rgb(r: number, g: number, b: number): Rgb {
+  return { r, g, b };
 }
 
-function mixColor(a: Rgba, b: Rgba, amount: number): Rgba {
+function mixColor(a: Rgb, b: Rgb, amount: number): Rgb {
   const t = Math.max(0, Math.min(1, amount));
-  return rgba(
-    a.r + (b.r - a.r) * t,
-    a.g + (b.g - a.g) * t,
-    a.b + (b.b - a.b) * t,
-    a.a + (b.a - a.a) * t,
-  );
+  return rgb(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t);
 }
 
 const numberFormat = new Intl.NumberFormat("en-US");
@@ -180,11 +173,7 @@ function layoutBinary<T extends { value: number }>(
 class PngCanvas {
   readonly data = Buffer.alloc(WIDTH * HEIGHT * 4);
 
-  fill(color: Rgba): void {
-    this.rect({ x: 0, y: 0, width: WIDTH, height: HEIGHT }, color);
-  }
-
-  rect(rect: Rect, color: Rgba): void {
+  rect(rect: Rect, color: Rgb): void {
     const x0 = Math.max(0, Math.floor(rect.x));
     const y0 = Math.max(0, Math.floor(rect.y));
     const x1 = Math.min(WIDTH, Math.ceil(rect.x + rect.width));
@@ -195,12 +184,12 @@ class PngCanvas {
         this.data[offset] = color.r;
         this.data[offset + 1] = color.g;
         this.data[offset + 2] = color.b;
-        this.data[offset + 3] = color.a;
+        this.data[offset + 3] = 255;
       }
     }
   }
 
-  stroke(rect: Rect, color: Rgba, width: number): void {
+  stroke(rect: Rect, color: Rgb, width: number): void {
     this.rect({ x: rect.x, y: rect.y, width: rect.width, height: width }, color);
     this.rect(
       { x: rect.x, y: rect.y + rect.height - width, width: rect.width, height: width },
@@ -210,7 +199,7 @@ class PngCanvas {
     this.rect({ x: rect.x + rect.width - width, y: rect.y, width, height: rect.height }, color);
   }
 
-  text(x: number, y: number, text: string, color: Rgba, scale: number): void {
+  text(x: number, y: number, text: string, color: Rgb, scale: number): void {
     let cursorX = Math.floor(x);
     const cursorY = Math.floor(y);
     for (const rawChar of text) {
@@ -251,7 +240,7 @@ function drawLabel(
   canvas: PngCanvas,
   rect: Rect,
   lines: string[],
-  color: Rgba,
+  color: Rgb,
   scale: number,
 ): void {
   const charWidth = 6 * scale;
@@ -273,15 +262,10 @@ function drawLabel(
   });
 }
 
-function treemapGroup(params: { name: string; color: Rgba; leaves: TreemapLeaf[] }): TreemapGroup {
-  return { ...params, value: totalValue(params.leaves) };
-}
-
-function buildGroups(params: {
-  report: SessionSystemPromptReport;
-  conversation: TreemapLeaf[];
-}): TreemapGroup[] {
-  const { report } = params;
+function buildGroups(
+  report: SessionSystemPromptReport,
+  conversation: TreemapLeaf[],
+): TreemapGroup[] {
   const injectedTotal = report.injectedWorkspaceFiles.reduce(
     (sum, file) => (file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars),
     0,
@@ -293,14 +277,14 @@ function buildGroups(params: {
     .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
     .filter((tool) => tool.value > 0);
   const groups = [
-    treemapGroup({
+    {
       name: "Conversation",
-      color: rgba(201, 82, 96),
-      leaves: params.conversation,
-    }),
-    treemapGroup({
+      color: rgb(201, 82, 96),
+      leaves: conversation,
+    },
+    {
       name: "Workspace files",
-      color: rgba(58, 145, 91),
+      color: rgb(58, 145, 91),
       leaves: [
         ...report.injectedWorkspaceFiles
           .filter((file) => file.injectionStatus !== "native_unverified")
@@ -310,40 +294,42 @@ function buildGroups(params: {
           })),
         { name: "Project context frame", value: projectFrameChars },
       ],
-    }),
-    treemapGroup({
+    },
+    {
       name: "System prompt",
-      color: rgba(222, 138, 46),
+      color: rgb(222, 138, 46),
       leaves: [{ name: "Base instructions", value: systemBaseChars }],
-    }),
-    treemapGroup({
+    },
+    {
       name: "Tool schemas",
-      color: rgba(59, 118, 184),
+      color: rgb(59, 118, 184),
       leaves: tools,
-    }),
-    treemapGroup({
+    },
+    {
       name: "Skills",
-      color: rgba(132, 91, 173),
+      color: rgb(132, 91, 173),
       leaves: report.skills.entries.map((skill) => ({
         name: skill.name,
         value: skill.blockChars,
       })),
-    }),
+    },
   ];
-  return groups.filter((group) => group.value > 0);
+  return groups
+    .map((group) => Object.assign(group, { value: totalValue(group.leaves) }))
+    .filter((group) => group.value > 0);
 }
 
 function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): void {
   const groupRects = layoutBinary(groups, rect);
   groupRects.forEach(({ item: group, rect: groupRect }, groupIndex) => {
-    const groupFill = mixColor(group.color, rgba(18, 22, 27), 0.16);
+    const groupFill = mixColor(group.color, rgb(18, 22, 27), 0.16);
     canvas.rect(groupRect, groupFill);
-    canvas.stroke(groupRect, rgba(14, 18, 22), 3);
+    canvas.stroke(groupRect, rgb(14, 18, 22), 3);
     drawLabel(
       canvas,
       { x: groupRect.x + 4, y: groupRect.y + 4, width: groupRect.width - 8, height: 38 },
       [group.name, formatSize(group.value)],
-      rgba(248, 250, 252),
+      rgb(248, 250, 252),
       groupRect.width > 260 && groupRect.height > 120 ? 2 : 1,
     );
     const childRect = inset(
@@ -358,15 +344,15 @@ function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): voi
     const leafRects = layoutBinary(group.leaves, childRect);
     leafRects.forEach(({ item: leaf, rect: leafRect }, leafIndex) => {
       const shade = (leafIndex % 7) / 10 + (groupIndex % 2) * 0.08;
-      const fill = mixColor(group.color, rgba(255, 255, 255), shade);
+      const fill = mixColor(group.color, rgb(255, 255, 255), shade);
       const inner = inset(leafRect, 1.5);
       canvas.rect(inner, fill);
-      canvas.stroke(inner, rgba(8, 12, 16), 1);
+      canvas.stroke(inner, rgb(8, 12, 16), 1);
       if (inner.width * inner.height > 5200) {
         const textColor =
           fill.r * 0.299 + fill.g * 0.587 + fill.b * 0.114 > 150
-            ? rgba(16, 23, 31)
-            : rgba(248, 250, 252);
+            ? rgb(16, 23, 31)
+            : rgb(248, 250, 252);
         drawLabel(canvas, inner, [leaf.name, formatSize(leaf.value)], textColor, 1);
       }
     });
@@ -374,19 +360,19 @@ function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): voi
 }
 
 function drawLegend(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect, total: number): void {
-  canvas.rect(rect, rgba(245, 247, 250));
-  canvas.stroke(rect, rgba(213, 220, 228), 1);
-  canvas.text(rect.x + 18, rect.y + 18, "LEGEND", rgba(30, 41, 59), 2);
+  canvas.rect(rect, rgb(245, 247, 250));
+  canvas.stroke(rect, rgb(213, 220, 228), 1);
+  canvas.text(rect.x + 18, rect.y + 18, "LEGEND", rgb(30, 41, 59), 2);
   let y = rect.y + 58;
   groups.forEach((group) => {
     canvas.rect({ x: rect.x + 18, y, width: 18, height: 18 }, group.color);
-    canvas.stroke({ x: rect.x + 18, y, width: 18, height: 18 }, rgba(15, 23, 42), 1);
+    canvas.stroke({ x: rect.x + 18, y, width: 18, height: 18 }, rgb(15, 23, 42), 1);
     const pct = total > 0 ? `${Math.round((group.value / total) * 100)} PCT` : "0 PCT";
     drawLabel(
       canvas,
       { x: rect.x + 46, y: y - 1, width: rect.width - 62, height: 38 },
       [group.name, pct],
-      rgba(30, 41, 59),
+      rgb(30, 41, 59),
       1,
     );
     y += 54;
@@ -399,15 +385,15 @@ export async function renderContextTreemapPng(params: {
   session: ContextTreemapSessionStats;
   conversation: TreemapLeaf[];
 }): Promise<{ path: string; trackedChars: number; caption: string }> {
-  const groups = buildGroups({ report: params.report, conversation: params.conversation });
+  const groups = buildGroups(params.report, params.conversation);
   const conversationChars = totalValue(params.conversation);
   const trackedChars = totalValue(groups);
   const canvas = new PngCanvas();
-  canvas.fill(rgba(238, 241, 245));
-  canvas.rect({ x: 0, y: 0, width: WIDTH, height: HEADER_HEIGHT }, rgba(20, 26, 34));
-  canvas.text(PADDING, 24, "CONTEXT TREEMAP", rgba(248, 250, 252), 3);
+  canvas.rect({ x: 0, y: 0, width: WIDTH, height: HEIGHT }, rgb(238, 241, 245));
+  canvas.rect({ x: 0, y: 0, width: WIDTH, height: HEADER_HEIGHT }, rgb(20, 26, 34));
+  canvas.text(PADDING, 24, "CONTEXT TREEMAP", rgb(248, 250, 252), 3);
   const sourceLine = `${params.report.source.toUpperCase()} / ${params.report.provider ?? "provider"} / ${params.report.model ?? "model"}`;
-  canvas.text(PADDING, 58, sanitizeLabel(sourceLine), rgba(176, 196, 222), 1);
+  canvas.text(PADDING, 58, sanitizeLabel(sourceLine), rgb(176, 196, 222), 1);
   const treemapRect = {
     x: PADDING,
     y: HEADER_HEIGHT + PADDING,
@@ -439,7 +425,7 @@ export async function renderContextTreemapPng(params: {
     PADDING,
     footerY,
     `${formatSize(trackedChars)} / ${actual} / ${window}`,
-    rgba(51, 65, 85),
+    rgb(51, 65, 85),
     1,
   );
   const outPath = path.join(

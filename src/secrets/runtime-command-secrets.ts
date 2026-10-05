@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
@@ -69,35 +69,23 @@ function isProviderOverridePath(params: {
   path: string;
   providerOverrides: CommandSecretProviderOverrides | undefined;
 }): boolean {
-  const webSearch = normalizeOptionalString(params.providerOverrides?.webSearch);
-  if (webSearch) {
-    if (params.config.tools?.web?.search?.enabled === false) {
+  for (const [overrideKey, kind, contract] of [
+    ["webSearch", "search", "webSearchProviders"],
+    ["webFetch", "fetch", "webFetchProviders"],
+  ] as const) {
+    const provider = normalizeOptionalString(params.providerOverrides?.[overrideKey]);
+    if (!provider) {
+      continue;
+    }
+    if (params.config.tools?.web?.[kind]?.enabled === false) {
       return false;
     }
     const pluginId = pluginIdFromRuntimeWebPath(params.path);
-    if (pluginId && params.path.endsWith(".config.webSearch.apiKey")) {
+    if (pluginId && params.path.endsWith(`.config.${overrideKey}.apiKey`)) {
       return (
         resolveManifestContractOwnerPluginId({
-          contract: "webSearchProviders",
-          value: webSearch,
-          origin: "bundled",
-          config: params.config,
-        }) === pluginId
-      );
-    }
-  }
-
-  const webFetch = normalizeOptionalString(params.providerOverrides?.webFetch);
-  if (webFetch) {
-    if (params.config.tools?.web?.fetch?.enabled === false) {
-      return false;
-    }
-    const pluginId = pluginIdFromRuntimeWebPath(params.path);
-    if (pluginId && params.path.endsWith(".config.webFetch.apiKey")) {
-      return (
-        resolveManifestContractOwnerPluginId({
-          contract: "webFetchProviders",
-          value: webFetch,
+          contract,
+          value: provider,
           origin: "bundled",
           config: params.config,
         }) === pluginId
@@ -132,11 +120,7 @@ function restoreInactiveWebCommandSecretTargets(params: {
     }
     // Provider overrides can make a web SecretRef active for this command only. Other web refs
     // must be restored from source config so assignment analysis keeps them inactive.
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }
@@ -214,11 +198,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
     if (!activePaths.has(target.path)) {
       continue;
     }
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }
@@ -272,13 +252,8 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
     return Promise.resolve({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
   }
   return resolveCommandSecretsFromSnapshot({
+    ...params,
     activeSnapshot,
-    commandName: params.commandName,
-    targetIds: params.targetIds,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-    providerOverrides: params.providerOverrides,
   });
 }
 

@@ -27,6 +27,7 @@ type PdfModelConfigContext = {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 };
 
 function formatProviderModelRef(providerId: string, modelId: string): string {
@@ -73,15 +74,7 @@ function resolveImageCandidateRefs(
     workspaceDir: params.workspaceDir,
   })
     .filter((providerId) => !params.filter || params.filter(providerId))
-    .filter((providerId) =>
-      hasProviderAuthForTool({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
-    )
+    .filter((providerId) => hasProviderAuthForTool({ ...params, provider: providerId }))
     .map((providerId) => {
       const documentImageModel = resolveDocumentMediaModel({
         cfg: params.cfg,
@@ -135,16 +128,7 @@ function resolveTextExtractionCandidateRefs(
     }),
   ];
   for (const providerId of providerIds) {
-    if (
-      !providerId ||
-      !hasProviderAuthForTool({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      })
-    ) {
+    if (!providerId || !hasProviderAuthForTool({ ...params, provider: providerId })) {
       continue;
     }
     const documentTextModel = resolveDocumentMediaModel({
@@ -194,31 +178,15 @@ function resolveTextExtractionCandidateRefs(
 export function resolvePdfModelConfigForTool(
   params: PdfModelConfigContext & { activeModel?: PdfToolActiveModel },
 ): ImageModelConfig | null {
-  const explicitPdf = coercePdfModelConfig(params.cfg);
-  if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
-    // PDF-specific config wins over generic image model config.
-    return resolveConfiguredImageModelRefs({
-      cfg: params.cfg,
-      imageModelConfig: explicitPdf,
-    });
-  }
-
-  const explicitImage = coerceImageModelConfig(params.cfg);
-  if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return resolveConfiguredImageModelRefs({
-      cfg: params.cfg,
-      imageModelConfig: explicitImage,
-    });
+  // PDF-specific config wins over generic image model config.
+  for (const coerce of [coercePdfModelConfig, coerceImageModelConfig]) {
+    const explicit = coerce(params.cfg);
+    if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+      return resolveConfiguredImageModelRefs({ cfg: params.cfg, imageModelConfig: explicit });
+    }
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
-  const googleOk = hasProviderAuthForTool({
-    provider: "google",
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-  });
 
   const activeProvider = params.activeModel?.provider.trim();
   const activeModel = params.activeModel?.model.trim();
@@ -233,24 +201,12 @@ export function resolvePdfModelConfigForTool(
       document: "pdf",
       mode: "image",
     }) !== false &&
-    hasProviderAuthForTool({
-      provider: activeProvider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    })
+    hasProviderAuthForTool({ ...params, provider: activeProvider })
       ? formatProviderModelRef(activeProvider, activeModel)
       : null;
   let preferred: string | null = null;
 
-  const providerOk = hasProviderAuthForTool({
-    provider: primary.provider,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-  });
+  const providerOk = hasProviderAuthForTool({ ...params, provider: primary.provider });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
     provider: primary.provider,
@@ -269,10 +225,7 @@ export function resolvePdfModelConfigForTool(
     providerId: primary.provider,
   });
   const nativePdfCandidates = resolveImageCandidateRefs({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
+    ...params,
     filter: (providerId) =>
       providerSupportsNativePdfDocument({
         cfg: params.cfg,
@@ -280,19 +233,8 @@ export function resolvePdfModelConfigForTool(
         providerId,
       }),
   });
-  const genericImageCandidates = resolveImageCandidateRefs({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
-  });
-  const textExtractionCandidates = resolveTextExtractionCandidateRefs({
-    cfg: params.cfg,
-    primary,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
-  });
+  const genericImageCandidates = resolveImageCandidateRefs(params);
+  const textExtractionCandidates = resolveTextExtractionCandidateRefs({ ...params, primary });
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
@@ -312,13 +254,7 @@ export function resolvePdfModelConfigForTool(
       if (
         !providerId ||
         documentImageModel === false ||
-        !hasProviderAuthForTool({
-          provider: providerId,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        })
+        !hasProviderAuthForTool({ ...params, provider: providerId })
       ) {
         continue;
       }
@@ -345,10 +281,7 @@ export function resolvePdfModelConfigForTool(
     ? [...nativePdfCandidates, ...textExtractionCandidates, ...genericImageCandidates]
     : [...nativePdfCandidates, ...genericImageCandidates, ...textExtractionCandidates];
 
-  if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
-    // Google native PDF handling is preferred when auth and a configured vision model are present.
-    preferred = providerVision;
-  } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
+  if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
   } else {
     preferred = fallbackCandidates[0] ?? null;

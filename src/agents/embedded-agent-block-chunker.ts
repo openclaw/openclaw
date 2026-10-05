@@ -65,7 +65,7 @@ function findSafeSentenceBreakIndex(
   const matches = text.matchAll(/[.!?](?=\s|$)/g);
   let sentenceIdx = -1;
   for (const match of matches) {
-    const at = match.index ?? -1;
+    const at = match.index;
     if (at < minChars) {
       continue;
     }
@@ -149,7 +149,6 @@ export class EmbeddedBlockChunker {
     this.#chunking = chunking;
   }
 
-  /** Add streamed text to the pending chunk buffer. */
   append(text: string) {
     if (!text) {
       return;
@@ -234,12 +233,10 @@ export class EmbeddedBlockChunker {
     return changed;
   }
 
-  /** Return the currently buffered text for tests and flush logic. */
   get bufferedText() {
     return this.#buffer ? `${this.#reopenPrefix}${this.#buffer}` : "";
   }
 
-  /** Return true when there is pending text to drain. */
   hasBuffered(): boolean {
     return this.#buffer.length > 0;
   }
@@ -300,8 +297,8 @@ export class EmbeddedBlockChunker {
       this.#codeContext = "";
       return;
     }
-    const minChars = Math.max(1, Math.floor(chunking?.minChars ?? 1));
-    const maxChars = Math.max(minChars, Math.floor(chunking?.maxChars ?? Infinity));
+    const minChars = Math.max(1, Math.floor(chunking.minChars ?? 1));
+    const maxChars = Math.max(minChars, Math.floor(chunking.maxChars ?? Infinity));
     const force = params.force || availableLength >= maxChars;
     const originalSource = this.bufferedText;
     if (originalSource.length < minChars && !force) {
@@ -538,9 +535,6 @@ export class EmbeddedBlockChunker {
         ? fenceSplit.closeFenceLine
         : `\n${fenceSplit.closeFenceLine}`;
       rawChunk = `${rawChunk}${closeFence}`;
-    }
-
-    if (fenceSplit) {
       const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
       if (absoluteBreakIdx === closeFenceStart) {
         // The synthetic closer already owns this boundary; replaying the source
@@ -577,31 +571,19 @@ export class EmbeddedBlockChunker {
     }
     const preference = chunking.breakPreference ?? "paragraph";
 
-    if (preference === "paragraph") {
-      const paragraphIdx = findSafeLineBreakIndex({
+    const separators: Array<"\n" | "\n\n"> =
+      preference === "paragraph" ? ["\n\n", "\n"] : preference === "newline" ? ["\n"] : [];
+    for (const separator of separators) {
+      const index = findSafeLineBreakIndex({
         text: buffer,
         unsafeSpans,
         minChars,
         reverse,
-        separator: "\n\n",
+        separator,
         offset,
       });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
-      }
-    }
-
-    if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeLineBreakIndex({
-        text: buffer,
-        unsafeSpans,
-        minChars,
-        reverse,
-        separator: "\n",
-        offset,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
+      if (index !== -1) {
+        return { index };
       }
     }
 
@@ -730,10 +712,7 @@ function findNextParagraphBreak(
   re.lastIndex = startIndex;
   let match: RegExpExecArray | null;
   while ((match = re.exec(buffer)) !== null) {
-    const index = match.index ?? -1;
-    if (index < 0) {
-      continue;
-    }
+    const index = match.index;
     if (index - startIndex < minCharsFromStart) {
       continue;
     }

@@ -276,7 +276,7 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
     hasParentId = Object.hasOwn(entry, "parentId"),
   ): void {
     if (entry.type === "label" && !this.byId.has(entry.targetId)) {
-      this.opaqueParentsById.set(entry.id, this.resolveCanonicalParentId(entry.parentId));
+      this.opaqueParentsById.set(entry.id, entry.parentId);
       return;
     }
     const crossesResetBoundary =

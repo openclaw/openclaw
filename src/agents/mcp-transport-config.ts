@@ -6,12 +6,12 @@ import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
-import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import { resolveHttpMcpServerLaunchConfig, type HttpMcpTransportType } from "./mcp-http.js";
 import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
@@ -100,71 +100,6 @@ function getBooleanField(rawServer: unknown, key: string): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function getStringField(rawServer: unknown, keys: readonly string[]): string | undefined {
-  const record = asOptionalObjectRecord(rawServer);
-  return record ? readTrimmedStringAlias(record, keys) : undefined;
-}
-
-function resolveHttpTransportConfig(
-  serverName: string,
-  rawServer: unknown,
-  transportType: HttpMcpTransportType,
-  logWarnings: boolean,
-): ResolvedHttpMcpTransportConfig | null {
-  const launch = resolveHttpMcpServerLaunchConfig(
-    rawServer,
-    logWarnings
-      ? {
-          transportType,
-          onDroppedHeader: (key: string) => {
-            logWarn(
-              `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
-            );
-          },
-          onMalformedHeaders: () => {
-            logWarn(
-              `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
-            );
-          },
-        }
-      : { transportType },
-  );
-  if (!launch.ok) {
-    return null;
-  }
-  return {
-    kind: "http",
-    transportType: launch.config.transportType,
-    url: launch.config.url,
-    headers: launch.config.headers,
-    ...(rawServer &&
-    typeof rawServer === "object" &&
-    (rawServer as { auth?: unknown }).auth === "oauth"
-      ? { auth: "oauth" as const }
-      : {}),
-    ...(rawServer &&
-    typeof rawServer === "object" &&
-    (rawServer as { oauth?: unknown }).oauth &&
-    typeof (rawServer as { oauth?: unknown }).oauth === "object" &&
-    !Array.isArray((rawServer as { oauth?: unknown }).oauth)
-      ? { oauth: (rawServer as { oauth: ResolvedMcpOAuthConfig }).oauth }
-      : {}),
-    ...(getBooleanField(rawServer, "sslVerify") !== undefined
-      ? { sslVerify: getBooleanField(rawServer, "sslVerify") }
-      : {}),
-    ...(getStringField(rawServer, ["clientCert"])
-      ? { clientCert: getStringField(rawServer, ["clientCert"]) }
-      : {}),
-    ...(getStringField(rawServer, ["clientKey"])
-      ? { clientKey: getStringField(rawServer, ["clientKey"]) }
-      : {}),
-    description: redactSensitiveUrl(launch.config.url),
-    connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
-  };
-}
-
 /** Resolve one MCP server's launch transport config, or null when unsupported. */
 export function resolveMcpTransportConfig(
   serverName: string,
@@ -213,22 +148,51 @@ export function resolveMcpTransportConfig(
     return null;
   }
 
-  const httpTransport = resolveHttpTransportConfig(
-    serverName,
+  const transportType = effectiveTransport === "streamable-http" ? "streamable-http" : "sse";
+  const launch = resolveHttpMcpServerLaunchConfig(
     rawServer,
-    effectiveTransport === "streamable-http" ? "streamable-http" : "sse",
-    logWarnings,
+    logWarnings
+      ? {
+          transportType,
+          onDroppedHeader: (key: string) => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
+            );
+          },
+          onMalformedHeaders: () => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
+            );
+          },
+        }
+      : { transportType },
   );
-  if (httpTransport) {
-    return httpTransport;
+  if (!launch.ok) {
+    if (logWarnings) {
+      logWarn(
+        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${launch.reason}.`,
+      );
+    }
+    return null;
   }
-
-  const httpLaunch = resolveHttpMcpServerLaunchConfig(rawServer);
-  const httpReason = httpLaunch.ok ? "not an HTTP MCP server" : httpLaunch.reason;
-  if (logWarnings) {
-    logWarn(
-      `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${httpReason}.`,
-    );
-  }
-  return null;
+  const record = asOptionalObjectRecord(rawServer);
+  const oauth = record?.oauth;
+  const sslVerify = getBooleanField(rawServer, "sslVerify");
+  const clientCert = normalizeOptionalString(record?.clientCert);
+  const clientKey = normalizeOptionalString(record?.clientKey);
+  return {
+    kind: "http",
+    transportType: launch.config.transportType,
+    url: launch.config.url,
+    headers: launch.config.headers,
+    ...(record?.auth === "oauth" ? { auth: "oauth" as const } : {}),
+    ...(isRecord(oauth) ? { oauth: oauth as ResolvedMcpOAuthConfig } : {}),
+    ...(sslVerify !== undefined ? { sslVerify } : {}),
+    ...(clientCert ? { clientCert } : {}),
+    ...(clientKey ? { clientKey } : {}),
+    description: redactSensitiveUrl(launch.config.url),
+    connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+    supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
+  };
 }

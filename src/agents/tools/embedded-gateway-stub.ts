@@ -244,12 +244,10 @@ async function handleChatHistory(params: Record<string, unknown>) {
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
           projected: page.messages,
+          ...(pagination.messageSequences ? { messageSequences: pagination.messageSequences } : {}),
         })
       : 0;
-  const hasMore =
-    pagination !== undefined &&
-    pagination.exhausted !== true &&
-    nextOffset < pagination.totalMessages;
+  const hasMore = pagination !== undefined && nextOffset < pagination.totalMessages;
 
   return {
     sessionKey,

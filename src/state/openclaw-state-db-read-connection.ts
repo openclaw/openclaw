@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import {
   createSqliteLifecycleAggregateError,
@@ -22,6 +25,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-state-context.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -30,6 +34,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
+import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
@@ -68,8 +73,11 @@ function retireReader(reader: RetainedReader): void {
 }
 
 function scheduleReaderRetirement(reader: RetainedReader): void {
-  // Bun delegates the same TTL to pool idle retirement, after task custody is released.
-  if (process.versions.bun || retainedReaders.get(reader.identity.key) !== reader) {
+  // Unproven close delegates the same TTL to pool retirement after task custody is released.
+  if (
+    !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources ||
+    retainedReaders.get(reader.identity.key) !== reader
+  ) {
     return;
   }
   clearTimeout(reader.idleTimer);
@@ -177,7 +185,11 @@ function assertStateReadSchemaForPolicy(
   existingSchema: boolean,
 ): void {
   if (existingSchema) {
-    assertExistingOpenClawStateRuntimeSchema(database, pathname);
+    assertExistingOpenClawStateRuntimeSchema(
+      database,
+      pathname,
+      getSqliteWorkerStateIntegrityAdmission(),
+    );
   } else {
     assertSupportedStateSchemaVersion(database, pathname);
   }
@@ -239,6 +251,9 @@ export function readOpenClawStateReadOnlyLocation<T>(
       });
       result = { status: "available", value: operation(opened.database) };
     } catch (error) {
+      if (isSqliteCorruptionError(error)) {
+        invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
+      }
       result = { status: "unavailable", error };
     }
     const location = typeof source === "string" ? source : source.location;
@@ -454,6 +469,7 @@ function openStateReadConnectionResult(
     },
   };
   try {
+    enableNodeSqliteKyselyStatementCache(db);
     if (expectedIdentity !== undefined) {
       assertExistingDatabaseIdentity(location, expectedIdentity);
     }

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { GatewayProtocolClient, type GatewayProtocolSocketHandlers } from "./protocol-client.js";
@@ -107,9 +108,7 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
       client.addEventListener(staleListener);
       client.start();
       const connection = connections[0];
-      if (!connection) {
-        throw new Error("synthetic protocol connection missing");
-      }
+      assert(connection);
       // A real WebSocket's close notification arrives after close() returns.
       connection.close.mockImplementation(() => {});
 
@@ -179,65 +178,78 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
     client.stop();
   });
 
-  test.each([
-    { recovery: "stops the socket", restart: false },
-    { recovery: "replaces the socket", restart: true },
-  ])("drops a gapped frame when recovery $recovery", ({ restart }) => {
-    const onEvent = vi.fn();
-    const listener = vi.fn();
-    const onGap = vi.fn(() => {
-      client.stop();
-      if (restart) {
-        client.start();
-      }
-    });
-    const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
-    client.addEventListener(listener);
-    client.start();
-    const first = connections[0];
-    if (!first) {
-      throw new Error("synthetic protocol connection missing");
-    }
-    first.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
-    );
-    onEvent.mockClear();
-    listener.mockClear();
-
-    first.handlers.message(
-      JSON.stringify({
-        type: "event",
-        event: "board.command",
-        payload: { command: "stale" },
-        seq: 3,
-      }),
-    );
-
-    expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 2, received: 3 });
-    expect(onEvent).not.toHaveBeenCalled();
-    expect(listener).not.toHaveBeenCalled();
-    expect(connections).toHaveLength(restart ? 2 : 1);
-
-    if (restart) {
-      const replacement = connections[1];
-      if (!replacement) {
-        throw new Error("synthetic replacement protocol connection missing");
-      }
-      const fresh = {
+  test.each(["stop", "replace", "reconnect"])(
+    "drops gapped frames during %s recovery",
+    async (recovery) => {
+      vi.useFakeTimers();
+      const onEvent = vi.fn();
+      const listener = vi.fn();
+      const onGap = vi.fn(() => {
+        if (recovery !== "reconnect") {
+          client.stop();
+          if (recovery === "replace") {
+            client.start();
+          }
+        }
+      });
+      const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
+      client.addEventListener(listener);
+      client.start();
+      const first = connections[0];
+      assert(first);
+      first.handlers.message(
+        JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
+      );
+      onEvent.mockClear();
+      listener.mockClear();
+      const gapped = {
         type: "event" as const,
-        event: "board.command",
-        payload: { command: "current" },
-        seq: 2,
+        event: recovery === "reconnect" ? "chat" : "board.command",
+        payload:
+          recovery === "reconnect"
+            ? { runId: "run-1", state: "delta", deltaText: "lost-prefix suffix" }
+            : { command: "stale" },
+        seq: 3,
       };
-      replacement.handlers.message(JSON.stringify(fresh));
-
-      expect(onGap).toHaveBeenCalledOnce();
-      expect(onEvent).toHaveBeenCalledExactlyOnceWith(fresh);
-      expect(listener).toHaveBeenCalledExactlyOnceWith(fresh);
-    }
-
-    client.stop();
-  });
+      first.handlers.message(JSON.stringify(gapped));
+      expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 2, received: 3 });
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+      expect(connections).toHaveLength(recovery === "replace" ? 2 : 1);
+      if (recovery === "reconnect") {
+        expect(first.close).toHaveBeenCalledExactlyOnceWith(4000, "event sequence gap");
+        first.handlers.message(
+          JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 4 }),
+        );
+        expect(onGap).toHaveBeenCalledOnce();
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(listener).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      if (recovery !== "stop") {
+        const replacement = connections[1];
+        assert(replacement);
+        const fresh =
+          recovery === "replace"
+            ? { type: "event", event: "board.command", payload: { command: "current" }, seq: 2 }
+            : {
+                ...gapped,
+                seq: 10,
+                payload: {
+                  runId: "run-1",
+                  state: "delta",
+                  deltaText: "suffix",
+                  message: { role: "assistant", content: "complete prefix and suffix" },
+                },
+              };
+        replacement.handlers.message(JSON.stringify(fresh));
+        expect(onGap).toHaveBeenCalledOnce();
+        expect(onEvent).toHaveBeenCalledExactlyOnceWith(fresh);
+        expect(listener).toHaveBeenCalledExactlyOnceWith(fresh);
+      }
+      client.stop();
+    },
+  );
 
   test.each(["final", "aborted", "error"])(
     "delivers a gap-revealing chat %s before recovery retires its socket",
@@ -253,9 +265,7 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
       client.addEventListener(() => calls.push("listener"));
       client.start();
       const connection = connections[0];
-      if (!connection) {
-        throw new Error("Expected a protocol connection");
-      }
+      assert(connection);
       connection.handlers.message(
         JSON.stringify({ type: "event", event: "board.changed", seq: 1, payload: {} }),
       );
@@ -273,220 +283,94 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
     },
   );
 
-  test("reconnects and rejects append frames when gap recovery leaves the socket active", async () => {
-    vi.useFakeTimers();
-    const onEvent = vi.fn();
-    const onGap = vi.fn();
-    const listener = vi.fn();
-    const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
-    client.addEventListener(listener);
-    client.start();
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-    connection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
-    );
-    onEvent.mockClear();
-    listener.mockClear();
-    const gapped = {
-      type: "event" as const,
-      event: "chat",
-      payload: { runId: "run-1", state: "delta", deltaText: "lost-prefix suffix" },
-      seq: 3,
-    };
-
-    connection.handlers.message(JSON.stringify(gapped));
-
-    expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 2, received: 3 });
-    expect(onEvent).not.toHaveBeenCalled();
-    expect(listener).not.toHaveBeenCalled();
-    expect(connection.close).toHaveBeenCalledExactlyOnceWith(4000, "event sequence gap");
-
-    const next = {
-      type: "event" as const,
-      event: "board.changed",
-      payload: {},
-      seq: 4,
-    };
-    connection.handlers.message(JSON.stringify(next));
-
-    expect(onGap).toHaveBeenCalledOnce();
-    expect(onEvent).not.toHaveBeenCalled();
-    expect(listener).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(10);
-    const replacement = connections[1];
-    if (!replacement) {
-      throw new Error("synthetic gap recovery connection missing");
-    }
-    const baseline = {
-      ...gapped,
-      seq: 10,
-      payload: {
-        runId: "run-1",
-        state: "delta",
-        deltaText: "suffix",
-        message: { role: "assistant", content: "complete prefix and suffix" },
-      },
-    };
-    replacement.handlers.message(JSON.stringify(baseline));
-    expect(onEvent).toHaveBeenCalledExactlyOnceWith(baseline);
-    expect(listener).toHaveBeenCalledExactlyOnceWith(baseline);
-    client.stop();
-  });
-
-  test("keeps one socket when the protocol is started twice during its handshake", () => {
-    const { client, connections } = createSyntheticGatewayProtocol();
-
-    client.start();
-    client.start();
-
-    expect(connections).toHaveLength(1);
-    expect(connections[0]?.close).not.toHaveBeenCalled();
-    client.stop();
-  });
-
-  test("settles the original unbounded request when an active protocol is started again", async () => {
+  test.each(["handshake", "request"])("keeps the active %s when started again", async (phase) => {
     const { client, connections } = createSyntheticGatewayProtocol();
     client.start();
     const connection = connections[0];
-    if (!connection) {
-      throw new Error("synthetic protocol connection missing");
+    assert(connection);
+    if (phase === "request") {
+      completeSyntheticGatewayProtocolHandshake(connection);
+      await Promise.resolve();
     }
-    completeSyntheticGatewayProtocolHandshake(connection);
-    await Promise.resolve();
-
-    const request = client.request<{ status: string }>("agent", undefined, {
-      expectFinal: true,
-      timeoutMs: null,
-    });
-    const frame = JSON.parse(String(connection.send.mock.calls.at(-1)?.[0])) as { id: string };
+    const request =
+      phase === "request"
+        ? client.request<{ status: string }>("agent", undefined, {
+            expectFinal: true,
+            timeoutMs: null,
+          })
+        : undefined;
     client.start();
-
     expect(connections).toHaveLength(1);
-    connection.handlers.message(
-      JSON.stringify({
-        type: "res",
-        id: frame.id,
-        ok: true,
-        payload: { status: "ok" },
-      }),
-    );
-
-    await expect(request).resolves.toEqual({ status: "ok" });
-    expect(client.hasPendingRequests).toBe(false);
+    expect(connection.close).not.toHaveBeenCalled();
+    if (request) {
+      const frame = JSON.parse(String(connection.send.mock.calls.at(-1)?.[0])) as { id: string };
+      connection.handlers.message(
+        JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { status: "ok" } }),
+      );
+      await expect(request).resolves.toEqual({ status: "ok" });
+      expect(client.hasPendingRequests).toBe(false);
+    }
     client.stop();
   });
 
-  test("preserves the one scheduled reconnect when the running protocol is started again", async () => {
+  test.each(["none", "backoff", "stop"])(
+    "preserves the scheduled reconnect after %s reset",
+    async (reset) => {
+      vi.useFakeTimers();
+      const { client, connections } = createSyntheticGatewayProtocol();
+      client.start();
+      const first = connections[0];
+      assert(first);
+      first.close(1012, "first service restart");
+      expect(vi.getTimerCount()).toBe(1);
+      if (reset === "none") {
+        client.start();
+        expect(connections).toHaveLength(1);
+        expect(vi.getTimerCount()).toBe(1);
+        await vi.advanceTimersByTimeAsync(9);
+        expect(connections).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(connections).toHaveLength(2);
+      } else {
+        if (reset === "backoff") {
+          client.resetReconnectBackoff(10);
+        } else {
+          client.stop();
+        }
+        client.start();
+        expect(connections).toHaveLength(2);
+        const second = connections[1];
+        assert(second);
+        second.close(1012, "second service restart");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(vi.getTimerCount()).toBe(1);
+        client.start();
+        expect(connections).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(10);
+        expect(connections).toHaveLength(3);
+      }
+      client.stop();
+    },
+  );
+
+  test.each(["terminal close", "factory failure"])("allows manual restart after %s", (failure) => {
     vi.useFakeTimers();
-    const { client, connections } = createSyntheticGatewayProtocol();
-    client.start();
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-
-    connection.close(1012, "service restart");
-    expect(vi.getTimerCount()).toBe(1);
-    client.start();
-
-    expect(connections).toHaveLength(1);
-    expect(vi.getTimerCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(9);
-    expect(connections).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(connections).toHaveLength(2);
-    client.stop();
-  });
-
-  test("restarts immediately after resetting a pending reconnect", async () => {
-    vi.useFakeTimers();
-    const { client, connections } = createSyntheticGatewayProtocol();
-    client.start();
-    const firstConnection = connections[0];
-    if (!firstConnection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-
-    firstConnection.close(1012, "first service restart");
-    expect(vi.getTimerCount()).toBe(1);
-    client.resetReconnectBackoff(10);
-    client.start();
-
-    expect(connections).toHaveLength(2);
-    const secondConnection = connections[1];
-    if (!secondConnection) {
-      throw new Error("synthetic replacement connection missing");
-    }
-    secondConnection.close(1012, "second service restart");
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(1);
-    client.start();
-    expect(connections).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(connections).toHaveLength(3);
-    client.stop();
-  });
-
-  test("allows manual restart after a terminal socket close", () => {
-    vi.useFakeTimers();
-    const { client, connections } = createSyntheticGatewayProtocol({ retryOnClose: false });
-    client.start();
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-
-    connection.close(1008, "terminal close");
-    expect(vi.getTimerCount()).toBe(0);
-    client.start();
-
-    expect(connections).toHaveLength(2);
-    expect(vi.getTimerCount()).toBe(0);
-    client.stop();
-  });
-
-  test("allows manual restart after a socket factory failure", () => {
     const { client, connections } = createSyntheticGatewayProtocol({
-      initialSocketFactoryFailures: 1,
+      retryOnClose: false,
+      initialSocketFactoryFailures: failure === "factory failure" ? 1 : 0,
     });
-
     client.start();
-    expect(connections).toHaveLength(0);
-    client.start();
-
-    expect(connections).toHaveLength(1);
-    client.stop();
-  });
-
-  test("does not let a canceled retry clear the next scheduled reconnect", async () => {
-    vi.useFakeTimers();
-    const { client, connections } = createSyntheticGatewayProtocol();
-    client.start();
-    const firstConnection = connections[0];
-    if (!firstConnection) {
-      throw new Error("synthetic protocol connection missing");
+    if (failure === "factory failure") {
+      expect(connections).toHaveLength(0);
+    } else {
+      const connection = connections[0];
+      assert(connection);
+      connection.close(1008, "terminal close");
     }
-
-    firstConnection.close(1012, "first service restart");
-    client.stop();
+    expect(vi.getTimerCount()).toBe(0);
     client.start();
-    const secondConnection = connections[1];
-    if (!secondConnection) {
-      throw new Error("synthetic replacement connection missing");
-    }
-    secondConnection.close(1012, "second service restart");
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(1);
-    client.start();
-    expect(connections).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(10);
-
-    expect(connections).toHaveLength(3);
+    expect(connections).toHaveLength(failure === "factory failure" ? 1 : 2);
+    expect(vi.getTimerCount()).toBe(0);
     client.stop();
   });
 });

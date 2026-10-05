@@ -29,13 +29,6 @@ type EmbeddedCliBackendDispatch = {
 export async function runEmbeddedAgentViaCliBackendIfEligible(
   params: CliBackendDispatchParams,
 ): Promise<EmbeddedAgentRunResult | undefined> {
-  const dispatch = resolveEmbeddedCliBackendDispatch(params);
-  return dispatch ? await runEmbeddedAgentViaCliBackend(params, dispatch) : undefined;
-}
-
-function resolveEmbeddedCliBackendDispatch(
-  params: RunEmbeddedAgentParams,
-): EmbeddedCliBackendDispatch | undefined {
   if (params.cliBackendDispatch !== "subscription-auth") {
     return undefined;
   }
@@ -55,7 +48,13 @@ function resolveEmbeddedCliBackendDispatch(
     return undefined;
   }
   const eligibility = resolveEmbeddedCliBackendDispatchEligibility(params);
-  return eligibility ? { provider: eligibility.provider, sessionFile, toolsAllow } : undefined;
+  return eligibility
+    ? runEmbeddedAgentViaCliBackend(params, {
+        provider: eligibility.provider,
+        sessionFile,
+        toolsAllow,
+      })
+    : undefined;
 }
 
 // The CLI bridge supports only a non-empty named allowlist bounded by its loopback grant.
@@ -67,7 +66,7 @@ function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[]
   if (!params.toolsAllow || params.toolsAllow.length === 0) {
     return undefined;
   }
-  const names = params.toolsAllow.map((name) => normalizeToolPolicyName(name));
+  const names = params.toolsAllow.map(normalizeToolPolicyName);
   if (names.some((name) => !name || name.includes("*"))) {
     return undefined;
   }

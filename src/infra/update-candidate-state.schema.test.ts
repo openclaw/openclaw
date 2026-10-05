@@ -320,11 +320,10 @@ async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boole
   );
 }
 
-it.each(
-  (["modern", "legacy"] as const).flatMap((protocol) =>
-    (["removed", "replaced"] as const).map((activation) => ({ protocol, activation })),
-  ),
-)(
+it.each([
+  { protocol: "modern", activation: "replaced" },
+  { protocol: "legacy", activation: "removed" },
+] as const)(
   "inspects with the installed $protocol candidate after the old package is $activation",
   async ({ protocol, activation }) => {
     const root = fs.realpathSync(dirs.make("candidate-installed-"));

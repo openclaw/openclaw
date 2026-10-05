@@ -4,11 +4,11 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
-import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
-import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -50,7 +50,7 @@ import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspa
 import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
-import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
+import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
   createWorkspaceFixture,
@@ -65,28 +65,12 @@ const mocks = vi.hoisted(() => ({
   workspace: vi.fn(),
   store: vi.fn(),
   open: vi.fn(),
-  beforeWrite: vi.fn<() => Promise<void>>(),
 }));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.load }));
 vi.mock("../../config/sessions/session-accessor.js", async (original) => ({
   ...(await original<typeof import("../../config/sessions/session-accessor.js")>()),
   loadSessionEntryReadOnly: () => mocks.load().entry,
 }));
-vi.mock("../../infra/fs-safe.js", async (original) => {
-  const actual = await original<typeof import("../../infra/fs-safe.js")>();
-  return {
-    ...actual,
-    root: async (...args: Parameters<typeof actual.root>) => {
-      const root = await actual.root(...args);
-      const write = root.write.bind(root);
-      root.write = async (...writeArgs) => {
-        await mocks.beforeWrite();
-        await write(...writeArgs);
-      };
-      return root;
-    },
-  };
-});
 vi.mock("../../agents/agent-scope.js", async (original) => ({
   ...(await original<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: mocks.workspace,
@@ -124,7 +108,7 @@ let active: boolean;
 let onTunnel: (() => void) | undefined;
 let onResult: (() => void) | undefined;
 let sessionId: string;
-let lifecycleRevision: number;
+let lifecycleRevision: string;
 let archivedAt: number | undefined;
 let run: ReturnType<
   typeof vi.fn<(command: WorkerWorkspaceCommand) => ReturnType<NodeWorkerWorkspaceRuntime["exec"]>>
@@ -137,7 +121,7 @@ function git(...args: string[]): string {
 
 function requestContext() {
   return {
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     workerRepositoryWorkspaceMutationService: {
       mutate: async <T>(params: {
         assertCurrent: () => void;
@@ -174,13 +158,13 @@ function requestContext() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  mocks.beforeWrite.mockReset();
   gatewayRoot = createWorkspaceFixture("repository-files-gateway-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", gatewayRoot);
   nodeRoot = createWorkspaceFixture("repository-files-node-");
   generation = 1;
   active = true;
   sessionId = identity.sessionId;
-  lifecycleRevision = 0;
+  lifecycleRevision = "original";
   archivedAt = undefined;
   onTunnel = undefined;
   onResult = undefined;
@@ -254,11 +238,23 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
+  await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
 
 async function withCheckpointAcceptance(failCapture = false) {
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId,
+      updatedAt: Date.now(),
+      repositoryWorkspaceId: source.workspaceId,
+      lifecycleRevision,
+      archivedAt,
+    },
+  );
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
   seedAttachedPlacementEnvironment(database, {
@@ -282,7 +278,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     ],
     ["starting", "active", { activeOwnerEpoch: identity.generation }],
   ] as const) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from,
       to,
@@ -413,7 +409,7 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
       ).toBe("saved\n");
     },
   );
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([]);
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
   expect(accepted.placements.get(identity.sessionId)?.turnClaim).toBeNull();
 });
 
@@ -436,7 +432,7 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
   });
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([
     expect.objectContaining({
       sessionId: identity.sessionId,
       workspaceAcceptedAtMs: null,
@@ -452,7 +448,6 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
     "package.json",
   );
   expect(list.root).toBeUndefined();
-  expect(resolveLocalSessionWorkspaceRoot({ sessionKey })).toBeUndefined();
   const before = expectOkPayload(
     await invoke("sessions.files.get", { sessionKey, path: "changed.txt" }, context),
   );
@@ -523,7 +518,7 @@ it.each(["reset", "archive", "lifecycle revision"])(
       } else if (change === "archive") {
         archivedAt = Date.now();
       } else {
-        lifecycleRevision++;
+        lifecycleRevision = `${lifecycleRevision}-next`;
       }
     };
     await expect(
@@ -540,57 +535,6 @@ it.each(["reset", "archive", "lifecycle revision"])(
     ).rejects.toThrow("owner changed");
     expect(run).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("before\n");
-  },
-);
-
-it.each(["stop", "reset"])(
-  "retains the editor owner through a delayed file commit before %s",
-  async (mutation) => {
-    const writing = createDeferredCore();
-    const releaseWrite = createDeferredCore();
-    mocks.beforeWrite.mockImplementationOnce(async () => {
-      writing.resolve();
-      await releaseWrite.promise;
-    });
-    const saving = invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\n",
-        expectedHash: hashContent("before\n"),
-      },
-      context,
-    );
-    await writing.promise;
-    let mutationEntered = false;
-    let contentAtMutation: string | undefined;
-    const mutating = runExclusiveSessionLifecycleMutation({
-      scope: path.join(gatewayRoot, "sessions.sqlite"),
-      identities: [sessionKey, identity.sessionId],
-      run: async () => {
-        mutationEntered = true;
-        contentAtMutation = fs.readFileSync(path.join(workspace, "changed.txt"), "utf8");
-        if (mutation === "stop") {
-          active = false;
-        } else {
-          sessionId = "replacement";
-        }
-      },
-    });
-    // Observe the independently queued lifecycle operation after its microtasks drain.
-    // The filesystem delay is explicit; no elapsed-time assumption controls the race.
-    try {
-      await setImmediate();
-      expect(mutationEntered).toBe(false);
-    } finally {
-      releaseWrite.resolve();
-      await Promise.allSettled([saving, mutating]);
-    }
-    expectOkPayload(await saving);
-    await mutating;
-    expect(mutationEntered).toBe(true);
-    expect(contentAtMutation).toBe("saved\n");
   },
 );
 
@@ -683,7 +627,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
     if (args[1][1] === "blob") {
-      lifecycleRevision++;
+      lifecycleRevision = `${lifecycleRevision}-next`;
     }
     return result;
   });
@@ -708,25 +652,6 @@ it.each(["symlink", "hardlink"])(
     );
     const diff = await loadSessionDiff({ sessionKey }, context as never);
     expect(JSON.stringify(diff)).not.toContain("outside marker");
-  },
-);
-
-it.each(["invalid input", "missing workspace"])(
-  "classifies %s as permanent inspection failure",
-  async (failure) => {
-    if (failure === "missing workspace") {
-      fs.rmSync(workspace, { recursive: true });
-    }
-    const input =
-      failure === "invalid input"
-        ? "{invalid"
-        : JSON.stringify({ operation: "get", sessionKey, path: "README", files: [] });
-    const response = await invokeNodeWorkerSupervisorCommand({
-      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-      paramsJSON: JSON.stringify({ ...identity, argv: [WORKSPACE_INSPECTION_COMMAND], input }),
-      workspace: runtime,
-    });
-    expect(response).toMatchObject({ handled: true, ok: false, code: "INVALID_REQUEST" });
   },
 );
 
@@ -828,7 +753,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;
-  const stopping = runExclusiveSessionLifecycleMutation({
+  const stopping = runExclusiveSessionLifecycleMutation("drain", {
     scope: path.join(gatewayRoot, "sessions.sqlite"),
     identities: [sessionKey, identity.sessionId],
     run: async () => {

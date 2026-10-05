@@ -5,13 +5,16 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
-import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import type { runExec, runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 
 export function registerFreshDoctorOutcomeTests(
   mocks: {
-    runExec: Mock<typeof runExec>;
+    command: Mock<typeof runExec>;
     runUtf8: Mock<typeof runUtf8CommandWithTimeout>;
     readConfig: Mock<typeof readConfigFileSnapshot>;
   },
@@ -33,7 +36,7 @@ export function registerFreshDoctorOutcomeTests(
         code,
         message: `Earlier failure ${index}`,
       }));
-      mocks.runExec.mockImplementation(async (_command, args, options) => {
+      mocks.command.mockImplementation(async (_command, args, options) => {
         if (args.includes("--repair")) {
           assert(options && typeof options === "object");
           const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
@@ -89,7 +92,7 @@ export function registerFreshDoctorOutcomeTests(
   );
 
   it("records a failed plugin Doctor process as a warning after config and readiness pass", async () => {
-    mocks.runExec.mockRejectedValueOnce(
+    mocks.command.mockRejectedValueOnce(
       Object.assign(new Error("Doctor exited"), {
         exitCode: 1,
         stderr: "Plugin example: optional repair needs a running Gateway.",
@@ -117,7 +120,7 @@ export function registerFreshDoctorOutcomeTests(
   it.each(["settlement", "startup"])(
     "blocks further work when Doctor %s leaves write custody unsettled",
     async (phase) => {
-      mocks.runExec.mockRejectedValueOnce(
+      mocks.command.mockRejectedValueOnce(
         phase === "settlement"
           ? new CommandProcessCleanupError()
           : Object.assign(new Error("Command timed out during startup"), { cleanup: "uncertain" }),
@@ -126,7 +129,56 @@ export function registerFreshDoctorOutcomeTests(
       await expect(completePostCorePluginUpdate(updateOptions)).rejects.toThrow(
         "Command cleanup could not confirm that owned work stopped",
       );
-      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.command).toHaveBeenCalledOnce();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["cleanup", "output", "settled"])(
+    "preserves an unsafe Doctor refusal when warning publication fails (%s)",
+    async (fault) => {
+      const original = new Error("Doctor migration refused");
+      const recording =
+        fault === "cleanup" ? new CommandProcessCleanupError() : new Error("Warning output failed");
+      const refusal = { kind: "data-at-risk" as const, reason: "active-mutation" as const };
+      mocks.command.mockImplementationOnce(async (_command, _args, options) => {
+        assert(options && typeof options === "object");
+        const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        assert(resultPath);
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: {
+            status: fault === "settled" ? "ok" : "error",
+            maintenanceRefusal: refusal,
+            failureFacts: [{ check: "state", code: "step-refused" }],
+            warnings: ["Keep the migration backup."],
+          },
+        });
+        if (fault !== "settled") {
+          throw original;
+        }
+        return { stdout: "", stderr: "" };
+      });
+      const error = await completePostCorePluginUpdate({
+        ...updateOptions,
+        onWarnings: () => {
+          throw recording;
+        },
+      }).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(AggregateError);
+      expect(error).toMatchObject({
+        cause: recording,
+        errors: [
+          expect.objectContaining({
+            ...(fault !== "settled" ? { cause: original } : {}),
+            refusal,
+            failureFacts: [{ check: "state", code: "step-refused" }],
+          }),
+          recording,
+        ],
+      });
+      expect(hasCommandProcessCleanupError(error)).toBe(fault === "cleanup");
       expect(mocks.readConfig).not.toHaveBeenCalled();
       expect(mocks.runUtf8).not.toHaveBeenCalled();
     },

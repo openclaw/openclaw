@@ -1,5 +1,6 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./schema/session-processes.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
@@ -159,6 +160,8 @@ export {
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,
   SessionsCatalogContinueResultSchema,
+  SessionsCatalogImportParamsSchema,
+  SessionsCatalogImportResultSchema,
   SessionsCatalogArchiveParamsSchema,
   SessionsCatalogArchiveResultSchema,
   SessionsCatalogStartTerminalParamsSchema,
@@ -183,6 +186,8 @@ export {
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
+  SessionsFilesAssetsParamsSchema,
+  SessionsFilesAssetsResultSchema,
   SessionsFilesSetParamsSchema,
   SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
@@ -416,6 +421,8 @@ export {
   ChannelsStatusResultSchema,
   ChannelsPairingListParamsSchema,
   ChannelsPairingListResultSchema,
+  ChannelsPairingCliListResultSchema,
+  ChannelsPairingCodeApproveResultSchema,
   ChannelsPairingApproveParamsSchema,
   ChannelsPairingApproveResultSchema,
   ChannelsPairingDismissParamsSchema,
@@ -654,6 +661,10 @@ export {
   WorktreesRestoreParamsSchema,
   WorktreesGcParamsSchema,
   WorktreesGcResultSchema,
+  WorktreesRecoverRemovalParamsSchema,
+  WorktreesRecoverRemovalResultSchema,
+  WorktreesRetireSnapshotParamsSchema,
+  WorktreesRetireSnapshotResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
   WorktreeRepositoryStatusSchema,
@@ -670,3 +681,5 @@ export {
 } from "./schema/sessions-activity-summary.js";
 
 export * from "./schema/sessions-involvement.js";
+
+export * from "./schema/catalog.js";

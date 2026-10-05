@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { createRequire, registerHooks } from "node:module";
+import Module, { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +18,22 @@ type Binding = Readonly<{
   device: string;
   inode: string;
 }>;
+type BunBindingRuntime = {
+  resolveSync(specifier: string, parent: string): string;
+  plugin(options: {
+    name: string;
+    setup(builder: {
+      onResolve(
+        options: { filter: RegExp; namespace: "file" },
+        callback: (args: {
+          path: string;
+          importer: string;
+          kind: string;
+        }) => { path: string; namespace: "file" } | undefined,
+      ): void;
+    }): void;
+  }): void;
+};
 
 const helperUrl = import.meta.url;
 const sharedRoots = new Set(["/tmp/openclaw", "/private/tmp/openclaw"]);
@@ -116,6 +132,7 @@ export function createManagedHandoffTestBinding(directory: string) {
   );
   return {
     ...binding,
+    preloadPath,
     nodeOption: `--import=${pathToFileURL(preloadPath).href}`,
     assertPath: (databasePath = binding.databasePath) =>
       assertManagedHandoffTestPath(binding, databasePath),
@@ -125,29 +142,67 @@ export function createManagedHandoffTestBinding(directory: string) {
 /** Explicit argv/source binding survives replaced env and deleted NODE_OPTIONS. */
 export function installManagedHandoffTestBinding(binding: Binding) {
   assertManagedHandoffTestPath(binding);
-  registerHooks({
-    resolve(specifier, context, nextResolve) {
-      const original = nextResolve(specifier, context);
-      if (specifier !== "@openclaw/fs-safe/temp") {
-        return original;
-      }
-      assertManagedHandoffTestPath(binding);
-      // Resolve at the consumer's package boundary, never through the parent's dependencies.
-      const consumer = context.parentURL ?? "";
-      const phase = consumer === helperUrl ? "preload" : "consumer";
-      const id = createHash("sha256").update(`${original.url}\0${consumer}`).digest("hex");
-      const shim = path.join(binding.directory, `fs-safe-temp-${id}.mjs`);
-      writeExactPrivateModule(
-        shim,
-        `export * from ${JSON.stringify(original.url)};\n` +
-          `import { resolveSecureTempRoot as original } from ${JSON.stringify(original.url)};\n` +
-          `import { resolveManagedHandoffTestTempRoot } from ${JSON.stringify(helperUrl)};\n` +
-          `export function resolveSecureTempRoot(options) { return resolveManagedHandoffTestTempRoot(` +
-          `${JSON.stringify(binding)}, original, options, ${JSON.stringify({ id, phase, consumer })}); }\n`,
-      );
-      return { url: pathToFileURL(shim).href, shortCircuit: true };
-    },
-  });
+  const shimFor = (originalUrl: string, consumer: string) => {
+    assertManagedHandoffTestPath(binding);
+    const phase = consumer === helperUrl ? "preload" : "consumer";
+    const id = createHash("sha256").update(`${originalUrl}\0${consumer}`).digest("hex");
+    // Each execution context publishes its own shim; another worker may still be writing.
+    const shim = path.join(binding.directory, `fs-safe-temp-${process.pid}-${threadId}-${id}.mjs`);
+    writeExactPrivateModule(
+      shim,
+      `export * from ${JSON.stringify(originalUrl)};\n` +
+        `import { resolveSecureTempRoot as original } from ${JSON.stringify(originalUrl)};\n` +
+        `import { resolveManagedHandoffTestTempRoot } from ${JSON.stringify(helperUrl)};\n` +
+        `export function resolveSecureTempRoot(options) { return resolveManagedHandoffTestTempRoot(` +
+        `${JSON.stringify(binding)}, original, options, ${JSON.stringify({ id, phase, consumer })}); }\n`,
+    );
+    return shim;
+  };
+  // Resolve at the consumer's package boundary, never through the parent's dependencies.
+  if (process.versions.bun) {
+    const bun = (globalThis as typeof globalThis & { Bun: BunBindingRuntime }).Bun;
+    let resolving = false;
+    bun.plugin({
+      name: "openclaw-managed-handoff-test-binding",
+      setup(builder) {
+        builder.onResolve(
+          { filter: /^@openclaw\/fs-safe\/temp$/u, namespace: "file" },
+          ({ path: specifier, importer, kind }) => {
+            // The original dependency lookup must bypass this same resolver hook.
+            if (resolving) {
+              return undefined;
+            }
+            assert(path.isAbsolute(importer), "Handoff consumer path must be absolute");
+            const consumer = pathToFileURL(importer).href;
+            let original: string;
+            resolving = true;
+            try {
+              original =
+                kind === "require-call" || kind === "require-resolve"
+                  ? createRequire(consumer).resolve(specifier)
+                  : bun.resolveSync(specifier, path.dirname(importer));
+            } finally {
+              resolving = false;
+            }
+            return { path: shimFor(pathToFileURL(original).href, consumer), namespace: "file" };
+          },
+        );
+      },
+    });
+  } else {
+    Module.registerHooks({
+      resolve(specifier, context, nextResolve) {
+        const original = nextResolve(specifier, context);
+        if (specifier !== "@openclaw/fs-safe/temp") {
+          return original;
+        }
+        return {
+          url: pathToFileURL(shimFor(original.url, context.parentURL ?? "")).href,
+          shortCircuit: true,
+        };
+      },
+    });
+  }
   // Refuse the invocation before its entrypoint if the actual dependency cannot
   // honor this binding. Consumer copies are separately resolved by the hook above.
   const temp = createRequire(import.meta.url)(

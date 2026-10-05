@@ -260,11 +260,26 @@ The latter two distinguish selected rows refreshed during this request from
 selected rows already resident when it began. Dirty counts describe pending
 owner work at the start of the request.
 
+`sessions.messages.subscribe` requests taking at least one second emit
+`slow session messages subscribe` with `operation`, `elapsedMs`, and
+`phaseDurationsMs`. Timing starts in the router, before the handler, and separates
+`projectionReadiness`, `accessFacts`, `handlerPreparation`,
+`retainedReadAdmission`, `replayPreparation`, and `observerCommit` from response
+and cleanup work. Ordinary subscriptions prepare committed access facts without
+waiting for display-row refreshes; incognito reads retain their exact-row
+preparation. Approval subscriptions still prepare and validate the authoritative
+replay before acknowledging. Records contain no session keys or message content.
+
 The `materialize` phase measures the wait for session-row projection readiness. In-flight
 catalog renewals no longer block lists or descriptions once a catalog is loaded:
 reads use the current catalog while its replacement loads in the background, then
 rows refresh with the new catalog. Startup still waits for the first catalog.
 Renewals that retain identical catalog content do not dirty resident rows.
+
+Concurrent lists share metadata preparation and selected-row materialization.
+Selected pages yield to the event loop between bounded materialization batches,
+including when stored facts are already cached. A long `materialize` wait does
+not by itself indicate an event-loop stall or repeated work for each caller.
 
 Profile and run-registry publications refresh their derived display facts without
 rereading session entries. Worker environment and placement publications refresh

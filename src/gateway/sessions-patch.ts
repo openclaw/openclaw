@@ -29,6 +29,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -49,7 +50,7 @@ import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
-import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
+import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
 import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-overrides.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -84,19 +85,21 @@ import {
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
+import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
 import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
+import { resolveProtectedSessionVisibilityError } from "./server-methods/sessions-shared.js";
 import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
   isSessionStatusModelPatchOrigin,
-  snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
+import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 type SessionPatchProjectionParams = {
@@ -188,7 +191,7 @@ function* projectSessionPatchSteps(
   if (harnessSessionError) {
     return invalid(harnessSessionError);
   }
-  if (typeof patch.archived === "boolean") {
+  if (typeof patch.archived === "boolean" || "snoozedUntil" in patch) {
     if (!params.existingEntry?.sessionId) {
       return invalid(`session not found: ${storeKey}`);
     }
@@ -281,13 +284,19 @@ function* projectSessionPatchSteps(
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
+  // A read acknowledgement is not session activity: ageing the row here would move a
+  // just-opened session to the top of recency order, so only the read state commits.
+  const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
+  const nextUpdatedAt = unreadAckOnly
+    ? (existing?.updatedAt ?? now)
+    : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
     // Reset retains sessionId, so rollback also needs the original lifecycle revision.
     ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
-    updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    updatedAt: nextUpdatedAt,
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
     ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
@@ -374,54 +383,22 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("archived" in patch) {
-    if (patch.archived === true) {
-      // Archived sessions leave the active quick-access set in the same write.
-      if (next.archivedAt === undefined) {
-        next.archivedAt = now;
-        next.archiveReason = "manual";
-        if (params.archivedBy) {
-          next.archivedBy = params.archivedBy;
-        } else {
-          delete next.archivedBy;
-        }
-      }
-      delete next.pinnedAt;
-    } else {
-      delete next.archivedAt;
-      delete next.archivedBy;
-      delete next.archiveReason;
+  if (patch.snoozedUntil !== undefined && patch.snoozedUntil !== null) {
+    const protectedError = resolveProtectedSessionVisibilityError(cfg, storeKey, "snooze");
+    if (protectedError) {
+      return { ok: false, error: protectedError };
     }
   }
-
-  const pinnable = isPinnableSessionEntry(storeKey, next);
-  if (!pinnable) {
-    delete next.pinnedAt;
-  }
-  if ("pinned" in patch) {
-    if (patch.pinned === true) {
-      if (next.archivedAt !== undefined) {
-        return invalid("cannot pin an archived session; restore it first");
-      }
-      if (!pinnable) {
-        return invalid("cannot pin a child session; pin its parent session instead");
-      }
-      next.pinnedAt ??= now;
-    } else {
-      delete next.pinnedAt;
-    }
-  }
-
-  if ("unread" in patch) {
-    if (patch.unread === true) {
-      // This timestamp is also the conditional-ack revision. Repeated writes in
-      // one clock tick must still represent distinct manual unread intent.
-      next.markedUnreadAt = Math.max(now, (params.existingEntry?.markedUnreadAt ?? 0) + 1);
-    } else {
-      next.lastReadAt = now;
-      delete next.markedUnreadAt;
-      delete next.agentStatus;
-    }
+  const lifecycleFlagsError = applySessionPatchLifecycleFlags({
+    patch,
+    next,
+    existingEntry: params.existingEntry,
+    storeKey,
+    now,
+    archivedBy: params.archivedBy,
+  });
+  if (lifecycleFlagsError) {
+    return { ok: false, error: lifecycleFlagsError };
   }
 
   const rawThinking = patch.thinkingLevel;
@@ -523,7 +500,11 @@ function* projectSessionPatchSteps(
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
-        : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
+        : createAgentPatchedSessionModelFallback({
+            ...resolveSessionModelRef(cfg, next, sessionAgentId),
+            entry: next,
+            ts: now,
+          })
       : undefined;
     if (!statusModelPatch) {
       delete next.modelFallback;

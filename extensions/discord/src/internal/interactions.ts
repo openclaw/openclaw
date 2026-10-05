@@ -14,11 +14,7 @@ import {
   type APIUser,
 } from "discord-api-types/v10";
 import { OptionsHandler } from "./interaction-options.js";
-import {
-  InteractionResponseController,
-  needsComponentsV2Query,
-  type InteractionResponseState,
-} from "./interaction-response.js";
+import { needsComponentsV2Query, type InteractionResponseState } from "./interaction-response.js";
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
@@ -85,7 +81,7 @@ class BaseInteraction {
   readonly guild: Guild | null;
   readonly channel: DiscordChannel | null;
   message: Message | null = null;
-  private readonly response = new InteractionResponseController();
+  private currentResponseState: InteractionResponseState = "unacknowledged";
   private pendingResponse: Promise<void> = Promise.resolve();
   private sentFollowUp = false;
 
@@ -105,15 +101,15 @@ class BaseInteraction {
   }
 
   get acknowledged(): boolean {
-    return this.response.acknowledged;
+    return this.currentResponseState !== "unacknowledged";
   }
 
   get responseState(): InteractionResponseState {
-    return this.response.state;
+    return this.currentResponseState;
   }
 
   set responseState(nextState: InteractionResponseState) {
-    this.response.state = nextState;
+    this.currentResponseState = nextState;
   }
 
   // Follow-ups produce visible output without advancing responseState.
@@ -132,13 +128,18 @@ class BaseInteraction {
   }
 
   private async performCallback(type: InteractionResponseType, data?: unknown) {
-    if (this.response.acknowledged) {
+    if (this.currentResponseState !== "unacknowledged") {
       throw new Error("Discord interaction has already been acknowledged.");
     }
     const result = await this.client.rest.post(Routes.interactionCallback(this.id, this.token), {
       body: data === undefined ? { type } : { type, data },
     });
-    this.response.recordCallback(type);
+    this.currentResponseState =
+      type === InteractionResponseType.DeferredChannelMessageWithSource
+        ? "deferred"
+        : type === InteractionResponseType.DeferredMessageUpdate
+          ? "deferred-update"
+          : "replied";
     return result;
   }
 
@@ -148,11 +149,13 @@ class BaseInteraction {
 
   async reply(payload: MessagePayload): Promise<unknown> {
     return await this.enqueueResponse(async () => {
-      const action = this.response.nextReplyAction();
-      if (action === "edit") {
+      if (
+        this.currentResponseState === "deferred" ||
+        this.currentResponseState === "deferred-update"
+      ) {
         return await this.performReplyEdit(payload);
       }
-      if (action === "follow-up") {
+      if (this.currentResponseState !== "unacknowledged") {
         return await this.performFollowUp(payload);
       }
       return await this.performCallback(
@@ -195,14 +198,14 @@ class BaseInteraction {
     const result = query
       ? await this.client.rest.patch(this.originalReplyRoute, { body }, query)
       : await this.client.rest.patch(this.originalReplyRoute, { body });
-    this.response.recordReplyEdit();
+    this.currentResponseState = "replied";
     return result;
   }
 
   async deleteReply(): Promise<unknown> {
     return await this.enqueueResponse(async () => {
       const result = await this.client.rest.delete(this.originalReplyRoute);
-      this.response.recordReplyDelete();
+      this.currentResponseState = "replied";
       return result;
     });
   }

@@ -2,6 +2,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,6 +10,7 @@ import {
   FLAG_TERMINATOR,
   getCommandPositionalsWithRootOptions,
 } from "../infra/cli-root-options.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type {
   PluginManifestCommandAliasRecord,
   PluginManifestToolOwnerRecord,
@@ -33,6 +35,14 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+const CLI_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -183,6 +193,22 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
     return false;
   }
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
+}
+
+export function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
+  );
+}
+
+export function shouldBootstrapCliProxyBeforeFastPath(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
+    return true;
+  }
+  return CLI_PROXY_ENV_KEYS.some((key) => normalizeOptionalString(env[key]) !== undefined);
 }
 
 function formatExcludedPluginCommand(command: string, owner: string): string {

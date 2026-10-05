@@ -11,7 +11,6 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import {
   decodePairingSetupCode,
   encodePairingSetupCode,
-  resolveConfiguredPairingPublicUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -20,8 +19,10 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../shared/device-bootstrap-profile.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isLoopbackHost } from "../net.js";
 import { respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -50,7 +51,8 @@ function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
 }
 
 export const devicePairSetupHandlers: GatewayRequestHandlers = {
-  "device.pair.setupCode": async ({ params, respond, context }) => {
+  "device.pair.setupCode": async (options) => {
+    const { params, respond, context } = options;
     if (
       !assertValidParams(
         params,
@@ -75,13 +77,22 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         return;
       }
       const config = context.getRuntimeConfig();
+      const joinContext = params.joinUrl === true ? captureOpenClawStateWorkerContext() : undefined;
+      const authority = readGatewayRequestMutationAuthority(options);
+      const assertJoinCurrent = joinContext
+        ? () => {
+            joinContext.admission.assertCurrent();
+            authority.assertCurrent();
+            if (context.getRuntimeConfig() !== config) {
+              throw new Error("Device pairing setup configuration changed.");
+            }
+          }
+        : undefined;
+      assertJoinCurrent?.();
       const requestPublicUrl = params.publicUrl;
-      const configuredPublicUrl =
-        params.preferRemoteUrl === true ? undefined : resolveConfiguredPairingPublicUrl(config);
-      const publicUrl = requestPublicUrl ?? configuredPublicUrl;
       const resolved = await resolvePairingSetupFromConfig(config, {
         env: process.env,
-        publicUrl,
+        publicUrl: requestPublicUrl,
         preferRemoteUrl: params.preferRemoteUrl === true,
         useLocalGateway: config.gateway?.mode === "remote" && params.preferRemoteUrl !== true,
         localTlsFingerprint: context.gatewayTlsFingerprint,
@@ -99,6 +110,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         runCommandWithTimeout: async (argv, runOpts) =>
           await runCommandWithTimeout(argv, { timeoutMs: runOpts.timeoutMs }),
       });
+      assertJoinCurrent?.();
       if (!resolved.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
         return;
@@ -107,9 +119,11 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       let joinUrl: string | undefined;
       if (params.joinUrl === true) {
         const parsedJoinUrl = resolveDevicePairingJoinBaseUrl(resolved.payload);
-        const shortcode = registerDevicePairingJoinCode({
+        const shortcode = await registerDevicePairingJoinCode({
           payload: resolved.payload,
           expiresAtMs: resolved.expiresAtMs,
+          context: joinContext,
+          assertCurrent: assertJoinCurrent,
         });
         const basePath = parsedJoinUrl.pathname.replace(/\/+$/u, "");
         parsedJoinUrl.pathname = `${basePath}/j/${shortcode}`;
@@ -125,6 +139,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         : undefined;
       const qrDataUrl =
         renderedQr && renderedQr.length <= MAX_QR_DATA_URL_LENGTH ? renderedQr : undefined;
+      assertJoinCurrent?.();
       respond(
         true,
         {

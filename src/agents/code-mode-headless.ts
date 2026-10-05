@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { raceWithTimeout } from "@openclaw/retry";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import type {
   CodeModeExecutorContinuation,
@@ -68,14 +68,28 @@ export function createHeadlessDeadlineScope(
   return {
     deadline,
     signal: controller.signal,
-    wait: <T>(promise: Promise<T>) =>
-      awaitCodeModeDeadline({
-        operation: () => promise,
-        remainingMs: Math.ceil(deadline - performance.now()),
-        signal: controller.signal,
-        createTimeoutError: timeoutError,
-        createAbortError: headlessAbortError,
-      }),
+    wait: async <T>(promise: Promise<T>): Promise<T> => {
+      const remainingMs = Math.ceil(deadline - performance.now());
+      if (remainingMs <= 0) {
+        throw timeoutError();
+      }
+      if (controller.signal.aborted) {
+        throw headlessAbortError(controller.signal);
+      }
+      return await raceWithTimeout(
+        promise,
+        remainingMs,
+        () => {
+          throw timeoutError();
+        },
+        {
+          signal: controller.signal,
+          onAbort: (abortedSignal) => {
+            throw headlessAbortError(abortedSignal);
+          },
+        },
+      );
+    },
     cleanup: () => {
       controller.abort(new CodeModeHeadlessAbortError());
       clearTimeout(timer);
@@ -87,11 +101,10 @@ export function createHeadlessDeadlineScope(
 function headlessAbortError(
   signal: AbortSignal,
 ): CodeModeHeadlessAbortError | CodeModeHeadlessTimeoutError {
-  return signal.reason instanceof CodeModeHeadlessTimeoutError
+  return signal.reason instanceof CodeModeHeadlessTimeoutError ||
+    signal.reason instanceof CodeModeHeadlessAbortError
     ? signal.reason
-    : signal.reason instanceof CodeModeHeadlessAbortError
-      ? signal.reason
-      : new CodeModeHeadlessAbortError();
+    : new CodeModeHeadlessAbortError();
 }
 
 function headlessFailure(params: {
@@ -173,12 +186,6 @@ function normalizeHeadlessNamespaceValue(
   return { kind: "value", value: toCodeModeJsonSafe(descriptor.value) };
 }
 
-function normalizeHeadlessNamespace(
-  descriptor: CodeModeNamespaceDescriptor,
-): CodeModeNamespaceDescriptor {
-  return { ...descriptor, scope: normalizeHeadlessNamespaceValue(descriptor.scope) };
-}
-
 function mergeHeadlessNamespaces(
   registered: CodeModeNamespaceDescriptor[],
   extra: CodeModeNamespaceDescriptor[],
@@ -194,7 +201,7 @@ function mergeHeadlessNamespaces(
     }
     ids.add(descriptor.id);
     globalNames.add(descriptor.globalName);
-    merged.push(normalizeHeadlessNamespace(descriptor));
+    merged.push({ ...descriptor, scope: normalizeHeadlessNamespaceValue(descriptor.scope) });
   }
   return merged;
 }
@@ -217,16 +224,7 @@ function headlessNamespaceFreezePrelude(descriptors: CodeModeNamespaceDescriptor
 export async function runCodeModeScriptHeadless(params: {
   ctx: ToolSearchToolContext;
   code: string;
-  overrides?: Partial<
-    Pick<
-      CodeModeConfig,
-      | "timeoutMs"
-      | "memoryLimitBytes"
-      | "maxOutputBytes"
-      | "maxSnapshotBytes"
-      | "maxPendingToolCalls"
-    >
-  >;
+  overrides?: Parameters<typeof resolveCodeModeHeadlessConfig>[1];
   wallClockMs?: number;
   maxToolCalls?: number;
   extraNamespaces?: CodeModeNamespaceDescriptor[];
@@ -332,10 +330,15 @@ export async function runCodeModeScriptHeadless(params: {
           return { kind: "checkpoint" };
         }
         let onPressure: (() => void) | undefined;
+        const settlement = new AbortController();
         try {
           const ready = await abortScope.wait(
             Promise.race([
-              waitForPendingBridgeSettlement(pending, boundary.settlementMode).then(() => true),
+              waitForPendingBridgeSettlement(
+                pending,
+                boundary.settlementMode,
+                settlement.signal,
+              ).then(() => true),
               new Promise<false>((resolve) => {
                 onPressure = () => resolve(false);
                 context.yieldSignal.addEventListener("abort", onPressure, { once: true });
@@ -362,6 +365,7 @@ export async function runCodeModeScriptHeadless(params: {
             onConsumed: delivery.release,
           };
         } finally {
+          settlement.abort();
           if (onPressure) {
             context.yieldSignal.removeEventListener("abort", onPressure);
           }
@@ -423,7 +427,9 @@ export async function runCodeModeScriptHeadless(params: {
           toolCallCount,
         });
       }
-      await abortScope.wait(waitForPendingBridgeSettlement(pending, settlementMode));
+      await abortScope.wait(
+        waitForPendingBridgeSettlement(pending, settlementMode, abortScope.signal),
+      );
       const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
       try {

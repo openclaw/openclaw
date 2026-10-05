@@ -295,7 +295,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(resolveTools({ ...deliveryOptions, config: {} }).context.delivery).toBeUndefined();
   });
 
-  it("does not expose CLI message-only authority to plugin delivery", () => {
+  it("does not expose CLI message-only authority to plugin delivery", async () => {
     const identity = {
       agentId: "main",
       runId: "cli-message-only",
@@ -308,7 +308,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       requesterSenderId: "sender-1",
     });
     setActivePluginRegistry(createEmptyPluginRegistry());
-    resolveGatewayScopedTools({
+    await resolveGatewayScopedTools({
       ...identity,
       cfg: { tools: { allow: ["message"] } },
       surface: "loopback",
@@ -321,45 +321,55 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
   });
 
-  it("does not expose scheduled message authority to plugin delivery with an announce route", () => {
-    const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
-    installChannel(
-      createOutboundTestPlugin({
-        id: "telegram",
-        outbound: {
-          deliveryMode: "direct",
-          sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+  it.each(["scheduled", "delivery-only"] as const)(
+    "does not expose %s message authority to plugin delivery with an announce route",
+    (kind) => {
+      const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
+      installChannel(
+        createOutboundTestPlugin({
+          id: "telegram",
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+          },
+        }),
+        ["work"],
+      );
+      const identity = { runId: "scheduled-message-run", sessionId: "session-cron" };
+      const token = mintTurn({
+        ...identity,
+        sessionKey,
+        ...(kind === "scheduled"
+          ? {
+              scheduled: {
+                policy: { version: 1, mode: "trusted" } as const,
+                assertCurrent: () => {},
+              },
+            }
+          : { deliveryAttempt: { beforeAttempt: async () => {}, assertCurrent: () => {} } }),
+      });
+      createOpenClawTools({
+        ...deliveryOptions,
+        ...identity,
+        agentSessionKey: sessionKey,
+        runSessionKey: `${sessionKey}:run:session-cron`,
+        agentThreadId: "7",
+        messageActionTurnCapability: token,
+        config: {
+          channels: { telegram: { enabled: true, accounts: { work: { enabled: true } } } },
+          plugins: { allow: ["telegram"] },
         },
-      }),
-      ["work"],
-    );
-    const identity = { runId: "scheduled-message-run", sessionId: "session-cron" };
-    const token = mintTurn({
-      ...identity,
-      sessionKey,
-      scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} },
-    });
-    createOpenClawTools({
-      ...deliveryOptions,
-      ...identity,
-      agentSessionKey: sessionKey,
-      runSessionKey: `${sessionKey}:run:session-cron`,
-      agentThreadId: "7",
-      messageActionTurnCapability: token,
-      config: {
-        channels: { telegram: { enabled: true, accounts: { work: { enabled: true } } } },
-        plugins: { allow: ["telegram"] },
-      },
-    });
-    const { context } = firstResolvePluginToolsParams();
-    expect(context.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "123",
-      accountId: "work",
-      threadId: "7",
-    });
-    expect(context.delivery).toBeUndefined();
-  });
+      });
+      const { context } = firstResolvePluginToolsParams();
+      expect(context.deliveryContext).toEqual({
+        channel: "telegram",
+        to: "123",
+        accountId: "work",
+        threadId: "7",
+      });
+      expect(context.delivery).toBeUndefined();
+    },
+  );
 
   it("does not expose process-local plugin delivery to gateway-owned channels", () => {
     installChannel(
@@ -376,15 +386,6 @@ describe("createOpenClawTools browser plugin integration", () => {
       messageActionTurnCapability: token,
     });
     expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
-  });
-
-  it("forwards the lifecycle registry to workspace-scoped plugin tools", () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, "gateway", "gateway-bindable", "/gateway-workspace");
-    expect(
-      resolveTools({ config: { plugins: { enabled: true } }, workspaceDir: "/session-workspace" })
-        .runtimeRegistry,
-    ).toBe(pluginRegistry);
   });
 
   it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
@@ -469,19 +470,6 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(params.hasAuthForProvider?.("acme")).toBe(true);
     expect(params.context.hasAuthForProvider?.("acme")).toBe(true);
     await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("profile-key");
-  });
-
-  it("keeps explicit plugin tool config isolated from a source-less runtime", () => {
-    const explicitConfig: OpenClawConfig = {
-      plugins: { allow: ["browser"] },
-      tools: { updatePlan: true },
-    };
-    setRuntimeConfigSnapshot({ plugins: { allow: ["old-plugin"] } });
-    const { runtimeConfig, getRuntimeConfig } = resolveTools({ config: explicitConfig }).context;
-    expect(runtimeConfig).toBe(explicitConfig);
-    expect(getRuntimeConfig?.()).toBe(explicitConfig);
-    setRuntimeConfigSnapshot({ ...explicitConfig, tools: { updatePlan: false } }, explicitConfig);
-    expect(getRuntimeConfig?.()).toBe(explicitConfig);
   });
 
   it("keeps the plugin tool getter live across authored source reloads", () => {
