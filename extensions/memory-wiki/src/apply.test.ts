@@ -143,6 +143,70 @@ describe("applyMemoryWikiMutation", () => {
     );
   });
 
+  it("updates nested generated blocks while preserving code samples and outside history", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-markers-" });
+    const pagePath = path.join(rootDir, "syntheses", "parser-synthesis.md");
+    const originalBody = [
+      "# Parser Synthesis",
+      "",
+      "Outside history.",
+      "",
+      "## Summary",
+      "<!-- openclaw:wiki:generated:start -->",
+      "stale outer summary",
+      "<!-- openclaw:wiki:generated:start -->",
+      "stale nested summary",
+      "<!-- openclaw:wiki:generated:end -->",
+      "stale outer tail",
+      "<!-- openclaw:wiki:generated:end -->",
+      "",
+      "```markdown",
+      "<!-- openclaw:wiki:generated:end -->",
+      "```",
+      "",
+      "Unmanaged historical context.",
+      "<!-- openclaw:wiki:generated:end -->",
+      "Keep after marker cleanup.",
+    ].join("\n");
+    await fs.mkdir(path.dirname(pagePath), { recursive: true });
+    await fs.writeFile(
+      pagePath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.parser-synthesis",
+          title: "Parser Synthesis",
+          sourceIds: ["source.parser"],
+        },
+        body: originalBody,
+      }),
+      "utf8",
+    );
+
+    await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Parser Synthesis",
+        body: "Current summary.",
+        sourceIds: ["source.parser"],
+      },
+    });
+
+    const page = await fs.readFile(pagePath, "utf8");
+    const parsed = parseWikiMarkdown(page);
+    expect(parsed.body).toContain("Current summary.");
+    expect(parsed.body).not.toContain("stale outer");
+    expect(parsed.body).not.toContain("stale nested");
+    expect(parsed.body).toContain(
+      ["```markdown", "<!-- openclaw:wiki:generated:end -->", "```"].join("\n"),
+    );
+    expect(parsed.body).toContain("Unmanaged historical context.\n\nKeep after marker cleanup.");
+    expect(
+      parsed.body.split("\n").filter((line) => line === "<!-- openclaw:wiki:generated:end -->"),
+    ).toHaveLength(2);
+  });
+
   it("applies a write when an unrelated vault page has malformed frontmatter (#96125)", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-apply-unrelated-invalid-",
