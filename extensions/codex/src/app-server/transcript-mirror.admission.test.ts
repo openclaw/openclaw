@@ -72,6 +72,7 @@ it.each([
 ])(
   "preserves host prompt ownership for an admitted $label",
   async ({ idempotencyKey, hidden, recovery }) => {
+    const admittedContent = "Check the admitted monitor.";
     const createUserTurnTranscriptRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     const base = await createParams();
     const target = {
@@ -92,7 +93,7 @@ it.each([
         ...(idempotencyKey ? { idempotencyKey } : {}),
       },
       target: { ...target, sessionEntry: undefined },
-      beforeMessageWrite: ({ message }) => message,
+      beforeMessageWrite: ({ message }) => ({ ...message, content: admittedContent }),
     });
     await recorder.persistApproved();
     const admitted = structuredClone(recorder.getPersistedMessage?.());
@@ -188,9 +189,23 @@ it.each([
       if (recovery === "available") {
         expect(prompts[0]).toMatchObject({
           message: {
-            content: "Check the monitor.",
+            content: admittedContent,
             ...(hidden ? { display: false } : {}),
-            __openclaw: { mirrorIdentity: "turn-1:prompt" },
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+            __openclaw: {
+              mirrorIdentity: "turn-1:prompt",
+              mirrorOrigin: "codex-app-server",
+              upstreamUserText: "Check the monitor.",
+            },
+          },
+        });
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          content: admittedContent,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          __openclaw: {
+            mirrorIdentity: "turn-1:prompt",
+            mirrorOrigin: "codex-app-server",
+            upstreamUserText: "Check the monitor.",
           },
         });
       } else if (recovery !== "removed") {
