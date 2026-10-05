@@ -54,6 +54,7 @@ test("automatic list and search projection reuse conventional state-directory pr
               stack: string | undefined;
             }> = [];
             for (const agentRuntimeOverride of ["openclaw", undefined]) {
+              // Search changes only the request; reuse each runtime's admitted stores.
               for (const agentId of agentIds) {
                 await writeSessionStore({
                   agentId,
@@ -67,7 +68,6 @@ test("automatic list and search projection reuse conventional state-directory pr
                   storePath: storeTemplate.replace("{agentId}", agentId),
                 });
               }
-              // Search is read-only; warm each request without reseeding the same runtime rows.
               for (const search of [undefined, "unmatched-runtime-search", "openclaw"]) {
                 const request = { configuredAgentsOnly: true, includeGlobal: false, search };
                 const warm = await directSessionReq("sessions.list", request);
