@@ -14,12 +14,10 @@ import { createServiceChildRelayAdapter } from "../process/supervisor/service-ch
 import type { SpawnSecretInput } from "../process/supervisor/types.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
-  projectNativeInferenceStartup,
   WORKER_NATIVE_INFERENCE_STARTUP_ARG,
   WORKER_NATIVE_INFERENCE_STARTUP_FD,
   WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES,
 } from "../worker/native-inference-startup.js";
-import type { NativeInferenceStartup } from "../worker/native-inference-startup.js";
 import {
   parseNodeWorkerConnectionFailureMessage,
   type NodeWorkerLaunchInput,
@@ -41,6 +39,10 @@ import type {
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
 import {
+  projectNodeWorkerNativeInference,
+  type NodeWorkerNativeInferenceSnapshot,
+} from "./node-worker-native-inference.js";
+import {
   sanitizeNodeWorkerDiagnostic,
   type NodeWorkerCredentialScrubber,
 } from "./node-worker-output.js";
@@ -53,7 +55,7 @@ export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
   workerEnv: NodeJS.ProcessEnv;
-  nativeInferenceStartup?: NativeInferenceStartup;
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
   descriptor: WorkerLaunchDescriptor;
@@ -90,11 +92,11 @@ export async function prepareNodeWorkerLaunchTransport(
         "Node worker native inference requires isolation none, not a nested container",
       );
     }
-    if (!options.nativeInferenceStartup) {
+    if (!options.nativeInferenceSnapshot) {
       throw new Error("Node worker native inference requires node-local startup configuration");
     }
-    const startup = projectNativeInferenceStartup(
-      options.nativeInferenceStartup,
+    const startup = projectNodeWorkerNativeInference(
+      options.nativeInferenceSnapshot,
       options.descriptor,
     );
     const encoded = JSON.stringify(startup);

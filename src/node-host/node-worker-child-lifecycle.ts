@@ -1,10 +1,6 @@
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
-import {
-  assertNativeInferenceAssignment,
-  type NativeInferenceStartup,
-} from "../worker/native-inference-startup.js";
 import type {
   NodeWorkerLaunchInput,
   NodeWorkerSupervisorIdentity,
@@ -33,7 +29,11 @@ import {
   sendNodeWorkerInput,
   type NodeWorkerChildAdapter,
 } from "./node-worker-launch-transport.js";
-import { nodeWorkerNativeInferenceSecrets } from "./node-worker-native-inference.js";
+import {
+  nodeWorkerNativeInferenceSecrets,
+  projectNodeWorkerNativeInference,
+  type NodeWorkerNativeInferenceSnapshot,
+} from "./node-worker-native-inference.js";
 import {
   createNodeWorkerCredentialScrubber,
   sanitizeNodeWorkerDiagnostic,
@@ -104,7 +104,7 @@ export class NodeWorkerChildLifecycle {
   constructor(
     private readonly options: {
       bundleRoot: string;
-      nativeInferenceStartup?: NativeInferenceStartup;
+      nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
       engineEnv: NodeJS.ProcessEnv;
       store: NodeWorkerLaunchStore;
       turns: NodeWorkerTurnStore;
@@ -126,6 +126,13 @@ export class NodeWorkerChildLifecycle {
       turns: options.turns,
       capacity: options.capacity,
     });
+  }
+
+  private nativeInferenceSecrets(descriptor: WorkerLaunchDescriptor): string[] {
+    return descriptor.assignment.inference === "runtime-local" &&
+      this.options.nativeInferenceSnapshot
+      ? nodeWorkerNativeInferenceSecrets(this.options.nativeInferenceSnapshot)
+      : [];
   }
 
   get idleGeneration(): number {
@@ -193,10 +200,7 @@ export class NodeWorkerChildLifecycle {
   }): Promise<NodeWorkerLaunchReceipt> {
     const sensitiveValues = [
       ...nodeWorkerDescriptorSecrets(params.descriptor),
-      ...(params.descriptor.assignment.inference === "runtime-local" &&
-      this.options.nativeInferenceStartup
-        ? nodeWorkerNativeInferenceSecrets(this.options.nativeInferenceStartup)
-        : []),
+      ...this.nativeInferenceSecrets(params.descriptor),
     ];
     const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
@@ -222,7 +226,7 @@ export class NodeWorkerChildLifecycle {
         bundleRoot: this.options.bundleRoot,
         workerEnv: params.workerEnv,
         engineEnv: this.options.engineEnv,
-        nativeInferenceStartup: this.options.nativeInferenceStartup,
+        nativeInferenceSnapshot: this.options.nativeInferenceSnapshot,
         input: params.input,
         descriptor: params.descriptor,
         planHash: params.planHash,
@@ -376,10 +380,10 @@ export class NodeWorkerChildLifecycle {
     idleGeneration?: number,
   ): Promise<NodeWorkerLaunchReceipt> {
     if (descriptor.assignment.inference === "runtime-local") {
-      if (!this.options.nativeInferenceStartup) {
+      if (!this.options.nativeInferenceSnapshot) {
         throw new Error("Node worker native inference requires node-local startup configuration");
       }
-      assertNativeInferenceAssignment(this.options.nativeInferenceStartup, descriptor);
+      projectNodeWorkerNativeInference(this.options.nativeInferenceSnapshot, descriptor);
     }
     const isCurrent = () => this.owners.get(active.launchId) === active && !this.options.isClosed();
     const assertCurrent = () => {
@@ -419,13 +423,7 @@ export class NodeWorkerChildLifecycle {
     // The IPC diagnostic handler shares this object, so rotate its contents rather than its owner.
     Object.assign(
       active.scrubber,
-      createNodeWorkerCredentialScrubber([
-        ...secrets,
-        ...(descriptor.assignment.inference === "runtime-local" &&
-        this.options.nativeInferenceStartup
-          ? nodeWorkerNativeInferenceSecrets(this.options.nativeInferenceStartup)
-          : []),
-      ]),
+      createNodeWorkerCredentialScrubber([...secrets, ...this.nativeInferenceSecrets(descriptor)]),
     );
     active.connectionFailure.errorText = undefined;
     const onAbort = () => {

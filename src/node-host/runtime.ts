@@ -32,6 +32,7 @@ import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
+import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -108,10 +109,11 @@ export async function prepareNodeHostRuntime(params?: {
   }
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
+  const platform = params?.platform ?? process.platform;
+  const nativeInferenceSnapshot = snapshotNodeWorkerNativeInference(config, env, platform);
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
-  const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
     platform === "darwin" && params?.installedAppsSharingEnabled === true;
   const desktopHostConfig = resolveNodeDesktopHostConfig({
@@ -180,7 +182,7 @@ export async function prepareNodeHostRuntime(params?: {
       preparedContainerSupervisor = createNodeWorkerSupervisor({
         env,
         capacity: config.nodeHost?.workerRuns?.capacity,
-        nativeInferenceConfig: config.nodeHost?.workerRuns?.nativeInferenceConfig,
+        nativeInferenceSnapshot,
         workspace: preparedWorkerWorkspace,
         containerEngine,
         ...(config.nodeHost?.workerRuns?.containerImage
@@ -231,8 +233,7 @@ export async function prepareNodeHostRuntime(params?: {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
-    nativeInferenceEnabled:
-      workerRunsEnabled && config.nodeHost?.workerRuns?.nativeInferenceConfig !== undefined,
+    nativeInferenceEnabled: workerRunsEnabled && nativeInferenceSnapshot !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
@@ -267,7 +268,7 @@ export async function prepareNodeHostRuntime(params?: {
           ? createNodeWorkerSupervisor({
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
-              nativeInferenceConfig: config.nodeHost?.workerRuns?.nativeInferenceConfig,
+              nativeInferenceSnapshot,
               onCapacityChanged: onRunnerCapacityChanged,
               workspace: workerWorkspace,
             })

@@ -11,6 +11,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { DeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -21,6 +22,7 @@ import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_NATIVE_INFERENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
 import type { NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
@@ -271,7 +273,7 @@ type WireWorkerHostOptions = {
   workerGatewayUrl?: string;
   workspaceGatewayUrl?: (frame: NodeInvokeRequestPayload) => string;
   workerEnv?: NodeJS.ProcessEnv;
-  nativeInferenceConfig?: string;
+  nodeConfig?: OpenClawConfig;
   bundlePrewarm?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
@@ -308,12 +310,14 @@ export async function createPairedNodeWorkerHost(
     { handleInvoke },
     { NodeWorkerBundleInstaller },
     { createNodeWorkerSupervisor },
+    { snapshotNodeWorkerNativeInference },
     { NodeWorkerWorkspaceRuntime },
   ] = await Promise.all([
     import("../../../../src/infra/device-identity.js"),
     import("../../../../src/node-host/invoke.js"),
     import("../../../../src/node-host/node-worker-bundle-installer.js"),
     import("../../../../src/node-host/node-worker-supervisor.js"),
+    import("../../../../src/node-host/node-worker-native-inference.js"),
     import("../../../../src/node-host/node-worker-workspace.js"),
   ]);
   const label = options.label ?? "node";
@@ -329,6 +333,9 @@ export async function createPairedNodeWorkerHost(
   await fs.mkdir(nodeEnv.HOME, { recursive: true });
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
+  const nativeInferenceSnapshot = options.nodeConfig
+    ? snapshotNodeWorkerNativeInference(options.nodeConfig, nodeEnv)
+    : undefined;
   let capacity = { total: options.capacity ?? 2, available: 0 };
   let environmentSession = options.environmentSession ?? true;
   let client: GatewayClient | undefined;
@@ -359,6 +366,7 @@ export async function createPairedNodeWorkerHost(
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
       ...(options.bundleStatus ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION } : {}),
+      ...(nativeInferenceSnapshot ? { nativeInference: NODE_WORKER_NATIVE_INFERENCE_VERSION } : {}),
     },
   });
 
@@ -367,7 +375,7 @@ export async function createPairedNodeWorkerHost(
     workspace,
     capacity: options.capacity,
     capacityWaitMs: options.capacityWaitMs,
-    nativeInferenceConfig: options.nativeInferenceConfig,
+    nativeInferenceSnapshot,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),
     onCapacityChanged: (nextCapacity) => {

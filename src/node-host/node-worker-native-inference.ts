@@ -1,57 +1,152 @@
-import path from "node:path";
-import { readSecretFileSync } from "../infra/secret-file.js";
+import { realpathSync } from "node:fs";
+import { resolveConfiguredProviderDefaultApi } from "../agents/embedded-agent-runner/model.configured-overrides.js";
+import { resolveUsableCustomProviderApiKey } from "../agents/model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { NativeInferenceStartup } from "../worker/native-inference-startup.js";
 import {
-  NativeRuntimeConfigSchema,
-  type NativeRuntimeConfig,
+  NativeRuntimeModelSchema,
+  type NativeRuntimeModel,
 } from "../worker/native-runtime-config.js";
-/** The trusted supervisor captures file bytes and named credentials before yielding. */
-export function snapshotNodeWorkerNativeInference(
-  configPath: string | undefined,
-  env: NodeJS.ProcessEnv,
-): NativeInferenceStartup | undefined {
-  if (configPath === undefined) {
+import { nativeRuntimeModelUnsupportedReason } from "../worker/native-runtime-model-support.js";
+
+type NodeWorkerNativeInferenceModel = {
+  model: NativeRuntimeModel;
+  credential: string;
+};
+
+/** Node-owned canonical model snapshot retained outside every worker child. */
+export type NodeWorkerNativeInferenceSnapshot = {
+  models: ReadonlyMap<string, NodeWorkerNativeInferenceModel>;
+};
+
+function resolvedHeaders(
+  providerHeaders: Record<string, unknown> | undefined,
+  modelHeaders: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  const values = { ...providerHeaders, ...modelHeaders };
+  if (Object.values(values).some((value) => typeof value !== "string")) {
     return undefined;
   }
-  if (process.platform === "win32") {
-    throw new Error(
-      "Worker-local inference is not supported on Windows yet; use a Gateway-inference profile and leave nodeHost.workerRuns.nativeInferenceConfig unset.",
-    );
-  }
-  if (!path.isAbsolute(configPath) || configPath.includes("\0")) {
-    throw new Error("Node worker native inference configuration requires an absolute path");
-  }
-  let config: NativeRuntimeConfig;
-  try {
-    config = NativeRuntimeConfigSchema.parse(
-      JSON.parse(
-        readSecretFileSync(configPath, "Node worker native inference configuration", {
-          maxBytes: 1024 * 1024,
-        }),
-      ),
-    );
-  } catch {
-    // Parser and filesystem errors can contain source bytes or operator paths.
-    throw new Error(
-      "Node worker native inference configuration is invalid or unavailable. Each workspace requires an explicit models allowlist ([] denies all) using configured model references.",
-    );
-  }
-  const credentials = Object.fromEntries(
-    [...new Set(config.models.map((model) => model.apiKeyEnv))].map((name) => {
-      const value = Object.hasOwn(env, name) ? env[name] : undefined;
-      if (!value?.trim()) {
-        throw new Error("Node worker native inference credential is unavailable");
-      }
-      return [name, value];
-    }),
-  );
-  return { config, credentials };
+  return Object.keys(values).length > 0 ? (values as Record<string, string>) : undefined;
 }
 
-/** Diagnostic scrubbing conservatively covers startup headers, including ordinary metadata. */
-export function nodeWorkerNativeInferenceSecrets(startup: NativeInferenceStartup): string[] {
+function resolveProviderCredential(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+}): string | undefined {
+  return (
+    resolveManagedSecretRefRuntimeProviderAuth({
+      cfg: params.config,
+      provider: params.provider,
+    })?.apiKey ??
+    resolveUsableCustomProviderApiKey({
+      cfg: params.config,
+      provider: params.provider,
+      env: params.env,
+    })?.apiKey
+  );
+}
+
+/** Capture worker-compatible models and their already-resolved node-local credentials. */
+export function snapshotNodeWorkerNativeInference(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeWorkerNativeInferenceSnapshot | undefined {
+  if (platform === "win32") {
+    return undefined;
+  }
+  const models = new Map<string, NodeWorkerNativeInferenceModel>();
+  for (const [providerId, provider] of Object.entries(config.models?.providers ?? {})) {
+    const credential = resolveProviderCredential({ config, env, provider: providerId });
+    if (!credential?.trim()) {
+      continue;
+    }
+    const providerApi =
+      provider.api ??
+      resolveConfiguredProviderDefaultApi({
+        provider: providerId,
+        providerConfig: provider,
+        cfg: config,
+      });
+    for (const configured of provider.models ?? []) {
+      const input = configured.input ?? ["text"];
+      if (input.some((kind) => kind !== "text" && kind !== "image")) {
+        continue;
+      }
+      const headers = resolvedHeaders(
+        provider.headers as Record<string, unknown> | undefined,
+        configured.headers,
+      );
+      if (provider.headers && !headers) {
+        continue;
+      }
+      const parsed = NativeRuntimeModelSchema.safeParse({
+        provider: providerId,
+        id: configured.id,
+        api: configured.api ?? providerApi,
+        baseUrl: configured.baseUrl ?? provider.baseUrl,
+        name: configured.name,
+        contextWindow: configured.contextWindow,
+        maxTokens: configured.maxTokens ?? provider.maxTokens,
+        reasoning: configured.reasoning,
+        thinkingLevelMap: configured.thinkingLevelMap,
+        cost: {
+          input: configured.cost?.input ?? 0,
+          output: configured.cost?.output ?? 0,
+          cacheRead: configured.cost?.cacheRead ?? 0,
+          cacheWrite: configured.cost?.cacheWrite ?? 0,
+        },
+        input,
+        headers,
+      });
+      if (!parsed.success) {
+        continue;
+      }
+      if (nativeRuntimeModelUnsupportedReason(parsed.data.api, credential)) {
+        continue;
+      }
+      models.set(`${parsed.data.provider}/${parsed.data.id}`, {
+        model: parsed.data,
+        credential,
+      });
+    }
+  }
+  return models.size > 0 ? { models } : undefined;
+}
+
+/** Project the node's configured models and one exact managed workspace into a child. */
+export function projectNodeWorkerNativeInference(
+  snapshot: NodeWorkerNativeInferenceSnapshot,
+  descriptor: WorkerLaunchDescriptor,
+): NativeInferenceStartup {
+  const ref = `${descriptor.assignment.modelRef.provider}/${descriptor.assignment.modelRef.model}`;
+  const selected = snapshot.models.get(ref);
+  if (!selected) {
+    throw new Error(`Node worker model ${ref} is not configured for worker inference`);
+  }
+  return {
+    config: {
+      models: [...snapshot.models.values()].map(({ model }) => structuredClone(model)),
+      workspace: realpathSync(descriptor.assignment.workspaceDir),
+    },
+    credentials: Object.fromEntries(
+      [...snapshot.models.entries()].map(([modelRef, { credential }]) => [modelRef, credential]),
+    ),
+  };
+}
+
+/** Diagnostic scrubbing covers every projected credential and configured header value. */
+export function nodeWorkerNativeInferenceSecrets(
+  snapshot: NodeWorkerNativeInferenceSnapshot,
+): string[] {
   return [
-    ...Object.values(startup.credentials),
-    ...startup.config.models.flatMap((model) => Object.values(model.headers ?? {})),
+    ...[...snapshot.models.values()].flatMap(({ model, credential }) => [
+      credential,
+      ...Object.values(model.headers ?? {}),
+    ]),
   ].filter((value) => value.length > 0);
 }

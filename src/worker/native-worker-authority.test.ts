@@ -47,7 +47,7 @@ function fixture(native = true) {
   }
   const ref = descriptor.assignment.modelRef;
   const startup: NativeInferenceStartup = {
-    credentials: { FIXTURE_NATIVE_KEY: "synthetic-authority-key" },
+    credentials: { [`${ref.provider}/${ref.model}`]: "synthetic-authority-key" },
     config: {
       models: [
         {
@@ -58,12 +58,9 @@ function fixture(native = true) {
           contextWindow: 8192,
           maxTokens: 1024,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          apiKeyEnv: "FIXTURE_NATIVE_KEY",
         },
       ],
-      workspaces: [
-        { id: descriptor.assignment.agentId, path: root, models: [ref.provider + "/" + ref.model] },
-      ],
+      workspace: root,
     },
   };
   const connection = connections.createWorkerConnection({

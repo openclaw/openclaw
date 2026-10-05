@@ -237,7 +237,6 @@ it(
               user,
             );
           }
-          expect(config.nodeHost?.workerRuns?.nativeInferenceConfig).toBeUndefined();
           await instance.state.writeConfig(config);
         }
         expect(instances[0]!.port).not.toBe(instances[1]!.port);

@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { AgentJobTerminalSnapshot } from "../../../../src/gateway/agent-turn/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
@@ -12,7 +13,6 @@ import {
 import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-db.generated.js";
-import type { NativeRuntimeConfig } from "../../../../src/worker/native-runtime-config.js";
 import {
   nodeWorkerPlanHash,
   parseNodeWorkerLaunchInput,
@@ -132,27 +132,31 @@ it.skipIf(process.platform === "win32")(
     const published = await createPublishedWireWorkspace(root);
     const gatewayOwner = createQaGatewayChild();
     const identity = loadOrCreateDeviceIdentity({ path: path.join(root, "node-identity.sqlite") });
-    const nativeInferenceConfig = path.join(root, "native.json");
     const nodeHostRoot = path.join(root, "node-state", "node-host");
     await mkdir(nodeHostRoot, { recursive: true });
-    const config: NativeRuntimeConfig = {
-      models: [
-        {
-          provider: providerId!,
-          id: modelId!,
-          api: "openai-completions",
-          baseUrl: provider.baseUrl,
-          contextWindow: 32768,
-          maxTokens: 128,
-          reasoning: true,
-          thinkingLevelMap: { medium: "medium" },
-          apiKeyEnv: "NATIVE_SLOT_KEY",
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    const config = {
+      models: {
+        providers: {
+          [providerId!]: {
+            apiKey: "synthetic-native-slot-key",
+            api: "openai-completions",
+            baseUrl: provider.baseUrl,
+            models: [
+              {
+                id: modelId!,
+                name: modelId!,
+                contextWindow: 32768,
+                maxTokens: 128,
+                reasoning: true,
+                thinkingLevelMap: { medium: "medium" },
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
         },
-      ],
-      workspaces: [{ id: "qa", path: nodeHostRoot, scope: "subdirectories", models: [MODEL_REF] }],
-    };
-    await writeFile(nativeInferenceConfig, JSON.stringify(config), { mode: 0o600 });
+      },
+    } as OpenClawConfig;
     let node: PairedNodeWorkerHost | undefined;
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
     await runQaGatewayFixture(
@@ -177,8 +181,7 @@ it.skipIf(process.platform === "win32")(
           root,
           capacity: 1,
           capacityWaitMs: 0,
-          nativeInferenceConfig,
-          workerEnv: { NATIVE_SLOT_KEY: "synthetic-native-slot-key" },
+          nodeConfig: config,
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);
         const keys = {

@@ -13,10 +13,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createWorkerBundleProducer } from "../gateway/worker-environments/bundle.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { NodeWorkerBundleInstaller } from "../node-host/node-worker-bundle-installer.js";
+import { snapshotNodeWorkerNativeInference } from "../node-host/node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
@@ -28,7 +30,6 @@ import {
   workerBundleArchiveRelativePath,
 } from "../shared/worker-bundle-hash.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { NativeRuntimeConfig } from "./native-runtime-config.js";
 import { nodeWorkerBundleTransferPath } from "./node-bundle-install-protocol.js";
 import { nodeWorkerPlanHash, type NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import {
@@ -267,41 +268,39 @@ describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platfor
       descriptor.assignment.toolAuthority = { allowedToolNames: ["write"] };
       const effectPath = path.join(workspace, "proof.txt");
       const provider = await providerFixture(effectPath);
-      const config: NativeRuntimeConfig = {
-        models: [
-          {
-            provider: MODEL.provider,
-            id: MODEL.model,
-            api: "openai-completions",
-            baseUrl: provider.baseUrl,
-            contextWindow: 32768,
-            maxTokens: 173,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            apiKeyEnv: KEY_NAME,
-            headers: { "x-native-registry": "supervisor-snapshot" },
+      const config = {
+        models: {
+          providers: {
+            [MODEL.provider]: {
+              apiKey: KEY,
+              api: "openai-completions",
+              baseUrl: provider.baseUrl,
+              headers: { "x-native-registry": "supervisor-snapshot" },
+              models: [
+                {
+                  id: MODEL.model,
+                  name: MODEL.model,
+                  contextWindow: 32768,
+                  maxTokens: 173,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
           },
-        ],
-        workspaces: [
-          {
-            id: descriptor.assignment.agentId,
-            path: workspace,
-            sessionId: descriptor.admission.sessionId,
-            models: [MODEL.provider + "/" + MODEL.model],
-          },
-        ],
-      };
-      const nativeInferenceConfig = path.join(root, "native-inference.json");
-      await writeFile(nativeInferenceConfig, JSON.stringify(config), { mode: 0o600 });
+        },
+      } as OpenClawConfig;
+      const nativeInferenceSnapshot = snapshotNodeWorkerNativeInference(config, env)!;
       supervisor = createNodeWorkerSupervisor({
         bundleRoot,
         env,
-        nativeInferenceConfig,
+        nativeInferenceSnapshot,
         capacity: 1,
       });
       const processOwner = supervisor;
       // Construction, not descriptor dispatch, owns configuration and credential capture.
       delete env[KEY_NAME];
-      await writeFile(nativeInferenceConfig, "{}");
       const { connectionEndpoint, ...plan } = descriptor;
       const placement = owner.placementStore.get(SESSION_ID);
       expect(placement).toMatchObject({ state: "active", workerBundleHash: artifact.bundleHash });

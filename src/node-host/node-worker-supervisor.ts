@@ -31,7 +31,6 @@ import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
-import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
@@ -76,13 +75,8 @@ class NodeWorkerSupervisor {
 
   constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
-    // Native credentials are captured before any general environment projection reads getters.
-    const nativeInferenceStartup = snapshotNodeWorkerNativeInference(
-      options.nativeInferenceConfig,
-      env,
-    );
     const startup = {
-      nativeInferenceStartup,
+      nativeInferenceSnapshot: options.nativeInferenceSnapshot,
       workerEnv: snapshotNodeWorkerEnv(env),
       engineEnv: { ...process.env, ...env },
     };

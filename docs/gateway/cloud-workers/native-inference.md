@@ -61,99 +61,76 @@ external service are outside this core feature.
 
 ## Provision the node
 
-Windows worker-local inference is deferred. A Windows node rejects
-`nodeHost.workerRuns.nativeInferenceConfig` before reading the registry or
-credentials. Leave that setting unset and use Gateway inference on Windows;
-existing Gateway-proxied workers retain their current behavior. Windows support
-needs a separate, opt-in credential-transport implementation and native validation.
+Windows worker-local inference is deferred. Windows nodes do not advertise this
+capability; use Gateway inference there. Existing Gateway-proxied workers retain
+their current behavior. Windows support needs a separate, opt-in
+credential-transport implementation and native validation.
 
 Install matching Gateway and node builds and pair the node normally. Put the
 external custodian's opaque auth values in the node service's provisioned startup
-environment, not Gateway configuration or profile settings. In the **node's**
-configuration:
+environment, not Gateway configuration or profile settings. Configure the
+endpoint and model catalog through the familiar top-level `models.providers`
+field in the **node's** `openclaw.json`, then enable worker hosting:
 
 ```json5
 {
+  models: {
+    providers: {
+      openai: {
+        api: "openai-completions",
+        baseUrl: "https://credential-proxy.example.test/v1",
+        apiKey: "${WORKER_PROXY_AUTH}",
+        models: [
+          {
+            id: "worker-model",
+            name: "Worker model",
+            contextWindow: 32768,
+            maxTokens: 4096,
+            reasoning: true,
+            thinkingLevelMap: { low: "low", high: "high" },
+            input: ["text", "image"],
+            cost: { input: 2, output: 8, cacheRead: 1, cacheWrite: 2 },
+          },
+        ],
+      },
+    },
+  },
   nodeHost: {
     workerRuns: {
       enabled: true,
       capacity: 1,
       isolation: "none",
-      nativeInferenceConfig: "/etc/openclaw/worker-inference.json",
     },
   },
 }
 ```
 
 The external platform may run the node inside a container. OpenClaw's additional
-nested-container worker mode is not supported for local inference. Make the
-registry file readable only by the service account. For a trusted private proxy CA,
+nested-container worker mode is not supported for local inference. Keep the node
+configuration and service environment readable only by the service account. For a trusted private proxy CA,
 provision a read-only CA bundle through the node service's `NODE_EXTRA_CA_CERTS`,
 or use its `NODE_USE_SYSTEM_CA` setting. The existing worker environment preserves
 these settings; it does not inherit `NODE_OPTIONS` or generic `HTTP_PROXY` /
 `HTTPS_PROXY` variables. Configure the compatible proxy endpoint explicitly as
 `baseUrl`, and never disable certificate verification.
 
-For example, with node state
-rooted at `/srv/worker-state`:
-
-```json validate=false
-{
-  "models": [
-    {
-      "provider": "openai",
-      "id": "worker-model",
-      "api": "openai-completions",
-      "baseUrl": "https://credential-proxy.example.test/v1",
-      "contextWindow": 32768,
-      "maxTokens": 4096,
-      "reasoning": true,
-      "thinkingLevelMap": { "low": "low", "high": "high" },
-      "cost": { "input": 2, "output": 8, "cacheRead": 1, "cacheWrite": 2 },
-      "apiKeyEnv": "WORKER_PROXY_AUTH"
-    }
-  ],
-  "workspaces": [
-    {
-      "id": "assistant",
-      "path": "/srv/worker-state/node-host",
-      "scope": "subdirectories",
-      "models": ["openai/worker-model"]
-    }
-  ]
-}
-```
-
 Replace the endpoint with your external custodian's compatible API and use its
-model metadata. Prices are per million tokens. Despite its name, `apiKeyEnv` names
-a variable containing an opaque proxy auth value, not an actual provider key.
-The registry contains the variable name, never the value. Optional `headers` are
-node-local startup values too; use only metadata or externally scoped auth there. Known credential-bearing
-header names are protected automatically. List nonstandard authentication header
-names in the model's `sensitiveHeaderNames` array (case-insensitive); other headers
-remain ordinary metadata. For example, `"sensitiveHeaderNames": ["X-Session"]`
-classifies a configured `X-Session` value without classifying a routing header.
-No model configuration is
+model metadata. Prices are per million tokens. `apiKey` uses the same literal,
+environment interpolation, and supported SecretRef forms as ordinary OpenClaw
+model configuration; provision an externally scoped proxy value rather than a
+raw provider key. Optional provider and model `headers` are node-local startup
+values too. All configured header values are conservatively protected from worker
+diagnostics and protocol output.
+
+Every compatible model under `models.providers` with a usable credential is
+available to worker-local turns on this node. There is no second workspace/model
+allowlist. The supervisor projects the exact admitted workspace into each child,
+and both node and worker check its canonical identity. Model configuration is not
 loaded from the workspace, a turn request, Gateway auth profiles, or dotenv files.
 
-A workspace grant's `id` is the exact agent ID. Omitted `scope` means an exact
-workspace path. Explicit `subdirectories` allows normal dispatch to create
-generated workspaces below a stable operator-selected root; you do not predict
-environment/session directory names. Both node and worker check canonical
-containment, and the runtime pins directory identity during the turn. Use a
-narrower existing root when possible. Optional `sessionId` restricts a grant to
-one known session incarnation. Every workspace **must declare `models` explicitly**
-as an array of configured `provider/model` references. Omission is invalid, not an
-all-model grant; `"models": []` is a valid deny-all grant. Unknown references or
-ambiguous duplicate model/workspace identities are rejected before credential
-capture. Fix the node registry rather than expecting Gateway inference fallback.
-Each child receives only its agent's explicit allowed-model set and those models'
-auth values, never an unrelated model's credentials. This set is per agent, not
-an additional per-turn credential policy.
-
-The supervisor snapshots the file and named auth values at startup. Rotation
-requires controlled node/worker replacement through your platform lifecycle; it
-does not mutate a running registry. The private startup carrier is removed before
+The node snapshots its canonical model configuration and resolved auth values at
+startup. Rotation requires controlled node/worker replacement through your
+platform lifecycle; it does not mutate a running snapshot. The private startup carrier is removed before
 tools execute to avoid accidental inheritance, not to isolate it from same-user code. Workspace preparation, repository setup, and unrelated proxied
 workers do not inherit it.
 
@@ -226,7 +203,7 @@ current worker-inference binding.
 model availability and auth checks; worker proxy auth values do not satisfy those
 checks. An explicit `agentRuntime` requires an explicit canonical `model` and an
 available Gateway runtime choice. The model picker is not a catalog of the node's
-local registry. Use the configured-default flow above; do not copy worker
+model configuration. Use the configured-default flow above; do not copy worker
 auth values to the Gateway or disable auth checks to make an explicit selection pass.
 These are selection-time checks: they do not make Gateway provider auth a
 requirement for continuing an already-bound worker-inference session, including
@@ -236,7 +213,7 @@ authority still apply.
 
 The launch carries a feature-gated inference choice and the existing model
 reference, not model endpoints, headers, or provider credentials. Missing local
-configuration, denied grants, incompatible workers, and provider errors fail
+configuration, unavailable models, incompatible workers, and provider errors fail
 closed. The worker and Gateway both reject proxy fallback for local turns.
 Omitting `settings.inference`, or setting it to `gateway`, preserves the default.
 
@@ -274,12 +251,11 @@ Before downgrading either service to a build without this feature:
    resolve cleanup before continuing. Do not force-destroy merely to downgrade.
 
 2. Remove the native profiles from `cloudWorkers.profiles` and any defaults that
-   reference them, then remove `nodeHost.workerRuns.nativeInferenceConfig` from
-   the node configuration. Removing a profile does not change an active
-   environment's recorded inference choice; reclaim it first. Retire the
-   node-local registry and auth environment through your platform lifecycle.
-3. Downgrade only after that cleanup. Older node schemas reject
-   `nativeInferenceConfig`, and older Gateways do not interpret
+   reference them. Removing a profile does not change an active environment's
+   recorded inference choice; reclaim it first. Retire worker-only model entries
+   and auth environment through your platform lifecycle if they are no longer
+   used by ordinary node-local OpenClaw operation.
+3. Downgrade only after that cleanup. Older Gateways do not interpret
    `settings.inference` as a local-inference requirement. Do not leave native
    placements or profiles for an older Gateway to recover. Any later Gateway or
    proxied turn needs its own configured provider credentials.
@@ -289,7 +265,7 @@ Before downgrading either service to a build without this feature:
 - Coding tools execute in the worker. Existing grants and permission modes apply.
   Interactive exec approvals and worker LLM-review approval transport remain
   unsupported; approval-required execution is denied, not auto-approved.
-- The local registry owns real model API, input capabilities, context window,
+- The node's canonical model configuration owns the real model API, input capabilities, context window,
   output-token limit, prices, and thinking support. Unsupported thinking and
   conflicting token-budget overrides are rejected. The existing worker replay
   projection preserves supported provider replay in canonical Gateway transcripts.
