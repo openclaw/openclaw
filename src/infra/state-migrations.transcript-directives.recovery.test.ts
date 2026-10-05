@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -12,12 +12,11 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
 });
 
 describe("historical transcript directive archive recovery", () => {
@@ -29,7 +28,7 @@ describe("historical transcript directive archive recovery", () => {
   ] as const)(
     "recovers a pending archive with a $cursorPhase cursor (copy missing: $copyMissing)",
     async ({ copyMissing, cursorPhase }) => {
-      const stateDir = makeTempDir(tempDirs, "transcript-directive-complete-recovery-");
+      const stateDir = tempDirs.make("transcript-directive-complete-recovery-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const opened = openOpenClawAgentDatabase({ agentId: "main", env });
       const archiveBytes = Buffer.from(

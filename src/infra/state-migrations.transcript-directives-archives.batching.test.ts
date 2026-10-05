@@ -3,17 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { recoverTranscriptArchivePublication } from "./state-migrations.transcript-archive-publication.js";
 import {
   migrateCanonicalTranscriptArchives,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalContent = `${JSON.stringify({ type: "message", message: { role: "user", content: "old" } })}\n`;
 
 function sha256(bytes: Uint8Array): string {
@@ -21,7 +22,7 @@ function sha256(bytes: Uint8Array): string {
 }
 
 function fixture(count = 3) {
-  const directory = makeTempDir(tempDirs, "archive-batch-");
+  const directory = tempDirs.make("archive-batch-");
   const pathname = path.join(directory, "agent.sqlite");
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(pathname);
@@ -84,6 +85,7 @@ function fixture(count = 3) {
   const migrate = (
     options: {
       onArchive?: (archivePath: string) => void;
+      signal?: AbortSignal;
       transformContent?: (content: string) => { changed: boolean; content: string };
       writeCursor?: typeof writeCursor;
     } = {},
@@ -93,6 +95,7 @@ function fixture(count = 3) {
         agentId: "main",
         database,
         pathname,
+        signal: options.signal,
         start: { generation: "", sessionId: "" },
         writeCursor: options.writeCursor ?? writeCursor,
         transformContent: options.transformContent ?? ((content) => ({ changed: false, content })),
@@ -134,13 +137,10 @@ function changeContent(content: string) {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const directory of tempDirs.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
 });
 
 describe("canonical transcript archive batch transactions", () => {
-  it("preserves unchanged bytes across batch boundaries with two transactions per batch", async () => {
+  it("checkpoints unchanged archives once per bounded batch", async () => {
     const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
     try {
       const before = f.database
@@ -155,8 +155,8 @@ describe("canonical transcript archive batch transactions", () => {
           .all(),
       ).toEqual(before);
       expect(f.progress()).toBe('{"phase":"complete"}');
-      expect(f.transactions).toBe(5); // Two per batch, plus completion.
-      expect(f.checks).toBe(10); // Entry and pre-commit for every transaction.
+      expect(f.transactions).toBe(3); // One cursor write per batch, plus completion.
+      expect(f.checks).toBe(6); // Entry and pre-commit for every transaction.
     } finally {
       f.close();
     }
@@ -221,7 +221,7 @@ describe("canonical transcript archive batch transactions", () => {
           "UPDATE session_transcript_archives SET archive_sha256 = 'invalid' WHERE session_id = 's00002'",
         )
         .run();
-      await expect(f.migrate()).rejects.toThrow(/is corrupt/);
+      await expect(f.migrate()).rejects.toThrow(/archive-2\.jsonl.*is corrupt/);
       expect(f.transactions).toBe(0);
       expect(f.progress()).toBe("start");
     } finally {
@@ -265,6 +265,25 @@ describe("canonical transcript archive batch transactions", () => {
       );
       expect(archiveBlob(f.database, "s00000").toString()).toContain("old");
       expect(f.progress()).toBe("start");
+    } finally {
+      f.close();
+    }
+  });
+
+  it("honors cancellation before starting a planned rewrite batch", async () => {
+    const f = fixture();
+    try {
+      const controller = new AbortController();
+      await expect(
+        f.migrate({
+          signal: controller.signal,
+          transformContent: changeContent,
+          onArchive: () => controller.abort(new Error("operator cancelled Doctor")),
+        }),
+      ).rejects.toThrow("operator cancelled Doctor");
+      expect(f.transactions).toBe(0);
+      expect(f.progress()).toBe("start");
+      expect(archiveBlob(f.database, "s00000").toString()).toContain("old");
     } finally {
       f.close();
     }
@@ -461,6 +480,46 @@ describe("canonical transcript archive batch transactions", () => {
           )
           .get()?.count,
       ).toBe(35);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("settles a recovery journal in bounded batches", async () => {
+    const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+    try {
+      await f.migrate({ transformContent: changeContent });
+      const transactionsBeforeRecovery = f.transactions;
+      const warnings = await runWithAgentDatabaseMaintenanceAuthority(
+        {
+          signal: new AbortController().signal,
+          assertOwned() {},
+          assertOwnedInTransaction() {},
+        },
+        f.pathname,
+        () =>
+          recoverTranscriptArchivePublication({
+            agentId: "main",
+            archiveDirectory: f.archiveDirectory,
+            database: f.database,
+            pathname: f.pathname,
+            onArchive: (archivePath) => {
+              fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+              fs.writeFileSync(archivePath, originalContent);
+            },
+          }),
+      );
+
+      expect(warnings).toEqual([]);
+      expect(f.transactions - transactionsBeforeRecovery).toBe(2);
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+      expect(
+        f.database
+          .prepare(
+            "SELECT count(*) AS count FROM session_transcript_archives WHERE published_at = 123",
+          )
+          .get()?.count,
+      ).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
     } finally {
       f.close();
     }
