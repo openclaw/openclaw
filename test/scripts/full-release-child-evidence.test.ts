@@ -48,7 +48,9 @@ function fixture(role = "normalCi") {
       actor: { login: "github-actions[bot]" },
       triggering_actor: { login: "github-actions[bot]" },
     },
-    lineage: { status: "ahead", merge_base_commit: { sha: workflowSha } },
+    lineage: role.endsWith("Candidate")
+      ? { status: "diverged", merge_base_commit: { sha: SHA } }
+      : { status: "ahead", merge_base_commit: { sha: workflowSha } },
     jobs,
     attempts: [jobs],
     role,
