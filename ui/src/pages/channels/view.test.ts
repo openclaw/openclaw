@@ -11,7 +11,7 @@ import {
 } from "./view.shared.ts";
 import { createChannelsViewProps } from "./view.test-support.ts";
 import { renderChannels } from "./view.ts";
-import type { ChannelsChannelData, ChannelsProps } from "./view.types.ts";
+import type { ChannelsProps } from "./view.types.ts";
 import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
 function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
@@ -452,7 +452,7 @@ function renderWhatsAppButtons(params: {
 
 function renderChannelDetailFixture(
   channelId: string,
-  data: ChannelsChannelData,
+  channels: ChannelsStatusSnapshot["channels"],
   options: {
     label?: string;
     loading?: boolean;
@@ -460,16 +460,13 @@ function renderChannelDetailFixture(
     onRefresh?: ChannelsProps["onRefresh"];
   } = {},
 ) {
-  const status = Object.entries(data).find(([key]) => key === channelId)?.[1] ?? {};
-  const channelAccounts = data.channelAccounts ?? {};
-  const accounts = Object.hasOwn(channelAccounts, channelId) ? channelAccounts[channelId] : [];
   const props = createProps({
     ts: Date.now(),
     channelOrder: [channelId],
     channelLabels: { [channelId]: options.label ?? channelId },
-    channels: { [channelId]: status },
-    channelAccounts,
-    channelDefaultAccountId: accounts?.length ? { [channelId]: accounts[0]!.accountId } : {},
+    channels,
+    channelAccounts: {},
+    channelDefaultAccountId: {},
   });
   props.channels.channelsLoading = options.loading ?? false;
   props.config.lastError = options.configError ?? null;
@@ -482,7 +479,6 @@ function renderChannelDetailFixture(
       channelId,
       label: options.label ?? channelId,
       props,
-      data: { ...data, channelAccounts },
       onClose: () => {},
       onSetup: () => {},
     }),
@@ -608,7 +604,7 @@ describe("channel detail", () => {
   it.each(["telegram", "whatsapp", "nostr"] as const)(
     "shows an escaped configuration save error inside the %s editor",
     (channelId) => {
-      const data: ChannelsChannelData =
+      const data: ChannelsStatusSnapshot["channels"] =
         channelId === "whatsapp"
           ? { whatsapp: createWhatsAppStatus() }
           : channelId === "nostr"
@@ -639,7 +635,6 @@ describe("channel detail", () => {
         channelId: "telegram",
         label: "Telegram",
         props,
-        data: {},
         onClose: () => {},
         onSetup: () => {},
       }),
@@ -676,7 +671,7 @@ describe("channel detail", () => {
         audience: "https://chat.example",
         mode: "polling",
       };
-      const data: ChannelsChannelData = { channelAccounts: {}, [channelId]: status };
+      const data: ChannelsStatusSnapshot["channels"] = { [channelId]: status };
       const container = renderChannelDetailFixture(channelId, data, { onRefresh });
       const facts = Array.from(container.querySelectorAll("dt"), (node) => [
         node.textContent?.trim(),
@@ -702,7 +697,7 @@ describe("channel detail", () => {
     const onRefresh = vi.fn();
     const container = renderChannelDetailFixture(
       "telegram",
-      { telegram: { configured: true, running: true }, channelAccounts: {} },
+      { telegram: { configured: true, running: true } },
       { loading: true, onRefresh },
     );
     const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");

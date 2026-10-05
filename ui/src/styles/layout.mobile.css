@@ -272,11 +272,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
 /* Mobile-specific styles */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell {
-    --shell-pad: 8px;
-    --shell-gap: 8px;
-  }
-
   /* Topbar */
   .shell--mobile-nav .topbar {
     padding: 10px 12px;
@@ -445,10 +440,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
 /* Small mobile */
 @media (max-width: 400px) {
-  .shell {
-    --shell-pad: 4px;
-  }
-
   .topbar {
     padding: 8px 10px;
   }

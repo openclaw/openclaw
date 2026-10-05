@@ -2898,9 +2898,8 @@ ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	2
 ui/src/pages/agents/panels-status-files.ts	1
 ui/src/pages/channels/view.detail.ts	1
-ui/src/pages/channels/view.nostr-profile-form.ts	4
+ui/src/pages/channels/view.nostr-profile-form.ts	3
 ui/src/pages/channels/view.nostr.ts	5
-ui/src/pages/channels/view.ts	9
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
