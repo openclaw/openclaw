@@ -180,6 +180,7 @@ export function sessionMatchesVisibleSessionScope(
     sessionMatchesArchivedFilter(row, options.archivedFilter) &&
     row.kind !== "global" &&
     row.kind !== "unknown" &&
+    row.isDock !== true &&
     (options.showCron === true || !isCronSessionDisplayKey(row.key)) &&
     (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
     (!options.filterByAgent ||
@@ -194,6 +195,7 @@ export function filterVisibleSessionRows(
   return rows.filter((row) => {
     if (
       row.key === options.currentSessionKey &&
+      row.isDock !== true &&
       ((options.archivedFilter ?? "active") === "active" ||
         sessionMatchesArchivedFilter(row, options.archivedFilter))
     ) {
@@ -265,7 +267,12 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   // hides another one behind a separate route.
   let visibleSessions = sortedSessions;
   let activeRow = visibleSessions.find(matchesCurrentSession);
-  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
+  if (
+    !activeRow &&
+    activeSession &&
+    activeSession.isDock !== true &&
+    input.archivedFilter !== "archived"
+  ) {
     // Deep-linked and archived sessions still need a visible selected row.
     activeRow = activeSession;
     visibleSessions = [activeRow, ...visibleSessions];

@@ -39,6 +39,7 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
     ...DEFAULT_SESSION_LIST_QUERY,
     rowMode: "compact",
     source: "dashboard",
+    excludeDock: true,
     hasBoard: true,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
@@ -54,6 +55,7 @@ export function sessionProgressTargetQuery(agentId?: string | null): SessionList
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
     source: "dashboard",
+    excludeDock: false,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
@@ -82,6 +84,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
+    excludeDock: options.excludeDock ?? true,
   };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;

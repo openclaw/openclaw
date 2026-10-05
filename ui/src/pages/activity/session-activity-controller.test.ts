@@ -200,6 +200,7 @@ it("keeps the same-query snapshot during invalidation and clears it on person ch
     "sessions.list",
     expect.objectContaining({
       involvingProfileId: "former",
+      excludeDock: true,
       includePeople: true,
       sortBy: "activity",
     }),

@@ -479,6 +479,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
+    createdSurface: entry?.createdSurface,
     ...projectSessionRowProfiles(input),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,

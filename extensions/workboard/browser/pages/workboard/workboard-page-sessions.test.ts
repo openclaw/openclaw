@@ -676,44 +676,88 @@ it("validates session columns inline and preserves their ids and rules when labe
   });
 });
 
-it("creates and saves one board conversation before opening the optional dock, reusing it after a failed save", async () => {
+it.each([undefined, "agent:main:legacy-board-conversation"])(
+  "creates one dock conversation for %s and reuses it after a failed save",
+  async (previousSessionKey) => {
+    const page = sessionsPage();
+    page.board.sessions.agentSessionKey = previousSessionKey;
+    const openSession = vi.fn();
+    Object.assign(page.fixture.host, {
+      dock: { openSession, close: vi.fn(), openSessionKey: null },
+    });
+    vi.mocked(page.fixture.host.sessions.create).mockResolvedValue("agent:main:board-conversation");
+    const request = expectDefined(page.request.getMockImplementation(), "request");
+    let rejectSave = true;
+    page.request.mockImplementation(async (method, params) => {
+      if (method === "sessions.describe") {
+        return { session: { key: previousSessionKey, agentId: "main", isDock: false } };
+      }
+      if (method === "workboard.sessionsBoard.update") {
+        if (rejectSave) {
+          throw new Error("Save unavailable");
+        }
+        page.board.sessions.agentSessionKey = "agent:main:board-conversation";
+        return { board: page.board };
+      }
+      return request(method, params);
+    });
+    await page.connect();
+    peoplePicker(page).onSelect("me");
+    await vi.advanceTimersByTimeAsync(0);
+    button(page, "Board agent").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.container.textContent).toContain("Save unavailable");
+    expect(openSession).not.toHaveBeenCalled();
+    expect(page.board.sessions.agentSessionKey).toBe(previousSessionKey);
+    rejectSave = false;
+    button(page, "Board agent").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.fixture.host.sessions.create).toHaveBeenCalledExactlyOnceWith({
+      agentId: "main",
+      displayName: "Sessions board · Team sessions",
+      surface: "plugin-dock",
+    });
+    if (previousSessionKey) {
+      expect(page.request).toHaveBeenCalledWith("sessions.describe", { key: previousSessionKey });
+    }
+    expect(page.fixture.host.sessions.patch).not.toHaveBeenCalled();
+    expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
+      boardId: "sessions",
+      patch: { agentSessionKey: "agent:main:board-conversation" },
+    });
+    expect(openSession).toHaveBeenCalledExactlyOnceWith({
+      sessionKey: "agent:main:board-conversation",
+      agentId: "main",
+      label: "Sessions board · Team sessions",
+      context: { page: "workboard", detail: { boardId: "sessions" } },
+    });
+  },
+);
+
+it("reopens the saved dock conversation by exact read when it is absent from the session roster", async () => {
   const page = sessionsPage();
+  const sessionKey = "agent:writer:board-conversation";
+  page.board.sessions.agentSessionKey = sessionKey;
   const openSession = vi.fn();
   Object.assign(page.fixture.host, { dock: { openSession, close: vi.fn(), openSessionKey: null } });
-  vi.mocked(page.fixture.host.sessions.create).mockResolvedValue("agent:main:board-conversation");
   const request = expectDefined(page.request.getMockImplementation(), "request");
-  let rejectSave = true;
-  page.request.mockImplementation(async (method, params) => {
-    if (method === "workboard.sessionsBoard.update") {
-      if (rejectSave) {
-        throw new Error("Save unavailable");
-      }
-      page.board.sessions.agentSessionKey = "agent:main:board-conversation";
-      return { board: page.board };
-    }
-    return request(method, params);
-  });
+  page.request.mockImplementation(async (method, params) =>
+    method === "sessions.describe"
+      ? { session: { key: sessionKey, agentId: "writer", isDock: true } }
+      : request(method, params),
+  );
   await page.connect();
-  peoplePicker(page).onSelect("me");
-  await vi.advanceTimersByTimeAsync(0);
+  expect(page.fixture.host.sessions.rows).toEqual([]);
   button(page, "Board agent").click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(page.container.textContent).toContain("Save unavailable");
-  expect(openSession).not.toHaveBeenCalled();
-  rejectSave = false;
-  button(page, "Board agent").click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.fixture.host.sessions.create).toHaveBeenCalledExactlyOnceWith({
-    agentId: "main",
-    label: "Sessions board · Team sessions",
-  });
-  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
-    boardId: "sessions",
-    patch: { agentSessionKey: "agent:main:board-conversation" },
-  });
+  expect(page.request).toHaveBeenCalledWith("sessions.describe", { key: sessionKey });
+  expect(page.fixture.host.sessions.create).not.toHaveBeenCalled();
+  expect(
+    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
+  ).toBe(false);
   expect(openSession).toHaveBeenCalledExactlyOnceWith({
-    sessionKey: "agent:main:board-conversation",
-    agentId: "main",
+    sessionKey,
+    agentId: "writer",
     label: "Sessions board · Team sessions",
     context: { page: "workboard", detail: { boardId: "sessions" } },
   });
