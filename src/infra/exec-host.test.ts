@@ -14,6 +14,7 @@ type JsonlSocketCall = {
   socketPath: string;
   requestLine: string;
   timeoutMs: number;
+  responseTimeoutMs?: number | null;
   signal?: AbortSignal;
   accept: (msg: unknown) => unknown;
 };
@@ -69,6 +70,7 @@ describe("requestExecHostViaSocket", () => {
 
     expect(call.socketPath).toBe("/tmp/socket");
     expect(call.timeoutMs).toBe(20_000);
+    expect(call.responseTimeoutMs).toBeNull();
     expect(call.signal).toBe(controller.signal);
     const payload = JSON.parse(call.requestLine) as {
       type: string;
@@ -127,5 +129,26 @@ describe("requestExecHostViaSocket", () => {
     ).resolves.toBeNull();
 
     expect(requireJsonlSocketCall().timeoutMs).toBe(123);
+    expect(requireJsonlSocketCall().responseTimeoutMs).toBeUndefined();
   });
+
+  it.each([
+    { commandTimeout: 35_000, responseTimeout: 45_000 },
+    { commandTimeout: Number.MAX_SAFE_INTEGER, responseTimeout: 2_147_000_000 },
+    { commandTimeout: 0, responseTimeout: null },
+    { commandTimeout: null, responseTimeout: null },
+  ])(
+    "keeps the command budget separate from connection admission: $commandTimeout",
+    async ({ commandTimeout, responseTimeout }) => {
+      requestJsonlSocketMock.mockResolvedValueOnce(null);
+      await requestExecHostViaSocket({
+        socketPath: "/tmp/socket",
+        token: "secret",
+        request: { command: ["echo", "hi"], timeoutMs: commandTimeout },
+      });
+      const call = requireJsonlSocketCall();
+      expect(call.timeoutMs).toBe(20_000);
+      expect(call.responseTimeoutMs).toBe(responseTimeout);
+    },
+  );
 });
