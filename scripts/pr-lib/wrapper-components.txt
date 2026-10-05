@@ -982,6 +982,8 @@ src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
+src/infra/sqlite-page-cache-residency.ts
+src/infra/sqlite-page-cache.worker.ts
 src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-planner-statistics.ts
 src/infra/sqlite-post-commit.ts
