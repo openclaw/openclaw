@@ -1,6 +1,11 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWriteAdmission,
+  runOpenClawAgentWriteAdmissions,
+} from "../../state/openclaw-agent-write-admission.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
@@ -20,6 +25,13 @@ type ReadSessionStore = <T>(
     assertCurrent: () => void;
   }) => Promise<T>,
 ) => Promise<T>;
+
+// A staged input may already own one foreground FIFO. Worker reservations still
+// refuse reentry; reads spanning several stores keep ordered batch acquisition.
+const withReadAdmission: typeof runOpenClawAgentWriteAdmissions = (databases, read) =>
+  databases.length === 1
+    ? runOpenClawAgentWriteAdmission(databases[0]!, read, true)
+    : runOpenClawAgentWriteAdmissions(databases, read);
 
 /** Native effects retain existing writer FIFO order through their synchronous consumer. */
 export async function withOrderedSessionEntriesInWorker<T>(
@@ -46,9 +58,17 @@ export async function withOrderedSessionEntriesInWorker<T>(
         }
       });
     }
-    return runOpenClawAgentWriteAdmissions(
+    return withReadAdmission(
       selected.map(({ database }) => database),
       async () => {
+        const witnesses = selected.map(({ database }) => {
+          const native = getOpenClawAgentDatabaseIfOpen(database);
+          return {
+            database,
+            native,
+            revision: native && readSqliteNativeMutationRevision(native.db),
+          };
+        });
         let changed = false;
         const unsubscribe = sessionChanges.subscribeFacts((change) => {
           const scope = "all" in change ? change.scope : change;
@@ -95,6 +115,18 @@ export async function withOrderedSessionEntriesInWorker<T>(
           }
           for (const read of selected) {
             read.assertCurrent();
+          }
+          // Synchronous SDK writers cannot join the FIFO; unpublished native DML still revokes the read.
+          for (const { database, native, revision } of witnesses) {
+            if (
+              getOpenClawAgentDatabaseIfOpen(database) !== native ||
+              (native &&
+                (native.db.isTransaction ||
+                  revision === undefined ||
+                  readSqliteNativeMutationRevision(native.db) !== revision))
+            ) {
+              throw new Error("Session entry changed during read");
+            }
           }
           if (changed) {
             throw new Error("Session entry changed during read");

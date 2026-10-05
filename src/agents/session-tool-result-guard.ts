@@ -10,7 +10,10 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
-import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
+import {
+  withRuntimeUserTurnTranscriptRecorder,
+  withCurrentRuntimeUserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -251,8 +254,11 @@ export function installSessionToolResultGuard(
   const runAsync = async <T>(operation: Generator<AppendRequest, T, AppendReceipt>): Promise<T> => {
     let next = operation.next();
     while (!next.done) {
+      const request = next.value;
       next = operation.next(
-        await appendRequest(next.value, originalAppendWithTranscriptAnchorAsync),
+        await withCurrentRuntimeUserTurnTranscriptRecorder(request.message, () =>
+          appendRequest(request, originalAppendWithTranscriptAnchorAsync),
+        ),
       );
     }
     return next.value;

@@ -88,5 +88,6 @@ export type SessionTurnCommitted = {
   sequences: Array<number | undefined>;
   projectionNeedsReconcile: boolean;
   custody?: SessionPendingInputWorkerReceipt;
+  authority?: import("./session-pending-input-authority.js").SessionPendingInputAuthorityFacts;
   publication?: SessionEntryReplacementPublication;
 };

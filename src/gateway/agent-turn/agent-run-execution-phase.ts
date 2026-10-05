@@ -32,6 +32,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
@@ -179,8 +180,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           () => dispatchAgentRunWithCommentaryMedia(dispatch, params),
           () => (leaseActive ? preparedModelRuntimeLease?.snapshot : undefined),
         );
-      const recorder = prepared.userTurn.recorder;
-      return recorder?.withPendingInput ? recorder.withPendingInput(run) : run();
+      return withCurrentUserTurnInput(prepared.userTurn.recorder, run);
     };
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();

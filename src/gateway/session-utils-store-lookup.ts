@@ -448,6 +448,7 @@ export async function withGatewaySessionStoreTarget<T>(
               return consume(target, memberships, assertCurrent);
             },
             {
+              ordered: params.includeMembership,
               prepareSource(input, database, source) {
                 for (const { read, scope } of publications) {
                   if (

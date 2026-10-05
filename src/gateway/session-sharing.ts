@@ -6,6 +6,10 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionPendingInputAuthority,
+  SessionPendingInputAuthorityFacts,
+} from "../config/sessions/session-pending-input-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSessionMethodScope } from "../shared/session-method-scopes-base.js";
@@ -35,6 +39,7 @@ import {
   prepareAuthorizedSessionMutationFacts,
   resolveOwnSessionProfileAuthorization,
   sessionMutationTargetChanged,
+  withCurrentSessionMutationSharing,
   VISIBILITY_AUTHORIZED_METHODS,
   type AuthorizedSessionMutationTarget,
   type PreparedMutationSharing,
@@ -43,7 +48,6 @@ import {
 } from "./session-sharing-authorization.js";
 import * as sessionSharingDescribe from "./session-sharing-describe.js";
 import {
-  withSessionSharingTarget,
   authorizeIncognitoSessionTarget,
   authorizeOwnSessionMutation,
   authorizeSessionAgentRun,
@@ -58,6 +62,7 @@ import { captureSessionMutationRouting } from "./session-sharing-preparation.js"
 import {
   createSessionListEntryFilter,
   prepareProjectedSessionSharing,
+  withCurrentSessionSharingProfiles,
 } from "./session-sharing-read.js";
 import {
   readSessionSharingStringParam,
@@ -160,12 +165,13 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
   const getPolicyConfig = () => params.context.getCommittedRuntimeConfig?.() ?? getCfg();
   let consumingSharing = params.preparedSharing;
+  let preparedProfiles = params.preparedProfiles;
   const preparedPolicy = (cfg: OpenClawConfig) =>
     consumingSharing
       ? prepareProjectedSessionSharing({
           cfg,
           client: params.client,
-          profiles: params.preparedProfiles,
+          profiles: preparedProfiles,
           isMember: (_target, id) =>
             consumingSharing!.members.some((member) => member.identityId === id),
         })
@@ -410,9 +416,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         const previous = consumingSharing;
         consumingSharing = prepared;
         try {
-          // Worker consumption uses pinned profile facts; accepted input custody
-          // rechecks live target policy without retaining that preparation snapshot.
-          params.preparedProfiles?.readCurrent();
+          preparedProfiles?.readCurrent();
           prepared.assertCurrent();
           const result = consume();
           if (isPromiseLike(result)) {
@@ -590,43 +594,22 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           throw new SessionMutationAuthorizationChangedError(error);
         }
       };
-      let createdSessionRecorded = false;
-      return {
+      const withCurrentFacts: SessionPendingInputAuthority["withCurrent"] = async (consume) => {
+        preparedProfiles?.readCurrent();
+        const expected = authorizedTargets[0]!;
+        return withCurrentSessionMutationSharing(params, expected, (prepared, facts) =>
+          consumeSharing(prepared, () => {
+            assertTargetCurrent(expected, expected, params.context.getRuntimeConfig());
+            return consume(facts, prepared.assertCurrent);
+          }),
+        );
+      };
+      const authorization: SessionMutationAuthorization = {
         ...(params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
           ? {
-              withCurrent: async <T>(consume: () => T): Promise<T> => {
-                params.preparedProfiles?.readCurrent();
-                const expected = authorizedTargets[0]!;
-                const cfg = params.context.getRuntimeConfig();
-                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-                  targetChanged(expected.sessionKey),
-                );
-                return withSessionSharingTarget(
-                  { cfg, sessionKey: expected.sessionKey, agentId: expected.agentId },
-                  (read) => {
-                    const prepared = {
-                      ...read,
-                      assertCurrent: () => {
-                        read.assertCurrent();
-                        assertRoutingCurrent(params.context.getRuntimeConfig());
-                      },
-                    };
-                    return consumeSharing(prepared, () => {
-                      assertTargetCurrent(expected, expected, params.context.getRuntimeConfig());
-                      return consume();
-                    });
-                  },
-                );
-              },
+              withCurrent: <T>(consume: () => T): Promise<T> => withCurrentFacts(consume),
               withPreparedCurrent: <T>(
-                facts: {
-                  agentId: string;
-                  storePath: string;
-                  sessionKey: string;
-                  entry: import("../config/sessions/types.js").SessionEntry | undefined;
-                  readSource?: import("../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
-                  members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
-                },
+                facts: SessionPendingInputAuthorityFacts,
                 consume: () => T,
                 assertSourceCurrent: () => void,
               ): T => {
@@ -673,7 +656,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         recordCreatedSession: (created) => {
           // Only the creation owner's COMMIT notification may replace an absent snapshot.
           // Never adopt a response/reload result, or a later incarnation of the same key.
-          if (createdSessionRecorded) {
+          if (authorizedTargets.some((target) => target.created)) {
             return;
           }
           let expected = authorizedTargets.find(
@@ -695,7 +678,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           if (!expected) {
             return;
           }
-          createdSessionRecorded = true;
           expected.resolved = {
             agentId: created.agentId,
             canonicalKey: created.sessionKey,
@@ -756,6 +738,22 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           );
         },
       };
+      if (authorization.withPreparedCurrent) {
+        authorization.admittedInputAuthority = {
+          // Transport/source custody owns lifetime; profile selection ends at input acceptance.
+          assertLifetimeCurrent: () => {},
+          withCurrent: (consume) =>
+            withCurrentSessionSharingProfiles(params.client, (profiles, beginConsume) => {
+              preparedProfiles = profiles;
+              return withCurrentFacts((...facts) => {
+                beginConsume();
+                return consume(...facts);
+              });
+            }),
+          withPreparedCurrent: authorization.withPreparedCurrent,
+        };
+      }
+      return authorization;
     })(),
   };
 }

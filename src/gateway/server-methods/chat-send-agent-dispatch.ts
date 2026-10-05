@@ -15,6 +15,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
@@ -249,11 +250,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   };
   const dispatchAdmission = {
     run: <T>(operation: () => Promise<T>) =>
-      gatewayWorkAdmission.run(() =>
-        userTurnRecorder.withPendingInput
-          ? userTurnRecorder.withPendingInput(operation)
-          : operation(),
-      ),
+      gatewayWorkAdmission.run(() => withCurrentUserTurnInput(userTurnRecorder, operation)),
   };
   const dashboardReadAdmission = assertDashboardReadCurrent
     ? {
@@ -288,7 +285,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             const replyContextFields = await replyContextFieldsPromise;
             assertWorkspaceRunOwnership?.();
             applyChatSendReplyContextFields(ctx, replyContextFields);
-            messageInjectionAttempt = beginCapturedMessageInjection();
+            messageInjectionAttempt = await withCurrentUserTurnInput(
+              userTurnRecorder,
+              beginCapturedMessageInjection,
+            );
           }
           if (messageInjectionAttempt) {
             const injected = await finalizeAcceptedChatSendMessageInjection({
@@ -480,7 +480,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           };
           const dispatchWithRetry = () =>
             runAcceptedChatSendDispatch({
-              operation: dispatchInbound,
+              operation: () => withCurrentUserTurnInput(userTurnRecorder, dispatchInbound),
               classify: classifyDispatchFailure,
               waitForRetry: (error) =>
                 waitForAcceptedChatSendRetry(

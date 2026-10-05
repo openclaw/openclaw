@@ -40,6 +40,7 @@ import type {
   SessionMetadataWorkerOperations,
   SessionMetadataMessageControl,
 } from "../../config/sessions/session-manager-write-contract.js";
+import { readSessionPendingInputAuthorityFacts } from "../../config/sessions/session-pending-input-authority.kernel.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -78,16 +79,31 @@ type MetadataWorkerAdmission = (
 ) => void;
 
 function runWithMetadataMessageAdmission<T>(
-  context: { admit: MetadataWorkerAdmission },
+  context: { admit: MetadataWorkerAdmission; database: DatabaseSync; databasePath: string },
   controls: SessionMetadataMessageControl | undefined,
   run: (admit: MetadataWorkerAdmission, beforeFreshMessageCommit: () => void) => T,
 ): { value: T; pendingInputReceipt?: SessionPendingInputWorkerReceipt } {
   let transactionFacts: unknown;
   let pendingAuthorityChecked = false;
+  const readAuthority = () => {
+    const source = controls?.pendingInput?.facts;
+    return source?.preparedAuthority && source.agentId && source.databaseAgentId
+      ? readSessionPendingInputAuthorityFacts(
+          { db: context.database, path: context.databasePath, agentId: source.databaseAgentId },
+          source.sessionKey,
+          source.agentId,
+        )
+      : undefined;
+  };
   const requestMessageCheck = (check: "pending" | "fresh") => {
     requestSqliteWorkerOperationAdmission({
       stage: "prepare",
-      facts: { kind: "session-message", domainFacts: transactionFacts, check },
+      facts: {
+        kind: "session-message",
+        domainFacts: transactionFacts,
+        check,
+        authority: check === "pending" ? readAuthority() : undefined,
+      },
     });
     if (check === "pending") {
       pendingAuthorityChecked = true;
@@ -102,6 +118,7 @@ function runWithMetadataMessageAdmission<T>(
           kind: "session-message",
           domainFacts: request.facts,
           ...(stage === "commit" && pendingAuthorityChecked ? { check: "pending" } : {}),
+          ...(stage === "commit" && pendingAuthorityChecked ? { authority: readAuthority() } : {}),
         },
       });
     });
