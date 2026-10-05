@@ -252,9 +252,7 @@ function formatClawHubPackageArtifactName(
   return `clawhub-package-${safeName}-${plugin.version}`;
 }
 
-export function resolveOpenClawClawHubPackageFamily(
-  packageName: string,
-): "" | "bundle-plugin" {
+export function resolveOpenClawClawHubPackageFamily(packageName: string): "" | "bundle-plugin" {
   return OPENCLAW_BUNDLE_PLUGIN_PACKAGES.has(packageName) ? "bundle-plugin" : "";
 }
 
