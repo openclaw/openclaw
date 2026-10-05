@@ -3431,7 +3431,7 @@ a:is(
   gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 6px;
+  padding: 5px 0;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -3524,7 +3524,7 @@ a:is(
 .sidebar-agent-card__name-text {
   min-width: 0;
   overflow: hidden;
-  padding-inline-end: 8px;
+  padding-inline-end: 4px;
   white-space: nowrap;
 }
 
