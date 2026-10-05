@@ -19,7 +19,7 @@ export function applyMarkdownTextEdits(text: string, edits: readonly MarkdownTex
     });
   return {
     text: output + text.slice(cursor),
-    mapOffset(offset: number): number {
+    mapOffset: (offset: number): number => {
       let low = 0;
       let high = shifts.length;
       while (low < high) {

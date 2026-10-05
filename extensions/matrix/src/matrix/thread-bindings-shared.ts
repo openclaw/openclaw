@@ -1,8 +1,8 @@
-import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
-import type { SessionBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
   projectThreadBindingRecord,
   resolveThreadBindingLifecycle,
+  type AccountScopedConversationBindingRecord,
+  type SessionBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 type MatrixThreadBindingTargetKind = "subagent" | "acp";

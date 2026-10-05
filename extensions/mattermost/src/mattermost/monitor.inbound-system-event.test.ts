@@ -132,14 +132,9 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./draft-stream.js", async () => {
-  const actual = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
-  return {
-    createMattermostDraftStream: mockState.createMattermostDraftStream,
-    createMattermostDraftPreviewBoundaryController:
-      actual.createMattermostDraftPreviewBoundaryController,
-  };
-});
+vi.mock("./draft-stream.js", () => ({
+  createMattermostDraftStream: mockState.createMattermostDraftStream,
+}));
 
 vi.mock("./monitor-resources.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor-resources.js")>()),

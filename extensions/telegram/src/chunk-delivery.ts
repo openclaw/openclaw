@@ -25,10 +25,11 @@ export function mergeTelegramPartialDeliveryError(
     : undefined;
   const messageIds = [
     ...new Set(
-      [priorDeliveryResult, currentDeliveryResult].flatMap((result) => [
-        ...(result?.messageIds ?? []),
-        ...(result?.receipt ? listMessageReceiptPlatformIds(result.receipt) : []),
-      ]),
+      [priorDeliveryResult, currentDeliveryResult].flatMap((result) =>
+        (result?.messageIds ?? []).concat(
+          result?.receipt ? listMessageReceiptPlatformIds(result.receipt) : [],
+        ),
+      ),
     ),
   ];
   let receipt = currentDeliveryResult?.receipt ?? priorDeliveryResult.receipt;
