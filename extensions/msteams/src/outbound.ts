@@ -89,7 +89,7 @@ async function sendWithDeliveryResults(
     }
     const receipt = createMessageReceiptFromOutboundResults({
       results: [
-        ...earlierResults.map((result) => ({ channel: "msteams", ...result })),
+        ...earlierResults.map((result) => attachChannelToResult("msteams", result)),
         ...(partial?.deliveryResult.receipt
           ? [{ receipt: partial.deliveryResult.receipt }]
           : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({

@@ -1,4 +1,5 @@
 // Irc tests cover client plugin behavior.
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
@@ -331,46 +332,56 @@ describe("irc client PRIVMSG chunking on the wire", () => {
 
   it("retains partial delivery when a later raw socket write fails", async () => {
     const server = await startLoopbackIrcServer();
-    const client = await connectIrcClient({
-      host: "127.0.0.1",
-      port: server.port,
-      tls: false,
-      nick: "bot",
-      username: "bot",
-      realname: "OpenClaw Bot",
-      messageChunkMaxChars: 3,
-    });
-    const failure = new Error("socket write failed");
-    const originalWrite = net.Socket.prototype.write.call.bind(net.Socket.prototype.write);
-    let sends = 0;
-    const write = vi.spyOn(net.Socket.prototype, "write").mockImplementation(function (
-      this: net.Socket,
-      ...args
-    ) {
-      if (typeof args[0] === "string" && args[0].startsWith("PRIVMSG #general :")) {
-        if (++sends === 2) {
-          throw failure;
-        }
-      }
-      return originalWrite(this, ...args);
-    });
+    const socket = new net.Socket();
+    const connect = vi
+      .spyOn(net, "connect")
+      .mockImplementationOnce((...args) => socket.connect(...args));
+    // Node's named exports otherwise retain the original connection factory.
+    syncBuiltinESMExports();
     try {
-      const error = await client
-        .sendPrivmsg("#general", "abcdefghi")
-        .catch((caughtError: unknown) => caughtError);
-      expect(isChannelPartialDeliveryError(error)).toBe(true);
-      expect(error).toMatchObject({
-        cause: failure,
-        deliveryResult: { messageIds: [], visibleReplySent: true },
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        messageChunkMaxChars: 3,
       });
-      client.quit("partial test complete");
-      await server.quitReceived;
-      expect(server.lines.filter((line) => line.startsWith("PRIVMSG #general :"))).toEqual([
-        "PRIVMSG #general :abc",
-      ]);
+      const failure = new Error("socket write failed");
+      const originalWrite = socket.write.bind(socket);
+      let sends = 0;
+      // Socket.connect restores write, so install this fault after connection.
+      const write = vi.spyOn(socket, "write").mockImplementation((...args) => {
+        if (typeof args[0] === "string" && args[0].startsWith("PRIVMSG #general :")) {
+          if (++sends === 2) {
+            throw failure;
+          }
+        }
+        return originalWrite(...args);
+      });
+      try {
+        const error = await client
+          .sendPrivmsg("#general", "abcdefghi")
+          .catch((caughtError: unknown) => caughtError);
+        expect(isChannelPartialDeliveryError(error)).toBe(true);
+        expect(error).toMatchObject({
+          cause: failure,
+          deliveryResult: { messageIds: [], visibleReplySent: true },
+        });
+        client.quit("partial test complete");
+        await server.quitReceived;
+        expect(server.lines.filter((line) => line.startsWith("PRIVMSG #general :"))).toEqual([
+          "PRIVMSG #general :abc",
+        ]);
+      } finally {
+        write.mockRestore();
+        client.close();
+      }
     } finally {
-      write.mockRestore();
-      client.close();
+      connect.mockRestore();
+      syncBuiltinESMExports();
+      socket.destroy();
       await server.close();
     }
   });
