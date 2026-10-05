@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -76,6 +77,7 @@ async function fetchBotFrameworkAttachment(
     response = await safeFetchWithPolicy({
       url: params.url,
       policy: params.policy,
+      resolveFn: lookup,
       requestInit: { headers },
       timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     });

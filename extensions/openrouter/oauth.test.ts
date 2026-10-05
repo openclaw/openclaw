@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 
 const OPENROUTER_OAUTH_REDIRECT_URI = "http://localhost:3000/openrouter-oauth/callback";
+const releaseGuard = vi.fn(async () => undefined);
 type OpenRouterOAuthLoginOptions = {
   createPkce?: typeof providerAuth.generatePkceVerifierChallenge;
   createState?: typeof providerAuthRuntime.generateOAuthState;
@@ -17,6 +19,7 @@ type OpenRouterOAuthLoginOptions = {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  releaseGuard.mockClear();
 });
 
 function loginOpenRouterOAuth(ctx: ProviderAuthContext, options: OpenRouterOAuthLoginOptions = {}) {
@@ -31,8 +34,14 @@ function loginOpenRouterOAuth(ctx: ProviderAuthContext, options: OpenRouterOAuth
       options.startCallback,
     );
   }
-  if (options.fetchImpl) {
-    vi.stubGlobal("fetch", options.fetchImpl);
+  const fetchImpl = options.fetchImpl;
+  if (fetchImpl) {
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(
+      async ({ url, init, beforeRequest }) => {
+        beforeRequest?.();
+        return { response: await fetchImpl(url, init), finalUrl: url, release: releaseGuard };
+      },
+    );
   }
   return createOpenRouterOAuthAuthMethod().run(ctx);
 }
@@ -216,6 +225,10 @@ describe("OpenRouter OAuth", () => {
       expect(log).not.toHaveBeenCalled();
       expect(openUrl).not.toHaveBeenCalled();
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(ssrfRuntime.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "trusted_env_proxy" }),
+      );
+      expect(releaseGuard).toHaveBeenCalledTimes(1);
       const [exchangeUrl, exchangeInit] = fetchImpl.mock.calls[0]!;
       expect(requestUrl(exchangeUrl)).toBe("https://openrouter.ai/api/v1/auth/keys");
       expect(exchangeInit?.method).toBe("POST");
@@ -380,6 +393,7 @@ describe("OpenRouter OAuth", () => {
       }),
     ).rejects.toThrow("OpenRouter OAuth key exchange: JSON response exceeds 16777216 bytes");
     expect(oversized.wasCanceled()).toBe(true);
+    expect(releaseGuard).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces OpenRouter OAuth exchange errors without credential material", async () => {

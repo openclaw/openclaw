@@ -14,6 +14,7 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 
@@ -177,30 +178,42 @@ async function exchangeOpenRouterOAuthCode(params: {
   code: string;
   codeVerifier: string;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<OpenRouterOAuthKeyResult> {
-  const response = await fetch(OPENROUTER_OAUTH_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: OPENROUTER_OAUTH_TOKEN_URL,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        code: params.code,
+        code_verifier: params.codeVerifier,
+        code_challenge_method: OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
+      }),
+      signal: params.signal
+        ? AbortSignal.any([params.signal, AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS)])
+        : AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS),
     },
-    body: JSON.stringify({
-      code: params.code,
-      code_verifier: params.codeVerifier,
-      code_challenge_method: OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
-    }),
-    signal: params.signal
-      ? AbortSignal.any([params.signal, AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS)])
-      : AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS),
+    beforeRequest: params.assertCurrent,
+    // The endpoint is fixed; preserve operator-configured proxy routing.
+    mode: "trusted_env_proxy",
+    auditContext: "openrouter.oauth",
   });
-  const body = await readResponseBody(response);
-  if (!response.ok) {
-    const message = extractOpenRouterError(body);
-    throw new Error(
-      `OpenRouter OAuth key exchange failed (${response.status})${message ? `: ${message}` : ""}`,
-    );
+  try {
+    const body = await readResponseBody(response);
+    if (!response.ok) {
+      const message = extractOpenRouterError(body);
+      throw new Error(
+        `OpenRouter OAuth key exchange failed (${response.status})${message ? `: ${message}` : ""}`,
+      );
+    }
+    return parseOpenRouterKeyResponse(body);
+  } finally {
+    await release();
   }
-  return parseOpenRouterKeyResponse(body);
 }
 
 async function promptForOpenRouterRedirect(
@@ -338,6 +351,7 @@ async function loginOpenRouterOAuth(ctx: ProviderAuthContext): Promise<ProviderA
       code,
       codeVerifier: pkce.verifier,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
+      assertCurrent: () => ctx.assertCurrent?.(),
     });
     progress.stop("OpenRouter credential received");
 
