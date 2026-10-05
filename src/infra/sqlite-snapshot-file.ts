@@ -32,12 +32,7 @@ export function assertPublishedFileIdentitySync(
   expectedContent: SqliteFileContent,
 ): void {
   const currentIdentity = fsSync.lstatSync(filePath);
-  if (
-    !currentIdentity.isFile() ||
-    !sameFileIdentity(expectedIdentity, currentIdentity) ||
-    expectedIdentity.size !== currentIdentity.size ||
-    expectedIdentity.birthtimeMs !== currentIdentity.birthtimeMs
-  ) {
+  if (!currentIdentity.isFile() || !sameFileStatFingerprint(expectedIdentity, currentIdentity)) {
     throw new Error(`SQLite snapshot file changed: ${filePath}`);
   }
   if (
@@ -80,12 +75,7 @@ export function hashPublishedFileSync(
     const content = hashFileDescriptorSync(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
     if (!sameFileMutationFingerprint(initialStat, finalStat)) {
-      if (
-        initialStat.dev !== finalStat.dev ||
-        initialStat.ino !== finalStat.ino ||
-        initialStat.birthtimeNs !== finalStat.birthtimeNs ||
-        initialStat.size !== finalStat.size
-      ) {
+      if (!sameFileStatFingerprint(initialStat, finalStat)) {
         throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
       }
       // FUSE may settle timestamps after publication; only matching bytes can admit that drift.
@@ -142,8 +132,8 @@ export function removePublishedTargetIfOwned(
 }
 
 export function sameFileStatFingerprint(
-  left: Stats | BigIntStats,
-  right: Stats | BigIntStats,
+  left: Pick<Stats | BigIntStats, "dev" | "ino" | "size">,
+  right: Pick<Stats | BigIntStats, "dev" | "ino" | "size">,
 ): boolean {
   // Linking/unlinking changes ctime, which Linux can expose as birthtime without statx.
   // Publication separately verifies bytes; timestamps do not identify the transferred file.

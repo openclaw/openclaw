@@ -511,6 +511,11 @@ tree, without restoring or deleting that tree. Failed verification leaves
 recovery armed and blocks the next update. Older updater versions without this
 settlement path still require their original recovery owner.
 
+SQLite snapshot publication verifies file identity, size, and content.
+Timestamp-only changes are accepted after verifying identical bytes, including on
+older Linux kernels where reported file creation time changes after ordinary writes
+or hard-link removal; replaced files or changed bytes are still refused.
+
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The
 current updater only inspects these journals; use their original helper to
