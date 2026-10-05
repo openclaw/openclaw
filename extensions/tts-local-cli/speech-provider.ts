@@ -29,6 +29,25 @@ function normalizeOutputFormat(value: unknown): OutputFormat {
   return VALID_OUTPUT_FORMATS.find((format) => format === lower) ?? "mp3";
 }
 
+/** Explicit `voiceId` wins; otherwise the first declared voice is the default. */
+function resolveVoiceId(cfg: SpeechProviderConfig): string | undefined {
+  const explicit = typeof cfg.voiceId === "string" ? cfg.voiceId.trim() : "";
+  return explicit || asStringArray(cfg.voices)?.[0];
+}
+
+/**
+ * A CLI backend owns its voice catalog, so the config declares it. With no
+ * declared list, the selected voice is the only one we can honestly report.
+ */
+function resolveVoiceList(cfg: SpeechProviderConfig): string[] {
+  const declared = asStringArray(cfg.voices);
+  if (declared?.length) {
+    return declared;
+  }
+  const selected = resolveVoiceId(cfg);
+  return selected ? [selected] : [];
+}
+
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
   const providers = asOptionalRecord(rawConfig.providers);
   return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
@@ -43,6 +62,7 @@ function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOU
     command,
     args: asStringArray(cfg.args) ?? [],
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
+    voiceId: resolveVoiceId(cfg),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : timeoutMs,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
     env: filterStringRecord(cfg.env),
@@ -181,6 +201,7 @@ async function runCli(params: {
     OutputPath: path.join(params.outputDir, `${params.filePrefix}.${params.config.outputFormat}`),
     OutputDir: params.outputDir,
     OutputBase: params.filePrefix,
+    VoiceId: params.config.voiceId,
   };
 
   const { cmd, initialArgs } = parseCommand(params.config.command);
@@ -341,6 +362,13 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
 
     isConfigured(ctx): boolean {
       return getConfig(ctx.providerConfig) !== null;
+    },
+
+    async listVoices(req) {
+      return resolveVoiceList(req.providerConfig ?? {}).map((voice) => ({
+        id: voice,
+        name: voice,
+      }));
     },
 
     async synthesize(req) {

@@ -168,6 +168,94 @@ describe("buildCliSpeechProvider", () => {
     expect(buildCliSpeechProvider().defaultTimeoutMs).toBe(120_000);
   });
 
+  it("lists the voices declared in provider config", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x", voices: ["af_jessica", "af_bella"] },
+    });
+
+    expect(voices).toEqual([
+      { id: "af_jessica", name: "af_jessica" },
+      { id: "af_bella", name: "af_bella" },
+    ]);
+  });
+
+  it("falls back to the selected voice when no list is declared", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x", voiceId: "af_jessica" },
+    });
+
+    expect(voices).toEqual([{ id: "af_jessica", name: "af_jessica" }]);
+  });
+
+  it("reports an empty voice list instead of failing when none are configured", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x" },
+    });
+
+    expect(voices).toEqual([]);
+  });
+
+  it("ignores a voices list that is not all strings", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x", voices: ["af_jessica", 7] },
+    });
+
+    expect(voices).toEqual([]);
+  });
+
+  it("templates the selected voice id into command args", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+        voices: ["af_jessica", "af_bella"],
+        voiceId: "af_bella",
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "af_bella"]);
+  });
+
+  it("templates the first declared voice when none is selected", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+        voices: ["af_jessica", "af_bella"],
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "af_jessica"]);
+  });
+
+  it("uses a selected voice that the declared list omits", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+        voices: ["af_jessica"],
+        voiceId: "am_michael",
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "am_michael"]);
+  });
+
+  it("templates an empty voice id when no voice is configured", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", ""]);
+  });
+
   it("passes text through stdin when args omit the text template", async () => {
     const script = createCliFixture();
     const result = await synthesize(baseProviderConfig(script), { text: "hello 😀 world" });
