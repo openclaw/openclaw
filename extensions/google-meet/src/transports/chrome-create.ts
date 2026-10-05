@@ -27,26 +27,6 @@ const GOOGLE_MEET_BROWSER_POLL_MS = 500;
 
 type GoogleMeetBrowserManualActionState = NonNullable<GoogleMeetChromeHealth["manualAction"]>;
 
-type BrowserCreateStepResult = {
-  meetingUri?: string;
-  browserUrl?: string;
-  browserTitle?: string;
-  manualAction?: GoogleMeetBrowserManualActionState;
-  notes?: string[];
-  retryAfterMs?: number;
-};
-
-type GoogleMeetBrowserCreateResult = {
-  meetingUri: string;
-  nodeId: string;
-  targetId?: string;
-  openedByPlugin: boolean;
-  browserUrl?: string;
-  browserTitle?: string;
-  notes?: string[];
-  source: "browser";
-};
-
 function formatBrowserAutomationError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -85,7 +65,7 @@ function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionS
     : undefined;
 }
 
-function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
+function readBrowserCreateResult(result: unknown) {
   const record = asRecord(result);
   const nested = asOptionalObjectRecord(record.result) ?? record;
   return {
@@ -171,7 +151,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
 export async function createMeetWithBrowserProxyOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
-}): Promise<GoogleMeetBrowserCreateResult> {
+}) {
   const nodeId = await resolveChromeNode({
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
@@ -236,7 +216,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
   }
   const notes = new Set<string>();
-  let lastResult: BrowserCreateStepResult | undefined;
+  let lastResult: ReturnType<typeof readBrowserCreateResult> | undefined;
   let lastError: unknown;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
@@ -257,7 +237,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
       }
       if (result.meetingUri) {
         return {
-          source: "browser",
+          source: "browser" as const,
           nodeId,
           targetId,
           openedByPlugin,

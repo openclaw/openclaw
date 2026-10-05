@@ -5,7 +5,7 @@ import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
-import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import {
@@ -19,9 +19,9 @@ import { buildBaseOptions } from "./simple-options.js";
 let toolCallCounter = 0;
 
 export const streamGoogle: StreamFunction<"google-generative-ai", GoogleProviderOptions> = (
-  model: Model<"google-generative-ai">,
-  context: Context,
-  options?: GoogleProviderOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const output = createAssistantOutput(model, "google-generative-ai");
@@ -43,9 +43,9 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleProvider
 };
 
 export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleStreamOptions> = (
-  model: Model<"google-generative-ai">,
-  context: Context,
-  options?: SimpleStreamOptions,
+  model,
+  context,
+  options,
 ) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
   const base = buildBaseOptions(model, options, apiKey);

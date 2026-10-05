@@ -52,18 +52,7 @@ const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 const ANTHROPIC_COMPACT_THRESHOLD_MIN = 50_000;
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
-type AnthropicPayloadPolicy = {
-  allowsServiceTier: boolean;
-  cacheControl: AnthropicEphemeralCacheControl | undefined;
-  compactThreshold: number;
-  serviceTier: AnthropicServiceTier | undefined;
-  useServerCompaction: boolean;
-  toolClearing?: {
-    trigger: number;
-    clearAtLeast: number;
-    tools: NonNullable<AnthropicContextManagementOptions["cacheTtlPruning"]>["tools"];
-  };
-};
+type AnthropicPayloadPolicy = ReturnType<typeof resolveAnthropicPayloadPolicy>;
 
 /** Resolve the Anthropic input-token trigger, including the API's minimum. */
 function resolveAnthropicCompactThreshold(contextWindow: unknown, configured: unknown): number {
@@ -418,10 +407,7 @@ function countAnthropicCacheControlMarkers(blocks: unknown): number {
 }
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
-export function resolveAnthropicPayloadPolicy(
-  input: AnthropicPayloadPolicyInput,
-  model?: Model,
-): AnthropicPayloadPolicy {
+export function resolveAnthropicPayloadPolicy(input: AnthropicPayloadPolicyInput, model?: Model) {
   const capabilities = resolveProviderRequestCapabilities(
     {
       provider: input.provider,

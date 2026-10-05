@@ -45,37 +45,6 @@ import {
 
 const MAX_ERROR_BODY_BYTES = 500;
 
-type NodeModel = {
-  name: string;
-  size?: number;
-  modifiedAt?: string;
-  family?: string;
-  parameterSize?: string;
-  quantization?: string;
-  contextWindow?: number;
-  capabilities?: string[];
-  loaded: boolean;
-};
-
-type OllamaModelsPayload = {
-  provider: "ollama";
-  models: NodeModel[];
-};
-
-type OllamaChatPayload = {
-  provider: "ollama";
-  model: string;
-  response: string;
-  usage?: {
-    promptTokens?: number;
-    completionTokens?: number;
-  };
-  timings?: {
-    loadMs?: number;
-    totalMs?: number;
-  };
-};
-
 type NodeSummary = Awaited<
   ReturnType<OpenClawPluginApi["runtime"]["nodes"]["list"]>
 >["nodes"][number];
@@ -147,10 +116,7 @@ async function requestOllamaJson<T>(params: {
   }
 }
 
-async function discoverOllamaNodeModels(
-  baseUrl = OLLAMA_DEFAULT_BASE_URL,
-  signal?: AbortSignal,
-): Promise<OllamaModelsPayload> {
+async function discoverOllamaNodeModels(baseUrl = OLLAMA_DEFAULT_BASE_URL, signal?: AbortSignal) {
   const apiBase = resolveOllamaApiBase(baseUrl);
   const discovered = await fetchOllamaModels(apiBase, signal ? { signal } : undefined);
   if (!discovered.reachable) {
@@ -171,34 +137,19 @@ async function discoverOllamaNodeModels(
     ...(signal ? { signal } : {}),
   });
   const rows = models
-    .map((model): NodeModel => {
+    .map((model) => {
       const details = model.details;
-      const row: NodeModel = {
+      return {
         name: model.name,
         loaded: loadedNames.has(model.name),
+        ...(typeof model.size === "number" ? { size: model.size } : {}),
+        ...(typeof model.modified_at === "string" ? { modifiedAt: model.modified_at } : {}),
+        ...(details?.family ? { family: details.family } : {}),
+        ...(details?.parameter_size ? { parameterSize: details.parameter_size } : {}),
+        ...(details?.quantization_level ? { quantization: details.quantization_level } : {}),
+        ...(typeof model.contextWindow === "number" ? { contextWindow: model.contextWindow } : {}),
+        ...(model.capabilities ? { capabilities: model.capabilities } : {}),
       };
-      if (typeof model.size === "number") {
-        row.size = model.size;
-      }
-      if (typeof model.modified_at === "string") {
-        row.modifiedAt = model.modified_at;
-      }
-      if (details?.family) {
-        row.family = details.family;
-      }
-      if (details?.parameter_size) {
-        row.parameterSize = details.parameter_size;
-      }
-      if (details?.quantization_level) {
-        row.quantization = details.quantization_level;
-      }
-      if (typeof model.contextWindow === "number") {
-        row.contextWindow = model.contextWindow;
-      }
-      if (model.capabilities) {
-        row.capabilities = model.capabilities;
-      }
-      return row;
     })
     .toSorted((left, right) => {
       if (left.loaded !== right.loaded) {
@@ -220,7 +171,7 @@ async function runOllamaNodeChat(params: {
   maxTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;
-}): Promise<OllamaChatPayload> {
+}) {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   const deadlineMs = performance.now() + params.timeoutMs;
   const remainingTimeoutMs = (): number => {

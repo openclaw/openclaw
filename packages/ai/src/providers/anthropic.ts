@@ -128,9 +128,9 @@ async function* iterateAnthropicEvents(
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicCompactionOptions> = (
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options?: AnthropicCompactionOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
@@ -277,11 +277,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
 export const streamSimpleAnthropic: StreamFunction<
   "anthropic-messages",
   AnthropicSimpleStreamOptions
-> = (
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options?: AnthropicSimpleStreamOptions,
-) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {

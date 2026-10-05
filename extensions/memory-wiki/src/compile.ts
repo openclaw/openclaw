@@ -35,8 +35,6 @@ import {
   setMemoryWikiDashboardState,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
-  type MemoryWikiImportInsightItem,
-  type MemoryWikiOverviewItem,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -57,7 +55,6 @@ import {
   scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
-  type WikiPageFrontmatterError,
   type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
@@ -317,14 +314,7 @@ const DASHBOARD_PAGES: Record<string, DashboardPageDefinition> = {
   },
 };
 
-export type CompileMemoryWikiResult = {
-  vaultRoot: string;
-  pageCounts: Record<WikiPageKind, number>;
-  pages: WikiPageSummary[];
-  frontmatterErrors: WikiPageFrontmatterError[];
-  claimCount: number;
-  updatedFiles: string[];
-};
+export type CompileMemoryWikiResult = Awaited<ReturnType<typeof compileMemoryWikiVaultUnlocked>>;
 
 export type RefreshMemoryWikiIndexesResult = {
   refreshed: boolean;
@@ -342,15 +332,7 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
-async function readPageSummaries(
-  rootDir: string,
-  signal?: AbortSignal,
-): Promise<{
-  pages: WikiPageSummary[];
-  frontmatterErrors: WikiPageFrontmatterError[];
-  importInsights: MemoryWikiImportInsightItem[];
-  overviewItems: MemoryWikiOverviewItem[];
-}> {
+async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
   const filePaths = (
     await Promise.all(
       WIKI_PAGE_GROUPS.map(async (group) =>
@@ -1038,7 +1020,7 @@ function buildCompiledCacheSnapshot(
 async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
   options?: CompileMemoryWikiOptions,
-): Promise<CompileMemoryWikiResult> {
+) {
   if (options?.sourcePageWrites === "preserve") {
     await activateExistingMemoryWikiVault(config, options.signal);
   } else {
