@@ -34,6 +34,15 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{x|num}" }], { x: 128 })).toBe("128");
   });
 
+  it("num rolls counts near one million into millions", () => {
+    expect(render([{ text: "{x|num}" }], { x: 999_950 })).toBe("1.0m");
+    expect(render([{ text: "{x|num}" }], { x: 1_000_000 })).toBe("1.0m");
+    expect(render([{ text: "{x|num}" }], { x: 1_048_576 })).toBe("1.0m");
+    expect(render([{ text: "{x|num}" }], { x: 2_000_000 })).toBe("2.0m");
+    expect(render([{ text: "{x|num}" }], { x: -1_500_000 })).toBe("-1.5m");
+    expect(render([{ text: "{x|num}" }], { x: 999_400 })).toBe("999k");
+  });
+
   it("fixed — fixed-decimal precision", () => {
     expect(render([{ text: "{cost|fixed:4}" }], { cost: 0.03771985 })).toBe("0.0377");
     expect(render([{ text: "{cost|fixed}" }], { cost: 1.5 })).toBe("1.50");
