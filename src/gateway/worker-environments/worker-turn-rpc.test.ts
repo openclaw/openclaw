@@ -360,7 +360,6 @@ describe("worker environment service", () => {
         liveEvents,
         placementStore: gate,
       });
-      workerService.start();
       const identity = {
         ...environmentIdentity,
         runId: claim.runId,
