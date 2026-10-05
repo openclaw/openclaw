@@ -206,6 +206,7 @@ suite.define(() => {
           await expect.poll(async () => (await readName(label)).animating).toBe(true);
           await page.keyboard.press("Escape");
           await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
+          await page.keyboard.press("Escape");
           await expect
             .poll(() => button.evaluate((element) => element.getBoundingClientRect().right <= 0))
             .toBe(true);
@@ -214,6 +215,8 @@ suite.define(() => {
           await toggle.tap();
           await button.tap();
           await expect.poll(async () => (await readName(label)).animating).toBe(true);
+          await page.keyboard.press("Escape");
+          await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
           await page.keyboard.press("Escape");
           await expect
             .poll(() => button.evaluate((element) => element.getBoundingClientRect().right <= 0))

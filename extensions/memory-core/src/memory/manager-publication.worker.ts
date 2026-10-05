@@ -289,7 +289,7 @@ function createPublicationBackend(
                   yield entry;
                 }
               }
-              upsertMemoryEmbeddingCache({ ...header, db, enabled: true, entries });
+              upsertMemoryEmbeddingCache({ ...header, db, entries });
               return true;
             }),
           );

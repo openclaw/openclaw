@@ -102,6 +102,69 @@ function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "
   return JSON.parse(text);
 }
 
+it.each([
+  { name: "update.json", prefix: "", failure: { exitCode: 1 } },
+  { name: "recovery-update.json", prefix: "", failure: { exitCode: null, termination: "timeout" } },
+  {
+    name: "update.json",
+    prefix: "Update warning before JSON\n",
+    failure: { exitCode: 0, outputLimitExceeded: true },
+  },
+])(
+  "keeps a later failed update step visible before successful output exhausts $name ($failure)",
+  ({ name, prefix, failure }) => {
+    const f = fixture();
+    const update = {
+      status: "error",
+      reason: "runtime-verification-failed",
+      steps: [
+        {
+          name: "candidate-doctor-lint",
+          exitCode: 0,
+          warnings: Array(64).fill(`Routine Doctor advisory: ${"x".repeat(400)}`),
+        },
+        {
+          name: "candidate-plugins",
+          exitCode: 1,
+          advisory: { kind: "recoverable-maintenance", message: "Optional repair deferred" },
+        },
+        {
+          name: "candidate-gateway-startup",
+          ...failure,
+          durationMs: 12824,
+          failureFacts: [{ code: "candidate-startup-failed", message: "Candidate import failed" }],
+          stderrTail: `Candidate import failed: token=${secret}\nStartup stack location`,
+        },
+        {
+          name: "gateway recovery verification",
+          exitCode: 1,
+          stderrTail: "Secondary recovery error",
+        },
+      ],
+    };
+    write(path.join(f.artifacts, "diagnostics/raw.json"), {
+      phase: "update-candidate",
+      exitStatus: 1,
+      signal: null,
+      logs: { [name]: `${prefix}${JSON.stringify(update, null, 2)}` },
+    });
+    const output = path.join(f.root, "public");
+    publishDiagnostics(f.artifacts, output, redactSensitiveText);
+    const report = JSON.parse(fs.readFileSync(path.join(output, "failure.json"), "utf8"));
+    const log = report.logs[name];
+    expect(log).toContain("Reported failing update step 3 of 4");
+    expect(log).toContain("Candidate import failed");
+    expect(log).toContain("Startup stack location");
+    expect(log).not.toContain(secret);
+    expect(log.indexOf("candidate-gateway-startup")).toBeLessThan(
+      log.indexOf("candidate-doctor-lint"),
+    );
+    expect(log).toContain("candidate-doctor-lint");
+    expect(Buffer.byteLength(JSON.stringify(log))).toBeLessThanOrEqual(16 * 1024);
+    expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
+  },
+);
+
 it("returns only redacted failure coordinates after safe publication", () => {
   const f = fixture();
   vi.stubEnv("GITHUB_ACTIONS", "true");

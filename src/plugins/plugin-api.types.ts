@@ -260,6 +260,9 @@ export type OpenClawPluginApi = {
       profileAccess?: "independent" | "required";
       /** Require a top-level sessionKey (and optional agentId) naming an existing session. */
       sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+      shareKey?: import("../gateway/methods/descriptor.js").GatewayReadSharing["shareKey"];
+      shareInvalidationEvents?: readonly string[];
+      shareMaxAgeMs?: number;
     },
   ) => void;
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */

@@ -147,14 +147,9 @@ export function sameFileStatFingerprint(
   left: Stats | BigIntStats,
   right: Stats | BigIntStats,
 ): boolean {
-  // Creating the publication hard link changes source ctime, so compare the
-  // mutation fields that remain stable for the same bytes and pathname owner.
-  return (
-    sameFileIdentity(left, right) &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.birthtimeMs === right.birthtimeMs
-  );
+  // Linking/unlinking changes ctime, which Linux can expose as birthtime without statx.
+  // Publication separately verifies bytes; timestamps do not identify the transferred file.
+  return sameFileIdentity(left, right) && left.size === right.size;
 }
 
 export async function removePublicationStagingDirectory(

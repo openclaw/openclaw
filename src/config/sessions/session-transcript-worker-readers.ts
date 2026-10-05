@@ -412,6 +412,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
     ),
+    readHarnessCompletionSource: reader(
+      "session-harness-completion-source",
+      "a harness completion source",
+      (input) => ({ kind: "session-harness-completion-source", ...input }),
+      (value) => value.snapshot,
+    ),
     readPendingInputSource: reader(
       "session-pending-input-source",
       "a submitted input source",

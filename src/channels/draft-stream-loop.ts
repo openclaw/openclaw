@@ -41,10 +41,8 @@ export function createDraftStreamLoop<T = string>(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   const retainUnsentValue = (value: T, background: boolean) => {

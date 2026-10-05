@@ -6,12 +6,20 @@ import {
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  releaseSessionSourceAuthorities,
+  type SessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
+} from "../config/sessions/session-source-authority.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
+import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveRequestedSessionStoreTarget } from "./session-store-key.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
@@ -43,16 +51,19 @@ function companionTargetIsVisible(
   target: { sessionKey: string; agentId: string },
   client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
+  prepared?: { target: ReturnType<typeof resolveSessionSharingTarget> },
 ): boolean {
   if (client?.connId && context.isConnectionActive?.(client.connId) === false) {
     return false;
   }
   const cfg = context.getRuntimeConfig();
-  const sharingTarget = resolveSessionSharingTarget({
-    cfg,
-    sessionKey: target.sessionKey,
-    agentId: target.agentId,
-  });
+  const sharingTarget = prepared
+    ? prepared.target
+    : resolveSessionSharingTarget({
+        cfg,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+      });
   if (!sharingTarget) {
     return cfg.gateway?.roles === undefined;
   }
@@ -91,7 +102,13 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         respond(false, undefined, target.error);
         return;
       }
-      if (!companionTargetIsVisible(target, client, context)) {
+      const sourceCfg = context.getRuntimeConfig();
+      const initialSharingTarget = resolveSessionSharingTarget({
+        cfg: sourceCfg,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+      });
+      if (!companionTargetIsVisible(target, client, context, { target: initialSharingTarget })) {
         respond(false, undefined, hiddenSessionNotFound(target.sessionKey));
         return;
       }
@@ -104,18 +121,88 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         client,
         context,
       });
-      const assertSourceCurrent = () => {
+      const sourceTarget = initialSharingTarget ?? {
+        agentId: target.agentId,
+        canonicalKey: target.sessionKey,
+        storeKey: target.sessionKey,
+        storePath: resolveSessionStorePathCore(sourceCfg.session?.store, {
+          agentId: target.agentId,
+        }),
+      };
+      const sourceStore = sourceCfg.session?.store;
+      const sourceMainKey = sourceCfg.session?.mainKey;
+      const sourceScope = sourceCfg.session?.scope;
+      const assertLifetimeCurrent = () => {
         signal?.throwIfAborted();
         if (
           context.sessionCompanion !== companion ||
           client.connId !== connId ||
           client.invalidated ||
           hasCurrentClientAuthority?.() === false ||
-          !companionTargetIsVisible(target, client, context)
+          context.isConnectionActive?.(connId) === false
         ) {
           throw new SessionCompanionAskError("session-missing", "Side chat is unavailable.");
         }
       };
+      const refuseSource = (): never => {
+        throw new SessionCompanionAskError("session-missing", "Side chat is unavailable.");
+      };
+      const assertSourceCurrent: SessionSourceAssertion = Object.assign(
+        () => {
+          assertLifetimeCurrent();
+          if (!companionTargetIsVisible(target, client, context)) {
+            refuseSource();
+          }
+        },
+        // The source may be incognito even when Side chat's private execution is durable.
+        isIncognitoSessionKey(target.sessionKey)
+          ? { nativeSource: true }
+          : {
+              async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
+                assertLifetimeCurrent();
+                const read = await prepareSessionSharingSource(sourceTarget, assertLifetimeCurrent);
+                const assertCurrent = () => {
+                  assertLifetimeCurrent();
+                  read.assertCurrent();
+                  const cfg = context.getRuntimeConfig();
+                  if (
+                    cfg.session?.store !== sourceStore ||
+                    cfg.session?.mainKey !== sourceMainKey ||
+                    cfg.session?.scope !== sourceScope ||
+                    (read.target
+                      ? prepareSessionSharing({ client, cfg }).entryFilter?.(
+                          read.target.storeKey,
+                          read.target.entry,
+                        ) === false
+                      : cfg.gateway?.roles !== undefined)
+                  ) {
+                    refuseSource();
+                  }
+                };
+                try {
+                  assertCurrent();
+                } catch (error) {
+                  await releaseSessionSourceAuthorities([read], [error]);
+                  throw error;
+                }
+                return {
+                  assertCurrent,
+                  checks: [
+                    {
+                      predicate: {
+                        source: read.source,
+                        sessionKey: sourceTarget.storeKey,
+                        fields: ["sessionId", "createdActor", "visibility", "incognito"],
+                        expected: read.target?.entry,
+                      },
+                      refuse: refuseSource,
+                    },
+                  ],
+                  release: read.release,
+                };
+              },
+            },
+      );
       let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       try {
         assertInputCurrent?.();

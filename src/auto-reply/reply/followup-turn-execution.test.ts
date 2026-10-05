@@ -180,6 +180,7 @@ describe("executeFollowupTurn", () => {
     const turn = createTurn();
     const typing = createTypingController();
     const onAgentRunStart = vi.fn();
+    turn.queued.runObservers = { onAgentRunStart };
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       params.opts?.onAgentRunStart?.("run-1");
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
@@ -190,7 +191,6 @@ describe("executeFollowupTurn", () => {
       defaults: {
         typing,
         typingMode: "instant",
-        opts: { onAgentRunStart },
       },
     });
 
