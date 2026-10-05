@@ -200,7 +200,7 @@ export async function runSetupInferenceTurn(params: {
     if (terminalError) {
       throw new Error(terminalError);
     }
-    const text = extractAgentRunText(result)?.trim();
+    const text = extractAgentRunText(result);
     if (!text) {
       return failed(
         "format",

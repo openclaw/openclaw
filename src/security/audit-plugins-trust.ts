@@ -100,14 +100,6 @@ async function isChannelPluginConfigured(
   return false;
 }
 
-function normalizePluginIdSet(entries: string[]): Set<string> {
-  return new Set(
-    entries
-      .map((entry) => normalizeOptionalLowercaseString(entry))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
-}
-
 function resolveEnabledExtensionPluginIds(params: {
   cfg: OpenClawConfig;
   pluginDirs: string[];
@@ -117,16 +109,9 @@ function resolveEnabledExtensionPluginIds(params: {
     return [];
   }
 
-  const allowSet = normalizePluginIdSet(normalized.allow);
-  const denySet = normalizePluginIdSet(normalized.deny);
-  const entryById = new Map<string, { enabled?: boolean }>();
-  for (const [id, entry] of Object.entries(normalized.entries)) {
-    const normalizedId = normalizeOptionalLowercaseString(id);
-    if (!normalizedId) {
-      continue;
-    }
-    entryById.set(normalizedId, entry);
-  }
+  const allowSet = new Set(normalized.allow);
+  const denySet = new Set(normalized.deny);
+  const entryById = new Map(Object.entries(normalized.entries));
 
   const enabled: string[] = [];
   for (const id of params.pluginDirs) {

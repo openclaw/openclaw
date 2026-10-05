@@ -3,7 +3,6 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -188,9 +187,6 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
 }
 
 function looksLikeNodeCommandPattern(value: string): boolean {
-  if (!value) {
-    return false;
-  }
   if (/[?*[\]{}(),|]/.test(value)) {
     return true;
   }
@@ -205,12 +201,7 @@ function looksLikeNodeCommandPattern(value: string): boolean {
   return /\s/.test(value) || value.includes("group:");
 }
 
-function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
-  const needle = unknown.trim();
-  if (!needle) {
-    return [];
-  }
-
+function suggestKnownNodeCommands(needle: string, known: Set<string>): string[] {
   // Fast path: prefix-ish suggestions.
   const prefix = needle.includes(".") ? needle.split(".").slice(0, 2).join(".") : needle;
   const prefixHits = Array.from(known)
@@ -899,7 +890,7 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const allow = new Set(normalizeUniqueStringEntries(allowRaw.map(normalizeNodeCommand)));
+  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
   if (allow.size === 0) {
     return findings;
   }

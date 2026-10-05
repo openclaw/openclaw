@@ -541,9 +541,6 @@ function appendRecord(record: DiagnosticStabilityEventRecord): void {
 }
 
 function upsertExporterRecord(record: DiagnosticStabilityEventRecord): void {
-  if (!record.source) {
-    return;
-  }
   const state = getDiagnosticStabilityState();
   const key = `${record.source}\u0000${record.target ?? "unknown"}\u0000${record.transport ?? "unknown"}`;
   if (record.outcome === "dropped") {

@@ -163,36 +163,9 @@ type ResolvedRedactOptions = {
   patterns: ResolvedRedactPattern[];
 };
 
-function normalizeMode(value?: string): RedactSensitiveMode {
-  return value === "off" ? "off" : DEFAULT_REDACT_MODE;
-}
-
 function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
   if (raw === PEM_REDACT_PATTERN_SOURCE) {
     return PEM_REDACT_MATCHER;
-  }
-  if (typeof raw === "string") {
-    // Default sources with quadratic regex cost compile to linear matchers with identical
-    // match semantics; the source string stays the rule's identity for config and exports.
-    const linear = LINEAR_MATCHER_SOURCES.get(raw);
-    if (linear) {
-      // Register the returned matcher under the same policies the regex path would apply to
-      // its compiled pattern; otherwise the early return silently drops shell-reference
-      // preservation, form-aware splitting, and chunk-unsafe carve-outs for these rules.
-      if (SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
-        shellReferencePreservingPatterns.add(linear);
-      }
-      if (TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
-        sourceAssignmentPatterns.add(linear);
-      }
-      if (FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
-        formAwareEqualsAssignmentPatterns.add(linear);
-      }
-      if (raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) || CHUNK_UNSAFE_PATTERN_SOURCES.has(raw)) {
-        chunkUnsafePatterns.add(linear);
-      }
-      return linear;
-    }
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
     if (AMBIGUOUS_ASSIGNMENT_MATCHERS.has(raw)) {
@@ -200,14 +173,16 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
     }
     return raw;
   }
-  let pattern: RegExp | null = null;
+  // Linear matchers and compiled regexes share the source's masking policies below.
+  let pattern: ResolvedRedactPattern | null =
+    typeof raw === "string" ? (LINEAR_MATCHER_SOURCES.get(raw) ?? null) : null;
   if (raw instanceof RegExp) {
     if (raw.flags.includes("g")) {
       pattern = raw;
     } else {
       pattern = new RegExp(raw.source, `${raw.flags}g`);
     }
-  } else if (raw.trim()) {
+  } else if (!pattern && raw.trim()) {
     const [source, flags] = parseRedactPatternSource(raw);
     // Open-ended repeats on canonical built-in flat single-character atoms compile without
     // one backtrack stack entry per repetition, so multi-megabyte values no longer overflow
@@ -834,7 +809,7 @@ function resolveConfigRedaction(): RedactOptions {
 
 export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
   const resolved = options ?? resolveConfigRedaction();
-  const mode = normalizeMode(resolved.mode);
+  const mode = resolved.mode === "off" ? "off" : DEFAULT_REDACT_MODE;
   return { mode, patterns: mode === "off" ? [] : resolvePatterns(resolved.patterns) };
 }
 
@@ -869,7 +844,7 @@ function redactSensitiveTextWithOptions(
   exactRedacted: string,
   resolvedOptions: RedactOptions,
 ): string {
-  if (normalizeMode(resolvedOptions.mode) === "off") {
+  if (resolvedOptions.mode === "off") {
     return exactRedacted;
   }
   if (

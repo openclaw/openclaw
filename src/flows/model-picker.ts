@@ -340,7 +340,7 @@ async function addModelSelectOption(params: {
   if (aliases?.length) {
     hints.push(`alias: ${aliases.join(", ")}`);
   }
-  if (normalizeProviderId(normalizedRef.provider) === "openai") {
+  if (normalizedRef.provider === "openai") {
     const route = params.resolveModelRouteRuntime({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
@@ -442,11 +442,8 @@ async function promptManualModel(params: {
       ? undefined
       : (value) => (normalizeOptionalString(value) ? undefined : t("common.required")),
   });
-  const model = (modelInput ?? "").trim();
-  if (!model) {
-    return {};
-  }
-  return { model: normalizeAgentModelRefForConfig(model) };
+  const model = normalizeAgentModelRefForConfig(modelInput ?? "");
+  return model ? { model } : {};
 }
 
 async function maybeFilterModelsByProvider(params: {
@@ -502,10 +499,7 @@ export async function promptDefaultModel(
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const loadCatalog = params.loadCatalog ?? true;
   const browseCatalogOnDemand = params.browseCatalogOnDemand ?? false;
-  const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
-  const preferredProvider = preferredProviderRaw
-    ? normalizeProviderId(preferredProviderRaw)
-    : undefined;
+  const preferredProvider = normalizeProviderId(params.preferredProvider ?? "") || undefined;
   const providerScopedCatalog = Boolean(browseCatalogOnDemand && preferredProvider);
   const configuredRaw = resolveAgentModelPrimaryValue(pickerConfig.agents?.defaults?.model) ?? "";
   const useStaticModelNormalization = !loadCatalog || browseCatalogOnDemand;
@@ -801,10 +795,7 @@ export async function promptModelAllowlist(params: {
   const existingKeys = resolveConfiguredModelKeys(cfg);
   const configuredRaw = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
-  const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
-  const preferredProvider = preferredProviderRaw
-    ? normalizeProviderId(preferredProviderRaw)
-    : undefined;
+  const preferredProvider = normalizeProviderId(params.preferredProvider ?? "") || undefined;
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -904,7 +895,7 @@ export async function promptModelAllowlist(params: {
     });
     const scopeKeys = allowedKeys.length > 0 ? allowedKeys : scopedFastKeys;
     const scopeKeySet = new Set(scopeKeys);
-    const initialKeys = normalizeModelKeys(initialSeeds.filter((key) => scopeKeySet.has(key)));
+    const initialKeys = initialSeeds.filter((key) => scopeKeySet.has(key));
     const options: WizardSelectOption[] = [];
     const seen = new Set<string>();
     for (const key of scopeKeys) {
@@ -968,14 +959,8 @@ export async function promptModelAllowlist(params: {
       initialValue: noCatalogInitialKeys.join(", "),
       placeholder: "provider/model, other-provider/model",
     });
-    const parsed = (raw ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0);
-    if (parsed.length === 0) {
-      return {};
-    }
-    return { models: normalizeModelKeys(parsed) };
+    const models = normalizeModelKeys((raw ?? "").split(","));
+    return models.length > 0 ? { models } : {};
   }
 
   const literalPrefixProviders = await resolveLiteralPrefixProviderIds({

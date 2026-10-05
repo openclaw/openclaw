@@ -23,7 +23,7 @@ import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync, readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -194,9 +194,7 @@ export const userProfileOperations = {
     { open, stateOptions },
   ) => {
     const options = { ...stateOptions(), database: open() };
-    return input?.githubAccountIds === undefined
-      ? { profiles: listUserProfilesSync(options) }
-      : readUserProfileSnapshotSync(options, input.githubAccountIds);
+    return readUserProfileSnapshotSync(options, input?.githubAccountIds);
   },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();

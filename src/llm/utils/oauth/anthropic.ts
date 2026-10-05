@@ -1,4 +1,3 @@
-import { toErrorObject } from "../../../infra/errors.js";
 import { readResponseWithLimit } from "../../../infra/http-body.js";
 import { startOAuthLoopbackCallbackServer } from "../../../infra/oauth-loopback-callback.js";
 import {
@@ -281,7 +280,7 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
     if (!code && manualPromise) {
       await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
       if (manualError) {
-        throw toErrorObject(manualError, "Non-Error thrown");
+        throw manualError;
       }
       if (manualInput) {
         applyAuthorizationInput(manualInput);
