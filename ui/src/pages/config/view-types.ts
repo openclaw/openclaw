@@ -182,6 +182,7 @@ export type ConfigProps = {
   chatSendShortcutOverridden: boolean;
   chatSendShortcutProvenance: ServerUiPrefProvenance;
   chatSendShortcutResetValue: ChatSendShortcut;
+  chatSendShortcutTouchDefault: boolean;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;
   chatFollowUpModeOverridden: boolean;

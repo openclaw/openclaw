@@ -118,6 +118,10 @@ function normalizeChoice<T extends string>(
 
 export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
 
+export function normalizeChatSendShortcutOverride(value: unknown): ChatSendShortcut | undefined {
+  return CHAT_SEND_SHORTCUTS.find((shortcut) => shortcut === value);
+}
+
 const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 
@@ -457,7 +461,6 @@ export function loadUiPreferences(
     chatPersistCommentary: true,
     chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
-    chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
@@ -525,7 +528,7 @@ export function loadUiPreferences(
         parsed.chatCollapseTaskProgress,
         defaults.chatCollapseTaskProgress,
       ),
-      chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      chatSendShortcut: normalizeChatSendShortcutOverride(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
@@ -671,7 +674,7 @@ export function saveSettings(next: UiSettings, options: { selectGateway?: boolea
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
-    chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
+    chatSendShortcut: normalizeChatSendShortcutOverride(next.chatSendShortcut),
     chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),
     catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),

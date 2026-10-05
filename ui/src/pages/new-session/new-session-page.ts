@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { resolveChatSendShortcut } from "../../app/chat-send-shortcut.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
@@ -466,7 +467,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
                 onSelect: (permissionMode) =>
                   submission.setPermissionMode(permissionMode ?? undefined),
               }),
-          requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
+          requiresModifier:
+            resolveChatSendShortcut(preferences?.chatSendShortcut) === "modifier-enter",
           requestUpdate: () => this.requestUpdate(),
           get submitting() {
             return submission.submitting;
