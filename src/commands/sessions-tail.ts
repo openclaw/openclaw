@@ -42,10 +42,6 @@ type SqliteFollowState = {
   selection: TailSelection;
 };
 
-type TrajectorySnapshot = {
-  events: TrajectoryEvent[];
-  maxStorageSeq: number;
-};
 type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
@@ -144,19 +140,6 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-function readTailSnapshot(selection: TailSelection, tailEvents: number): TrajectorySnapshot {
-  const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-    agentId: selection.agentId,
-    sessionId: selection.sessionId,
-    storePath: selection.storePath,
-    tailEvents,
-  });
-  return {
-    events: rows.map((row) => row.event),
-    maxStorageSeq: rows.at(-1)?.seq ?? -1,
-  };
-}
-
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   for (const event of events) {
     runtime.log(formatProgressLine(event));
@@ -225,18 +208,9 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
 }
 
 function followSelections(
-  selections: TailSelection[],
+  states: SqliteFollowState[],
   runtime: RuntimeEnv,
-  initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
 ): Promise<FollowOutcome> {
-  const states = selections.map((selection): SqliteFollowState => {
-    const snapshot = initialSnapshots.get(selection);
-    return {
-      lastStorageSeq: snapshot?.maxStorageSeq ?? -1,
-      selection,
-    };
-  });
-
   return new Promise((resolve) => {
     let finished = false;
     const interval = setInterval(() => {
@@ -340,15 +314,20 @@ export async function sessionsTailCommand(
     return;
   }
 
-  const followSnapshots = new Map<TailSelection, TrajectorySnapshot>();
+  const followStates: SqliteFollowState[] = [];
   for (const selection of selected) {
-    const snapshot = readTailSnapshot(selection, Math.max(tailCount, opts.follow ? 1 : 0));
-    followSnapshots.set(selection, snapshot);
-    renderEvents(tailCount > 0 ? snapshot.events.slice(-tailCount) : [], runtime);
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      agentId: selection.agentId,
+      sessionId: selection.sessionId,
+      storePath: selection.storePath,
+      tailEvents: Math.max(tailCount, opts.follow ? 1 : 0),
+    });
+    followStates.push({ selection, lastStorageSeq: rows.at(-1)?.seq ?? -1 });
+    renderEvents(tailCount > 0 ? rows.slice(-tailCount).map((row) => row.event) : [], runtime);
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(selected, runtime, followSnapshots);
+    const outcome = await followSelections(followStates, runtime);
     runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }

@@ -7,7 +7,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronFailureNotificationDelivery } from "../types.js";
 import {
   createAlertJob,
   createAlertState,
@@ -39,62 +38,8 @@ describe("cron failure alert outcome write-back", () => {
       startedAt: dueAt,
       endedAt,
     });
-    return { store, state };
+    return { store, state, job };
   }
-
-  it.each([
-    {
-      name: "delivered",
-      outcome: { delivered: true, status: "delivered" },
-    },
-    {
-      name: "not delivered",
-      outcome: {
-        delivered: false,
-        status: "not-delivered",
-        error: "alert channel exploded",
-      },
-    },
-    {
-      name: "unknown",
-      outcome: { status: "unknown", error: "later delivery work failed" },
-    },
-  ] satisfies Array<{ name: string; outcome: CronFailureNotificationDelivery }>)(
-    "persists a $name outcome in the worker once the send settles",
-    async ({ name, outcome }) => {
-      const settled = createDeferred();
-      let hostStatements = 0;
-      const { store } = await runFailure({
-        id: `alert-outcome-${name.replaceAll(" ", "-")}`,
-        sendCronFailureAlert: vi.fn(async (params) => {
-          const statements = observeHostDataSql();
-          try {
-            await params.onDeliverySettled(outcome);
-            hostStatements = statements.calls.reduce(
-              (sum, call) => sum + call.mock.calls.length,
-              0,
-            );
-            settled.resolve();
-          } catch (error) {
-            settled.reject(error);
-            throw error;
-          } finally {
-            statements.restore();
-          }
-        }),
-      });
-
-      await settled.promise;
-      expect(hostStatements).toBe(0);
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-        lastFailureAlertAtMs: endedAt,
-        lastFailureNotificationDeliveryStatus: outcome.status,
-      });
-      const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
-      expect(persisted?.lastFailureNotificationDelivered).toBe(outcome.delivered);
-      expect(persisted?.lastFailureNotificationDeliveryError).toBe(outcome.error);
-    },
-  );
 
   it.each([
     { name: "the original owner", initialOwner: "alpha" },
@@ -231,16 +176,23 @@ describe("cron failure alert outcome write-back", () => {
     },
   );
 
-  it("redacts transport errors before persisting them", async () => {
+  it("redacts transport errors and persists them without host SQL", async () => {
     const err = new Error(
       `webhook rejected: token=abcdefghijklmnopqrstuvwxyz123456 ${"x".repeat(2_000)}`,
     );
+    let hostStatements = 0;
     const send = vi.fn<SendCronFailureAlert>(async (params) => {
-      await params.onDeliverySettled({
-        delivered: false,
-        status: "not-delivered",
-        error: err.message,
-      });
+      const statements = observeHostDataSql();
+      try {
+        await params.onDeliverySettled({
+          delivered: false,
+          status: "not-delivered",
+          error: err.message,
+        });
+        hostStatements = statements.calls.reduce((sum, call) => sum + call.mock.calls.length, 0);
+      } finally {
+        statements.restore();
+      }
     });
     const { store } = await runFailure({
       id: "alert-outcome-redacted-error",
@@ -248,6 +200,7 @@ describe("cron failure alert outcome write-back", () => {
     });
     expect(send).toHaveBeenCalledOnce();
     await send.mock.results[0]?.value;
+    expect(hostStatements).toBe(0);
     expect(
       (await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureNotificationDeliveryStatus,
     ).toBe("not-delivered");
@@ -258,104 +211,103 @@ describe("cron failure alert outcome write-back", () => {
     expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
   });
 
-  it("does not overwrite a newer alert cycle committed by a sibling service", async () => {
-    const store = fixtures.makeStorePath();
-    const job = createAlertJob({ id: "alert-outcome-sibling-cycle", dueAt });
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    // Service A: the send stays in flight while a sibling commits a newer cycle.
-    let releaseA: (() => void) | undefined;
-    const gateA = new Promise<void>((resolve) => {
-      releaseA = resolve;
-    });
-    const sendA = vi.fn(async (params) => {
-      await gateA;
-      await params.onDeliverySettled({ delivered: true, status: "delivered" });
-    });
-    const stateA = createAlertState({
-      storePath: store.storePath,
-      nowMs: () => endedAt,
-      sendCronFailureAlert: sendA,
-    });
-    await finalizeAlertOutcome({
-      state: stateA,
-      job,
-      status: "error",
-      error: "provider unavailable",
-      startedAt: dueAt,
-      endedAt,
-    });
-
-    // Service B on the same store: a later failure past the cooldown starts a
-    // newer alert cycle and commits it.
-    const laterAt = endedAt + 600_000;
-    const sendB = vi.fn(async (params) => {
-      await params.onDeliverySettled({
-        delivered: false,
-        status: "not-delivered",
-        error: "recipient not reached",
+  it.each(["sibling cycle", "newer run", "retired lifecycle"] as const)(
+    "rejects a delayed outcome after a %s takes ownership",
+    async (replacement) => {
+      const gate = createDeferred();
+      const send = vi.fn<SendCronFailureAlert>(async (params) => {
+        await gate.promise;
+        await params.onDeliverySettled(
+          replacement === "sibling cycle"
+            ? { delivered: true, status: "delivered" }
+            : { delivered: false, status: "not-delivered" },
+        );
       });
-    });
-    const stateB = createAlertState({
-      storePath: store.storePath,
-      nowMs: () => laterAt,
-      sendCronFailureAlert: sendB,
-    });
-    const jobForB = structuredClone(job);
-    jobForB.state.runningAtMs = laterAt;
-    await finalizeAlertOutcome({
-      state: stateB,
-      job: jobForB,
-      status: "error",
-      error: "provider unavailable again",
-      startedAt: laterAt - 10,
-      endedAt: laterAt,
-    });
-    expect(sendB).toHaveBeenCalledOnce();
-    await sendB.mock.results[0]?.value;
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
-      laterAt,
-    );
-
-    // Service A's delayed send settles with a stale snapshot; it must not
-    // overwrite the sibling's newer cycle.
-    releaseA?.();
-    await sendA.mock.results[0]?.value;
-    await Promise.resolve();
-    await stateA.op;
-    await Promise.resolve();
-    await stateA.op;
-
-    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
-    expect(persisted?.lastFailureAlertAtMs).toBe(laterAt);
-    expect(persisted?.lastFailureNotificationDelivered).not.toBe(true);
-  });
+      const { store, state, job } = await runFailure({
+        id: "alert-outcome-stale",
+        sendCronFailureAlert: send,
+      });
+      const laterAt = endedAt + (replacement === "sibling cycle" ? 600_000 : 1_000);
+      if (replacement === "retired lifecycle") {
+        stopCronService(state);
+      } else if (replacement === "sibling cycle") {
+        const siblingSend = vi.fn<SendCronFailureAlert>(async (params) => {
+          await params.onDeliverySettled({
+            delivered: false,
+            status: "not-delivered",
+            error: "recipient not reached",
+          });
+        });
+        const sibling = createAlertState({
+          storePath: store.storePath,
+          nowMs: () => laterAt,
+          sendCronFailureAlert: siblingSend,
+        });
+        const siblingJob = structuredClone(job);
+        siblingJob.state.runningAtMs = laterAt;
+        await finalizeAlertOutcome({
+          state: sibling,
+          job: siblingJob,
+          status: "error",
+          error: "provider unavailable again",
+          startedAt: laterAt - 10,
+          endedAt: laterAt,
+        });
+        expect(siblingSend).toHaveBeenCalledOnce();
+        await siblingSend.mock.results[0]?.value;
+        expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
+          laterAt,
+        );
+      } else {
+        const currentJob = state.store?.jobs[0];
+        if (!currentJob) {
+          throw new Error("expected persisted cron job");
+        }
+        currentJob.state.runningAtMs = laterAt;
+        await finalizeAlertOutcome({
+          state,
+          job: currentJob,
+          status: "error",
+          error: "provider still unavailable",
+          startedAt: laterAt,
+          endedAt: laterAt + 10,
+        });
+        expect(send).toHaveBeenCalledOnce();
+      }
+      gate.resolve();
+      await send.mock.results[0]?.value;
+      await Promise.resolve();
+      await state.op;
+      await Promise.resolve();
+      await state.op;
+      const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+      if (replacement === "sibling cycle") {
+        expect(persisted?.lastFailureAlertAtMs).toBe(laterAt);
+        expect(persisted?.lastFailureNotificationDelivered).not.toBe(true);
+      } else {
+        expect(persisted).toMatchObject(
+          replacement === "newer run"
+            ? {
+                lastRunAtMs: laterAt,
+                lastFailureAlertAtMs: endedAt,
+                lastFailureNotificationDeliveryStatus: "not-requested",
+              }
+            : { lastFailureNotificationDeliveryStatus: "unknown" },
+        );
+        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("restores the live fields when the outcome persist fails", async () => {
-    const store = fixtures.makeStorePath();
-    const job = createAlertJob({ id: "alert-outcome-persist-restore", dueAt });
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    let releaseSend: (() => void) | undefined;
-    const sendGate = new Promise<void>((resolve) => {
-      releaseSend = resolve;
-    });
-    const sendCronFailureAlert = vi.fn(async (params) => {
-      await sendGate;
+    const sendGate = createDeferred();
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async (params) => {
+      await sendGate.promise;
       await params.onDeliverySettled({ delivered: false, status: "not-delivered" });
     });
-    const state = createAlertState({
-      storePath: store.storePath,
-      nowMs: () => endedAt,
+    const { store, state, job } = await runFailure({
+      id: "alert-outcome-persist-restore",
       sendCronFailureAlert,
-    });
-    await finalizeAlertOutcome({
-      state,
-      job,
-      status: "error",
-      error: "provider unavailable",
-      startedAt: dueAt,
-      endedAt,
     });
 
     // The run itself is durable; from here on every write to this row fails.
@@ -369,7 +321,7 @@ describe("cron failure alert outcome write-back", () => {
       END;
     `);
     try {
-      releaseSend?.();
+      sendGate.resolve();
       await sendCronFailureAlert.mock.results[0]?.value;
       await Promise.resolve();
       await state.op;
@@ -389,69 +341,5 @@ describe("cron failure alert outcome write-back", () => {
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_outcome_write;");
     }
-  });
-
-  it("does not overwrite a newer run in the same alert cooldown cycle", async () => {
-    let resolveSend: (() => void) | undefined;
-    const sendGate = new Promise<void>((resolve) => {
-      resolveSend = resolve;
-    });
-    const sendCronFailureAlert = vi.fn(async (params) => {
-      await sendGate;
-      await params.onDeliverySettled({ delivered: false, status: "not-delivered" });
-    });
-    const { store, state } = await runFailure({
-      id: "alert-outcome-same-cycle-newer-run",
-      sendCronFailureAlert,
-    });
-    const currentJob = state.store?.jobs[0];
-    if (!currentJob) {
-      throw new Error("expected persisted cron job");
-    }
-    const laterAt = endedAt + 1_000;
-    currentJob.state.runningAtMs = laterAt;
-    await finalizeAlertOutcome({
-      state,
-      job: currentJob,
-      status: "error",
-      error: "provider still unavailable",
-      startedAt: laterAt,
-      endedAt: laterAt + 10,
-    });
-    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-
-    resolveSend?.();
-    await sendCronFailureAlert.mock.results[0]?.value;
-    const durable = (await loadCronStore(store.storePath)).jobs[0]?.state;
-    expect(durable).toMatchObject({
-      lastRunAtMs: laterAt,
-      lastFailureAlertAtMs: endedAt,
-      lastFailureNotificationDeliveryStatus: "not-requested",
-    });
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("does not write after the service lifecycle retires", async () => {
-    let resolveSend: (() => void) | undefined;
-    const sendGate = new Promise<void>((resolve) => {
-      resolveSend = resolve;
-    });
-    const sendCronFailureAlert = vi.fn(async (params) => {
-      await sendGate;
-      await params.onDeliverySettled({ delivered: false, status: "not-delivered" });
-    });
-    const { store, state } = await runFailure({
-      id: "alert-outcome-retired-lifecycle",
-      sendCronFailureAlert,
-    });
-
-    stopCronService(state);
-    resolveSend?.();
-    await sendCronFailureAlert.mock.results[0]?.value;
-
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-      lastFailureNotificationDeliveryStatus: "unknown",
-    });
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 });

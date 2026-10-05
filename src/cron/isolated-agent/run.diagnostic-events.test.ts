@@ -16,9 +16,10 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 
-const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
+const hasAnyAuthProfileStoreSourceAsyncMock = vi.hoisted(() => vi.fn(() => false));
+// mock-isolation: Cron diagnostics simulate missing auth sources without a credential-store owner.
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: hasAnyAuthProfileStoreSourceMock,
+  hasAnyAuthProfileStoreSourceAsync: hasAnyAuthProfileStoreSourceAsyncMock,
 }));
 
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -261,7 +262,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
   it("skips auth-profile override resolution when no sources exist", async () => {
     const result = await runCronIsolatedAgentTurn(makeParams());
     expect(result.status).toBe("ok");
-    expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);
+    expect(hasAnyAuthProfileStoreSourceAsyncMock).toHaveBeenCalledTimes(1);
     expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

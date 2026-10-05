@@ -480,7 +480,13 @@ suite.define(() => {
             // The query owns one bounded metadata lookup. The scoped transcript
             // request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
-            expect(metadata[0]?.params).toEqual({ ...scope, search: query, limit: 10 });
+            expect(metadata[0]?.params).toEqual({
+              ...scope,
+              search: query,
+              limit: 10,
+              rowMode: "compact",
+              source: "command-palette",
+            });
             expect(metadata[0]?.ok).toBe(true);
             expect(metadata[0]?.sessionKeys).toEqual(metadataKeys);
             expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);

@@ -315,7 +315,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }: ConfigOption
       },
       entries: {
         main: {
-          default: true,
           tools: { allow: ["memory_search"] },
         },
       },

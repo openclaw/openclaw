@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { UiPreferences } from "./settings.ts";
@@ -39,7 +40,7 @@ type AgentSelectionState = {
 
 export type AgentSelectionCapability = {
   readonly state: AgentSelectionState;
-  /** Changes on explicit selection intent or Gateway replacement, including same-id intent. */
+  /** Changes on explicit selection/scope intent or Gateway replacement, including same-id intent. */
   readonly intentRevision: number;
   set: (agentId: string | null, options?: { background?: boolean }) => void;
   setScope: (agentId: string | null) => void;
@@ -146,6 +147,7 @@ export function createAgentSelectionCapability(
   }
   const listeners = new Set<(next: AgentSelectionState) => void>();
   let intentRevision = 0;
+  let publishedIntentRevision = intentRevision;
 
   const publish = (next: AgentSelectionState) => {
     const selectedId = reconcileSelectedId(next.selectedId);
@@ -157,9 +159,15 @@ export function createAgentSelectionCapability(
         ? next.scopeId
         : selectedId;
     const reconciled = { selectedId, scopeId: resolveScopeId(scopeId) };
-    if (state.selectedId === reconciled.selectedId && state.scopeId === reconciled.scopeId) {
+    if (
+      state.selectedId === reconciled.selectedId &&
+      state.scopeId === reconciled.scopeId &&
+      publishedIntentRevision === intentRevision
+    ) {
       return;
     }
+    // Same-scope intent must reach observers now, not be attributed to a later roster update.
+    publishedIntentRevision = intentRevision;
     state = reconciled;
     for (const listener of listeners) {
       listener(state);
@@ -176,6 +184,7 @@ export function createAgentSelectionCapability(
     if (nextTeamMode === teamMode) {
       return;
     }
+    intentRevision += 1;
     teamMode = nextTeamMode;
     if (teamMode) {
       previousScopeId = state.scopeId;
@@ -318,14 +327,12 @@ export function createAgentSelectionCapability(
         setSelectedId(agentId);
         return;
       }
+      intentRevision += 1;
       scopeNeedsRoster = false;
       const scopeId = agentId?.trim() ? normalizeAgentId(agentId) : null;
       publish({ ...state, scopeId });
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopPreferences?.();
       stopGateway();

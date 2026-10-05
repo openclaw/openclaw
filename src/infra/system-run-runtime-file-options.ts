@@ -7,7 +7,6 @@ import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
   BUN_UNBINDABLE_APPROVAL_OPTIONS,
   DENO_UNBINDABLE_APPROVAL_OPTIONS,
-  PERL_UNSAFE_APPROVAL_FLAGS,
 } from "./system-run-mutable-file-options.js";
 
 function hasListedOption(argv: string[], options: ReadonlySet<string>): boolean {
@@ -58,9 +57,6 @@ export function hasPerlUnsafeApprovalFlag(argv: string[]): boolean {
       token.startsWith("-M") ||
       token.startsWith("-m")
     ) {
-      return true;
-    }
-    if (PERL_UNSAFE_APPROVAL_FLAGS.has(token)) {
       return true;
     }
   }

@@ -698,7 +698,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   rewriteCommonJsRuntimeSpecifiers(plan);
   return {
     ...plan,
-    ...preparePackageRuntimeAssets(plan),
+    ...(await preparePackageRuntimeAssets(plan)),
   };
 }
 

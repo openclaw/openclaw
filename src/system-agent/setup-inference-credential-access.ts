@@ -19,7 +19,7 @@ import {
   restoreAuthProfileStorePersistenceSnapshot,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { isMissingSecretRefResolutionError } from "../secrets/resolve-errors.js";
 import {
   SetupInferenceOwnerDriftError,
@@ -52,7 +52,7 @@ export async function withPreparedSetupCredentialAccess(
         : credential?.type === "token"
           ? (credential.tokenRef ?? credential.token)
           : undefined;
-    const ref = coerceSecretRef(refInput, staged.config.secrets?.defaults);
+    const ref = parseSecretRef(refInput, staged.config.secrets?.defaults);
     if (!credential || !ref) {
       return await verify();
     }

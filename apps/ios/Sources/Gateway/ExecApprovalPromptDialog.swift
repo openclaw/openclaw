@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
@@ -110,7 +111,7 @@ private struct ExecApprovalPromptCard: View {
                 if self.prompt.kind != "exec" {
                     Text(verbatim: self.prompt.commandText)
                         .font(OpenClawType.headline)
-                    if let description = self.normalized(self.prompt.descriptionText) {
+                    if let description = self.prompt.descriptionText?.trimmedNonEmpty {
                         Text(verbatim: description)
                             .font(OpenClawType.subhead)
                             .foregroundStyle(.secondary)
@@ -134,7 +135,7 @@ private struct ExecApprovalPromptCard: View {
                         in: RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous))
             }
 
-            if let warningText = self.normalized(self.prompt.warningText) {
+            if let warningText = self.prompt.warningText?.trimmedNonEmpty {
                 Label {
                     Text(warningText)
                         .font(OpenClawType.footnote)
@@ -147,24 +148,24 @@ private struct ExecApprovalPromptCard: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if self.isPluginApproval {
-                    if let pluginId = self.normalized(self.prompt.pluginId) {
+                    if let pluginId = self.prompt.pluginId?.trimmedNonEmpty {
                         ExecApprovalPromptMetadataRow(label: "Plugin", value: pluginId)
                     }
-                    if let toolName = self.normalized(self.prompt.toolName) {
+                    if let toolName = self.prompt.toolName?.trimmedNonEmpty {
                         ExecApprovalPromptMetadataRow(label: "Tool", value: toolName)
                     }
-                    if let severity = self.normalized(self.prompt.pluginSeverity) {
+                    if let severity = self.prompt.pluginSeverity?.trimmedNonEmpty {
                         ExecApprovalPromptMetadataRow(label: "Severity", value: severity)
                     }
                 } else {
-                    if let host = self.normalized(self.prompt.host) {
+                    if let host = self.prompt.host?.trimmedNonEmpty {
                         ExecApprovalPromptMetadataRow(label: "Host", value: host)
                     }
-                    if let nodeId = self.normalized(self.prompt.nodeId) {
+                    if let nodeId = self.prompt.nodeId?.trimmedNonEmpty {
                         ExecApprovalPromptMetadataRow(label: "Node", value: nodeId)
                     }
                 }
-                if let agentId = self.normalized(self.prompt.agentId) {
+                if let agentId = self.prompt.agentId?.trimmedNonEmpty {
                     ExecApprovalPromptMetadataRow(label: "Agent", value: agentId)
                 }
                 if let expiresText = self.expiresText(self.prompt.expiresAtMs) {
@@ -172,13 +173,13 @@ private struct ExecApprovalPromptCard: View {
                 }
             }
 
-            if let errorText = self.normalized(self.errorText) {
+            if let errorText = self.errorText?.trimmedNonEmpty {
                 Text(errorText)
                     .font(OpenClawType.footnote)
                     .foregroundStyle(OpenClawBrand.danger)
             }
 
-            if let resolvedText = self.normalized(self.resolvedText) {
+            if let resolvedText = self.resolvedText?.trimmedNonEmpty {
                 Text(resolvedText)
                     .font(OpenClawType.footnote)
                     .foregroundStyle(self.resolvedColor)
@@ -282,11 +283,6 @@ private struct ExecApprovalPromptCard: View {
         }
         .buttonStyle(.bordered)
         .disabled(!self.canDismiss)
-    }
-
-    private func normalized(_ value: String?) -> String? {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private var resolvedColor: Color {

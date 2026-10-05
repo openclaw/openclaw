@@ -170,7 +170,7 @@ test("sessions.list reads completed models from each physical agent store", asyn
   testState.sessionStorePath = undefined;
   const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
   testState.sessionConfig = { store: storeTemplate };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
+  testState.agentsConfig = { entries: { main: {}, ops: {} } };
   for (const agentId of ["main", "ops"]) {
     const sessionId = `session-${agentId}`;
     const sessionKey = `agent:${agentId}:main`;
@@ -261,7 +261,7 @@ test.runIf(process.platform !== "win32")(
       testState.sessionConfig = {
         store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
       };
-      testState.agentsConfig = { list: [{ id: "main", default: true }] };
+      testState.agentsConfig = { entries: { main: {} } };
       await writeSessionStore({
         agentId: "main",
         entries: {
@@ -302,7 +302,7 @@ test("configured-only multi-store target preparation is reused across distinct l
     const agentIds = Array.from({ length: 29 }, (_, index) => `agent-${index}`);
     const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionConfig = { store: storeTemplate };
-    testState.agentsConfig = { list: agentIds.map((id, index) => ({ id, default: index === 0 })) };
+    testState.agentsConfig = { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) };
     for (const agentId of agentIds) {
       const storePath = storeTemplate.replace("{agentId}", agentId);
       await writeSessionStore({
@@ -369,7 +369,7 @@ test("configured-only parent-owned stores keep lineage children without director
     const mainKey = "agent:ops:main";
     const childKey = "agent:codex:subagent:fixed-child";
     testState.sessionConfig = { store: storeTemplate };
-    testState.agentsConfig = { ownership: "explicit", list: [{ id: "ops" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
     await writeSessionStore({
       agentId: "ops",
@@ -406,7 +406,7 @@ test("filters sessions by agentId", async () => {
     store: path.join(dir, "{agentId}", "sessions.json"),
   };
   testState.agentsConfig = {
-    list: [{ id: "home", default: true }, { id: "work" }],
+    entries: { home: {}, work: {} },
   };
   const homeDir = path.join(dir, "home");
   const workDir = path.join(dir, "work");
@@ -475,7 +475,7 @@ test("resolves and patches main alias to default agent main key", async () => {
     target: { canonicalKey: "agent:main:main", storeKeys: ["agent:main:main"] },
   });
   const { storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   testState.sessionConfig = { mainKey: "work" };
 
   await writeSessionStore({

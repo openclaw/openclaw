@@ -37,7 +37,6 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -52,23 +51,16 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { mattermostApprovalAuth } from "./approval-auth.js";
-import {
-  describeMattermostAccount,
-  mattermostConfigAdapter,
-  mattermostMeta as meta,
-  normalizeMattermostAllowEntry as normalizeAllowEntry,
-  resolveMattermostGatewayAuthBypassPaths,
-} from "./channel-config-shared.js";
+import { normalizeMattermostAllowEntry as normalizeAllowEntry } from "./channel-config-shared.js";
 import {
   createMattermostDeliveryProgressReporter,
   toMattermostOutboundResult,
 } from "./channel-send-result.js";
-import { MattermostChannelConfigSchema } from "./config-surface.js";
+import { mattermostSetupPlugin } from "./channel.setup.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   inspectMattermostAccount,
-  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -85,8 +77,6 @@ import {
 } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
-import { mattermostSetupContract } from "./setup-core.js";
-import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
 const loadMattermostChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -649,36 +639,9 @@ const mattermostMessageAdapter = createChannelMessageAdapterFromOutbound({
 
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = createChatChannelPlugin({
   base: {
-    id: "mattermost",
-    meta: {
-      ...meta,
-    },
-    setupContract: mattermostSetupContract,
-    setupWizard: mattermostSetupWizard,
-    capabilities: {
-      chatTypes: ["direct", "channel", "group", "thread"],
-      reactions: true,
-      threads: true,
-      media: true,
-      nativeCommands: true,
-    },
+    ...mattermostSetupPlugin,
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-    },
-    reload: {
-      configPrefixes: ["channels.mattermost"],
-      noopPrefixes: ["messages.inbound"],
-      /**
-       * accounts.default is promoted; named resolution merges only channel-wide fields
-       * plus the selected account. Monitor debounce and durable ingress use accountId.
-       */
-      accountScopedRestart: true,
-    },
-    configSchema: MattermostChannelConfigSchema,
-    config: {
-      ...mattermostConfigAdapter,
-      isConfigured: isMattermostConfigured,
-      describeAccount: describeMattermostAccount,
     },
     approvalCapability: mattermostApprovalAuth,
     doctor: mattermostDoctor,
@@ -758,9 +721,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         if (!token || !baseUrl) {
           return { ok: false, error: "bot token or baseUrl missing" };
         }
-        return await (
-          await loadMattermostChannelRuntime()
-        ).probeMattermost(baseUrl, token, timeoutMs, isPrivateNetworkOptInEnabled(account.config));
+        const channelRuntime = await loadMattermostChannelRuntime();
+        const allowPrivateNetwork = account.config.network?.dangerouslyAllowPrivateNetwork === true;
+        return await channelRuntime.probeMattermost(baseUrl, token, timeoutMs, allowPrivateNetwork);
       },
       resolveAccountSnapshot: ({ account, runtime }) => ({
         accountId: account.accountId,
@@ -779,9 +742,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       }),
     }),
     gateway: {
-      // Same function as the public gateway-auth artifact so the pre-plugin
-      // fast path and the loaded plugin cannot drift (pinned by contract test).
-      resolveGatewayAuthBypassPaths: resolveMattermostGatewayAuthBypassPaths,
+      ...mattermostSetupPlugin.gateway,
       startAccount: async (ctx) => {
         const account = ctx.account;
         const statusSink = createAccountStatusSink({

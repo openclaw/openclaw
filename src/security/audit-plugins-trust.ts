@@ -1,14 +1,15 @@
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { InstallRecordBase } from "../config/types.installs.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import type { InstallRecordBase } from "../config/zod-schema.installs.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -17,38 +18,8 @@ import {
   createPluginRegistryIdNormalizer,
   loadPluginRegistrySnapshot,
 } from "../plugins/plugin-registry.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
-
-type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
-
-type PluginTrustPolicyDeps = {
-  isToolAllowedByPolicies: typeof import("../agents/tool-policy-match.js").isToolAllowedByPolicies;
-  pickSandboxToolPolicy: typeof import("../agents/sandbox-tool-policy.js").pickSandboxToolPolicy;
-  resolveSandboxConfigForAgent: typeof import("../agents/sandbox/config.js").resolveSandboxConfigForAgent;
-  resolveSandboxToolPolicyForAgent: typeof import("../agents/sandbox/tool-policy.js").resolveSandboxToolPolicyForAgent;
-  resolveToolProfilePolicy: typeof import("../agents/tool-policy.js").resolveToolProfilePolicy;
-};
-
-/** Lazily load tool-policy helpers so basic security imports avoid agent policy modules. */
-const loadPluginTrustPolicyDeps = createLazyPromise(
-  () =>
-    Promise.all([
-      import("../agents/sandbox/config.js"),
-      import("../agents/sandbox/tool-policy.js"),
-      import("../agents/tool-policy-match.js"),
-      import("../agents/tool-policy.js"),
-      import("../agents/sandbox-tool-policy.js"),
-    ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
-      isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
-      pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
-      resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
-      resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
-      resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
-    })),
-  { cacheRejections: true },
-);
 
 function readChannelCommandSetting(
   cfg: OpenClawConfig,
@@ -127,28 +98,6 @@ async function isChannelPluginConfigured(
     }
   }
   return false;
-}
-
-function resolveToolPolicies(params: {
-  cfg: OpenClawConfig;
-  deps: PluginTrustPolicyDeps;
-  agentTools?: AgentToolsConfig;
-  sandboxMode?: "off" | "non-main" | "all";
-  agentId?: string | null;
-}): Array<SandboxToolPolicy | undefined> {
-  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
-  const profilePolicy = params.deps.resolveToolProfilePolicy(profile);
-  const policies: Array<SandboxToolPolicy | undefined> = [
-    profilePolicy,
-    params.deps.pickSandboxToolPolicy(params.cfg.tools ?? undefined),
-    params.deps.pickSandboxToolPolicy(params.agentTools),
-  ];
-  if (params.sandboxMode === "all") {
-    policies.push(
-      params.deps.resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined),
-    );
-  }
-  return policies;
 }
 
 function normalizePluginIdSet(entries: string[]): Set<string> {
@@ -373,7 +322,19 @@ export async function collectPluginsTrustFindings(params: {
       pluginDirs,
     });
     if (enabledExtensionPluginIds.length > 0) {
-      const deps = await loadPluginTrustPolicyDeps();
+      const [
+        { resolveSandboxConfigForAgent },
+        { resolveSandboxToolPolicyForAgent },
+        { isToolAllowedByPolicies },
+        { resolveToolProfilePolicy },
+        { pickSandboxToolPolicy },
+      ] = await Promise.all([
+        import("../agents/sandbox/config.js"),
+        import("../agents/sandbox/tool-policy.js"),
+        import("../agents/tool-policy-match.js"),
+        import("../agents/tool-policy.js"),
+        import("../agents/sandbox-tool-policy.js"),
+      ]);
       const enabledPluginSet = new Set(enabledExtensionPluginIds);
       const contexts: Array<{
         label: string;
@@ -394,18 +355,20 @@ export async function collectPluginsTrustFindings(params: {
       const permissiveContexts: string[] = [];
       for (const context of contexts) {
         const profile = context.tools?.profile ?? params.cfg.tools?.profile;
-        const restrictiveProfile = Boolean(deps.resolveToolProfilePolicy(profile));
-        const sandboxMode = deps.resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
+        const profilePolicy = resolveToolProfilePolicy(profile);
+        const restrictiveProfile = Boolean(profilePolicy);
+        const sandboxMode = resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
         // Probe with a synthetic plugin tool id: broad allow policies will allow
         // it, while restrictive profiles or explicit allowlists should not.
-        const policies = resolveToolPolicies({
-          cfg: params.cfg,
-          deps,
-          agentTools: context.tools,
-          sandboxMode,
-          agentId: context.agentId,
-        });
-        const broadPolicy = deps.isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
+        const policies: Array<SandboxToolPolicy | undefined> = [
+          profilePolicy,
+          pickSandboxToolPolicy(params.cfg.tools ?? undefined),
+          pickSandboxToolPolicy(context.tools),
+        ];
+        if (sandboxMode === "all") {
+          policies.push(resolveSandboxToolPolicyForAgent(params.cfg, context.agentId));
+        }
+        const broadPolicy = isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
         const explicitPluginAllow =
           !restrictiveProfile &&
           (hasExplicitPluginAllow({

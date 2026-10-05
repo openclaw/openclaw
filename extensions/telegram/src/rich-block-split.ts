@@ -4,6 +4,7 @@ import { avoidTrailingHighSurrogateBreak } from "openclaw/plugin-sdk/text-chunki
 import {
   countRichTextChars,
   measureInputRichBlocks,
+  normalizeInputRichBlocks,
   normalizeRichText,
   type InputRichBlock,
   type InputRichBlockListItem,
@@ -238,7 +239,9 @@ export function splitTelegramRichBlocks(
     return [];
   }
   const limits = { textLimit, blockLimit };
-  const expanded = blocks.flatMap((block) => splitOversizedRichBlock(block, limits));
+  const expanded = normalizeInputRichBlocks(blocks).flatMap((block) =>
+    splitOversizedRichBlock(block, limits),
+  );
   const chunks: InputRichBlock[][] = [];
   let current: InputRichBlock[] = [];
   let size: RichBlockBudget = { chars: 0, blocks: 0, media: 0 };

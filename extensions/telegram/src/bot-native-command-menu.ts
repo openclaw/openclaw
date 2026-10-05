@@ -62,13 +62,7 @@ const cappedTelegramMenuCache = new Map<
 >();
 
 function countTelegramCommandText(value: string): number {
-  let count = 0;
-  for (let index = 0; index < value.length;) {
-    const codePoint = value.codePointAt(index);
-    index += codePoint && codePoint > 0xffff ? 2 : 1;
-    count += 1;
-  }
-  return count;
+  return Array.from(value).length;
 }
 
 function truncateTelegramCommandText(value: string, maxLength: number): string {
@@ -141,18 +135,6 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
     const text = record && key in record ? readStringField(record, key) : undefined;
     return text !== undefined && pattern.test(text);
   });
-}
-
-function formatTelegramCommandRetrySuccessLog(params: {
-  initialCount: number;
-  acceptedCount: number;
-}): string {
-  const omittedCount = Math.max(0, params.initialCount - params.acceptedCount);
-  return (
-    `Telegram accepted ${params.acceptedCount} commands after BOT_COMMANDS_TOO_MUCH ` +
-    `(started with ${params.initialCount}; omitted ${omittedCount}). ` +
-    "Reduce plugin/skill/custom commands to expose more menu entries."
-  );
 }
 
 export function buildPluginTelegramMenuCommands<TSpec extends TelegramPluginCommandSpec>(params: {
@@ -396,16 +378,6 @@ function buildEffectiveTelegramCommandLocalizations(
   return [...effective.entries()].toSorted(([a], [b]) => a.localeCompare(b));
 }
 
-function toTelegramBotCommands(commands: TelegramMenuCommand[]): Array<{
-  command: string;
-  description: string;
-}> {
-  return commands.map((command) => ({
-    command: command.command,
-    description: command.description,
-  }));
-}
-
 function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
   variants: Array<{ languageCode: LanguageCode; commands: TelegramMenuCommand[] }>;
   unsupportedLanguageCodes: string[];
@@ -483,17 +455,10 @@ async function clearTelegramMenuCommandsForScopes(params: {
   let allCleared = true;
   for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
     const options = buildTelegramCommandScopeOptions(scope, languageCode);
-    const operation =
-      typeof bot.api.deleteMyCommands === "function" ? "deleteMyCommands" : "setMyCommands";
     const cleared = await withTelegramApiErrorLogging({
-      operation: formatTelegramCommandScopeOperation(operation, scope, languageCode),
+      operation: formatTelegramCommandScopeOperation("deleteMyCommands", scope, languageCode),
       runtime,
-      fn: () => {
-        if (typeof bot.api.deleteMyCommands === "function") {
-          return options ? bot.api.deleteMyCommands(options) : bot.api.deleteMyCommands();
-        }
-        return options ? bot.api.setMyCommands([], options) : bot.api.setMyCommands([]);
-      },
+      fn: () => (options ? bot.api.deleteMyCommands(options) : bot.api.deleteMyCommands()),
     })
       .then(() => true)
       .catch(() => false);
@@ -510,7 +475,7 @@ async function setTelegramMenuCommandsForScopes(params: {
   shouldLog?: (err: unknown) => boolean;
 }): Promise<void> {
   const { bot, runtime, commands, languageCode, shouldLog } = params;
-  const botCommands = toTelegramBotCommands(commands);
+  const botCommands = commands.map(({ command, description }) => ({ command, description }));
   for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
     await withTelegramApiErrorLogging({
       operation: formatTelegramCommandScopeOperation("setMyCommands", scope, languageCode),
@@ -628,10 +593,9 @@ export function syncTelegramMenuCommands(params: {
         });
         if (retryCommands.length < initialCommandCount) {
           runtime.log?.(
-            formatTelegramCommandRetrySuccessLog({
-              initialCount: initialCommandCount,
-              acceptedCount: retryCommands.length,
-            }),
+            `Telegram accepted ${retryCommands.length} commands after BOT_COMMANDS_TOO_MUCH ` +
+              `(started with ${initialCommandCount}; omitted ${initialCommandCount - retryCommands.length}). ` +
+              "Reduce plugin/skill/custom commands to expose more menu entries.",
           );
         }
         acceptedCommands = retryCommands;

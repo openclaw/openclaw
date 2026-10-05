@@ -156,6 +156,7 @@ async function runCronIsolatedAgentTurnInTrace(
               agentId: prepared.context.agentId,
               sessionId: prepared.context.currentRunSessionId(),
               sessionKey: prepared.context.runSessionKey,
+              runId,
               ...(info?.isFallback === true ? { isFallback: true } : {}),
               phase: "runner_entered",
               provider: info?.provider ?? prepared.context.liveSelection.provider,
@@ -244,6 +245,7 @@ async function runCronIsolatedAgentTurnInTrace(
               {
                 sessionKey: prepared.context.runSessionKey,
                 sessionId: initialSessionId,
+                agentId: prepared.context.agentId,
                 lifecycleGeneration: runLifecycleGeneration,
                 cronRunsByJobId: new Map([
                   [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],

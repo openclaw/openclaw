@@ -627,7 +627,7 @@ export async function executeQueuedCronRun(params: {
       params.onSetupError?.(executionJob, errorText);
       outcome = {
         ...base,
-        ...authorCronRunCompletion(state, executionJob, {
+        ...authorCronRunCompletion(executionJob, {
           status: "error",
           error: errorText,
           diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {

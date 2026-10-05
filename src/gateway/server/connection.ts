@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolvePreauthHandshakeTimeoutMs } from "../../../packages/gateway-client/src/timeouts.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -15,7 +16,7 @@ import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
-import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
+import { getHeader } from "../http-header-value.js";
 import type { GatewayIngressAttribution } from "../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
@@ -177,12 +178,10 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   const [openedAt, connId] = [Date.now(), randomUUID()];
   const connectionController = new AbortController();
   const { remoteAddr, remotePort, localAddr, localPort, endpoint } = params.addresses;
-  const headerValue = (value: string | string[] | undefined) =>
-    Array.isArray(value) ? value[0] : value;
-  const requestHost = headerValue(upgradeReq.headers.host);
-  const requestOrigin = headerValue(upgradeReq.headers.origin);
-  const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
-  const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
+  const requestHost = getHeader(upgradeReq, "host");
+  const requestOrigin = getHeader(upgradeReq, "origin");
+  const requestUserAgent = getHeader(upgradeReq, "user-agent");
+  const forwardedFor = getHeader(upgradeReq, "x-forwarded-for");
   const openedDuringStartup = isStartupPending?.() === true;
 
   logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
@@ -326,7 +325,10 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       } else {
         socket.send(encoded, { binary: false });
       }
-      return { kind: "sent" } as const;
+      return {
+        kind: "sent",
+        bytes: typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength,
+      } as const;
     } catch {
       socket.terminate();
       retireConnection();

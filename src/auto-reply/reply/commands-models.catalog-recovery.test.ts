@@ -335,8 +335,7 @@ describe("/models browse catalog recovery", () => {
       },
       env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
       authStore: { version: 1, profiles: {} },
-      skipSetupProviderFallback: true,
-      allowPreparedRuntimeAuth: false,
+      preparedRuntimeAuthStore: { version: 1, profiles: {} },
     });
 
     expect(
@@ -379,7 +378,6 @@ describe("/models browse catalog recovery", () => {
           },
         },
         env: {},
-        skipSetupProviderFallback: true,
         preparedRuntimeAuthModes: { "claude-cli": "api_key" },
         authStore: store,
         preparedRuntimeAuthStore: store,

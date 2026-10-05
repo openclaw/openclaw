@@ -556,6 +556,22 @@ describe("ChatSessionRailElement", () => {
       expect(send.disabled).toBe(true);
       await type("What changed?");
       expect(send.disabled).toBe(false);
+      const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
+      textarea.dispatchEvent(compositionEnd);
+      const confirmingEnter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(confirmingEnter, "timeStamp", {
+        value: compositionEnd.timeStamp - 1,
+      });
+      textarea.dispatchEvent(confirmingEnter);
+      expect(confirmingEnter.defaultPrevented).toBe(false);
+      expect(ask).not.toHaveBeenCalled();
+      expect(textarea.value).toBe("What changed?");
+      textarea.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
       enter();
       await element.updateComplete;
       expect(textarea.disabled).toBe(false);

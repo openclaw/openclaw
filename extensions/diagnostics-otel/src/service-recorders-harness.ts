@@ -28,7 +28,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     addRunAttrs,
     tracesEnabled,
     getTrackedInternalOrTrustedSpan,
-    contentCapturePolicy,
+    captureContent,
   } = runtime;
 
   const recordAgentCommentary = (
@@ -49,7 +49,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       "openclaw.commentary.text_length": evt.textLength,
       "openclaw.commentary.content_truncated": evt.contentTruncated,
     };
-    assignOtelModelContentAttributes(attrs, privateData.modelContent, contentCapturePolicy);
+    assignOtelModelContentAttributes(attrs, privateData.modelContent, captureContent);
     // addEvent bypasses setSpanAttrs; apply the same redaction and identifier
     // policy. Queued commentary precedes queued harness completion.
     span.addEvent("openclaw.agent.commentary", redactOtelAttributes(attrs), evt.sourceTimestampMs);
@@ -150,11 +150,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: redactedError ?? errorType });
     }
     // Aborted runs also retain their context for late children.
-    if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
-      return;
-    }
-    span.end(evt.ts);
+    completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
   };
 
   const recordContextAssembled = (

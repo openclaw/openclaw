@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
-  buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
+  prepareWatchedSessionsHarnessContext,
   type AgentMessage,
   type ContextEngineProjection,
   type EmbeddedContextFile,
@@ -10,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonBlankString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
   CODEX_MEMORY_CONTEXT_BASENAME,
@@ -19,7 +22,6 @@ import {
   getCodexContextFileDisplayBasename,
   isNonEmptyString,
   normalizeCodexContextFilePath,
-  normalizeCodexDynamicToolName,
   type CodexBootstrapFile,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
@@ -375,21 +377,23 @@ export function buildCodexOpenClawPromptContext(params: {
  * Sessions section must be re-surfaced here or Codex-backed main sessions
  * keep refusing cross-session questions (openclaw#114797).
  */
-export function buildCodexWatchedSessionsContext(params: {
+export async function prepareCodexWatchedSessionsContext(params: {
   attempt: EmbeddedRunAttemptParams;
   dynamicTools: readonly CodexDynamicToolSpec[];
   sessionKey?: string;
   sandboxed?: boolean;
-}): string | undefined {
+  assertCurrent: () => void;
+}): Promise<string | undefined> {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
   }
-  return buildWatchedSessionsHarnessContext({
+  return prepareWatchedSessionsHarnessContext({
     config: params.attempt.config,
     sessionKey: params.sessionKey,
     sandboxed: params.sandboxed,
+    assertCurrent: params.assertCurrent,
     toolNames: flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
   });
 }
@@ -404,7 +408,7 @@ export function renderCodexSkillsInstructions(params: {
   }
   const names = new Set(
     flattenCodexDynamicToolFunctions(params.dynamicTools ?? []).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
   const prompt = params.skillsPrompt?.trim();

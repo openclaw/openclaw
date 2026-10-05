@@ -75,7 +75,7 @@ export type PreparedModelRuntimeBuildResult = Readonly<{
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
-function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
+export function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
   candidates: readonly T[],
   keyOf: (candidate: T) => K,
 ): Map<K, T[]> {

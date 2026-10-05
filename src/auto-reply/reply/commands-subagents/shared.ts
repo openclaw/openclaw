@@ -98,8 +98,8 @@ export function resolveRequesterSessionKey(
   if (!raw) {
     return undefined;
   }
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  return resolveInternalSessionKey({ key: raw, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  return resolveInternalSessionKey({ key: raw, alias });
 }
 
 export function buildSubagentsHelp() {

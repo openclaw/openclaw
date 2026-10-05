@@ -46,7 +46,11 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
-import { readSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
+import {
+  canReadSystemInfo,
+  readSystemInfo,
+  SYSTEM_INFO_POLL_INTERVAL_MS,
+} from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -62,7 +66,7 @@ import {
   type RealtimeTalkInputDevice,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
-import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
+import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { ConfigRouteScrollController } from "./config-route-scroll-controller.ts";
 import {
@@ -75,7 +79,7 @@ import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { renderMcp, renderMcpIntro } from "./mcp.ts";
 import "./meeting-capture.ts";
 import "./memory-page.ts";
-import { narrowMemorySchema } from "./memory-schema.ts";
+import { memorySettingsSchema } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
 import {
@@ -176,20 +180,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
   }
 }
 
-export function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
-  const root =
-    asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
-    asConfigRecord(config);
-  if (!root) {
-    return {
-      gatewayAuth: "unknown",
-      execPolicy: "unknown",
-      browserEnabled: true,
-      browserEnabledOverridden: false,
-      toolProfile: "",
-      toolProfileOverridden: false,
-    };
-  }
+export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
   const gateway = asConfigRecord(root.gateway);
   const auth = asConfigRecord(gateway?.auth);
   const tools = asConfigRecord(root.tools);
@@ -625,7 +616,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfo = null;
     }
     if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !supportsSystemInfo(snapshot.hello);
+      this.systemInfoUnavailable = !canReadSystemInfo(snapshot);
       if (this.systemInfoUnavailable) {
         this.invalidateSystemInfoRequest();
         this.systemInfo = null;
@@ -655,22 +646,18 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private systemInfoRequestClient(): GatewayBrowserClient | null {
-    const gatewaySource = this.gateway.gateway;
-    const gateway = gatewaySource?.snapshot;
+    const gateway = this.gateway.gateway;
     if (
-      !gatewaySource ||
-      !gateway ||
       !this.isConnected ||
       document.visibilityState === "hidden" ||
       this.pageId !== "appearance" ||
-      this.context.gateway !== gatewaySource ||
-      gateway.phase !== "connected" ||
-      !supportsSystemInfo(gateway.hello) ||
+      this.context.gateway !== gateway ||
+      !canReadSystemInfo(gateway?.snapshot) ||
       this.systemInfoUnavailable
     ) {
       return null;
     }
-    return gateway.client;
+    return gateway?.snapshot.client ?? null;
   }
 
   private resetSessionObserverModels(unavailable = false) {
@@ -1172,8 +1159,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         .pluginsHref=${pathForRoute("plugins", this.context.basePath)}
         .memoryImportHref=${pathForRoute("memory-import", this.context.basePath)}
         .routeData=${this.routeData}
-        .buildEditor=${(keys: readonly string[]) =>
-          renderSectionEditor("memory", t("tabs.memory"), narrowMemorySchema(props.schema, keys))}
+        .buildEditor=${() =>
+          renderSectionEditor("memory", t("tabs.memory"), memorySettingsSchema(props.schema))}
       ></openclaw-memory-settings>`;
     }
     if (this.pageId === "talk") {

@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
@@ -21,6 +20,7 @@ import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-ad
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { Deferred } from "../shared/deferred.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -52,6 +52,7 @@ vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOrig
     resolveSessionAsync: async ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
       sessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({ agent: "main" }),
       entry: loadSessionEntryReadOnly({
         agentId: "main",
@@ -73,7 +74,7 @@ let ws: WebSocket;
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-acp-completion-");
 
 function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSync>[0]) {
   return loadTranscriptEventsSync(scope).flatMap((event) => {
@@ -143,7 +144,7 @@ describe("Gateway ACP completion ownership", () => {
     { name: "replaced transcript target", rebound: true },
   ];
   test.each(cases)("completes $name once with truthful transcript ownership", async (scenario) => {
-    const storePath = path.join(tempDirs.make("openclaw-acp-completion-"), "sessions.json");
+    const storePath = path.join(tempDirs.make(), "sessions.json");
     testState.sessionStorePath = storePath;
     const mediaFile = path.join(path.dirname(storePath), "photo.png");
     if (scenario.media) {
@@ -378,7 +379,10 @@ describe("Gateway ACP completion ownership", () => {
           },
           { timeout: 10_000 },
         );
-        expect.soft(replayPayload).toMatchObject({ runId, status: expectedStatus });
+        expect.soft(replayPayload, JSON.stringify(replayPayload)).toMatchObject({
+          runId,
+          status: expectedStatus,
+        });
         if (scenario.cancel) {
           expect
             .soft(replayPayload)

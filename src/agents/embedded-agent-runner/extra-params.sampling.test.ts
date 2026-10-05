@@ -130,14 +130,13 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
               },
             },
           },
-          list: [
-            {
-              id: "bot",
+          entries: {
+            bot: {
               params: {
                 max_tokens: 48_000,
               },
             },
-          ],
+          },
         },
       } as never,
       provider: "dashscope",

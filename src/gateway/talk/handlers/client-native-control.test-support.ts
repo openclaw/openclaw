@@ -5,6 +5,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createAttemptNestedToolActivityState } from "../../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
@@ -526,6 +527,7 @@ export async function withParkedNativeTask(
                   hasDeliveredSourceReply: () => false,
                   markSourceReplyDelivered: () => {},
                   builtinToolNames: new Set(),
+                  sourceReplyCapableToolNames: new Set(),
                   coreBuiltinToolNames: new Set(),
                   replaySafeToolNames: new Set(),
                   codeModeExecToolNames: new Set(),
@@ -538,7 +540,7 @@ export async function withParkedNativeTask(
                   sessionId: params.sessionId,
                   runId: params.runId,
                 }),
-                nestedToolActivities: [],
+                nestedToolActivityState: createAttemptNestedToolActivityState(),
                 isReplaySafeTool: () => false,
                 runAbortController,
                 abortRun: abortOwned,

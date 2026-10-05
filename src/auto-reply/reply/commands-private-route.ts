@@ -27,41 +27,34 @@ export type PrivateCommandRouteTarget = {
 const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
 const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
 
-export function buildPrivateCommandApprovalRequest(params: {
+/** Finds private owner DM routes that can receive sensitive command replies. */
+export async function resolvePrivateCommandRouteTargets(params: {
   commandParams: HandleCommandsParams;
   id: string;
   command: string;
   commandArgv?: string[];
-  agentId: string | undefined;
-  createdAtMs: number;
-}): ExecApprovalRequest {
+}): Promise<PrivateCommandRouteTarget[]> {
   const { commandParams } = params;
-  return {
+  const createdAtMs = Date.now();
+  const request: ExecApprovalRequest = {
     approvalKind: "exec",
     id: params.id,
     request: {
       command: params.command,
       ...(params.commandArgv === undefined ? {} : { commandArgv: params.commandArgv }),
-      agentId: params.agentId,
+      agentId: commandParams.agentId,
       ...(commandParams.sessionKey ? { sessionKey: commandParams.sessionKey } : {}),
       turnSourceChannel: commandParams.command.channel,
       turnSourceTo: readCommandDeliveryTarget(commandParams) ?? null,
       turnSourceAccountId: commandParams.ctx.AccountId ?? null,
       turnSourceThreadId: readCommandMessageThreadId(commandParams) ?? null,
     },
-    createdAtMs: params.createdAtMs,
+    createdAtMs,
     expiresAtMs:
       resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, {
-        nowMs: params.createdAtMs,
+        nowMs: createdAtMs,
       }) ?? EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS,
   };
-}
-
-/** Finds private owner DM routes that can receive sensitive command replies. */
-export async function resolvePrivateCommandRouteTargets(params: {
-  commandParams: HandleCommandsParams;
-  request: ExecApprovalRequest;
-}): Promise<PrivateCommandRouteTarget[]> {
   const originChannel = params.commandParams.command.channel;
   const targets: PrivateCommandRouteTarget[] = [];
   for (const candidate of listPrivateCommandRouteCandidateChannels(originChannel)) {
@@ -77,7 +70,7 @@ export async function resolvePrivateCommandRouteTargets(params: {
       cfg: params.commandParams.cfg,
       accountId,
       approvalKind: "exec",
-      request: params.request,
+      request,
     });
     if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
       continue;
@@ -86,7 +79,7 @@ export async function resolvePrivateCommandRouteTargets(params: {
       cfg: params.commandParams.cfg,
       accountId,
       approvalKind: "exec",
-      request: params.request,
+      request,
     });
     for (const target of resolvedTargets) {
       targets.push({
@@ -97,18 +90,34 @@ export async function resolvePrivateCommandRouteTargets(params: {
       });
     }
   }
-  return sortPrivateCommandRouteTargets({
-    cfg: params.commandParams.cfg,
-    originChannel,
-    targets: dedupeByKey(targets, (target) =>
-      [
-        target.channel,
-        target.to,
-        target.accountId ?? "",
-        target.threadId == null ? "" : String(target.threadId),
-      ].join("\0"),
-    ),
-  });
+  const owners = commandParams.cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(owners) || owners.length === 0) {
+    return [];
+  }
+  return dedupeByKey(targets, (target) =>
+    [
+      target.channel,
+      target.to,
+      target.accountId ?? "",
+      target.threadId == null ? "" : String(target.threadId),
+    ].join("\0"),
+  )
+    .map((target) => {
+      const keys = buildPrivateCommandRouteOwnerKeys(target);
+      const ownerPreference = owners.findIndex((owner) =>
+        keys.has(normalizeLowercaseStringOrEmpty(String(owner))),
+      );
+      return {
+        target,
+        ownerPreference,
+        originPreference: target.channel === originChannel ? 0 : 1,
+      };
+    })
+    .filter((entry) => entry.ownerPreference !== -1)
+    .toSorted(
+      (a, b) => a.originPreference - b.originPreference || a.ownerPreference - b.ownerPreference,
+    )
+    .map((entry) => entry.target);
 }
 
 /** Tries private targets in priority order until delivery stops or owns further recovery. */
@@ -213,21 +222,6 @@ function listPrivateCommandRouteCandidateChannels(originChannel: string) {
   );
 }
 
-function resolveOwnerPreferenceIndex(params: {
-  cfg: HandleCommandsParams["cfg"];
-  target: PrivateCommandRouteTarget;
-}): number {
-  const owners = params.cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(owners) || owners.length === 0) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  const keys = buildPrivateCommandRouteOwnerKeys(params.target);
-  const index = owners.findIndex((owner) =>
-    keys.has(normalizeLowercaseStringOrEmpty(String(owner))),
-  );
-  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
-}
-
 function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): Set<string> {
   const channel = normalizeLowercaseStringOrEmpty(target.channel);
   const to = normalizeLowercaseStringOrEmpty(target.to);
@@ -246,22 +240,4 @@ function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): S
     }
   }
   return keys;
-}
-
-function sortPrivateCommandRouteTargets(params: {
-  cfg: HandleCommandsParams["cfg"];
-  originChannel: string;
-  targets: PrivateCommandRouteTarget[];
-}): PrivateCommandRouteTarget[] {
-  return params.targets
-    .map((target) => ({
-      target,
-      ownerPreference: resolveOwnerPreferenceIndex({ cfg: params.cfg, target }),
-      originPreference: target.channel === params.originChannel ? 0 : 1,
-    }))
-    .filter((entry) => entry.ownerPreference !== Number.MAX_SAFE_INTEGER)
-    .toSorted(
-      (a, b) => a.originPreference - b.originPreference || a.ownerPreference - b.ownerPreference,
-    )
-    .map((entry) => entry.target);
 }

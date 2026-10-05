@@ -1,100 +1,55 @@
 /** Extracts and trust-filters media from embedded-agent tool results. */
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { extractToolResultText } from "./embedded-agent-tool-results.js";
+import { mapAgentHarnessMessagingMediaValues } from "./harness/messaging-media.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
-function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
+function pushUniqueMessagingMediaUrl(urls: Set<string>, value: unknown): void {
+  const normalized = normalizeOptionalString(value);
+  if (normalized) {
+    urls.add(normalized);
   }
-  const normalized = value.trim();
-  if (!normalized || seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  urls.push(normalized);
 }
 
 /** Collects messaging attachment references from tool-call arguments or result records. */
 export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const pushAttachment = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return;
-    }
-    const attachment = value as Record<string, unknown>;
-    for (const candidate of [
-      attachment.media,
-      attachment.mediaUrl,
-      attachment.path,
-      attachment.filePath,
-      attachment.fileUrl,
-      attachment.url,
-    ]) {
-      pushUniqueMessagingMediaUrl(urls, seen, candidate);
-    }
-  };
-
-  for (const candidate of [
-    record.media,
-    record.mediaUrl,
-    record.path,
-    record.filePath,
-    record.fileUrl,
-  ]) {
-    pushUniqueMessagingMediaUrl(urls, seen, candidate);
-  }
-  if (Array.isArray(record.mediaUrls)) {
-    for (const mediaUrl of record.mediaUrls) {
-      pushUniqueMessagingMediaUrl(urls, seen, mediaUrl);
-    }
-  }
-  if (Array.isArray(record.attachments)) {
-    for (const attachment of record.attachments) {
-      pushAttachment(attachment);
-    }
-  }
-  return urls;
+  const urls = new Set<string>();
+  mapAgentHarnessMessagingMediaValues(
+    record,
+    (value) => {
+      pushUniqueMessagingMediaUrl(urls, value);
+      return value;
+    },
+    false,
+  );
+  return [...urls];
 }
 
 /** Collects messaging attachment references from a completed tool result. */
 export function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const appendFromRecord = (value: unknown) => {
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    for (const url of collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>)) {
-      if (!seen.has(url)) {
-        seen.add(url);
-        urls.push(url);
-      }
-    }
-  };
-
-  appendFromRecord(result);
-  if (result && typeof result === "object") {
-    appendFromRecord((result as Record<string, unknown>).details);
-  }
+  const records = [result, asOptionalObjectRecord(result)?.details];
   const outputText = extractToolResultText(result);
   if (outputText) {
-    try {
-      appendFromRecord(JSON.parse(outputText));
-    } catch {
-      // Ignore non-JSON tool output.
-    }
+    records.push(safeParseJson(outputText));
   }
-  return urls;
+  return [
+    ...new Set(
+      records.flatMap((value) => {
+        const record = asOptionalObjectRecord(value);
+        return record ? collectMessagingMediaUrlsFromRecord(record) : [];
+      }),
+    ),
+  ];
 }
 
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
@@ -243,11 +198,10 @@ const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
 ]);
 
 function collectStructuredMedia(media: Record<string, unknown>): ToolResultMediaArtifact {
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
+  const mediaUrls = new Set<string>();
   const attachmentsByUrl = new Map<string, ReplyMediaAttachment>();
   const pushString = (value: unknown, attachment?: ReplyMediaAttachment) => {
-    pushUniqueMessagingMediaUrl(mediaUrls, seen, value);
+    pushUniqueMessagingMediaUrl(mediaUrls, value);
     const normalized = typeof value === "string" ? value.trim() : "";
     if (normalized && attachment && !attachmentsByUrl.has(normalized)) {
       attachmentsByUrl.set(normalized, attachment);
@@ -297,9 +251,9 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
     }
   }
   return {
-    mediaUrls,
+    mediaUrls: [...mediaUrls],
     ...(attachmentsByUrl.size > 0
-      ? { attachments: mediaUrls.map((url) => attachmentsByUrl.get(url) ?? {}) }
+      ? { attachments: [...mediaUrls].map((url) => attachmentsByUrl.get(url) ?? {}) }
       : {}),
   };
 }

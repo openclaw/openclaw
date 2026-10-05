@@ -1,11 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import * as AIMock from "@copilotkit/aimock";
 import {
   type Journal,
   LLMock,
   type ChatCompletionRequest,
   type Fixture,
   getTextContent,
+  isChatCompletionBody,
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
@@ -31,70 +31,19 @@ type AimockToolFacts = Pick<
   AimockRequestFacts,
   "plannedToolName" | "plannedToolCallId" | "toolOutputCallId"
 >;
+type AimockChatJournalEntry = Pick<JournalEntry, "response"> & {
+  body: ChatCompletionRequest;
+};
 type AimockJournalAdd = (
   entry: Omit<JournalEntry, "id" | "timestamp">,
   matchedFixture?: Fixture,
 ) => JournalEntry;
-type AimockNamespaceWithChatCompletionBodyGuard = typeof AIMock & {
-  isChatCompletionBody?: (body: JournalEntry["body"]) => boolean;
-};
 type AimockRequestObservation =
-  | { kind: "retained-body"; tools: AimockToolFacts }
+  | { kind: "retained-body"; body: ChatCompletionRequest; tools: AimockToolFacts }
   | { kind: "projected"; projection: AimockRequestProjection };
-
-// SAFETY: AIMock 1.42 declarations omit this 1.43 export; runtime probing keeps the bridge compatible.
-const upstreamIsChatCompletionBody = (AIMock as AimockNamespaceWithChatCompletionBodyGuard)
-  .isChatCompletionBody;
-
-function isChatCompletionBody(body: JournalEntry["body"]): body is ChatCompletionRequest {
-  return (
-    upstreamIsChatCompletionBody?.(body) ??
-    (Array.isArray(body?.messages) && typeof body.model === "string")
-  );
-}
 
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
-}
-
-function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      const text = getTextContent(message.content) ?? "";
-      if (!isInternalRuntimeContextCarrierText(text)) {
-        return text;
-      }
-    }
-  }
-  return "";
-}
-
-function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
-  return requestMessages(body)
-    .map((message) => getTextContent(message.content) ?? "")
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
-  const message = requestMessages(body).findLast((entry) => entry?.role === "tool");
-  return message ? (getTextContent(message.content) ?? "") : "";
-}
-
-function extractToolOutputCallId(body: ChatCompletionRequest | null | undefined) {
-  const message = requestMessages(body).findLast(
-    (entry) => entry?.role === "tool" && typeof entry.tool_call_id === "string",
-  );
-  return message?.tool_call_id ?? "";
-}
-
-function extractToolOutputStructuredError(body: ChatCompletionRequest | null | undefined) {
-  const message = asOptionalObjectRecord(
-    requestMessages(body).findLast((entry) => entry?.role === "tool"),
-  );
-  return message?.isError === true || message?.is_error === true;
 }
 
 function countImageInputs(value: unknown): number {
@@ -115,7 +64,7 @@ function countImageInputs(value: unknown): number {
   return (imageLikeType ? 1 : 0) + nested;
 }
 
-function extractToolFacts(entry: Pick<JournalEntry, "response" | "body">): AimockToolFacts {
+function extractToolFacts(entry: AimockChatJournalEntry): AimockToolFacts {
   const response = entry.response.fixture?.response as
     | {
         toolCalls?: Array<{ name?: unknown; id?: unknown; callId?: unknown; toolCallId?: unknown }>;
@@ -123,27 +72,43 @@ function extractToolFacts(entry: Pick<JournalEntry, "response" | "body">): Aimoc
     | undefined;
   const call = response?.toolCalls?.[0];
   const callId = call?.id ?? call?.callId ?? call?.toolCallId;
+  const output = requestMessages(entry.body).findLast(
+    (message) => message?.role === "tool" && typeof message.tool_call_id === "string",
+  );
   return {
     plannedToolName: typeof call?.name === "string" && call.name.length > 0 ? call.name : undefined,
     plannedToolCallId: typeof callId === "string" && callId.length > 0 ? callId : undefined,
-    toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
+    toolOutputCallId: output?.tool_call_id || undefined,
   };
 }
 
 function extractRequestFacts(
-  body: JournalEntry["body"],
+  body: ChatCompletionRequest,
   tools: AimockToolFacts,
 ): AimockRequestFacts {
   const model = typeof body?.model === "string" ? body.model : "";
+  const messages = requestMessages(body);
+  const user = messages.findLast(
+    (message) =>
+      message?.role === "user" &&
+      !isInternalRuntimeContextCarrierText(getTextContent(message.content) ?? ""),
+  );
+  const output = messages.findLast((message) => message?.role === "tool");
+  const outputRecord = asOptionalObjectRecord(output);
   return {
     ...tools,
     model,
-    prompt: extractLastUserText(body),
+    prompt: user ? (getTextContent(user.content) ?? "") : "",
     providerVariant: resolveMockProviderVariant(model, "aimock"),
-    imageInputCount: countImageInputs(requestMessages(body)),
-    ...(extractToolOutputStructuredError(body) ? { toolOutputStructuredError: true } : {}),
-    toolOutput: extractToolOutput(body),
-    allInputText: extractAllInputText(body),
+    imageInputCount: countImageInputs(messages),
+    ...(outputRecord?.isError === true || outputRecord?.is_error === true
+      ? { toolOutputStructuredError: true }
+      : {}),
+    toolOutput: output ? (getTextContent(output.content) ?? "") : "",
+    allInputText: messages
+      .map((message) => getTextContent(message.content) ?? "")
+      .filter(Boolean)
+      .join("\n"),
   };
 }
 
@@ -212,21 +177,22 @@ function createDebugMount(): Mountable {
       // so the debug boundary remains monotonic after retained entries rotate.
       journal.add = (entry, matchedFixture?: Fixture) => {
         const recorded = addJournalEntry(entry, matchedFixture);
-        if (!isChatCompletionBody(entry.body)) {
+        const body = entry.body;
+        if (!isChatCompletionBody(body)) {
           return recorded;
         }
-        const tools = extractToolFacts(entry);
+        const tools = extractToolFacts({ response: entry.response, body });
         // Upstream keeps <=64 KiB bodies intact; only discarded bodies need an
         // extra bounded projection. Weak entry ownership follows eviction/reset.
         observations.set(
           recorded,
           recorded.body === entry.body
-            ? { kind: "retained-body", tools }
+            ? { kind: "retained-body", body, tools }
             : {
                 kind: "projected",
                 projection: boundRequestFacts({
                   complete: true,
-                  facts: extractRequestFacts(entry.body, tools),
+                  facts: extractRequestFacts(body, tools),
                 }),
               },
         );
@@ -302,7 +268,7 @@ function createDebugMount(): Mountable {
         const plannedToolCallId = plannedToolCallIds.get(index);
         let projection: AimockRequestProjection =
           observation.kind === "retained-body"
-            ? { complete: true, facts: extractRequestFacts(entry.body, observation.tools) }
+            ? { complete: true, facts: extractRequestFacts(observation.body, observation.tools) }
             : observation.projection;
         if (plannedToolCallId) {
           projection = projection.complete
@@ -316,7 +282,7 @@ function createDebugMount(): Mountable {
           incomplete.push({ cursor, ...projection });
           continue;
         }
-        const body = entry.body ?? {};
+        const body = observation.kind === "retained-body" ? observation.body : (entry.body ?? {});
         snapshots.push({ raw: JSON.stringify(body), body, ...projection.facts });
       }
       if (incomplete.length > 0) {

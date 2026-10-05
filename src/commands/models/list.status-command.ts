@@ -58,7 +58,6 @@ import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-ca
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -90,6 +89,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
+  formatMs,
   resolveModelsTargetAgent,
 } from "./shared.js";
 
@@ -97,13 +97,7 @@ function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): strin
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   return override ? resolveUserPath(override, env) : undefined;
 }
-const providerUsageRuntimeLoader = createLazyImportLoader(
-  () => import("../../infra/provider-usage.js"),
-);
-const progressRuntimeLoader = createLazyImportLoader(() => import("../../cli/progress.js"));
-const terminalTableRuntimeLoader = createLazyImportLoader(
-  () => import("../../../packages/terminal-core/src/table.js"),
-);
+
 const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
@@ -280,8 +274,7 @@ export async function modelsStatusCommand(
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
   // system-agent target still reports unscoped defaults, matching this command's shipped output.
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
-  const workspaceDir =
-    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, workspaceAgentId);
   const agentModelPrimary = agentId ? resolveAgentNativeModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
@@ -825,7 +818,6 @@ export async function modelsStatusCommand(
         cfg,
         warnAfterMs: DEFAULT_OAUTH_WARN_MS,
         runtimeCredentialsByProvider,
-        allowKeychainPrompt: false,
       });
       const authProfileHealthById = new Map(
         authHealth.profiles.map((profile) => [profile.profileId, profile]),
@@ -1075,7 +1067,7 @@ export async function modelsStatusCommand(
       let probeSummary: AuthProbeSummary | undefined;
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
-          progressRuntimeLoader.load(),
+          import("../../cli/progress.js"),
           listProbeRuntimeLoader.load(),
         ]);
         probeSummary = await withProgressTotals(
@@ -1486,7 +1478,7 @@ export async function modelsStatusCommand(
         runtime.log(colorize(rich, theme.muted, "- none"));
       } else {
         const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
-          await providerUsageRuntimeLoader.load();
+          await import("../../infra/provider-usage.js");
         const usageByProvider = new Map<string, string>();
         const usageProviders = Array.from(
           new Set(
@@ -1568,10 +1560,11 @@ export async function modelsStatusCommand(
       }
 
       if (probeSummary) {
-        const [
-          { getTerminalTableWidth, renderTable },
-          { describeProbeSummary, formatProbeLatency, sortProbeResults },
-        ] = await Promise.all([terminalTableRuntimeLoader.load(), listProbeRuntimeLoader.load()]);
+        const [{ getTerminalTableWidth, renderTable }, { describeProbeSummary, sortProbeResults }] =
+          await Promise.all([
+            import("../../../packages/terminal-core/src/table.js"),
+            listProbeRuntimeLoader.load(),
+          ]);
         runtime.log("");
         runtime.log(colorize(rich, theme.heading, "Auth probes"));
         if (probeSummary.results.length === 0) {
@@ -1593,7 +1586,7 @@ export async function modelsStatusCommand(
           };
           const rows = sorted.map((result) => {
             const status = colorize(rich, statusColor(result.status), result.status);
-            const latency = formatProbeLatency(result.latencyMs);
+            const latency = formatMs(result.latencyMs);
             const modelLabel = result.model ?? `${result.provider}/-`;
             const modeLabel = result.mode
               ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}`

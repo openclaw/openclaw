@@ -226,7 +226,6 @@ export class ModelRegistry {
         : {}),
       ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       allowWorkspaceScopedCurrent: true,
-      useRuntimeConfig: true,
     });
     this.loadModels();
     this.baseCatalogSnapshot = this.captureCatalogSnapshot();
@@ -401,7 +400,7 @@ export class ModelRegistry {
           api: model.api ?? accepted.get(model.id)?.api ?? configured.api,
           baseUrl: model.baseUrl ?? accepted.get(model.id)?.baseUrl ?? configured.baseUrl,
           maxTokensSource: "configured",
-          headers: sanitizeModelHeaders(model.headers, { stripSecretRefMarkers: true }),
+          headers: sanitizeModelHeaders(model.headers),
         })),
       };
       providers[providerId] = inherited
@@ -418,7 +417,7 @@ export class ModelRegistry {
         apiKey: normalizeOptionalSecretInput(configured.apiKey),
         auth: configured.auth,
         authHeader: configured.authHeader,
-        headers: sanitizeModelHeaders(configured.headers, { stripSecretRefMarkers: true }),
+        headers: sanitizeModelHeaders(configured.headers),
       });
     }
     let combined = this.parseModels(providers);

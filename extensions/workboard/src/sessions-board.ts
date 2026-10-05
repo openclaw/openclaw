@@ -1,63 +1,38 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import type {
   WorkboardSessionFacts,
-  WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
   WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import {
+  isIncognitoSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "openclaw/plugin-sdk/session-key-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
-import {
-  parseSessionPlacements,
-  sessionFactsHash,
-  sessionMatchesColumn,
-  sessionsBoardFallback,
-  sessionsBoardSpecHash,
-  SESSIONS_BOARD_BATCH_SIZE,
-  SESSIONS_BOARD_MODEL_BATCH_SIZE,
-  SESSIONS_BOARD_MODEL_INTERVAL_MS,
-} from "./sessions-board-classification.js";
-import {
-  createSessionsBoardCompletion,
-  type SessionsBoardCompletionInput,
-} from "./sessions-board-model.js";
-import type { WorkboardStore } from "./store.js";
+import { sessionMatchesColumn, sessionsBoardFallback } from "./sessions-board-rules.js";
+import type { WorkboardBoardStore } from "./store-boards.js";
+import { freezeCardList } from "./store-read.js";
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
-  "request" | "readSessionFacts" | "isAvailable"
+  "request" | "readSessionFacts" | "subscribeSessionChanges"
 >;
 type SessionsBoardServiceParams = {
-  store: WorkboardStore;
+  store: WorkboardBoardStore;
   gateway: Gateway;
-  getConfig?: () => OpenClawConfig;
-  complete?: (input: SessionsBoardCompletionInput) => Promise<string>;
   now?: () => number;
-};
-type BoardState = {
-  facts: WorkboardSessionFacts[];
-  checkedAt: number;
-  lastReadAt: number;
-  specHash?: string;
-  warning?: string;
-  failed: boolean;
-  classifiedAt?: number;
-  lastModelAt: number;
-  forceRequested: boolean;
-  forced: Set<string>;
-  modelQueue: string[];
-  again: boolean;
-  pending?: Promise<void>;
-  timer?: ReturnType<typeof setTimeout>;
 };
 type CallerAuthority = { assertCurrent: () => void };
 type Operations = {
-  read: (boardId: string, view?: WorkboardSessionsBoardView) => Promise<WorkboardSessionsBoardRead>;
+  read: (
+    boardId: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ) => Promise<WorkboardSessionsBoardRead>;
   update: (
     boardId: string,
     patch: unknown,
@@ -69,13 +44,23 @@ type Operations = {
     columnId: string,
     caller?: CallerAuthority,
   ) => Promise<WorkboardSessionsBoardRead>;
-  refresh: (boardId: string, caller?: CallerAuthority) => Promise<WorkboardSessionsBoardRead>;
-  /** Reclassify every active Sessions board, or only boards read within `viewedWithinMs`. */
-  sweep: (options?: { viewedWithinMs?: number }) => Promise<void>;
 };
 export type WorkboardSessionsBoardService = OpenClawPluginService &
   Operations & { stop: () => Promise<void> };
 type Owner = Operations & { cancel: () => void; stop: () => Promise<void> };
+type CachedFacts = {
+  facts: WorkboardSessionFacts;
+  prRetry?: { at: number; delayMs: number; stale: boolean };
+};
+type PreparedProjection = {
+  read: Promise<{ snapshot: WorkboardSessionsBoardRead; complete: boolean }>;
+  expires: number;
+  retryAt: number;
+  facts?: Map<string, CachedFacts>;
+};
+const FACTS_BATCH_SIZE = 40;
+const FACTS_PR_RETRY_MS = 60_000;
+const FACTS_PR_RETRY_MAX_MS = 15 * 60_000;
 
 function activeState() {
   return resolveGlobalSingleton<{ owner?: Owner }>(
@@ -94,7 +79,7 @@ async function listSessions(
   board: WorkboardSessionsBoard,
   view?: WorkboardSessionsBoardView,
 ) {
-  const sessions = new Map<string, string>();
+  const sessions = new Map<string, WorkboardSessionFacts>();
   let people: WorkboardSessionsBoardRead["people"];
   let offset = 0;
   for (;;) {
@@ -107,10 +92,14 @@ async function listSessions(
       "sessions.list",
       {
         limit: 1000,
+        rowMode: "compact",
         offset,
         configuredAgentsOnly: true,
         includeGlobal: false,
         includeUnknown: false,
+        ...(board.sessions.scope?.includeAutomation
+          ? {}
+          : { excludeCron: true, excludeSystem: true }),
         archived: board.sessions.scope?.includeArchived ? "all" : false,
         sortBy: "activity",
         activeMinutes: Math.max(1, Math.ceil((board.sessions.scope?.maxAgeHours ?? 72) * 60)),
@@ -131,9 +120,29 @@ async function listSessions(
       if (
         isRecord(session) &&
         typeof session.key === "string" &&
-        typeof session.sessionId === "string"
+        typeof session.sessionId === "string" &&
+        session.visibility !== "draft" &&
+        session.incognito !== true &&
+        (board.sessions.scope?.includeHome === true || session.isMain !== true) &&
+        !isIncognitoSessionKey(session.key)
       ) {
-        sessions.set(session.key, session.sessionId);
+        sessions.set(session.key, {
+          key: session.key,
+          sessionId: session.sessionId,
+          agentId: resolveAgentIdFromSessionKey(session.key),
+          label: typeof session.label === "string" ? session.label : undefined,
+          derivedTitle: typeof session.derivedTitle === "string" ? session.derivedTitle : undefined,
+          run: "idle",
+          pullRequests: [],
+          pullRequestsUnavailable: true,
+          archived: session.archived === true,
+          lastActivityAt:
+            typeof session.lastActivityAt === "number"
+              ? session.lastActivityAt
+              : typeof session.updatedAt === "number"
+                ? session.updatedAt
+                : Date.now(),
+        });
       }
     }
     if (payload.hasMore !== true) {
@@ -163,14 +172,17 @@ function createOwner(
   context: ParametersOfStart,
   isCurrent: () => boolean,
 ): Owner {
-  const runAsService = AsyncLocalStorage.snapshot();
-  const lifetime = new AbortController();
-  const boards = new Map<string, BoardState>();
+  const lastKnown = new Map<string, CachedFacts>();
+  const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
+  const projections = new Map<string, PreparedProjection>();
+  let revision = params.store.sessionsRevision;
   const now = params.now ?? Date.now;
-  const complete = params.complete ?? createSessionsBoardCompletion();
+  let stopped = false;
+  let hasRead = false;
+  let factsFailureLogged = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const assertCurrent = () => {
-    lifetime.signal.throwIfAborted();
-    if (!isCurrent()) {
+    if (stopped || !isCurrent()) {
       throw new Error("Sessions board service is no longer active.");
     }
   };
@@ -178,342 +190,313 @@ function createOwner(
     assertCurrent();
     caller?.assertCurrent();
   };
-  const stateFor = (id: string): BoardState => {
-    let state = boards.get(id);
-    if (!state) {
-      state = {
-        facts: [],
-        checkedAt: -Infinity,
-        lastReadAt: -Infinity,
-        lastModelAt: -Infinity,
-        failed: false,
-        forceRequested: false,
-        forced: new Set(),
-        modelQueue: [],
-        again: false,
-      };
-      boards.set(id, state);
-    }
-    return state;
-  };
-  const deferModel = (id: string, state: BoardState) => {
-    if (state.timer || lifetime.signal.aborted) {
+  const unsubscribe = params.gateway.subscribeSessionChanges(({ factsInvalidated }) => {
+    if (stopped || !hasRead || factsInvalidated === "category") {
       return;
     }
-    state.timer = setTimeout(
-      () => {
-        state.timer = undefined;
-        void schedule(id);
-      },
-      Math.max(0, state.lastModelAt + SESSIONS_BOARD_MODEL_INTERVAL_MS - now()),
-    );
-    state.timer.unref?.();
-  };
-  const classify = async (id: string, state: BoardState) => {
-    assertCurrent();
-    const board = await params.store.getSessionsBoard(id);
-    const { sessions: roster } = await listSessions(params.gateway, board);
-    const facts: WorkboardSessionFacts[] = [];
-    const keys = [...roster.keys()];
-    for (let offset = 0; offset < keys.length; offset += SESSIONS_BOARD_BATCH_SIZE) {
-      assertCurrent();
-      const result = await params.gateway.readSessionFacts({
-        sessionKeys: keys.slice(offset, offset + SESSIONS_BOARD_BATCH_SIZE),
-      });
-      facts.push(
-        ...result.sessions.filter(
-          (session) =>
-            roster.get(session.key) === session.sessionId && inScope(session, board, now()),
-        ),
-      );
+    params.store.invalidateSessionBoards();
+    if (timer) {
+      return;
     }
-    assertCurrent();
-    const previousFacts = state.facts.map(sessionFactsHash).join(":");
-    const previousWarning = state.warning;
-    state.facts = facts;
-    state.checkedAt = now();
-    state.specHash = sessionsBoardSpecHash(board);
-    const prWarning = facts.some((session) => session.pullRequestsUnavailable)
-      ? "Some pull-request information is unavailable. Refresh to retry."
-      : undefined;
-    if (state.forceRequested) {
-      for (const session of facts) {
-        state.forced.add(session.key);
-      }
-      state.forceRequested = false;
-    }
-    const present = new Set(keys);
-    for (const key of state.forced) {
-      if (!present.has(key)) {
-        state.forced.delete(key);
-      }
-    }
-    let cached = new Map(
-      (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
-    );
-    const columns = new Set(board.sessions.columns.map((column) => column.id));
-    const fallback = sessionsBoardFallback(board);
-    const writes: Array<WorkboardSessionPlacement & { expectedUpdatedAt?: number }> = [];
-    const needsModel: WorkboardSessionFacts[] = [];
-    for (const session of facts) {
-      const old = cached.get(session.key);
-      const factsHash = sessionFactsHash(session);
-      const cacheHash = `${state.specHash}:${factsHash}`;
-      if (
-        old?.source === "operator" &&
-        old.factsHash.endsWith(`:${factsHash}`) &&
-        columns.has(old.columnId)
-      ) {
-        state.forced.delete(session.key);
-        continue;
-      }
-      if (
-        !state.forced.has(session.key) &&
-        old?.factsHash === cacheHash &&
-        columns.has(old.columnId)
-      ) {
-        continue;
-      }
-      const column = !board.sessions.instructions?.trim()
-        ? board.sessions.columns.find((entry) => sessionMatchesColumn(session, entry))
-        : undefined;
-      if (column) {
-        writes.push({
-          sessionKey: session.key,
-          columnId: column.id,
-          source: "state",
-          reason: "Matched column rules",
-          factsHash: cacheHash,
-          updatedAt: now(),
-          expectedUpdatedAt: old?.updatedAt,
-        });
-        state.forced.delete(session.key);
-      } else {
-        needsModel.push(session);
-        // A changed fact retires a pin immediately. Keep its position while inference retries.
-        if (!old || old.source === "operator" || !columns.has(old.columnId)) {
-          writes.push({
-            sessionKey: session.key,
-            columnId: old && columns.has(old.columnId) ? old.columnId : fallback.id,
-            source: "state",
-            reason: "unresolved",
-            factsHash: `pending:${factsHash}`,
-            updatedAt: now(),
-            expectedUpdatedAt: old?.updatedAt,
-          });
-        }
-      }
-    }
-    try {
-      if (writes.length) {
-        if (
-          !(await params.store.writeSessionPlacements(id, writes, {
-            expectedSpec: board.sessions,
-            assertCurrent,
-          }))
-        ) {
-          state.again = true;
-          return;
-        }
-        cached = new Map(
-          (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
-        );
-        state.classifiedAt = now();
-      }
-      if (!needsModel.length) {
-        state.modelQueue = [];
-        state.failed = false;
-        state.warning = prWarning;
-        return;
-      }
-      if (now() < state.lastModelAt + SESSIONS_BOARD_MODEL_INTERVAL_MS) {
-        deferModel(id, state);
-        return;
-      }
-      const queued = new Map(state.modelQueue.map((key, index) => [key, index]));
-      needsModel.sort(
-        (left, right) =>
-          (queued.get(left.key) ?? queued.size) - (queued.get(right.key) ?? queued.size),
-      );
-      const batch = needsModel.slice(0, SESSIONS_BOARD_MODEL_BATCH_SIZE);
-      // Repeatedly changing runs return to the tail instead of starving later sessions.
-      state.modelQueue = [...needsModel.slice(batch.length), ...batch].map(
-        (session) => session.key,
-      );
-      const cfg = params.getConfig?.() ?? context.config;
-      const agentId = board.orchestration?.defaultAssignee ?? resolveDefaultAgentId(cfg);
-      state.lastModelAt = now();
-      const output = parseSessionPlacements(
-        await complete({
-          board,
-          sessions: batch,
-          cfg,
-          agentId,
-          signal: lifetime.signal,
-          assertCurrent,
-        }),
-        board,
-        batch,
-      );
-      assertCurrent();
-      const modelWrites = batch.map(
-        (session): WorkboardSessionPlacement & { expectedUpdatedAt?: number } => {
-          const result = output.get(session.key) ?? { columnId: fallback.id, reason: "unresolved" };
-          return {
-            sessionKey: session.key,
-            ...result,
-            source: "model",
-            factsHash: `${state.specHash}:${sessionFactsHash(session)}`,
-            updatedAt: now(),
-            expectedUpdatedAt: cached.get(session.key)?.updatedAt,
-          };
-        },
-      );
-      if (
-        !(await params.store.writeSessionPlacements(id, modelWrites, {
-          expectedSpec: board.sessions,
-          assertCurrent,
-        }))
-      ) {
-        state.again = true;
-        return;
-      }
-      for (const session of batch) {
-        state.forced.delete(session.key);
-      }
-      state.classifiedAt = now();
-      state.failed = false;
-      state.warning = prWarning;
-      if (needsModel.length > batch.length) {
-        deferModel(id, state);
-      }
-    } catch (error) {
-      assertCurrent();
-      state.warning =
-        "Utility-model classification is unavailable. Previous placements are retained; check the agent's utility model and refresh.";
-      if (!state.failed) {
-        context.logger.warn(
-          `Sessions board ${id} classification failed: ${redactToolPayloadText(String(error)).slice(0, 300)}`,
-        );
-      }
-      state.failed = true;
-    } finally {
-      if (
-        isCurrent() &&
-        !lifetime.signal.aborted &&
-        (previousWarning !== state.warning ||
-          previousFacts !== facts.map(sessionFactsHash).join(":"))
-      ) {
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (!stopped && isCurrent()) {
         params.store.announceChangeEpoch();
       }
-    }
-  };
-  const schedule = (id: string, force = false): Promise<void> =>
-    runAsService(() => {
-      if (lifetime.signal.aborted || !isCurrent()) {
-        return Promise.resolve();
+    }, 5_000);
+    timer.unref?.();
+  });
+  const project = async (
+    board: WorkboardSessionsBoard,
+    roster: Map<string, WorkboardSessionFacts>,
+    people: WorkboardSessionsBoardRead["people"],
+    admittedRevision: typeof revision,
+    caller?: CallerAuthority,
+    preparedFacts?: Map<string, CachedFacts>,
+  ) => {
+    const id = board.id;
+    const assertReadCurrent = interactiveAuthority(caller);
+    assertReadCurrent();
+    const unavailable = new Set<string>();
+    const reasons = new Set<string>();
+    const resolved = new Map<string, CachedFacts>();
+    const rows = [...roster.values()].filter((row) => {
+      if (row.key === board.sessions.agentSessionKey) {
+        return false;
       }
-      const state = stateFor(id);
-      state.forceRequested ||= force;
-      if (state.pending) {
-        state.again = true;
-        return state.pending;
+      const previous = preparedFacts?.get(row.key);
+      if (previous && (!previous.prRetry || previous.prRetry.at > now())) {
+        resolved.set(row.key, previous);
+        return false;
       }
-      const pending = params.store
-        .runOperation(() => classify(id, state))
-        .catch((error: unknown) => {
-          if (!isCurrent() || lifetime.signal.aborted) {
-            return;
-          }
-          state.warning = "Session facts are unavailable. Refresh to retry.";
-          if (!state.failed) {
-            context.logger.warn(
-              `Sessions board ${id} refresh failed: ${redactToolPayloadText(String(error)).slice(0, 300)}`,
-            );
-          }
-          state.failed = true;
-          state.checkedAt = now();
-          params.store.announceChangeEpoch();
-        })
-        .finally(() => {
-          if (state.pending === pending) {
-            state.pending = undefined;
-          }
-          if (state.again && isCurrent() && !lifetime.signal.aborted) {
-            state.again = false;
-            void schedule(id);
-          }
-        });
-      state.pending = pending;
-      return pending;
+      return true;
     });
-  const read = async (
-    id: string,
-    view?: WorkboardSessionsBoardView,
-  ): Promise<WorkboardSessionsBoardRead> => {
-    assertCurrent();
-    const board = await params.store.getSessionsBoard(id);
-    const state = stateFor(id);
-    state.lastReadAt = now();
-    if (state.specHash !== sessionsBoardSpecHash(board) || now() - state.checkedAt >= 60_000) {
-      void schedule(id);
+    let complete = true;
+    for (let offset = 0; offset < rows.length; offset += FACTS_BATCH_SIZE) {
+      const batch = rows.slice(offset, offset + FACTS_BATCH_SIZE);
+      try {
+        const result = await params.gateway.readSessionFacts({
+          sessionKeys: batch.map((row) => row.key),
+        });
+        assertReadCurrent();
+        const returned = new Map(result.sessions.map((facts) => [facts.key, facts]));
+        for (const row of batch) {
+          const facts = returned.get(row.key);
+          if (facts?.sessionId === row.sessionId) {
+            const cached = lastKnown.get(row.key);
+            const previous =
+              cached?.facts.sessionId === facts.sessionId &&
+              cached.facts.lifecycleRevision === facts.lifecycleRevision
+                ? cached
+                : undefined;
+            let prRetry: CachedFacts["prRetry"];
+            if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
+              const retry = previous?.prRetry;
+              const delayMs = retry
+                ? Math.min(retry.delayMs * 2, FACTS_PR_RETRY_MAX_MS)
+                : FACTS_PR_RETRY_MS;
+              prRetry = {
+                // Fresh run/health reads do not advance an unexpired PR backoff.
+                ...(retry && retry.at > now() ? retry : { at: now() + delayMs, delayMs }),
+                stale: Boolean(
+                  previous &&
+                  (previous.prRetry?.stale ||
+                    (!previous.facts.pullRequestsUnavailable &&
+                      !previous.facts.pullRequestsRateLimited)),
+                ),
+              };
+            }
+            resolved.set(row.key, {
+              facts:
+                prRetry?.stale && previous
+                  ? { ...facts, pullRequests: previous.facts.pullRequests }
+                  : facts,
+              prRetry,
+            });
+          } else {
+            complete = false;
+          }
+          // Late snapshots may finish, but cannot replace a newer generation's fallback facts.
+          if (params.store.sessionsRevision === admittedRevision) {
+            const current = resolved.get(row.key);
+            if (current) {
+              lastKnown.set(row.key, current);
+            } else {
+              lastKnown.delete(row.key);
+            }
+          }
+        }
+      } catch (error) {
+        assertReadCurrent();
+        complete = false;
+        for (const row of batch) {
+          unavailable.add(row.key);
+          const previous = lastKnown.get(row.key);
+          if (previous?.facts.sessionId === row.sessionId) {
+            resolved.set(row.key, previous);
+          }
+        }
+        reasons.add(redactToolPayloadText(String(error)).replace(/\s+/g, " ").slice(0, 300));
+      }
     }
-    // Foreground authorization stays in the requesting operator/tool scope, not the service scope.
-    const { sessions: visible, people } = await listSessions(params.gateway, board, view);
     const placements = new Map(
       (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
     );
-    assertCurrent();
+    assertReadCurrent();
     const fallback = sessionsBoardFallback(board);
     const sessions: WorkboardSessionsBoardRead["sessions"] = [];
-    for (const facts of state.facts) {
-      if (visible.get(facts.key) !== facts.sessionId || !inScope(facts, board, now())) {
+    const prWarnings = new Map<string, number>();
+    for (const row of roster.values()) {
+      if (!resolved.has(row.key) && !unavailable.has(row.key)) {
         continue;
       }
-      const placement = placements.get(facts.key);
-      const valid =
-        placement && board.sessions.columns.some((column) => column.id === placement.columnId);
+      const cached = resolved.get(row.key);
+      const known = cached?.facts;
+      const facts = known ?? row;
+      if (!inScope(facts, board, now())) {
+        continue;
+      }
+      if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
+        const availability = cached?.prRetry?.stale ? "stale" : "not loaded yet";
+        const reason = `${availability}${facts.pullRequestsRateLimited ? " (GitHub rate limited)" : ""}`;
+        prWarnings.set(reason, (prWarnings.get(reason) ?? 0) + 1);
+      }
+      const pin = placements.get(row.key);
+      const pinned =
+        pin?.source === "operator" &&
+        board.sessions.columns.some((column) => column.id === pin.columnId);
+      // Keep availability visible to callers while rules use the last confirmed PR list.
+      const ruleFacts =
+        facts.pullRequestsUnavailable || facts.pullRequestsRateLimited
+          ? { ...facts, pullRequestsUnavailable: !cached?.prRetry?.stale }
+          : facts;
+      const match = known
+        ? board.sessions.columns.find((column) => sessionMatchesColumn(ruleFacts, column))
+        : undefined;
       sessions.push({
         ...facts,
-        columnId: valid ? placement.columnId : fallback.id,
-        source: valid ? placement.source : "state",
-        reason: valid ? placement.reason : "unresolved",
+        columnId: pinned ? pin.columnId : (match ?? fallback).id,
+        source: pinned ? "operator" : "state",
+        reason: pinned
+          ? pin.reason
+          : !known || (!match && ruleFacts.pullRequestsUnavailable)
+            ? "facts-unavailable"
+            : match
+              ? "Matched column rules"
+              : "fallback",
       });
     }
+    const warnings: string[] = [];
+    if (unavailable.size) {
+      const warning = `Session facts are unavailable for ${unavailable.size} sessions: ${[...reasons].join("; ")}. Showing the last known placement.`;
+      warnings.push(warning);
+      if (!factsFailureLogged) {
+        context.logger.warn(warning);
+      }
+      factsFailureLogged = true;
+    } else {
+      factsFailureLogged = false;
+    }
+    for (const [reason, count] of prWarnings) {
+      warnings.push(
+        `Pull-request facts for ${count} ${count === 1 ? "session" : "sessions"} are ${reason}.`,
+      );
+    }
     return {
-      board,
-      columns: board.sessions.columns,
-      sessions,
-      ...(people !== undefined ? { people } : {}),
-      ...(state.warning ? { warning: state.warning } : {}),
-      ...(state.classifiedAt !== undefined ? { classifiedAt: state.classifiedAt } : {}),
+      complete,
+      facts: resolved,
+      snapshot: {
+        board,
+        columns: board.sessions.columns,
+        sessions,
+        ...(people !== undefined ? { people } : {}),
+        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+      },
     };
   };
-  const cancel = () => {
-    lifetime.abort();
-    for (const state of boards.values()) {
-      if (state.timer) {
-        clearTimeout(state.timer);
-        state.timer = undefined;
-      }
+  const read = async (
+    id: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ): Promise<WorkboardSessionsBoardRead> => {
+    const assertReadCurrent = interactiveAuthority(caller);
+    assertReadCurrent();
+    hasRead = true;
+    if (revision !== params.store.sessionsRevision) {
+      boards.clear();
+      projections.clear();
+      revision = params.store.sessionsRevision;
     }
+    const admittedRevision = revision;
+    let boardRead = boards.get(id);
+    if (!boardRead) {
+      const pending = params.store.getSessionsBoard(id).catch((error: unknown) => {
+        if (boards.get(id) === pending) {
+          boards.delete(id);
+        }
+        throw error;
+      });
+      if (boards.size >= 64) {
+        boards.delete(boards.keys().next().value!);
+      }
+      boards.set(id, pending);
+      boardRead = pending;
+    }
+    const board = await boardRead;
+    const { sessions, people } = await listSessions(params.gateway, board, view);
+    assertReadCurrent();
+    // Roster membership and facets remain invocation-bound; only equal authorized inputs share work.
+    const key = JSON.stringify([id, view, [...sessions.values()], people]);
+    const cacheable = params.store.sessionsRevision === admittedRevision;
+    let projection = cacheable ? projections.get(key) : undefined;
+    let preparedFacts: Map<string, CachedFacts> | undefined;
+    if (projection && (projection.expires < now() || projection.retryAt <= now())) {
+      // Reuse facts only from this exact authorized roster and revision.
+      if (projection.expires >= now()) {
+        preparedFacts = projection.facts;
+      }
+      projections.delete(key);
+      projection = undefined;
+    }
+    const joined = Boolean(projection);
+    if (!projection) {
+      const prepared: PreparedProjection = {
+        expires: Infinity,
+        retryAt: Infinity,
+        read: project(board, sessions, people, admittedRevision, caller, preparedFacts).then(
+          ({ snapshot: result, complete, facts }) => {
+            const maxAge = (board.sessions.scope?.maxAgeHours ?? 72) * 3_600_000;
+            prepared.expires = result.sessions.reduce(
+              (expires, row) => Math.min(expires, row.lastActivityAt + maxAge),
+              Infinity,
+            );
+            prepared.facts = complete ? facts : undefined;
+            prepared.retryAt = result.sessions.reduce(
+              (retryAt, row) => Math.min(retryAt, facts.get(row.key)?.prRetry?.at ?? Infinity),
+              Infinity,
+            );
+            const snapshot = {
+              ...result,
+              revision: { ...admittedRevision, boardId: id, scope: randomUUID() },
+            };
+            freezeCardList(snapshot);
+            return { snapshot, complete };
+          },
+        ),
+      };
+      // Bound arbitrary filters and aging roster windows; eviction only causes a cold read.
+      if (cacheable) {
+        if (projections.size >= 64) {
+          projections.delete(projections.keys().next().value!);
+        }
+        projections.set(key, prepared);
+      }
+      projection = prepared;
+    }
+    try {
+      const { snapshot, complete } = await projection.read;
+      assertReadCurrent();
+      // Complete an admitted read under its captured revision even during continuous churn.
+      // Retire incomplete and superseded work rather than retrying until writers become idle.
+      if (
+        (!complete || params.store.sessionsRevision !== admittedRevision) &&
+        projections.get(key) === projection
+      ) {
+        projections.delete(key);
+      }
+      return snapshot;
+    } catch (error) {
+      if (projections.get(key) === projection) {
+        projections.delete(key);
+      }
+      assertReadCurrent();
+      if (joined) {
+        return await read(id, view, caller);
+      }
+      throw error;
+    }
+  };
+  const cancel = () => {
+    stopped = true;
+    unsubscribe();
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = undefined;
+    lastKnown.clear();
+    boards.clear();
+    projections.clear();
   };
   return {
     read,
     cancel,
     async stop() {
       cancel();
-      await Promise.allSettled(
-        [...boards.values()].flatMap((state) => (state.pending ? [state.pending] : [])),
-      );
-      boards.clear();
     },
     async update(id, patch, caller) {
       const assertWriteCurrent = interactiveAuthority(caller);
       assertWriteCurrent();
-      const board = await params.store.updateSessionsBoard(id, patch, assertWriteCurrent);
-      void schedule(id);
-      return board;
+      return await params.store.updateSessionsBoard(id, patch, assertWriteCurrent);
     },
     async move(id, sessionKey, columnId, caller) {
       const assertWriteCurrent = interactiveAuthority(caller);
@@ -530,7 +513,7 @@ function createOwner(
       const facts = result.sessions.find(
         (entry) =>
           entry.key === sessionKey &&
-          entry.sessionId === visible.get(sessionKey) &&
+          entry.sessionId === visible.get(sessionKey)?.sessionId &&
           inScope(entry, board, now()),
       );
       if (!facts) {
@@ -540,62 +523,24 @@ function createOwner(
         (entry) => entry.sessionKey === sessionKey,
       );
       if (
-        !(await params.store.writeSessionPlacements(
+        !(await params.store.writeSessionPlacement(
           id,
-          [
-            {
-              sessionKey,
-              columnId,
-              source: "operator",
-              reason: "Moved by operator",
-              factsHash: `${sessionsBoardSpecHash(board)}:${sessionFactsHash(facts)}`,
-              updatedAt: now(),
-              expectedUpdatedAt: previous?.updatedAt,
-            },
-          ],
+          {
+            sessionKey,
+            columnId,
+            source: "operator",
+            reason: "Moved by operator",
+            factsHash: "",
+            updatedAt: now(),
+            expectedUpdatedAt: previous?.updatedAt,
+          },
           { expectedSpec: board.sessions, assertCurrent: assertWriteCurrent },
         ))
       ) {
         throw new Error("Sessions board changed. Refresh and retry the move.");
       }
-      const state = stateFor(id);
-      state.facts = [...state.facts.filter((entry) => entry.key !== sessionKey), facts];
-      return await read(id);
+      return await read(id, undefined, caller);
     },
-    async refresh(id, caller) {
-      await params.store.getSessionsBoard(id);
-      interactiveAuthority(caller)();
-      void schedule(id, true);
-      return await read(id);
-    },
-    sweep: (options) =>
-      runAsService(async () => {
-        if (lifetime.signal.aborted || !isCurrent() || !(await params.gateway.isAvailable())) {
-          return;
-        }
-        const current = (await params.store.listBoards()).boards.filter(
-          (board) => board.kind === "sessions" && !board.archivedAt,
-        );
-        const ids = new Set(current.map((board) => board.id));
-        for (const [id, state] of boards) {
-          if (!ids.has(id) && !state.pending) {
-            if (state.timer) {
-              clearTimeout(state.timer);
-            }
-            boards.delete(id);
-          }
-        }
-        const viewedWithinMs = options?.viewedWithinMs;
-        await Promise.all(
-          current
-            .filter(
-              (board) =>
-                viewedWithinMs === undefined ||
-                now() - stateFor(board.id).lastReadAt <= viewedWithinMs,
-            )
-            .map((board) => schedule(board.id)),
-        );
-      }),
   };
 }
 
@@ -615,10 +560,19 @@ export function createWorkboardSessionsBoardService(
   };
   return {
     id: "workboard-sessions-board",
-    reload: { configPrefixes: ["agents", "models", "auth", "plugins"] },
     async start(context) {
       const state = activeState();
       await state.owner?.stop();
+      state.owner = undefined;
+      const repaired = await params.store.repairSessionPlacements();
+      if (repaired.placements) {
+        context.logger.info(
+          `Sessions board removed ${repaired.placements} non-operator placements.`,
+        );
+      }
+      if (repaired.boards) {
+        context.logger.info(`Sessions board updated default rules on ${repaired.boards} boards.`);
+      }
       const owner = createOwner(params, context, () => activeState().owner === owner);
       owned = state.owner = owner;
     },
@@ -633,10 +587,8 @@ export function createWorkboardSessionsBoardService(
       }
       await owner.stop();
     },
-    read: (id, view) => current().read(id, view),
+    read: (id, view, caller) => current().read(id, view, caller),
     update: (id, patch, caller) => current().update(id, patch, caller),
     move: (id, key, column, caller) => current().move(id, key, column, caller),
-    refresh: (id, caller) => current().refresh(id, caller),
-    sweep: (options) => activeState().owner?.sweep(options) ?? Promise.resolve(),
   };
 }

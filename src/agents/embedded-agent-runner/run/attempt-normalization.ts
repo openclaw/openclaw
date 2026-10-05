@@ -23,7 +23,7 @@ import {
 import {
   MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
   stepIdleTimeoutBreaker,
-  type createIdleTimeoutBreakerState,
+  type IdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
 import { resolveRunRetryKind } from "./retry-budget.js";
@@ -59,7 +59,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  idleTimeoutBreakerState: ReturnType<typeof createIdleTimeoutBreakerState>;
+  idleTimeoutBreakerState: IdleTimeoutBreakerState;
   contextRecoveryState: ReturnType<typeof createEmbeddedRunContextRecoveryState>;
   recordedCompactionCount?: number;
   replayState: ReplayState;
@@ -125,7 +125,13 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
+  await applyEmbeddedAttemptSessionIdentity({
+    sessionPromptState,
+    sessionFileUsed,
+    sessionIdUsed,
+    assertCurrent: () => runInput.laneController.throwIfAborted(),
+  });
+  runInput.laneController.throwIfAborted();
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature
@@ -165,7 +171,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
-    outputTokens: attemptUsage?.output,
   });
   if (breakerStep.tripped) {
     const message =

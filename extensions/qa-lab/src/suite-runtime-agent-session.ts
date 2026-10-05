@@ -129,7 +129,6 @@ function readWaitingCodeModeRunId(message: Record<string, unknown>) {
 
 function summarizeSessionTranscriptEvents(
   events: unknown[],
-  sessionKey: string,
   eventCursor = events.length,
   pendingCodeModeExecNeedle?: string,
   includeCodeModeControl = false,
@@ -280,10 +279,6 @@ function summarizeSessionTranscriptEvents(
     });
   }
 
-  if (events.length === 0) {
-    throw new Error(`session transcript is empty for ${sessionKey}`);
-  }
-
   return {
     ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
     assistantToolCallCounts,
@@ -309,23 +304,6 @@ function summarizeSessionTranscriptEvents(
     ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
     ...(lastAssistantToolNames.length > 0 ? { lastAssistantToolNames } : {}),
     ...(lastMessageRole ? { lastMessageRole } : {}),
-  };
-}
-
-function emptySessionTranscriptSummary(
-  eventCursor: number,
-  pendingCodeModeExecNeedle?: string,
-): QaSessionTranscriptSummary {
-  return {
-    assistantToolCallCounts: {},
-    compactionSummaries: [],
-    completedToolCallCounts: {},
-    eventCursor,
-    ...(pendingCodeModeExecNeedle ? { hasPendingCodeModeWait: false } : {}),
-    userMessageCount: 0,
-    successfulToolCallCounts: {},
-    finalText: "",
-    hasDirectReplySelfMessage: false,
   };
 }
 
@@ -546,16 +524,18 @@ async function readSessionTranscriptSummary(
   const { normalizedSessionKey, events, selectedEvents, sessionId } =
     await readQaSessionTranscriptEvents(env, sessionKey, options);
   const pendingCodeModeExecNeedle = options.pendingCodeModeExecNeedle?.trim();
-  if (selectedEvents.length === 0 && options.allowEmpty === true) {
-    return emptySessionTranscriptSummary(events.length, pendingCodeModeExecNeedle);
+  if (selectedEvents.length === 0 && options.allowEmpty !== true) {
+    throw new Error(`session transcript is empty for ${normalizedSessionKey}`);
   }
   const summary = summarizeSessionTranscriptEvents(
     selectedEvents,
-    normalizedSessionKey,
     events.length,
     pendingCodeModeExecNeedle,
     options.includeCodeModeControl,
   );
+  if (selectedEvents.length === 0) {
+    return summary;
+  }
   const probeText = options.probeText?.trim();
   let cutoff: unknown;
   if (probeText && sessionId) {

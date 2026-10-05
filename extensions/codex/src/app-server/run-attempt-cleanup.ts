@@ -7,6 +7,7 @@ import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-co
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { clearCodexBindingForClient } from "./session-binding.js";
 import {
   isSameCodexAppServerThreadOwner,
   withExclusiveCodexAppServerThread,
@@ -135,41 +136,40 @@ export async function cleanupCodexAttempt(
         identity: bindingIdentity,
         threadId: resourceState.thread.threadId,
         run: () =>
-          bindingStore.withLease(bindingIdentity, async () => {
-            if (
-              !isSameCodexAppServerThreadOwner(
-                bindingStore.read(bindingIdentity),
-                resourceState.thread,
-              )
-            ) {
-              throw new Error("Codex plugin refresh lost its managed thread binding.");
-            }
-            if (!(await releaseThreadSubscription(connection.assertCurrent))) {
-              throw new Error("Plugin reload could not release the previous Codex thread.");
-            }
-            if (
-              !(await bindingStore.mutate(
-                bindingIdentity,
-                {
-                  kind: "clear",
-                  threadId: resourceState.thread.threadId,
-                },
-                connection.assertCurrent,
-              ))
-            ) {
-              throw new Error("Codex plugin refresh lost its managed thread binding.");
-            }
-          }),
+          bindingStore.withLease(
+            bindingIdentity,
+            async () => {
+              if (
+                !isSameCodexAppServerThreadOwner(
+                  bindingStore.read(bindingIdentity),
+                  resourceState.thread,
+                )
+              ) {
+                throw new Error("Codex plugin refresh lost its managed thread binding.");
+              }
+              if (!(await releaseThreadSubscription(connection.assertCurrent))) {
+                throw new Error("Plugin reload could not release the previous Codex thread.");
+              }
+              if (
+                !(await clearCodexBindingForClient(
+                  bindingStore,
+                  bindingIdentity,
+                  resourceState.thread,
+                  connection.authority,
+                ))
+              ) {
+                throw new Error("Codex plugin refresh lost its managed thread binding.");
+              }
+            },
+            { assertCurrent: connection.assertCurrent, authority: connection.authority },
+          ),
       });
     } else {
       // Codex keeps approvals in its native session; independent conversations
       // must retain their own subscriptions instead of evicting one another.
       const bindingReleased =
         isIncognitoSessionKey(params.sessionKey) && !retainLiveThread
-          ? await bindingStore.mutate(bindingIdentity, {
-              kind: "clear",
-              threadId: resourceState.thread.threadId,
-            })
+          ? await resources.clearThreadBinding()
           : true;
       // Clear first: a newer binding owner keeps its live subscription.
       if (

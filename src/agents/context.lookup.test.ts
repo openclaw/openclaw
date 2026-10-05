@@ -1,9 +1,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextWindowCatalog } from "./context-cache-projection.js";
 import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
+import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
 const state = vi.hoisted(() => {
   const initialConfig: OpenClawConfig = {};
@@ -67,11 +69,11 @@ beforeEach(() => {
     config: state.config,
     modelCatalog: state.catalog,
   }));
-  context.resetContextWindowCacheForTest();
+  resetContextWindowCacheForTest();
 });
 
 afterEach(() => {
-  context.resetContextWindowCacheForTest();
+  resetContextWindowCacheForTest();
   vi.useRealTimers();
 });
 

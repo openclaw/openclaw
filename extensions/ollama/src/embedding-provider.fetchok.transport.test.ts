@@ -1,6 +1,7 @@
 // Real-transport regression proof for Ollama embedding error redaction.
 // Drives the production embedding path through the real SSRF guard and loopback
 // sockets, without mocking global fetch, SSRF runtime, or logging redaction.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";

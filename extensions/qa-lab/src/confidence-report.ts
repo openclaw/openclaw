@@ -77,25 +77,7 @@ type QaConfidenceLaneResult = QaConfidenceLane & {
   skipBackfilled?: boolean;
 };
 
-type QaConfidenceReport = {
-  generatedAt: string;
-  profile: string;
-  strictZeroUnknowns: boolean;
-  strictGlobalPass: boolean;
-  pass: boolean;
-  zeroUnknowns: boolean;
-  globalPass: boolean;
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-    blocked: number;
-    missing: number;
-    unknown: number;
-  };
-  failures: string[];
-  lanes: QaConfidenceLaneResult[];
-};
+type QaConfidenceReport = Awaited<ReturnType<typeof buildQaConfidenceReport>>;
 
 const QA_CONFIDENCE_SELF_TEST_CANARY_IDS = [
   "prompt-drift",
@@ -673,7 +655,7 @@ function applySkipBackfillState(
   });
 }
 
-function countLaneResults(lanes: readonly QaConfidenceLaneResult[]): QaConfidenceReport["counts"] {
+function countLaneResults(lanes: readonly QaConfidenceLaneResult[]) {
   return {
     total: lanes.length,
     passed: lanes.filter((lane) => lane.status === "pass").length,
@@ -713,7 +695,7 @@ export async function buildQaConfidenceReport(params: {
   strictZeroUnknowns?: boolean;
   strictGlobalPass?: boolean;
   generatedAt?: string;
-}): Promise<QaConfidenceReport> {
+}) {
   const evaluatedLanes = [];
   for (const lane of params.manifest.lanes) {
     evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));

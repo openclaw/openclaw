@@ -3,11 +3,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
+import {
+  inspectCronJobsForDoctor,
+  repairCronJobsForDoctor,
+} from "../../src/commands/doctor/cron/store-repair.js";
 import type { OpenClawConfig } from "../../src/config/types.js";
 import { CronService, type CronEvent } from "../../src/cron/service.js";
 import { createNoopLogger } from "../../src/cron/service.test-harness.js";
 import { getCronJobsStoreRevision } from "../../src/cron/store.js";
-import { inspectCronJobsForDoctor, repairCronJobsForDoctor } from "../../src/cron/store/doctor.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import * as sqliteSnapshot from "../../src/infra/sqlite-snapshot.js";
 import { createPluginDoctorStateMigrationContext } from "../../src/infra/state-migrations.plugin-doctor-context.js";
@@ -221,6 +224,7 @@ async function runRegisteredDreamingService(
   config: OpenClawConfig,
   cron: CronService,
   logger: ReturnType<typeof createNoopLogger>,
+  scheduler: ReturnType<typeof createTestGatewayScheduler>,
 ) {
   const registry = createEmptyPluginRegistry();
   memoryCore.register(
@@ -246,6 +250,7 @@ async function runRegisteredDreamingService(
   let services: PluginServicesHandle | undefined;
   try {
     services = await startPluginServices({
+      scheduler,
       registry,
       config,
       getCronService: () => cron,
@@ -584,7 +589,6 @@ describe("host Cron Doctor repair", () => {
   it.each([
     { layout: "inactive only", activeDreaming: false, enabled: true },
     { layout: "active and inactive", activeDreaming: true, enabled: true },
-    { layout: "inactive only", activeDreaming: false, enabled: false },
     { layout: "active and inactive", activeDreaming: true, enabled: false },
   ])(
     "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
@@ -661,7 +665,7 @@ describe("host Cron Doctor repair", () => {
                 },
               },
             };
-            await runRegisteredDreamingService(config, cron, logger);
+            await runRegisteredDreamingService(config, cron, logger, scheduler);
             expect(mutations).toEqual(
               enabled
                 ? [
@@ -670,9 +674,7 @@ describe("host Cron Doctor repair", () => {
                       action: activeDreaming ? "updated" : "added",
                     },
                   ]
-                : activeDreaming
-                  ? [{ jobId: "survivor", action: "removed" }]
-                  : [],
+                : [{ jobId: "survivor", action: "removed" }],
             );
             expect(logger.warn).toHaveBeenCalledWith(
               expect.stringContaining(
@@ -720,7 +722,7 @@ describe("host Cron Doctor repair", () => {
             }
             expect(getCronJobsStoreRevision(retiredStore)).toBe(retiredRevision);
             mutations.length = 0;
-            await runRegisteredDreamingService(config, cron, logger);
+            await runRegisteredDreamingService(config, cron, logger, scheduler);
             expect(mutations).toEqual([]);
             expect(readRows(fixture.db())).toEqual(afterRuntime);
           } finally {
@@ -775,7 +777,7 @@ describe("host Cron Doctor repair", () => {
             },
           },
         };
-        await runRegisteredDreamingService(config, cron, logger);
+        await runRegisteredDreamingService(config, cron, logger, scheduler);
         expect(mutations).toEqual([]);
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
         expect(readRows(fixture.db())).toEqual(before);
@@ -800,7 +802,7 @@ describe("host Cron Doctor repair", () => {
           sessionTarget: "isolated",
           payload: { kind: "agentTurn", lightContext: true },
         });
-        await runRegisteredDreamingService(config, cron, logger);
+        await runRegisteredDreamingService(config, cron, logger, scheduler);
         expect(mutations).toEqual([{ jobId: "survivor", action: "updated" }]);
         const managed = (await cron.list({ includeDisabled: true })).filter(
           (job) => job.declarationKey === declarationKey,
@@ -832,12 +834,17 @@ describe("host Cron Doctor repair", () => {
     });
   });
 
-  it.each(["after backup", "inside transaction"] as const)(
-    "rejects expired repair authority %s without changing or publishing rows",
-    async (phase) => {
+  it.each([
+    ["after backup", "Doctor repair owner expired"],
+    ["inside transaction", "Doctor repair owner expired"],
+    ["concurrent definition", "Cron definitions changed during Doctor repair"],
+    ["retirement", "fixture refuses retirement"],
+  ] as const)(
+    "rejects repair at %s without partial changes or publication",
+    async (phase, error) => {
       await withCronFixture(async (fixture) => {
         const inventory = await inspectCronJobsForDoctor(fixture.scope);
-        const before = readRows(fixture.db());
+        let expectedRows = readRows(fixture.db());
         const previousRevisions = revisions(fixture);
         let active = true;
         const authority = makeAuthority();
@@ -851,73 +858,51 @@ describe("host Cron Doctor repair", () => {
           if (phase === "inside transaction") {
             throw new Error("Doctor repair owner expired");
           }
+          if (phase === "retirement") {
+            db.exec(`CREATE TEMP TRIGGER refuse_doctor_delete BEFORE DELETE ON main.cron_jobs
+            WHEN OLD.job_id = 'duplicate'
+            BEGIN SELECT RAISE(ABORT, 'fixture refuses retirement'); END`);
+          }
         };
         afterBackup(() => {
           if (phase === "after backup") {
             active = false;
           }
+          if (phase === "concurrent definition") {
+            runOpenClawStateWriteTransaction(({ db }) => {
+              db.prepare(
+                "UPDATE cron_jobs SET job_json = job_json || ' ' WHERE job_id = 'operator'",
+              ).run();
+            });
+            expectedRows = readRows(fixture.db());
+          }
         });
-        await expect(
-          repairCronJobsForDoctor(fixture.scope, authority, inventory, [
-            changeDescription(findJob(inventory, fixture.activeStore, "survivor")),
-          ]),
-        ).rejects.toThrow("Doctor repair owner expired");
-        expect(readRows(fixture.db())).toEqual(before);
-        expect(await listBackups(fixture.databasePath)).toHaveLength(1);
+        try {
+          await expect(
+            repairCronJobsForDoctor(fixture.scope, authority, inventory, [
+              changeDescription(findJob(inventory, fixture.activeStore, "survivor")),
+              ...(phase === "retirement" || phase === "concurrent definition"
+                ? [
+                    {
+                      job:
+                        phase === "retirement"
+                          ? findJob(inventory, fixture.activeStore, "duplicate")
+                          : findJob(inventory, fixture.retiredStore, "retired"),
+                      definition: null,
+                    },
+                  ]
+                : []),
+            ]),
+          ).rejects.toThrow(error);
+        } finally {
+          if (phase === "retirement") {
+            fixture.db().exec("DROP TRIGGER IF EXISTS temp.refuse_doctor_delete");
+          }
+        }
+        expect(readRows(fixture.db())).toEqual(expectedRows);
         expect(revisions(fixture)).toEqual(previousRevisions);
+        expect(await listBackups(fixture.databasePath)).toHaveLength(1);
       });
     },
   );
-
-  it("rejects definitions changed after backup before applying any selected row", async () => {
-    await withCronFixture(async (fixture) => {
-      const inventory = await inspectCronJobsForDoctor(fixture.scope);
-      const previousRevisions = revisions(fixture);
-      let concurrentRows = readRows(fixture.db());
-      afterBackup(() => {
-        runOpenClawStateWriteTransaction(({ db }) => {
-          db.prepare(
-            "UPDATE cron_jobs SET job_json = job_json || ' ' WHERE job_id = 'operator'",
-          ).run();
-        });
-        concurrentRows = readRows(fixture.db());
-      });
-      await expect(
-        repairCronJobsForDoctor(fixture.scope, makeAuthority(), inventory, [
-          changeDescription(findJob(inventory, fixture.activeStore, "survivor")),
-          { job: findJob(inventory, fixture.retiredStore, "retired"), definition: null },
-        ]),
-      ).rejects.toThrow("Cron definitions changed during Doctor repair");
-      expect(readRows(fixture.db())).toEqual(concurrentRows);
-      expect(revisions(fixture)).toEqual(previousRevisions);
-    });
-  });
-
-  it("rolls back earlier changes and publication when a later retirement fails", async () => {
-    await withCronFixture(async (fixture) => {
-      const inventory = await inspectCronJobsForDoctor(fixture.scope);
-      const before = readRows(fixture.db());
-      const previousRevisions = revisions(fixture);
-      const authority = makeAuthority();
-      authority.assertOwnedInTransaction = (db) => {
-        expect(db.isTransaction).toBe(true);
-        db.exec(`CREATE TEMP TRIGGER refuse_doctor_delete BEFORE DELETE ON main.cron_jobs
-          WHEN OLD.job_id = 'duplicate'
-          BEGIN SELECT RAISE(ABORT, 'fixture refuses retirement'); END`);
-      };
-      try {
-        await expect(
-          repairCronJobsForDoctor(fixture.scope, authority, inventory, [
-            changeDescription(findJob(inventory, fixture.activeStore, "survivor")),
-            { job: findJob(inventory, fixture.activeStore, "duplicate"), definition: null },
-          ]),
-        ).rejects.toThrow("fixture refuses retirement");
-      } finally {
-        fixture.db().exec("DROP TRIGGER IF EXISTS temp.refuse_doctor_delete");
-      }
-      expect(readRows(fixture.db())).toEqual(before);
-      expect(revisions(fixture)).toEqual(previousRevisions);
-      expect(await listBackups(fixture.databasePath)).toHaveLength(1);
-    });
-  });
 });

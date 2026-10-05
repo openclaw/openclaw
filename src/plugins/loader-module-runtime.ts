@@ -283,7 +283,7 @@ export function createLazyPluginRuntime(params: {
         return getRuntimeProperty(prop);
       },
     };
-    // Policy facets match defineCachedValue's getter-only contract before loading too.
+    // Policy facets match the runtime's getter-only contract before loading too.
     if (prop !== "modelAuth" && prop !== "modelConfig") {
       descriptor.set = (value: unknown) => {
         Reflect.set(resolveRuntime() as object, prop, value);

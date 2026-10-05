@@ -1,4 +1,7 @@
-import { prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  prepareSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
@@ -36,21 +39,15 @@ function createTranscriptPresenceQuery(database: Pick<OpenClawAgentDatabase, "db
 }
 
 // Cache SQL by native handle, never session facts or native statements.
-const transcriptPresenceQueries = new WeakMap<
-  OpenClawAgentDatabase["db"],
-  ReturnType<typeof createTranscriptPresenceQuery>
->();
+const transcriptPresenceQuery = createSqliteQueryCache((db) =>
+  createTranscriptPresenceQuery({ db }),
+);
 
 /** Reads physical transcript presence without decoding events or restoring cold storage. */
 export function hasSessionTranscriptEventsSync(scope: SessionTranscriptReadScope): boolean {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  let query = transcriptPresenceQueries.get(database.db);
-  if (!query) {
-    query = createTranscriptPresenceQuery(database);
-    transcriptPresenceQueries.set(database.db, query);
-  }
-  return Boolean(query(resolved.sessionId));
+  return Boolean(transcriptPresenceQuery(database.db)(resolved.sessionId));
 }
 
 /** Reads both physical mutation fences from the same session window snapshot. */

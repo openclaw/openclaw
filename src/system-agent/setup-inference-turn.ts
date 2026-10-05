@@ -504,19 +504,6 @@ export async function verifySetupInference(
   return { ...verification, binding: verifiedBinding };
 }
 
-type BoundSetupInferenceVerifier = (params: {
-  runtime: RuntimeEnv;
-  bindSession: true;
-  agentId?: string;
-  deps?: ActivateSetupInferenceDeps;
-}) => Promise<BoundVerifySetupInferenceResult>;
-
-export type ResolvePersistentApplyInferenceDeps = SystemAgentVerifiedInferenceDeps & {
-  resolveVerifiedInferenceRoute?: typeof resolveSystemAgentVerifiedInferenceRoute;
-  hasCurrentOwnerPluginArtifacts?: typeof hasCurrentSystemAgentOwnerPluginArtifacts;
-  verifyBoundInference?: BoundSetupInferenceVerifier;
-};
-
 function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
   const { runConfig: _runConfig, sourceConfig: _sourceConfig, ...identity } = route;
   return identity;
@@ -530,26 +517,21 @@ function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
 export async function resolvePersistentApplyInference(params: {
   binding: SystemAgentVerifiedInferenceBinding;
   runtime: RuntimeEnv;
-  deps?: ResolvePersistentApplyInferenceDeps;
+  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentConfiguredRoute | null> {
   const deps = params.deps ?? {};
-  const resolveVerified =
-    deps.resolveVerifiedInferenceRoute ?? resolveSystemAgentVerifiedInferenceRoute;
-  const initialRoute = await resolveVerified(params.binding, deps);
+  const initialRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding, deps);
   if (!initialRoute) {
     return null;
   }
-  const hasCurrentOwnerPluginArtifacts =
-    deps.hasCurrentOwnerPluginArtifacts ?? hasCurrentSystemAgentOwnerPluginArtifacts;
-  if (!(await hasCurrentOwnerPluginArtifacts(params.binding, deps))) {
+  if (!(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding, deps))) {
     return null;
   }
   if (params.binding.auth.proofKind !== "runtime-owner") {
     return initialRoute;
   }
 
-  const verifyBound = deps.verifyBoundInference ?? verifySetupInference;
-  const live = await verifyBound({
+  const live = await verifySetupInference({
     runtime: params.runtime,
     bindSession: true,
     agentId: params.binding.execution.agentId,
@@ -571,8 +553,8 @@ export async function resolvePersistentApplyInference(params: {
   }
   // The live probe is not a lock. Recheck the authored route after it returns,
   // then keep using the original frozen execution snapshot.
-  const finalRoute = await resolveVerified(params.binding, deps);
-  if (!finalRoute || !(await hasCurrentOwnerPluginArtifacts(params.binding, deps))) {
+  const finalRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding, deps);
+  if (!finalRoute || !(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding, deps))) {
     return null;
   }
   return finalRoute;

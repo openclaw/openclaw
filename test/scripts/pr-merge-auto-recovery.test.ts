@@ -41,7 +41,6 @@ describePosix("native auto-merge recovery", () => {
     { mode: "pending", cancellation: "lost", absent: false },
     { mode: "pending-error", cancellation: "success", absent: false },
     { mode: "pending", cancellation: "success", absent: true },
-    { mode: "pending-error", cancellation: "success", absent: true },
   ])(
     "retires auto before recovering a reviewed replacement (submission=$mode, cancellation=$cancellation, absent=$absent)",
     ({ mode, cancellation, absent }) => {
@@ -158,30 +157,16 @@ describePosix("native auto-merge recovery", () => {
     expect(f.record()).toMatchObject({ phase: "merged", landed: f.state().pr.mergeCommit?.oid });
     expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1, posts: 0 });
   });
-  it.each(["head", "queue", "reread"])(
-    "preserves uncertain auto cancellation when %s changes during dispatch",
-    (change) => {
-      const f = fixture();
-      f.save({
-        ...f.state(),
-        mode: "pending",
-        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
-      });
-      expect(f.run(true).status).toBe(0);
-      const changed = change === "queue" ? { isInMergeQueue: true } : { headRefOid: f.base };
-      f.save({
-        ...f.state(),
-        observations: [{}, {}, ...(change === "reread" ? [{}] : []), { pr: changed }],
-      });
-      const result = f.cancel(f.git(["rev-parse", outcomeRef]));
-      expect(result.status, result.output).toBe(1);
-      expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1 });
-      expect(f.record().cancellation.state).toBe("requested");
-    },
-  );
-  it.each(["head", "queue", "method"])(
-    "refuses auto cancellation when %s no longer matches the retained request",
-    (change) => {
+  it.each([
+    ["head", "during"],
+    ["queue", "during"],
+    ["head", "reread"],
+    ["head", "before"],
+    ["queue", "before"],
+    ["method", "before"],
+  ] as const)(
+    "preserves auto cancellation authority when %s changes %s dispatch",
+    (change, stage) => {
       const f = fixture();
       f.save({
         ...f.state(),
@@ -191,20 +176,27 @@ describePosix("native auto-merge recovery", () => {
       expect(f.run(true).status).toBe(0);
       const accepted = f.git(["rev-parse", outcomeRef]);
       const next = f.state();
-      if (change === "head") {
-        next.pr.headRefOid = f.base;
-      }
-      if (change === "queue") {
-        next.pr.isMergeQueueEnabled = true;
-      }
-      if (change === "method") {
-        next.pr.autoMergeRequest = { mergeMethod: "MERGE" };
+      if (stage === "before") {
+        if (change === "head") {
+          next.pr.headRefOid = f.base;
+        } else if (change === "queue") {
+          next.pr.isMergeQueueEnabled = true;
+        } else {
+          next.pr.autoMergeRequest = { mergeMethod: "MERGE" };
+        }
+      } else {
+        const changed = change === "queue" ? { isInMergeQueue: true } : { headRefOid: f.base };
+        next.observations = [{}, {}, ...(stage === "reread" ? [{}] : []), { pr: changed }];
       }
       f.save(next);
       const result = f.cancel(accepted);
       expect(result.status, result.output).toBe(1);
-      expect(f.state()).toMatchObject({ cancellations: 0, mutations: 1 });
-      expect(f.git(["rev-parse", outcomeRef])).toBe(accepted);
+      expect(f.state()).toMatchObject({ cancellations: stage === "before" ? 0 : 1, mutations: 1 });
+      if (stage === "before") {
+        expect(f.git(["rev-parse", outcomeRef])).toBe(accepted);
+      } else {
+        expect(f.record().cancellation.state).toBe("requested");
+      }
     },
   );
 });

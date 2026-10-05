@@ -1,4 +1,3 @@
-// Memory Core plugin module implements the concrete memory index manager.
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -450,21 +449,23 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           try {
             // Keep one native publication connection for this generation, then
             // release its broker capacity even when the manager stays cached.
-            await this.runSync(params).then(
-              () => this.publishedDatabase.closePublicationWorker(),
-              async (error: unknown) => {
-                const [cleanup] = await Promise.allSettled([
-                  this.publishedDatabase.closePublicationWorker(),
-                ]);
-                if (cleanup.status === "rejected") {
-                  throw new AggregateError(
-                    [error, cleanup.reason],
-                    `${String(error)}; Memory sync cleanup failed: ${String(cleanup.reason)}`,
-                    { cause: error },
-                  );
-                }
-                throw error;
-              },
+            await this.publishedDatabase.withPublicationGeneration(() =>
+              this.runSync(params).then(
+                () => this.publishedDatabase.closePublicationWorker(),
+                async (error: unknown) => {
+                  const [cleanup] = await Promise.allSettled([
+                    this.publishedDatabase.closePublicationWorker(),
+                  ]);
+                  if (cleanup.status === "rejected") {
+                    throw new AggregateError(
+                      [error, cleanup.reason],
+                      `${String(error)}; Memory sync cleanup failed: ${String(cleanup.reason)}`,
+                      { cause: error },
+                    );
+                  }
+                  throw error;
+                },
+              ),
             );
           } finally {
             this.endSyncProviderGeneration();
@@ -505,7 +506,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.syncing = this.syncOutcomes.track(run, true).finally(() => {
       this.syncing = null;
     });
-    return this.syncing ?? Promise.resolve();
+    return this.syncing;
   }
 
   status(): MemoryProviderStatus {

@@ -88,10 +88,8 @@ async function withDockerProbeTimeout<T>(
 ): Promise<T> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setNodeTimeout> | undefined;
-  let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setNodeTimeout(() => {
-      timedOut = true;
       controller.abort();
       reject(new DockerProbeTimeoutError(timeoutMs));
     }, timeoutMs);
@@ -99,14 +97,12 @@ async function withDockerProbeTimeout<T>(
   try {
     return await Promise.race([run(controller.signal), timeoutPromise]);
   } catch (err) {
-    if (timedOut || controller.signal.aborted) {
+    if (controller.signal.aborted) {
       throw new DockerProbeTimeoutError(timeoutMs);
     }
     throw err;
   } finally {
-    if (timeout) {
-      clearNodeTimeout(timeout);
-    }
+    clearNodeTimeout(timeout);
   }
 }
 

@@ -31,7 +31,7 @@ describe("resolveOpenAiCompatModelOverride", () => {
     loadConfigMock.mockReset().mockReturnValue({
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
         defaults: {
           model: { primary: "openai/gpt-5.4" },
           models: {
@@ -49,7 +49,7 @@ describe("resolveOpenAiCompatModelOverride", () => {
     loadConfigMock.mockReturnValue({
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }],
+        entries: { main: {} },
         defaults: { model: { primary: "Reader" }, modelPolicy: { allow: ["custom/*"] } },
       },
       models: {

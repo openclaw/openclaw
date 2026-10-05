@@ -21,18 +21,10 @@ import { parseBooleanValue } from "../../../utils/boolean.js";
 import { streamSimple } from "../../stream.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
-const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
-const KILOCODE_FEATURE_DEFAULT = "openclaw";
-const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 const BOOLEAN_PARAM_PARSE_OPTIONS = {
   truthy: ["1", "true", "yes", "on", "enable", "enabled"],
   falsy: ["0", "false", "no", "off", "disable", "disabled"],
 };
-
-function resolveKilocodeAppHeaders(): Record<string, string> {
-  const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
-  return { [KILOCODE_FEATURE_HEADER]: feature };
-}
 
 function resolveModelEndpointClass(model: Parameters<StreamFn>[0]) {
   return (
@@ -63,12 +55,7 @@ function readExtraParam(
 }
 
 function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? parseStrictFiniteNumber(value)
-        : undefined;
+  const parsed = parseStrictFiniteNumber(value);
   if (parsed === undefined) {
     return undefined;
   }
@@ -219,9 +206,7 @@ export function createOpenRouterWrapper(
 
 /** @deprecated Proxy provider-owned stream helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  const slashIndex = trimmed?.indexOf("/") ?? -1;
-  return slashIndex > 0 && trimmed?.slice(0, slashIndex) === "x-ai";
+  return normalizeOptionalLowercaseString(modelId)?.startsWith("x-ai/") ?? false;
 }
 
 /** @deprecated Kilocode provider-owned stream helper; do not use from third-party plugins. */
@@ -239,7 +224,9 @@ export function createKilocodeWrapper(
       transport: "stream",
       routeFacts: getModelProviderRequestRouteFacts(model),
       callerHeaders: options?.headers,
-      providerHeaders: resolveKilocodeAppHeaders(),
+      providerHeaders: {
+        "X-KILOCODE-FEATURE": process.env.KILOCODE_FEATURE?.trim() || "openclaw",
+      },
       precedence: "defaults-win",
     }).headers;
     return streamWithPayloadPatch(

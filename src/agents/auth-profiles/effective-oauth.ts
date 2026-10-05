@@ -10,17 +10,15 @@ import {
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { OAuthCredential } from "./types.js";
 
 export type OAuthBootstrapCredentialReader = (params: {
-  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
 }) => OAuthCredential | null;
 
 /** Select local OAuth unless a safe external bootstrap credential should win. */
 export function resolveEffectiveOAuthCredentialCore(params: {
-  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
   readBootstrapCredential: OAuthBootstrapCredentialReader;
@@ -29,7 +27,6 @@ export function resolveEffectiveOAuthCredentialCore(params: {
     return params.credential;
   }
   const imported = params.readBootstrapCredential({
-    store: params.store,
     profileId: params.profileId,
     credential: params.credential,
   });
@@ -73,21 +70,11 @@ export function resolveEffectiveOAuthCredentialCore(params: {
 
 /** Resolves the effective OAuth credential, optionally reading external CLI bootstrap state. */
 export function resolveEffectiveOAuthCredential(params: {
-  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
-  allowKeychainPrompt?: boolean;
 }): OAuthCredential {
   return resolveEffectiveOAuthCredentialCore({
-    store: params.store,
-    profileId: params.profileId,
-    credential: params.credential,
-    readBootstrapCredential: ({ store, profileId, credential }) =>
-      readExternalCliBootstrapCredential({
-        store,
-        profileId,
-        credential,
-        allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-      }),
+    ...params,
+    readBootstrapCredential: readExternalCliBootstrapCredential,
   });
 }

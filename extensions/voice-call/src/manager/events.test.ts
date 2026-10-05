@@ -83,7 +83,7 @@ afterEach(async () => {
 });
 
 describe("processEvent (functional)", () => {
-  it.each(["speech", "answered", "terminal"] as const)(
+  it.each(["speech", "answered", "terminal", "fatal-error"] as const)(
     "publishes %s side effects only after SQLite persistence succeeds",
     async (kind) => {
       let failPersistence = true;
@@ -95,7 +95,9 @@ describe("processEvent (functional)", () => {
         providerCallId: "provider-before",
         state: kind === "answered" ? "ringing" : "active",
       });
-      const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=hangup-user`;
+      const terminal = kind === "terminal" || kind === "fatal-error";
+      const endReason = kind === "fatal-error" ? "error" : "hangup-user";
+      const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=${endReason}`;
       ctx.activeCalls.set(call.callId, call);
       ctx.providerCallIdMap.set("provider-before", call.callId);
       const resolve = vi.fn();
@@ -107,7 +109,7 @@ describe("processEvent (functional)", () => {
           timeout: setTimeout(() => {}, 60_000),
         });
       }
-      if (kind === "terminal") {
+      if (terminal) {
         ctx.maxDurationTimers.set(
           call.callId,
           setTimeout(() => {}, 60_000),
@@ -119,7 +121,9 @@ describe("processEvent (functional)", () => {
           ? { ...base, type: "call.speech", transcript: "durable", isFinal: true }
           : kind === "answered"
             ? { ...base, type: "call.answered", providerCallId: "provider-after" }
-            : { ...base, type: "call.ended", reason: "hangup-user" };
+            : kind === "fatal-error"
+              ? { ...base, type: "call.error", error: "carrier failure", retryable: false }
+              : { ...base, type: "call.ended", reason: "hangup-user" };
 
       await expect(processEvent(ctx, event)).rejects.toThrow(
         "synthetic SQLite persistence failure",
@@ -131,20 +135,26 @@ describe("processEvent (functional)", () => {
       expect(ctx.providerCallIdMap.has("provider-after")).toBe(false);
       expect(resolve).not.toHaveBeenCalled();
       expect(reject).not.toHaveBeenCalled();
-      expect(ctx.maxDurationTimers.has(call.callId)).toBe(kind === "terminal");
+      expect(ctx.maxDurationTimers.has(call.callId)).toBe(terminal);
       expect(logSpy.logEntries).not.toContain(terminalLog);
 
       failPersistence = false;
       await processEvent(ctx, event);
       expect(ctx.processedEventIds.has(event.id)).toBe(true);
       expect(resolve).toHaveBeenCalledTimes(kind === "speech" ? 1 : 0);
-      expect(reject).toHaveBeenCalledTimes(kind === "terminal" ? 1 : 0);
+      expect(reject).toHaveBeenCalledTimes(terminal ? 1 : 0);
       expect(onCallAnswered).toHaveBeenCalledTimes(kind === "answered" ? 1 : 0);
       if (kind === "answered") {
         expect(onCallAnswered).toHaveBeenCalledWith(call);
       }
-      expect(ctx.activeCalls.has(call.callId)).toBe(kind !== "terminal");
-      if (kind === "terminal") {
+      expect(ctx.activeCalls.has(call.callId)).toBe(!terminal);
+      if (terminal) {
+        expect(call).toMatchObject({ state: endReason, endReason, endedAt: event.timestamp });
+        expect(reject).toHaveBeenCalledWith(
+          new Error(
+            kind === "fatal-error" ? "Call error: carrier failure" : "Call ended: hangup-user",
+          ),
+        );
         expect(logSpy.logEntries.filter((entry) => entry === terminalLog)).toHaveLength(1);
       } else {
         expect(logSpy.logEntries).not.toContain(terminalLog);

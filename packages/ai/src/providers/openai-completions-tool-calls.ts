@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js";
 import { finalizeTerminalToolCallArguments } from "../transports/transport-stream-shared.js";
-import type { ToolCall } from "../types.js";
+import type { AssistantMessage, ToolCall } from "../types.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
 const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
@@ -15,9 +15,9 @@ type NormalizedOpenAICompletionsDelta = {
   toolCalls: ChatCompletionToolCallDelta[];
 };
 
-type OpenAICompletionsToolCallFinalizationOptions<TBlock extends object> = {
+type OpenAICompletionsToolCallFinalizationOptions = {
   allowSilentToolCallPromotion?: boolean;
-  onConfirmedToolCall?: (block: TBlock, contentIndex: number) => void;
+  onConfirmedToolCall?: (block: ToolCall, contentIndex: number) => void;
 };
 
 /** Keep encrypted provider reasoning attached to the first matching tool call. */
@@ -231,11 +231,12 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
 }
 
 /** Publish only executable calls; streaming scratch state never belongs in replay. */
-export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
-  output: { content: TBlock[]; stopReason: string; errorMessage?: string },
-  options: OpenAICompletionsToolCallFinalizationOptions<TBlock> = {},
+export function finalizeOpenAICompletionsToolCalls(
+  output: Pick<AssistantMessage, "content" | "stopReason" | "errorMessage">,
+  options: OpenAICompletionsToolCallFinalizationOptions = {},
 ): void {
-  const isToolCall = (block: TBlock) => (block as { type?: unknown }).type === "toolCall";
+  const isToolCall = (block: AssistantMessage["content"][number]): block is ToolCall =>
+    block.type === "toolCall";
   const hasToolCalls = output.content.some(isToolCall);
 
   if (output.stopReason === "toolUse" && !hasToolCalls) {
@@ -246,14 +247,7 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     output.stopReason === "stop" &&
     hasToolCalls &&
     options.allowSilentToolCallPromotion !== false &&
-    !output.content.some((block) => {
-      const candidate = block as { type?: unknown; text?: unknown };
-      return (
-        candidate.type === "text" &&
-        typeof candidate.text === "string" &&
-        candidate.text.trim().length > 0
-      );
-    })
+    !output.content.some((block) => block.type === "text" && block.text.trim().length > 0)
   ) {
     output.stopReason = "toolUse";
   }
@@ -265,9 +259,7 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     return;
   }
 
-  type FinalToolCall = TBlock & {
-    name?: unknown;
-    arguments: Record<string, unknown>;
+  type FinalToolCall = ToolCall & {
     partialArgs?: unknown;
   };
   const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];

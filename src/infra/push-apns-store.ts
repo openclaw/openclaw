@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-// Canonical shared-SQLite store for APNs device and relay registrations.
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -117,10 +116,7 @@ export function isValidApnsTopic(value: string): boolean {
 }
 
 function normalizeTokenDebugSuffix(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(value.trim()).replace(/[^0-9a-z]/g, "");
+  const normalized = normalizeLowercaseStringOrEmpty(value).replace(/[^0-9a-z]/g, "");
   return normalized.length > 0 ? normalized.slice(-8) : undefined;
 }
 
@@ -136,9 +132,6 @@ function normalizeRelayOrigin(
   value: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -148,9 +141,6 @@ function normalizeRelayOrigin(
 }
 
 function normalizePersistedRelayOrigin(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -159,16 +149,9 @@ function normalizePersistedRelayOrigin(value: unknown): string | undefined {
   return normalized.ok ? normalized.value : undefined;
 }
 
-/** Normalizes the APNs environment string accepted by registration inputs. */
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
-  if (typeof value !== "string") {
-    return null;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return null;
+  return normalized === "sandbox" || normalized === "production" ? normalized : null;
 }
 
 const apnsNodeIdSchema = z.string().transform(normalizeApnsNodeId).refine(isValidApnsNodeId);

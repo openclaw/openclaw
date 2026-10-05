@@ -1,9 +1,9 @@
-import { html } from "lit";
+import { html, type PropertyValues } from "lit";
 import "../../styles/debug-data.css";
 import { property, state as litState } from "lit/decorators.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
+import { canReadSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -43,6 +43,7 @@ class DebugOverlayContent extends OpenClawLightDomElement {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.resetSections(),
     ensureInitialData: () => void this.refreshSections(),
+    onSnapshot: () => this.syncPolling(),
     onPageActivation: () => this.syncPolling(),
   });
   private readonly subscriptions = new SubscriptionsController(this).watch(
@@ -63,6 +64,12 @@ class DebugOverlayContent extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  override updated(changed: PropertyValues): void {
+    if (changed.has("minimized")) {
+      this.syncPolling();
+    }
+  }
+
   private resetSections(): void {
     this.requestGeneration += 1;
     for (const controller of this.requestControllers.values()) {
@@ -79,7 +86,13 @@ class DebugOverlayContent extends OpenClawLightDomElement {
   }
 
   private syncPolling(): void {
-    if (document.visibilityState === "hidden") {
+    const canReadStatus = canReadSystemInfo(this.gateway.snapshot);
+    if (!canReadStatus) {
+      this.requestControllers.get("status")?.abort();
+      this.statusHistory = [];
+      this.updateSection(this.requestGeneration, "status", { status: "unavailable" });
+    }
+    if (document.visibilityState === "hidden" || (this.minimized && !canReadStatus)) {
       this.polling.stop();
     } else if (this.polling.start()) {
       void this.refreshSections();
@@ -105,7 +118,10 @@ class DebugOverlayContent extends OpenClawLightDomElement {
       : DEBUG_OVERLAY_SECTIONS;
     const requests = sections.map(async (section): Promise<void> => {
       // A slow roster or lane read must not stop fresh vitals, or overlap itself.
-      if (this.requestControllers.has(section.id)) {
+      if (
+        this.requestControllers.has(section.id) ||
+        (section.id === "status" && !canReadSystemInfo(gateway.snapshot))
+      ) {
         return;
       }
       const controller = new AbortController();

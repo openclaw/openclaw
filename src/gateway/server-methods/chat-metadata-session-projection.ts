@@ -1,5 +1,5 @@
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
@@ -8,9 +8,14 @@ import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepar
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveGatewaySessionRuntimeSelectionLocked } from "../session-utils-projection.js";
+import {
+  type prepareChatAccountSelection,
+  resolveChatAccountSelection,
+} from "./chat-account-selection.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
@@ -25,6 +30,55 @@ export type ChatMetadataProjectionFacts = {
   authModes: PreparedAgentCredentialModes;
   modelCatalog: ModelCatalogSnapshot;
 };
+
+export type PreparedChatMetadataProjection = Awaited<
+  ReturnType<typeof prepareChatMetadataModelProjection>
+> & {
+  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
+};
+
+export function readPreparedChatMetadata(
+  projection: Pick<PreparedChatMetadataProjection, "read" | "agent">,
+  readParams: ChatMetadataReadParams,
+  config: OpenClawConfig,
+  acpMeta: SessionAcpMeta | null,
+  readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
+): ChatMetadataResult {
+  readParams.draftAccountSelection?.assertCurrent();
+  const { agent } = projection;
+  return projectChatSessionMetadata(
+    readParams,
+    {
+      ...projection.read(),
+      ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
+      swarmEnabled: agent.swarmEnabled,
+      accountSelection:
+        readAccountSelection?.() ??
+        resolveChatAccountSelection({
+          authStore: agent.authStore,
+          sessionEntry: readParams.sessionEntry,
+        }),
+    },
+    config,
+    acpMeta,
+  );
+}
+
+export async function prepareSessionAcpMeta(
+  params: Pick<ChatMetadataReadParams, "agentId" | "sessionKey" | "sessionEntry">,
+  cfg: OpenClawConfig,
+): Promise<SessionAcpMeta | null> {
+  if (!params.sessionKey) {
+    return null;
+  }
+  const [meta] = await readAcpSessionMetaForEntries({
+    cfg,
+    entries: [
+      { agentId: params.agentId, sessionKey: params.sessionKey, entry: params.sessionEntry },
+    ],
+  });
+  return meta ?? null;
+}
 
 export async function prepareChatMetadataModelProjection(params: {
   context: GatewayModelCatalogContext;
@@ -178,10 +232,11 @@ export function projectSessionModelCatalog(
   });
 }
 
-export function projectChatSessionMetadata(
+function projectChatSessionMetadata(
   readParams: ChatMetadataReadParams,
   metadata: ChatMetadataResult,
   config: OpenClawConfig,
+  preparedAcpMeta: SessionAcpMeta | null,
 ): ChatMetadataResult {
   const projected = metadata.models
     ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
@@ -190,18 +245,11 @@ export function projectChatSessionMetadata(
     return projected;
   }
   const entry = readParams.sessionEntry;
-  const acpMeta =
-    entry?.acp ??
-    (entry
-      ? readAcpSessionMetaForEntry({
-          cfg: config,
-          sessionKey: readParams.sessionKey,
-          agentId: readParams.agentId,
-          entry,
-        })
-      : undefined);
   return {
     ...projected,
-    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
+    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(
+      entry,
+      preparedAcpMeta ?? undefined,
+    ),
   };
 }

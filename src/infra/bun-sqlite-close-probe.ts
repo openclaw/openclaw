@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -17,24 +18,19 @@ async function cleanupProbe(
   directory: string | undefined,
   background: boolean,
 ) {
-  let deadline: NodeJS.Timeout | undefined;
   try {
     if (worker) {
       if (background) {
         worker.unref();
       }
-      await Promise.race([
+      await raceWithTimeout(
         worker.terminate(),
-        new Promise<never>((_resolve, reject) => {
-          deadline = setTimeout(
-            () => reject(new Error("SQLite close probe termination timed out after 5000ms")),
-            5_000,
-          );
-          if (background) {
-            deadline.unref();
-          }
-        }),
-      ]);
+        5_000,
+        () => {
+          throw new Error("SQLite close probe termination timed out after 5000ms");
+        },
+        { ref: !background },
+      );
       await nextTurn(undefined, { ref: !background });
     }
     if (directory) {
@@ -45,8 +41,6 @@ async function cleanupProbe(
     const reason = `SQLite close probe cleanup failed: ${String(error)}; retained ${directory}`;
     process.emitWarning(reason, { code: "SQLITE_CLOSE_PROBE_CLEANUP" });
     return reason;
-  } finally {
-    clearTimeout(deadline);
   }
   return undefined;
 }

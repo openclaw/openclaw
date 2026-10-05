@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
@@ -49,7 +50,11 @@ async function api(
 ): Promise<unknown> {
   assertCurrent();
   const raw = await requirePublicationCommand(
-    githubPublicationApiArgs(endpoint, body === undefined ? "GET" : "POST"),
+    githubPublicationApiArgs(
+      endpoint,
+      body === undefined ? "GET" : "POST",
+      identity.host ?? resolveGitHubHost(),
+    ),
     {
       env: identity.env,
       beforeRun: assertCurrent,
@@ -72,7 +77,8 @@ export async function prepareRepositoryGitHubPublicationTarget(
   identity: PreparedGitHubPublicationIdentity,
   assertCurrent: () => void,
 ) {
-  const remote = parseGitHubRemoteUrl(workspace.url);
+  const githubHost = identity.host ?? resolveGitHubHost();
+  const remote = parseGitHubRemoteUrl(workspace.url, githubHost);
   if (
     !remote ||
     !/^[A-Za-z0-9_.-]+$/u.test(remote.owner) ||
@@ -187,6 +193,8 @@ export async function executeRepositoryGitHubPublication(params: {
         [
           ...githubPublicationApiArgs(
             "repos/" + repository + "/compare/" + source + "..." + remoteBase + "?per_page=1",
+            "GET",
+            identity.host ?? resolveGitHubHost(),
           ),
           "--jq",
           "{sha: .merge_base_commit.sha}",
@@ -227,7 +235,11 @@ export async function executeRepositoryGitHubPublication(params: {
     const observeHead = async () => {
       const observedIdentity = await refreshIdentity();
       const raw = await requirePublicationCommand(
-        githubPublicationApiArgs(endpoint + "matching-refs/heads/" + encodeURIComponent(branch)),
+        githubPublicationApiArgs(
+          endpoint + "matching-refs/heads/" + encodeURIComponent(branch),
+          "GET",
+          observedIdentity.host ?? resolveGitHubHost(),
+        ),
         { env: observedIdentity.env },
       );
       const value: unknown = JSON.parse(raw);
@@ -279,6 +291,7 @@ export async function executeRepositoryGitHubPublication(params: {
         baseBranch,
         headCommit: headCommit ?? snapshot.baseCommit,
         marker,
+        host: identity.host ?? resolveGitHubHost(),
         refreshIdentity,
         assertCurrent,
         recordObserved: (url) => execution.recordEffect("pull_request", { url }),
@@ -432,28 +445,31 @@ export async function executeRepositoryGitHubPublication(params: {
       execution.recordEffect("push");
       dispatched = true;
       // GraphQL's beforeOid is an exact lease; REST's non-force update only checks ancestry.
-      const result = await runPublicationCommand(githubPublicationApiArgs("graphql", "POST"), {
-        env: identity.env,
-        beforeRun: assertAction,
-        input: JSON.stringify({
-          query:
-            "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
-          variables: {
-            input: {
-              repositoryId: sourceRepository.node_id,
-              clientMutationId: row.request_id,
-              refUpdates: [
-                {
-                  name: "refs/heads/" + branch,
-                  beforeOid: remoteHead ?? "0".repeat(40),
-                  afterOid: headCommit,
-                  force: false,
-                },
-              ],
+      const result = await runPublicationCommand(
+        githubPublicationApiArgs("graphql", "POST", identity.host ?? resolveGitHubHost()),
+        {
+          env: identity.env,
+          beforeRun: assertAction,
+          input: JSON.stringify({
+            query:
+              "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
+            variables: {
+              input: {
+                repositoryId: sourceRepository.node_id,
+                clientMutationId: row.request_id,
+                refUpdates: [
+                  {
+                    name: "refs/heads/" + branch,
+                    beforeOid: remoteHead ?? "0".repeat(40),
+                    afterOid: headCommit,
+                    force: false,
+                  },
+                ],
+              },
             },
-          },
-        }),
-      });
+          }),
+        },
+      );
       let succeeded = false;
       if (result.code === 0) {
         const reply: unknown = JSON.parse(result.stdout.toString("utf8"));
@@ -493,7 +509,11 @@ export async function executeRepositoryGitHubPublication(params: {
       execution.recordEffect("pull_request");
       dispatched = true;
       const created = await runPublicationCommand(
-        githubPublicationApiArgs(`repos/${repository}/pulls`, "POST"),
+        githubPublicationApiArgs(
+          `repos/${repository}/pulls`,
+          "POST",
+          identity.host ?? resolveGitHubHost(),
+        ),
         {
           env: identity.env,
           beforeRun: assertAction,

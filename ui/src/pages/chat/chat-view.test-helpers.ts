@@ -211,6 +211,9 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
 
 export function renderChatView(overrides: Partial<ChatProps> = {}) {
   const container = document.createElement("div");
+  onTestFinished(() => {
+    render(nothing, container);
+  });
   render(renderChat(createChatProps(overrides)), container);
   return container;
 }

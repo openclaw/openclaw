@@ -58,6 +58,31 @@ The baseline list should stay broad enough to cover:
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
 
+### Native tool discovery proof
+
+A flow can declare a model-specific configured runtime route:
+
+```yaml
+execution:
+  kind: flow
+  liveConfiguredRuntime:
+    id: codex
+    model: openai/gpt-5.5
+```
+
+This route applies only in `live-frontier` when both `--model` and `--alt-model`
+select the declared model. The launcher prepares singleton and partitioned runs
+through the same runtime route. Other selections keep their general model route;
+explicit forced runtimes and runtime-pair cells retain their own preparation.
+The metadata does not override either model choice or product tool loading.
+
+The native discovery lane selects `openai/gpt-5.5` for both model slots. Its
+Codex catalog supports native tool search without a `code_mode_only` override.
+Provider identity alone does not establish that capability. Shared searchable
+fixtures require linked `tool_search` receipts only in Codex execution cells;
+direct OpenClaw cells still prove tool calls and results. `sessions_spawn`
+remains the always-direct control and does not require discovery receipts.
+
 ## Provider mock lanes
 
 `qa suite` has two local provider mock lanes:

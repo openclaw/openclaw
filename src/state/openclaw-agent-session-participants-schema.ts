@@ -1,10 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-db-contract.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-
-const ensuredDatabases = new WeakSet<DatabaseSync>();
 
 export function sessionParticipantsSchemaSql(): string {
   return extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_PARTICIPANTS_TABLE, {
@@ -14,25 +11,7 @@ export function sessionParticipantsSchemaSql(): string {
   });
 }
 
-/** Lazily installs the additive participant table on the first admitted prompt. */
-export function ensureSessionParticipantsSchema(database: DatabaseSync): boolean {
-  if (ensuredDatabases.has(database)) {
-    return false;
-  }
-  const ensure = () => {
-    // sqlite-allow-raw -- canonical additive DDL only.
-    database.exec(sessionParticipantsSchemaSql());
-  };
-  if (database.isTransaction) {
-    ensure();
-    return true;
-  }
-  runSqliteImmediateTransactionSync(database, ensure);
-  ensuredDatabases.add(database);
-  return false;
-}
-
-/** Cache a first-use ensure only after its owning transaction commits. */
-export function confirmSessionParticipantsSchemaEnsured(database: DatabaseSync): void {
-  ensuredDatabases.add(database);
-}
+export const {
+  ensure: ensureSessionParticipantsSchema,
+  recordCommitted: confirmSessionParticipantsSchemaEnsured,
+} = createSqliteSchemaEnsurer(sessionParticipantsSchemaSql);

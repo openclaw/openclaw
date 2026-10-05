@@ -377,7 +377,7 @@ export class DiscordVoiceSessions {
           logger.warn("discord voice: capture failed: " + formatErrorMessage(error));
         });
       } else {
-        this.params.receive.scheduleCaptureFinalize(entry, userId, "speaker end");
+        this.params.receive.scheduleCaptureFinalize(entry, userId);
       }
     };
     const destroyedHandler = () => {

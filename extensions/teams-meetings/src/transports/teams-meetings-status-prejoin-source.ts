@@ -1,14 +1,11 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
-type MeetingStatusPreludeParams = Parameters<
-  typeof MeetingPlatformAdapter.createStatusPreludeSource
->[0];
-
-export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludeParams): string {
-  return MeetingPlatformAdapter.createStatusPreludeSource(params, {
-    controlLookupSource: `const buttons = [...document.querySelectorAll("button")];
+export const teamsMeetingStatusPrelude: Parameters<
+  typeof MeetingPlatformAdapter.createPageScripts
+>[0]["statusPrelude"] = {
+  controlLookupSource: `const buttons = [...document.querySelectorAll("button")];
   const findTextButton = (pattern) => buttons.find((button) => !button.disabled && pattern.test(label(button)));`,
-    lifecycleSource: (sources) => `  const continueInBrowser = first(selectors.continueInBrowser) ||
+  lifecycleSource: (sources) => `  const continueInBrowser = first(selectors.continueInBrowser) ||
     findTextButton(/continue on this browser|join on the web|use the web app|continue without the app/i);
   if (canMutateSession && identityVerifiedBeforeCall && continueInBrowser) {
     continueInBrowser.click();
@@ -149,7 +146,7 @@ ${sources.inCallMicrophone}
       controlManualAction = manualActionFor("teams-microphone-required", "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.");
     }
   }`,
-    manualActionSource: (sources) => `  const pageText = text(document.body);
+  manualActionSource: (sources) => `  const pageText = text(document.body);
   const pageTextLower = pageText.toLowerCase();
   const lobbyWaiting = Boolean(first(selectors.lobby)) ||
     /someone will let you in shortly|waiting for someone to let you in|when someone admits you|you.?re in the lobby|we.?ve let people in the meeting know you.?re waiting/i.test(pageTextLower);
@@ -162,15 +159,4 @@ ${sources.inCallMicrophone}
     tenantLoginRequired ||
     (Boolean(signInControl) && !guestInput && !join && /sign in to (?:join|continue)|sign in to your account/i.test(pageTextLower));
 ${sources.manualActions({ loginDisplayName: "Microsoft Teams", inCallControls: false })}`,
-    platform: {
-      displayName: "Teams",
-      globals: {
-        audioOutputs: "__openclawTeamsAudioOutputs",
-        captionArchive: "__openclawTeamsCaptionArchive",
-        captions: "__openclawTeamsCaptions",
-        meeting: "__openclawTeamsMeeting",
-      },
-      manualActionReasonPrefix: "teams",
-    },
-  });
-}
+};

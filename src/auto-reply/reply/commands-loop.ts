@@ -29,28 +29,20 @@ function loopNamePrefix(sessionKey: string): string {
 const LOOP_FINAL_REPLY_ONLY =
   "Reply with your normal final message only; do not use the message tool.";
 
-function buildLoopPayloadMessage(params: {
-  prompt: string;
-  shortName: string;
-  selfPaced: boolean;
-}): string {
-  const lines = [
-    `[loop ${params.shortName}] ${params.prompt}`,
-    "Do the task and reply concisely. If nothing changed since the last run, reply briefly.",
-  ];
-  if (params.selfPaced) {
-    lines.push(
-      `Before replying, ALWAYS call the ${AUTOMATIONS_TOOL_NAME} tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.`,
-    );
-  }
-  return lines.join("\n");
-}
-
 function buildLoopWorkOrder(prompt: string, sessionKey: string, everyMs?: number): string {
   const shortName = truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
   const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const selfPaced = everyMs === undefined;
-  const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced });
+  const lines = [
+    `[loop ${shortName}] ${prompt}`,
+    "Do the task and reply concisely. If nothing changed since the last run, reply briefly.",
+  ];
+  if (selfPaced) {
+    lines.push(
+      `Before replying, ALWAYS call the ${AUTOMATIONS_TOOL_NAME} tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.`,
+    );
+  }
+  const message = lines.join("\n");
   const pacing = selfPaced ? 'pacing:{min:"1m",max:"1h"},' : "";
   return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs ?? LOOP_DEFAULT_INTERVAL_MS}},${pacing}sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { requireGitCommandOutput } from "../../infra/git-exec.js";
-import { readGitMetadataPrefix, resolveGitRefsBase } from "../../infra/git-root.js";
+import { readGitMetadataDirectories } from "../../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../../infra/git-worker-context.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { WorktreeRepositoryError } from "./errors.js";
@@ -44,21 +44,13 @@ function branchInventoryRevision(repoRoot: string): string | undefined {
       return stat;
     };
     const marker = path.join(repoRoot, ".git");
-    const markerStat = stamp(marker);
-    const pointer =
-      markerStat?.isFile() && markerStat.size <= 4096n
-        ? /^gitdir: (.+)\r?\n?$/.exec(readGitMetadataPrefix(marker, 4096))?.[1]?.trim()
-        : undefined;
-    const gitDir = markerStat?.isDirectory()
-      ? marker
-      : pointer
-        ? path.resolve(repoRoot, pointer)
-        : undefined;
-    if (!gitDir) {
+    stamp(marker);
+    const directories = readGitMetadataDirectories(repoRoot);
+    if (!directories) {
       return undefined;
     }
+    const { gitDir, commonDir: common } = directories;
     const head = path.join(gitDir, "HEAD");
-    const common = resolveGitRefsBase(head);
     if (fsSync.existsSync(path.join(common, "reftable"))) {
       return undefined;
     }

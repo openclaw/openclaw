@@ -1,7 +1,8 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as storeWrites from "../shared/store-writer-queue.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -100,6 +101,36 @@ test.each([false, true])(
       { context },
     );
     await reclaimEntered.promise;
+    const secondQueued = createDeferredCore();
+    const secondRead = createDeferredCore();
+    const releaseRead = createDeferredCore();
+    const runQueuedStoreWrite = storeWrites.runQueuedStoreWrite;
+    const queueObserver = vi
+      .spyOn(storeWrites, "runQueuedStoreWrite")
+      .mockImplementation((params) => {
+        if (params.label === "recoverGatewaySession") {
+          secondQueued.resolve();
+        }
+        return runQueuedStoreWrite(params);
+      });
+    const readEntry = sessionEntryReads.withSessionEntryReadOnlyInWorker;
+    let holdNextRead = true;
+    const readObserver = vi
+      .spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker")
+      .mockImplementation((input, assertCurrent, consume) => {
+        const hold = holdNextRead && input.sessionKey === sourceKey;
+        if (hold) {
+          holdNextRead = false;
+        }
+        return readEntry(input, assertCurrent, async (result, owner) => {
+          const value = await consume(result, owner);
+          if (hold) {
+            secondRead.resolve();
+            await releaseRead.promise;
+          }
+          return value;
+        });
+      });
     let authorityActive = true;
     let secondSettled = false;
     const second = directSessionReq<RecoveryPayload>(
@@ -122,17 +153,24 @@ test.each([false, true])(
     });
     let settledBeforeCommit = false;
     try {
-      await nextTurn();
+      // Let the winner publish while any unqueued source read is still in flight.
+      // Correct recovery queues before acquiring facts, so it reaches the other gate.
+      await Promise.race([secondRead.promise, secondQueued.promise]);
+      holdNextRead = false;
       authorityActive = !revokeAuthority;
       startReclaim.resolve();
       await reclaimed.promise;
       // The placement queue is free, but the winner has not published its successor.
-      await nextTurn();
       settledBeforeCommit = secondSettled;
+      releaseResult.resolve();
+      await first;
     } finally {
       startReclaim.resolve();
       releaseResult.resolve();
+      releaseRead.resolve();
       await Promise.allSettled([first, second]);
+      readObserver.mockRestore();
+      queueObserver.mockRestore();
     }
     const winner = await first;
     expect(winner.ok, JSON.stringify(winner.error)).toBe(true);

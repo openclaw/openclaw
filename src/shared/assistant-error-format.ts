@@ -1,5 +1,8 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -89,10 +92,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
 }
 
 export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -143,10 +143,6 @@ export function extractErrorHttpStatus(raw: string): { code: number; rest: strin
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-
   if (
     HTML_ERROR_PREFIX_RE.test(trimmed) &&
     HTML_CLOSE_RE.test(trimmed) &&
@@ -171,9 +167,6 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
 
 export function isGenericProviderInternalError(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
   return (
     GENERIC_PROVIDER_INTERNAL_ERROR_RE.test(trimmed) &&
     (/help\.openai\.com/i.test(trimmed) || SUPPORT_REQUEST_ID_RE.test(trimmed))
@@ -181,10 +174,7 @@ export function isGenericProviderInternalError(raw: string): boolean {
 }
 
 export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -246,18 +236,8 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE;
   }
 
-  const leadingStatus = extractLeadingHttpStatus(trimmed);
-  const isHtmlChallenge = isCloudflareOrHtmlErrorPage(trimmed);
-  if (leadingStatus && isHtmlChallenge) {
-    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
-  }
-
-  if (isHtmlChallenge) {
-    return (
-      "The provider returned an HTML error page instead of an API response. " +
-      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
-      "Retry in a moment or check provider status."
-    );
+  if (isCloudflareOrHtmlErrorPage(trimmed)) {
+    return "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
   }
 
   const httpMatch = extractHttpStatusMatch(trimmed.match(HTTP_STATUS_PREFIX_RE));
@@ -277,30 +257,33 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
 }
 
+const CONNECTION_FAILED_MESSAGE =
+  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 const TRANSPORT_ERRORS = [
   {
     code: /\beconnrefused\b/i,
     phrases: ["connection refused", "actively refused"],
-    message: "LLM request failed: connection refused by the provider endpoint.",
+    message: CONNECTION_FAILED_MESSAGE,
   },
   {
     code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
     phrases: ["socket hang up", "connection reset", "connection aborted"],
-    message: "LLM request failed: network connection was interrupted.",
+    message:
+      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   },
   {
-    code: /\benotfound\b|\beai_again\b/i,
-    phrases: ["getaddrinfo", "no such host", "dns"],
-    message: "LLM request failed: DNS lookup for the provider endpoint failed.",
-  },
-  {
-    code: /\benetunreach\b|\behostunreach\b|\behostdown\b/i,
-    phrases: ["network is unreachable", "host is unreachable"],
-    message: "LLM request failed: the provider endpoint is unreachable from this host.",
-  },
-  {
-    phrases: ["fetch failed", "connection error", "network request failed"],
-    message: "LLM request failed: network connection error.",
+    code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,
+    phrases: [
+      "getaddrinfo",
+      "no such host",
+      "dns",
+      "network is unreachable",
+      "host is unreachable",
+      "fetch failed",
+      "connection error",
+      "network request failed",
+    ],
+    message: CONNECTION_FAILED_MESSAGE,
   },
 ];
 
@@ -319,7 +302,7 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     }
   }
   if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
+    return CONNECTION_FAILED_MESSAGE;
   }
   return undefined;
 }

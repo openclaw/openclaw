@@ -20,6 +20,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const registryRead = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
@@ -165,7 +166,9 @@ it.each(
           .sessionId,
       ).toBe("root-session");
       expect(result).toHaveProperty("error", expect.stringContaining(failure));
-      expect(root.endedReason).toBe("subagent-killed");
+      const stoppedRoot = subagentRuns.get(root.runId);
+      expect(isSameSubagentRunOwner(stoppedRoot, root)).toBe(true);
+      expect(stoppedRoot?.endedReason).toBe("subagent-killed");
       const childKills = phase === "descendant drain" ? 2 : 0;
       expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe(
         childKills ? "killed" : "running",

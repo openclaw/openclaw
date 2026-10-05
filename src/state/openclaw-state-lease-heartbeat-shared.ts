@@ -4,6 +4,8 @@ import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-er
 
 // Allow headroom over observed 38 s cold Gateway boots under load; committed lease expiry still bounds startup.
 export const LEASE_HEARTBEAT_START_TIMEOUT_MS = 60_000;
+export const LEASE_CONTENTION_RETRY_MS = 25;
+export const LEASE_CONTENTION_RETRY_TIMEOUT_MS = 2_000;
 
 export const leaseHeartbeatState = {
   status: 0,
@@ -36,6 +38,11 @@ export type LeaseHeartbeatRenewalFailure = {
   elapsedMs: number;
 };
 
+export type LeaseHeartbeatLoss = {
+  path: "automatic-renewal" | "activation" | "explicit-verify" | "explicit-renew";
+  outcome: "no-current-owned-unexpired-row" | "operation-error";
+};
+
 export type LeaseHeartbeatWorkerData = {
   path: string;
   expectedIdentity: string;
@@ -60,6 +67,7 @@ export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "ac
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure
+  | { loss: LeaseHeartbeatLoss }
   | { startup: "prepared" }
   | { id: number; ok: true; expiresAt: number }
   | { id: number; ok: false; message: string; payload?: OpenClawStateWorkerErrorPayload };

@@ -3,7 +3,6 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeAgentId } from "./config-utils.js";
 import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
@@ -43,7 +42,11 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
-import { collectRawSessionText, projectSessionEntryRecord } from "./session-entry-projection.js";
+import {
+  collectRawSessionText,
+  projectSessionEntryRecord,
+  renderSessionExportLines,
+} from "./session-entry-projection.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
@@ -64,11 +67,6 @@ export {
 } from "./session-transcript-corpus.js";
 export { readTranscriptStatsBatchReadOnlySync } from "./openclaw-runtime-session.js";
 
-// Keep the historical one-line-per-message export shape for normal turns, but
-// wrap pathological long messages so downstream indexers never ingest a single
-// toxic line. Wrapped continuation lines still map back to the same JSONL line.
-// This limit applies to content only; the role label adds up to 11 chars.
-const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
 const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
@@ -100,6 +98,10 @@ export type SessionFileEntry = {
 export type SessionFileState = Pick<
   SessionFileEntry,
   "path" | "absPath" | "mtimeMs" | "revisionMs" | "size"
+>;
+
+export type SessionEntrySnapshot = NonNullable<
+  ReturnType<typeof readTranscriptExportSnapshotReadOnlySync>
 >;
 
 export type BuildSessionEntryOptions = {
@@ -433,50 +435,6 @@ function normalizeSessionText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function splitLongSessionLine(
-  text: string,
-  maxChars: number = SESSION_EXPORT_CONTENT_WRAP_CHARS,
-): string[] {
-  const normalized = text.trim();
-  if (!normalized) {
-    return [];
-  }
-  if (normalized.length <= maxChars) {
-    return [normalized];
-  }
-
-  const segments: string[] = [];
-  let cursor = 0;
-  while (cursor < normalized.length) {
-    const remaining = normalized.length - cursor;
-    if (remaining <= maxChars) {
-      segments.push(normalized.slice(cursor).trim());
-      break;
-    }
-
-    const limit = cursor + maxChars;
-    let splitAt = limit;
-    for (let index = limit; index > cursor; index -= 1) {
-      if (normalized[index] === " ") {
-        splitAt = index;
-        break;
-      }
-    }
-    splitAt = avoidTrailingHighSurrogateBreak(normalized, cursor, splitAt);
-    segments.push(normalized.slice(cursor, splitAt).trim());
-    cursor = splitAt;
-    while (cursor < normalized.length && normalized[cursor] === " ") {
-      cursor += 1;
-    }
-  }
-
-  return segments.filter(Boolean);
-}
-
-function renderSessionExportLines(label: string, text: string): string[] {
-  return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
-}
-
 const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
 
 function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
@@ -657,14 +615,47 @@ export async function buildSessionEntryInProcess(
   opts: BuildSessionEntryOptions = {},
   redactText: (text: string) => string = (text) => redactSensitiveText(text, { mode: "tools" }),
 ): Promise<SessionFileEntry | null> {
+  return buildSessionEntryFromSource(absPath, opts, redactText);
+}
+
+/** Project an actor-owned snapshot without reopening its physical store on the caller. */
+export async function buildSessionEntryFromSnapshot(
+  absPath: string,
+  opts: Omit<BuildSessionEntryOptions, "onTranscriptMessage"> & {
+    agentId: string;
+    sessionId: string;
+    storePath: string;
+  },
+  snapshot: SessionEntrySnapshot,
+  assertCurrent: () => void,
+): Promise<SessionFileEntry | null> {
+  assertCurrent();
+  const result = await buildSessionEntryFromSource(
+    absPath,
+    structuredClone(opts),
+    (text) => redactSensitiveText(text, { mode: "tools" }),
+    snapshot,
+  );
+  assertCurrent();
+  return result;
+}
+
+async function buildSessionEntryFromSource(
+  absPath: string,
+  opts: BuildSessionEntryOptions,
+  redactText: (text: string) => string,
+  preparedSnapshot?: SessionEntrySnapshot,
+): Promise<SessionFileEntry | null> {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   try {
-    const snapshot = sqliteIdentity
-      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
-          // Observers require original messages and run only after the snapshot closes.
-          projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
-        })
-      : null;
+    const snapshot =
+      preparedSnapshot ??
+      (sqliteIdentity
+        ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
+            // Observers require original messages and run only after the snapshot closes.
+            projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+          })
+        : null);
     const sqliteSource =
       snapshot && sqliteIdentity
         ? {

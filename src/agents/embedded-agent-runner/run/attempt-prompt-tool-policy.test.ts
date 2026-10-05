@@ -90,6 +90,75 @@ describe("applyPromptBuildToolsAllow", () => {
     },
   );
 
+  it.each(["structured", "search", "code"] as const)(
+    "withdraws only the Decision cap from the latest permitted %s generation",
+    async (mode) => {
+      const control = mode === "search" ? "tool_search" : "exec";
+      const fixture = createSession(
+        mode === "structured" ? ["read", "write", "message"] : [control, "message"],
+      );
+      const tools = [
+        { name: "read", generation: "old" },
+        { name: "write", generation: "old" },
+        { name: "message", generation: "old" },
+      ];
+      const effective =
+        mode === "structured" ? tools : [{ name: control, generation: "old" }, tools[2]!];
+      const catalogRef: ToolSearchCatalogRef | undefined =
+        mode === "structured"
+          ? undefined
+          : {
+              current: {
+                entries: tools.slice(0, 2).map((t) => catalogEntry(t.name, t)),
+                counterScope: "revocation",
+                searchCount: 0,
+                describeCount: 0,
+                callCount: 0,
+              },
+            };
+      const policy = createPromptBuildToolPolicy({
+        session: fixture.session,
+        effectiveTools: effective,
+        uncompactedEffectiveTools: tools,
+        tools,
+        catalogRef,
+        codeModeControlsEnabled: mode === "code",
+        forceToolNames: ["message", "denied"],
+      });
+      let current = true;
+      policy.apply(["read"], () => current);
+      expect(policy.current.tools.map((t) => t.name)).toEqual(["message"]);
+      // A permission publication installs a new baseline while the optional cap is active.
+      const freshRead = { name: "read", generation: "new" };
+      const freshMessage = { name: "message", generation: "new" };
+      tools.splice(0, tools.length, freshRead, freshMessage, { name: "other", generation: "new" });
+      if (catalogRef?.current) {
+        catalogRef.current.entries = [
+          catalogEntry("read", freshRead),
+          catalogEntry("other", tools[2]!),
+        ];
+      }
+      fixture.session.setActiveToolsByName(
+        mode === "structured" ? ["read", "message", "other"] : [control, "message"],
+      );
+      policy.refresh();
+      current = false;
+      const prepare = vi.fn(async () => {});
+      await policy.prepareForDispatch(prepare);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(policy.current.tools).toEqual([freshRead, freshMessage]);
+      expect(policy.current.callableToolNames).toContain("read");
+      expect(policy.current.callableToolNames).not.toContain("write");
+      expect(policy.current.callableToolNames).not.toContain("other");
+      expect(policy.current.callableToolNames).not.toContain("denied");
+      if (catalogRef) {
+        expect(catalogRef.current?.entries.map((e) => e.tool)).toEqual([freshRead]);
+      }
+      expect(policy.prepareForDispatch(prepare)).toBeUndefined();
+      expect(prepare).toHaveBeenCalledOnce();
+    },
+  );
+
   it("finalizes prompt guidance from an empty submitted surface", () => {
     const finalize = vi.fn(
       ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>

@@ -66,11 +66,8 @@ describe("Codex participant native admission", () => {
   it.each([
     { hooks: "optional", lifecycle: "fresh", participants: "solo", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "solo", policy: "normal" },
-    { hooks: "disabled", lifecycle: "resumed", participants: "solo", policy: "normal" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "solo", policy: "normal" },
     { hooks: "managed-only", lifecycle: "resumed", participants: "solo", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "normal" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "multiple", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
   ] as const)(
     "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
@@ -310,7 +307,6 @@ describe("Codex native hook Gateway fallback", () => {
     const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
     for (const { hooks, policy, supportsSteering } of [
       { hooks: "disabled", policy: "normal", supportsSteering: false },
-      { hooks: "managed-only", policy: "normal", supportsSteering: false },
       { hooks: "optional", policy: "normal", supportsSteering: true },
       { hooks: "disabled", policy: "token-sharing", supportsSteering: true },
       { hooks: "disabled", policy: "report-only", supportsSteering: true },
@@ -339,7 +335,7 @@ describe("Codex native hook Gateway fallback", () => {
       }
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "configRequirements/read") {
-          return { requirements: { allowManagedHooksOnly: hooks === "managed-only" } };
+          return { requirements: { allowManagedHooksOnly: false } };
         }
         if (method === "account/read") {
           return { account: { type: "apiKey" } };

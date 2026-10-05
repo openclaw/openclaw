@@ -101,10 +101,7 @@ export async function quiesceLocalWorkspace(params: {
           engine,
           id,
           bridges,
-          assertCurrent: () => {
-            params.assertCurrent();
-            runtime.assertCurrent();
-          },
+          assertCurrent: params.assertCurrent,
         });
       });
     await validateSandboxContainerEngineTarget(engine, backendTarget);
@@ -113,7 +110,7 @@ export async function quiesceLocalWorkspace(params: {
     const inspect = await execContainer(
       engine,
       ["inspect", "-f", "{{.Id}} {{.State.Running}} {{.State.Paused}}", entry.containerName],
-      { allowFailure: true },
+      { allowFailure: true, signal: AbortSignal.timeout(30_000) },
     );
     params.assertCurrent();
     if (inspect.code !== 0) {
@@ -158,7 +155,7 @@ export async function quiesceLocalWorkspace(params: {
       // before reconciliation rather than trusting stale pause metadata.
       params.assertCurrent();
       runtime.assertCurrent();
-      await execContainer(engine, ["pause", id]);
+      await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
     }
     releases.push(async () => {
       await validateSandboxContainerEngineTarget(engine, backendTarget);
@@ -167,6 +164,7 @@ export async function quiesceLocalWorkspace(params: {
       // A missing or already-running runtime needs receipt cleanup, not unpause.
       const observed = await execContainer(engine, ["inspect", "-f", "{{.State.Paused}}", id], {
         allowFailure: true,
+        signal: AbortSignal.timeout(30_000),
       });
       params.assertCurrent();
       if (observed.code !== 0) {
@@ -177,7 +175,10 @@ export async function quiesceLocalWorkspace(params: {
         }
       } else if (observed.stdout.trim() === "true") {
         runtime.assertCurrent();
-        const result = await execContainer(engine, ["unpause", id], { allowFailure: true });
+        const result = await execContainer(engine, ["unpause", id], {
+          allowFailure: true,
+          signal: AbortSignal.timeout(30_000),
+        });
         if (
           result.code !== 0 &&
           !/no such (?:container|object)|does not exist/iu.test(result.stderr)

@@ -21,7 +21,10 @@ import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
-import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
+import {
+  connectChatMetadataAccount,
+  createChatMetadataHarness,
+} from "./chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 function createPersonalMetadataFixture(
@@ -51,7 +54,11 @@ function createPersonalMetadataFixture(
     sessions: { others: "none" },
   };
   const config = {
-    agents: { entries: { main: { default: true }, other: {} } },
+    agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, other: {} },
+    },
     gateway: {
       roles: {
         default: "reader",
@@ -130,10 +137,53 @@ function dispatchMetadata(
 }
 
 describe("chat metadata ownership", () => {
+  it("serves commands without preparing a catalog when the client reads models separately", async () => {
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const harness = createChatMetadataHarness(config);
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => config,
+      readChatMetadata: harness.runtime.read,
+    });
+    const request = async (includeModels?: boolean) => {
+      const respond = vi.fn<RespondFn>();
+      await expectDefined(
+        chatHistoryHandlers["chat.metadata"],
+        "metadata handler",
+      )({
+        params: { agentId: "main", ...(includeModels === false ? { includeModels } : {}) },
+        context,
+        client: null,
+        respond,
+        req: { type: "req", id: "commands-only", method: "chat.metadata" },
+        isWebchatConnect: () => false,
+      });
+      return respond;
+    };
+    try {
+      await harness.runtime.refresh();
+      const compact = await request(false);
+      expect(compact).toHaveBeenCalledWith(true, {
+        commands: [{ name: "command-1-1" }],
+        swarmEnabled: true,
+      });
+      expect(harness.buildProjection).not.toHaveBeenCalled();
+      const legacy = await request();
+      expect(legacy).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: [expect.objectContaining({ id: "first" })],
+          commands: [{ name: "command-1-1" }],
+        }),
+      );
+    } finally {
+      await harness.runtime.stop();
+    }
+  });
+
   it("creates and reuses a legacy requester profile through chat.metadata without host SQL", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       ensureProfileForEmail("admitted@example.test");
-      const config: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
       const metadata = { models: [], swarmEnabled: false };
       const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(
         async () => metadata,

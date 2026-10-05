@@ -28,7 +28,7 @@ export async function withSessionRowDatabaseFacts(
     rows: ReadonlyMap<string, Row>;
     dirty: ReadonlySet<string>;
     revision: () => number | undefined;
-    registrySnapshot: () => object | undefined;
+    prepareRegistryFacts: () => Promise<void> | undefined;
     env: NodeJS.ProcessEnv;
     cfg: OpenClawConfig;
     selected?: ReadonlySet<string>;
@@ -42,7 +42,6 @@ export async function withSessionRowDatabaseFacts(
   },
 ): Promise<void> {
   const revision = owner.revision();
-  const registrySnapshot = owner.registrySnapshot();
   const ids: string[] = [];
   for (const id of owner.selected ?? owner.dirty) {
     ids.push(id);
@@ -152,7 +151,7 @@ export async function withSessionRowDatabaseFacts(
             if (prepared) {
               facts.set(identity(row), {
                 ...prepared,
-                acpMeta: prepared.entry?.acp ?? null,
+                acpMeta: null,
                 repositoryWorkspace: null,
               });
             }
@@ -160,19 +159,19 @@ export async function withSessionRowDatabaseFacts(
         }
         const acpRows = rows.flatMap((row) => {
           const prepared = facts.get(identity(row));
-          return prepared?.entry && !prepared.entry.acp
-            ? [{ row, prepared, entry: prepared.entry }]
-            : [];
+          return prepared?.entry ? [{ row, prepared, entry: prepared.entry }] : [];
         });
-        const acpMetadata = await readAcpSessionMetaForEntries({
-          env,
-          cfg: owner.cfg,
-          entries: acpRows.map(({ row, entry }) => ({
-            agentId: row.agentId,
-            sessionKey: row.key,
-            entry,
-          })),
-        });
+        const acpMetadata = acpRows.length
+          ? await readAcpSessionMetaForEntries({
+              env,
+              cfg: owner.cfg,
+              entries: acpRows.map(({ row, entry }) => ({
+                agentId: row.agentId,
+                sessionKey: row.key,
+                entry,
+              })),
+            })
+          : [];
         for (const [index, { prepared }] of acpRows.entries()) {
           prepared.acpMeta = acpMetadata[index] ?? null;
         }
@@ -193,15 +192,20 @@ export async function withSessionRowDatabaseFacts(
               byWorkspace.get(prepared.entry!.repositoryWorkspaceId!) ?? null;
           }
         }
+        // Registry renewal changes presentation, not the captured SQLite facts.
+        // Prepare the current lineage before accepting those facts instead of reading them again.
+        for (
+          let pending = owner.prepareRegistryFacts();
+          pending;
+          pending = owner.prepareRegistryFacts()
+        ) {
+          await pending;
+        }
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
         assertCurrent();
-        if (
-          revision !== undefined &&
-          owner.revision() === revision &&
-          registrySnapshot === owner.registrySnapshot()
-        ) {
+        if (revision !== undefined && owner.revision() === revision) {
           const currentIds = rows
             .filter(
               (row) =>

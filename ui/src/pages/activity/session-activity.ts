@@ -11,6 +11,14 @@ import {
 } from "../../app-route-paths.ts";
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
+import { canApplySessionListSnapshot } from "../../lib/sessions/session-list-query.ts";
+import {
+  createSessionWriteObservation,
+  type createSessionRowProvenance,
+} from "../../lib/sessions/session-row-provenance.ts";
+import { matchesExistingSession } from "../../lib/sessions/session-row-reconcile.ts";
+import type { CurrentWorkChange } from "./current-work.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
@@ -113,6 +121,96 @@ export function canonicalSessionActivityLocation(
 function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): number {
   const recency = sessionActivityTimestamp(b) - sessionActivityTimestamp(a);
   return recency || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+}
+
+type ActivityRowProvenance = ReturnType<typeof createSessionRowProvenance>;
+
+/** Reads own membership; field receipts preserve observations made while the read was pending. */
+export function reconcileSessionActivityRead(
+  incoming: SessionsListResult,
+  previous: SessionsListResult | undefined,
+  provenance: ActivityRowProvenance,
+  revision: number,
+): { result: SessionsListResult; requiresRefresh: boolean } {
+  const held = new Map(
+    (previous?.sessions ?? []).flatMap((row) => {
+      const identity = provenance.identity(row);
+      return identity ? [[identity, row] as const] : [];
+    }),
+  );
+  let orderChanged = false;
+  const sessions = incoming.sessions.map((row) => {
+    const identity = provenance.identity(row);
+    const existing = identity ? held.get(identity) : undefined;
+    provenance.observeReadRow(row, revision, row.agentId, existing ? [existing] : []);
+    if (identity) {
+      held.delete(identity);
+    }
+    const merged = existing ? provenance.mergeRow(existing, row, row.agentId) : row;
+    orderChanged ||= sessionActivityTimestamp(merged) !== sessionActivityTimestamp(row);
+    return merged;
+  });
+  return {
+    result: {
+      ...incoming,
+      sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
+    },
+    requiresRefresh: [...held.values()].some((row) => {
+      const sample = provenance.fieldObservation(row, "updatedAt").source.snapshotAt;
+      return (
+        (sample === undefined ? provenance.hasNewerFacts(row, revision) : sample > incoming.ts) &&
+        !incoming.sessions.some((replacement) =>
+          matchesExistingSession(replacement, row.key, provenance.owner(row)),
+        )
+      );
+    }),
+  };
+}
+
+/** Unfiltered Activity holds its admitted window; aggregate facets refresh separately. */
+export function reconcileSessionActivity(
+  result: SessionsListResult,
+  changes: Iterable<CurrentWorkChange>,
+  provenance: ActivityRowProvenance,
+  revision: number,
+): { result: SessionsListResult; requiresRefresh: boolean } {
+  let nextResult = result;
+  let requiresRefresh = false;
+  for (const change of changes) {
+    if (
+      !change.snapshot ||
+      !canApplySessionListSnapshot(
+        nextResult,
+        change.snapshot,
+        { archivedFilter: "all", limit: 100, excludeSubagents: true },
+        "activity",
+      )
+    ) {
+      requiresRefresh = true;
+      continue;
+    }
+    const next = reconcileSessionChanged(
+      nextResult,
+      change.snapshot,
+      { archivedFilter: "all" },
+      (row, existing, fields, info) => {
+        provenance.inheritRow(row, existing);
+        provenance.observeFields(
+          row,
+          (info.isAncestorReference ? provenance.fieldNames(existing) : fields).filter(
+            (field) => field !== "activitySummary" || info.hasActivitySummary,
+          ),
+          createSessionWriteObservation(revision, info.updatedAt, undefined, info.snapshotAt),
+          info.agentId,
+        );
+        return provenance.mergeRow(existing, row, info.agentId);
+      },
+    ).result;
+    if (next) {
+      nextResult = { ...next, sessions: next.sessions.toSorted(compareSessionActivity) };
+    }
+  }
+  return { result: nextResult, requiresRefresh };
 }
 
 export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {

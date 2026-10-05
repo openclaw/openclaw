@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
@@ -14,7 +15,6 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
       targetsBySessionKey: new Map(),
       durableTargets: [],
@@ -23,13 +23,23 @@ vi.mock("../session-utils.js", async () => {
     })),
   };
 });
+vi.mock("../session-utils-store-worker.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils-store-worker.js")>(
+    "../session-utils-store-worker.js",
+  );
+  return {
+    resolveGatewaySessionStoreTargetInWorker: vi.fn(
+      actual.resolveGatewaySessionStoreTargetInWorker,
+    ),
+  };
+});
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
   );
   return {
     ...actual,
-    resolveExistingUsageSessionFile: vi.fn(actual.resolveExistingUsageSessionFile),
+    resolveUsageSessionSource: vi.fn(actual.resolveUsageSessionSource),
     discoverAllSessions: vi.fn(async ({ agentId }: { agentId?: string }) =>
       ["main", "opus"].includes(agentId ?? "")
         ? [
@@ -57,18 +67,21 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
+  loadSessionLogs,
   loadSessionUsageTimeSeries,
-  resolveExistingUsageSessionFile,
+  resolveUsageSessionSource,
 } from "../../infra/session-cost-usage.js";
-import {
-  loadCombinedSessionStoreForGatewayCore,
-  loadGatewaySessionEntryReadOnly,
-} from "../session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
-let TEST_RUNTIME_CONFIG = {
+let TEST_RUNTIME_CONFIG: OpenClawConfig = {
   session: {},
-  agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, opus: {} },
+  },
 };
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 };
 async function runSessionsUsageMethod(
@@ -115,23 +128,21 @@ function mockCombinedStore(
 }
 function mockStoredSession(
   key: string,
-  sessionId: string,
+  entry: SessionEntry,
   resolution: "valid" | "missing" = "valid",
 ) {
-  const entry = { sessionId, updatedAt: 1_000 };
   const storePath = "/tmp/agents/opus/agent/openclaw-agent.sqlite";
-  vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
-    cfg: TEST_RUNTIME_CONFIG,
+  vi.mocked(resolveGatewaySessionStoreTargetInWorker).mockResolvedValueOnce({
     agentId: "opus",
     canonicalKey: key,
-    entry,
-    legacyKey: undefined,
     store: { [key]: entry },
     storeKeys: [key],
     storePath,
   });
-  vi.mocked(resolveExistingUsageSessionFile).mockReturnValueOnce(
-    resolution === "missing" ? undefined : `sqlite:opus:${sessionId}:${storePath}`,
+  vi.mocked(resolveUsageSessionSource).mockResolvedValueOnce(
+    resolution === "missing"
+      ? undefined
+      : { entry, sessionFile: `sqlite:opus:${entry.sessionId}:${storePath}` },
   );
 }
 
@@ -233,6 +244,19 @@ describe("sessions.usage", () => {
           ]),
         }),
       );
+      for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"] as const) {
+        const respond = await runSessionsUsageMethod(method, { key: "shared", agentId: "opus" });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        expect(
+          method === "sessions.usage.timeseries" ? loadSessionUsageTimeSeries : loadSessionLogs,
+        ).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentId: "opus",
+            sessionId: "shared",
+            sessionFile: fs.realpathSync(sessionFile),
+          }),
+        );
+      }
     });
   });
   it("rolls up known session family ids when historical usage is requested", async () => {
@@ -242,23 +266,19 @@ describe("sessions.usage", () => {
 
     const oldSessionFile = "/tmp/old.jsonl.reset.2026-02-01T00-00-00.000Z";
     const oldestSessionFile = "/tmp/oldest.jsonl.reset.2026-01-31T00-00-00.000Z";
-    mockStoredSession(storeKey, "current");
+    const entry: SessionEntry = {
+      sessionId: "current",
+      updatedAt: 1_000,
+      usageFamilyKey: storeKey,
+      usageFamilySessionIds: ["old", "current", "oldest"],
+    };
+    mockStoredSession(storeKey, entry);
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
       { sessionId: "oldest", sessionFile: oldestSessionFile, mtime: 900 },
     ]);
 
-    mockCombinedStore(
-      {
-        [storeKey]: {
-          sessionId: "current",
-          updatedAt: 1_000,
-          usageFamilyKey: storeKey,
-          usageFamilySessionIds: ["old", "current", "oldest"],
-        },
-      },
-      [[storeKey, "opus"]],
-    );
+    mockCombinedStore({ [storeKey]: entry }, [[storeKey, "opus"]]);
     vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
       summaries: sessions.map((session) => {
         const historical = session.sessionId === "old";
@@ -425,7 +445,7 @@ describe("sessions.usage", () => {
 
   it("prefers the deterministic store key when duplicate sessionIds exist", async () => {
     const preferredKey = "agent:opus:acp:run-dup";
-    mockStoredSession(preferredKey, "run-dup");
+    mockStoredSession(preferredKey, { sessionId: "run-dup", updatedAt: 1_000 });
     mockCombinedStore(
       {
         [preferredKey]: { sessionId: "run-dup", sessionFile: "run-dup.jsonl", updatedAt: 1_000 },
@@ -466,7 +486,7 @@ describe("sessions.usage", () => {
 
   it("fails closed when a canonical stored target no longer matches", async () => {
     const key = "agent:opus:stale";
-    mockStoredSession(key, "stale", "missing");
+    mockStoredSession(key, { sessionId: "stale", updatedAt: 1_000 }, "missing");
     const respond = await runSessionsUsageMethod("sessions.usage.timeseries", { key });
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(loadSessionUsageTimeSeries).not.toHaveBeenCalled();

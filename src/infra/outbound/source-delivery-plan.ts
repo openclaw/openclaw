@@ -71,21 +71,12 @@ export type SourceDeliveryPlan = {
     force: boolean;
     requireExplicitTarget: boolean;
     requireExplicitTargetEvidence: boolean;
-    defaultTarget: boolean;
   };
   fallback: {
     directDelivery: boolean;
     skipWhenMessageToolSentToTarget: boolean;
-    bestEffort: boolean;
-  };
-  progress: {
-    allowCallbacksWhenSourceDeliverySuppressed: boolean;
   };
 };
-
-function isMessageToolOwnedDelivery(owner: SourceVisibleDeliveryOwner): boolean {
-  return owner === "message_tool" || owner === "message_tool_then_direct_fallback";
-}
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
@@ -164,55 +155,6 @@ export function sourceDeliveryTargetsMatch(
     return target.threadImplicit === true && target.threadSuppressed !== true;
   }
   return deliveryThreadId === targetThreadId;
-}
-
-/** Builds a source delivery plan from ownership and fallback inputs. */
-export function createSourceDeliveryPlan(params: {
-  owner: SourceVisibleDeliveryOwner;
-  reason: SourceDeliveryPlanReason;
-  target?: SourceDeliveryTarget;
-  messageToolEnabled?: boolean;
-  messageToolForced?: boolean;
-  requireExplicitMessageTarget?: boolean;
-  requireExplicitMessageTargetEvidence?: boolean;
-  directFallback?: boolean;
-  skipFallbackWhenMessageToolSentToTarget?: boolean;
-  fallbackBestEffort?: boolean;
-  allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-}): SourceDeliveryPlan {
-  const messageToolOwnsDelivery = isMessageToolOwnedDelivery(params.owner);
-  const sourceReplyDeliveryMode = messageToolOwnsDelivery ? "message_tool_only" : undefined;
-  const directDelivery =
-    params.directFallback ??
-    (params.owner === "direct_fallback" || params.owner === "message_tool_then_direct_fallback");
-  return {
-    owner: params.owner,
-    reason: params.reason,
-    target: params.target ?? {},
-    normalFinal:
-      sourceReplyDeliveryMode === "message_tool_only" || params.owner === "none"
-        ? "private"
-        : "visible",
-    sourceReplyDeliveryMode,
-    messageTool: {
-      enabled: params.messageToolEnabled ?? messageToolOwnsDelivery,
-      force: params.messageToolForced ?? messageToolOwnsDelivery,
-      requireExplicitTarget: params.requireExplicitMessageTarget ?? false,
-      requireExplicitTargetEvidence: params.requireExplicitMessageTargetEvidence ?? false,
-      defaultTarget: Boolean(params.target?.channel || params.target?.to),
-    },
-    fallback: {
-      directDelivery,
-      skipWhenMessageToolSentToTarget:
-        params.skipFallbackWhenMessageToolSentToTarget ??
-        params.owner === "message_tool_then_direct_fallback",
-      bestEffort: params.fallbackBestEffort ?? false,
-    },
-    progress: {
-      allowCallbacksWhenSourceDeliverySuppressed:
-        params.allowProgressCallbacksWhenSourceDeliverySuppressed ?? false,
-    },
-  };
 }
 
 function resolveImplicitMessageToolDeliveryTarget(

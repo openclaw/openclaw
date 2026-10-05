@@ -519,13 +519,15 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
+      shouldPatchModel: (model) =>
+        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS),
     });
     // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
     // the response-side fallback here for custom Xiaomi-compatible proxy routes.
     ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
       baseStreamFn: ctx.agent.streamFn,
-      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
+      shouldPatchModel: (model) =>
+        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS),
     });
 
     // Guard Google-family payloads against invalid negative thinking budgets
@@ -663,23 +665,15 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
-function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    normalizedModelId !== undefined &&
-    MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
-  );
-}
-
-function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
+function isMiMoOpenAICompatibleModel(
   model: Parameters<StreamFn>[0],
+  modelIds: ReadonlySet<string>,
 ): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
     normalizedModelId !== undefined &&
-    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
+    modelIds.has(normalizedModelId)
   );
 }
 

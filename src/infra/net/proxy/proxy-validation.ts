@@ -1,5 +1,3 @@
-// Proxy validation resolves operator config and probes allowed, denied, and
-// APNs destinations through an explicit HTTP(S) forward proxy.
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
@@ -24,7 +22,6 @@ const APNS_REACHABILITY_REASON = "InvalidProviderToken";
 
 type ProxyValidationConfigSource = "override" | "config" | "env" | "missing" | "disabled";
 
-/** Normalized proxy validation input plus actionable config errors. */
 type ProxyValidationResolvedConfig = {
   enabled: boolean;
   proxyUrl?: string;
@@ -58,7 +55,6 @@ type ProxyValidationFetchCheckParams = {
   timeoutMs: number;
 };
 
-/** Result from a fetch-based probe, including optional denied-canary evidence. */
 type ProxyValidationFetchCheckResult = {
   ok: boolean;
   status: number;
@@ -223,7 +219,6 @@ function normalizeTimeoutMs(value: number | undefined): number {
 type ProxyValidationDeniedTarget = {
   url: string;
   expectedCanaryToken?: string;
-  transportErrorMeansBlocked: boolean;
 };
 
 type LoopbackValidationCanary = {
@@ -304,10 +299,7 @@ async function resolveDeniedTargets(
 ): Promise<{ targets: ProxyValidationDeniedTarget[]; close: () => Promise<void> }> {
   if (deniedUrls !== undefined) {
     return {
-      targets: deniedUrls.map((url) => ({
-        url,
-        transportErrorMeansBlocked: false,
-      })),
+      targets: deniedUrls.map((url) => ({ url })),
       close: async () => undefined,
     };
   }
@@ -318,7 +310,6 @@ async function resolveDeniedTargets(
       {
         url: canary.url,
         expectedCanaryToken: canary.token,
-        transportErrorMeansBlocked: true,
       },
     ],
     close: canary.close,
@@ -337,117 +328,6 @@ async function runValidationCheck(
   }
 }
 
-async function runAllowedCheck(params: {
-  url: string;
-  proxyUrl: string;
-  proxyTls?: ManagedProxyTlsOptions;
-  timeoutMs: number;
-  fetchCheck: ProxyValidationFetchCheck;
-}): Promise<ProxyValidationOutcome> {
-  if (!isHttpUrl(params.url)) {
-    return { ok: false, error: "Invalid allowed destination URL" };
-  }
-
-  const result = await params.fetchCheck({
-    proxyUrl: params.proxyUrl,
-    ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-    targetUrl: params.url,
-    timeoutMs: params.timeoutMs,
-  });
-  if (!result.ok) {
-    return {
-      ok: false,
-      status: result.status,
-      error: `Allowed destination returned HTTP ${result.status}`,
-    };
-  }
-  return { ok: true, status: result.status };
-}
-
-async function runDeniedCheck(params: {
-  target: ProxyValidationDeniedTarget;
-  proxyUrl: string;
-  proxyTls?: ManagedProxyTlsOptions;
-  timeoutMs: number;
-  fetchCheck: ProxyValidationFetchCheck;
-}): Promise<ProxyValidationOutcome> {
-  if (!isHttpUrl(params.target.url)) {
-    return { ok: false, error: "Invalid denied destination URL" };
-  }
-
-  try {
-    const result = await params.fetchCheck({
-      proxyUrl: params.proxyUrl,
-      ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-      targetUrl: params.target.url,
-      timeoutMs: params.timeoutMs,
-    });
-    if (
-      params.target.expectedCanaryToken !== undefined &&
-      result.deniedCanaryToken !== params.target.expectedCanaryToken
-    ) {
-      // A blocked loopback canary may return a denial status; only a matching
-      // token proves the proxy actually forwarded the forbidden loopback URL.
-      if (result.ok) {
-        return {
-          ok: false,
-          status: result.status,
-          error: `Denied loopback canary returned HTTP ${result.status} without the validation token`,
-        };
-      }
-      return {
-        ok: true,
-        status: result.status,
-      };
-    }
-    return {
-      ok: false,
-      status: result.status,
-      error:
-        params.target.expectedCanaryToken === undefined
-          ? `Denied destination returned HTTP ${result.status}; expected the proxy to block the connection`
-          : `Denied loopback canary was reachable through the proxy with HTTP ${result.status}`,
-    };
-  } catch (err) {
-    const message = coerceErrorMessage(err);
-    if (params.target.transportErrorMeansBlocked) {
-      return {
-        ok: true,
-        error: message,
-      };
-    }
-    return {
-      ok: false,
-      error: `Denied destination failed without a verifiable proxy-deny signal: ${message}`,
-    };
-  }
-}
-
-async function runApnsReachabilityCheck(params: {
-  authority: string;
-  proxyUrl: string;
-  proxyTls?: ManagedProxyTlsOptions;
-  timeoutMs: number;
-  apnsCheck: ProxyValidationApnsCheck;
-}): Promise<ProxyValidationOutcome> {
-  const result = await params.apnsCheck({
-    proxyUrl: params.proxyUrl,
-    ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-    authority: params.authority,
-    timeoutMs: params.timeoutMs,
-  });
-  if (!hasApnsReachabilityProof(result)) {
-    return {
-      ok: false,
-      error:
-        "APNs reachability check failed: response did not include an apns-id header or APNs InvalidProviderToken body. " +
-        "The proxy may be intercepting the connection instead of tunneling it.",
-    };
-  }
-  return { ok: true, status: result.status };
-}
-
-/** Runs allowed, denied, and optional APNs proxy validation probes. */
 export async function runProxyValidation(
   options: RunProxyValidationOptions,
 ): Promise<ProxyValidationResult> {
@@ -456,6 +336,7 @@ export async function runProxyValidation(
     return { ok: false, config, checks: [] };
   }
 
+  const proxyUrl = config.proxyUrl;
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
   let proxyTls: ManagedProxyTlsOptions | undefined;
   try {
@@ -476,28 +357,87 @@ export async function runProxyValidation(
   const allowedUrls = options.allowedUrls ?? DEFAULT_PROXY_VALIDATION_ALLOWED_URLS;
   const deniedTargets = await resolveDeniedTargets(options.deniedUrls);
   const checks: ProxyValidationCheck[] = [];
-  const proxyOptions = { proxyUrl: config.proxyUrl, proxyTls, timeoutMs };
+  const checkDestination = (kind: "allowed" | "denied", target: ProxyValidationDeniedTarget) =>
+    runValidationCheck(kind, target.url, async () => {
+      if (!isHttpUrl(target.url)) {
+        return { ok: false, error: `Invalid ${kind} destination URL` };
+      }
+      try {
+        const result = await fetchCheck({
+          proxyUrl,
+          ...(proxyTls ? { proxyTls } : {}),
+          targetUrl: target.url,
+          timeoutMs,
+        });
+        if (kind === "allowed") {
+          return result.ok
+            ? { ok: true, status: result.status }
+            : {
+                ok: false,
+                status: result.status,
+                error: `Allowed destination returned HTTP ${result.status}`,
+              };
+        }
+        if (
+          target.expectedCanaryToken !== undefined &&
+          result.deniedCanaryToken !== target.expectedCanaryToken
+        ) {
+          // Only the token proves forwarding; an unverified success is not a denial.
+          return result.ok
+            ? {
+                ok: false,
+                status: result.status,
+                error: `Denied loopback canary returned HTTP ${result.status} without the validation token`,
+              }
+            : { ok: true, status: result.status };
+        }
+        return {
+          ok: false,
+          status: result.status,
+          error:
+            target.expectedCanaryToken === undefined
+              ? `Denied destination returned HTTP ${result.status}; expected the proxy to block the connection`
+              : `Denied loopback canary was reachable through the proxy with HTTP ${result.status}`,
+        };
+      } catch (err) {
+        if (kind === "allowed") {
+          throw err;
+        }
+        const message = coerceErrorMessage(err);
+        return target.expectedCanaryToken !== undefined
+          ? { ok: true, error: message }
+          : {
+              ok: false,
+              error: `Denied destination failed without a verifiable proxy-deny signal: ${message}`,
+            };
+      }
+    });
 
   try {
     for (const url of allowedUrls) {
-      checks.push(
-        await runValidationCheck("allowed", url, () =>
-          runAllowedCheck({ ...proxyOptions, url, fetchCheck }),
-        ),
-      );
+      checks.push(await checkDestination("allowed", { url }));
     }
     for (const target of deniedTargets.targets) {
-      checks.push(
-        await runValidationCheck("denied", target.url, () =>
-          runDeniedCheck({ ...proxyOptions, target, fetchCheck }),
-        ),
-      );
+      checks.push(await checkDestination("denied", target));
     }
     if (options.apnsReachability === true) {
       checks.push(
-        await runValidationCheck("apns", apnsAuthority, () =>
-          runApnsReachabilityCheck({ ...proxyOptions, authority: apnsAuthority, apnsCheck }),
-        ),
+        await runValidationCheck("apns", apnsAuthority, async () => {
+          const result = await apnsCheck({
+            proxyUrl,
+            ...(proxyTls ? { proxyTls } : {}),
+            authority: apnsAuthority,
+            timeoutMs,
+          });
+          return hasApnsReachabilityProof(result)
+            ? { ok: true, status: result.status }
+            : {
+                ok: false,
+                error:
+                  "APNs reachability check failed: response did not include an apns-id header or APNs InvalidProviderToken body. " +
+                  "The proxy may be intercepting the connection instead of tunneling it.",
+              };
+        }),
       );
     }
   } finally {

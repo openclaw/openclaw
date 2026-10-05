@@ -17,6 +17,7 @@ import {
   assertAgentDatabaseAdmitted,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   listOpenIncognitoAgentDatabases,
@@ -50,6 +51,7 @@ import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-k
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
+  isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
@@ -481,6 +483,14 @@ export function resolveGatewaySessionStoreTargets(
   const deleted = createGatewayRetainedStoreMatcher(cfg, opts.discovery);
   const admitted = (target: SessionStoreTarget, durable = false): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
+    if (
+      opts.preserveSentinelOwners === "physical" &&
+      getAgentDatabaseStartupAdmission() &&
+      physical &&
+      !isConfiguredAgentDatabaseTarget(cfg, physical.agentId, physical.storePath, env)
+    ) {
+      return false;
+    }
     if (durable && deleted(physical?.storePath ?? target.storePath, target.agentId)) {
       return false;
     }
@@ -528,7 +538,7 @@ type GatewayCombinedSessionStore = {
   targetsBySessionKey: GatewayStoredSessionTargets;
 };
 
-function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionStoreOptions) {
+export function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionStoreOptions) {
   const targets = resolveGatewaySessionStoreTargets(cfg, opts);
   return {
     projection: opts.projection ?? "list",
@@ -543,7 +553,7 @@ function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionSt
   };
 }
 
-function mergeCombinedSessionStore(
+export function mergeCombinedSessionStore(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions,
   prepared: ReturnType<typeof prepareCombinedSessionStore>,

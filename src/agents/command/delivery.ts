@@ -25,7 +25,7 @@ import { createChannelReplyTransform } from "../../channels/message/reply-transf
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -368,7 +368,7 @@ export async function deliverAgentCommandResult(
   const deliveryRequested = opts.deliver === true;
   const sourcePayloads =
     deliveryRequested && params.payloads
-      ? selectSourceDeliverablePayloads(params.payloads, opts.sourceReplyDeliveryMode)
+      ? selectSourceDeliverablePayloads(params.payloads, opts)
       : params.payloads;
   const suppressAutomaticDelivery =
     deliveryRequested &&

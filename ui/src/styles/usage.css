@@ -296,7 +296,7 @@
   border: 2px solid currentcolor;
   border-right-color: transparent;
   border-radius: var(--radius-full);
-  animation: usage-spin 0.8s linear infinite;
+  animation: btn-spinner-spin 0.8s linear infinite;
 }
 
 .usage-loading-card {
@@ -712,17 +712,6 @@
   border-radius: var(--radius-lg);
   background: var(--card);
   box-shadow: none;
-}
-
-.usage-summary-card--hero,
-.usage-summary-card--half,
-.usage-summary-card--medium,
-.usage-summary-card--compact {
-  grid-column: auto;
-}
-
-.usage-summary-card--hero {
-  gap: 6px;
 }
 
 .usage-summary-card--throughput {
@@ -2065,12 +2054,6 @@
 
   .usage-loading-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@keyframes usage-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 

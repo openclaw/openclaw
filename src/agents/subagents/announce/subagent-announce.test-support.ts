@@ -88,9 +88,7 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
         ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
         : undefined,
     getGlobalHookRunner: () => ({ hasHooks: () => options.hasHooks?.() ?? false }),
-    createBoundDeliveryRouter: () => ({
-      resolveDestination: () => ({ mode: "none" }),
-    }),
+    resolveBoundDeliveryDestination: async () => null,
     resolveConversationIdFromTargets: () => "",
     resolveExternalBestEffortDeliveryTarget,
     resolveQueueSettings,

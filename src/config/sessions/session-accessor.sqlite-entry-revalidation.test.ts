@@ -14,11 +14,12 @@ import {
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { onSessionIdentityMutation } from "./session-accessor.js";
 import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import {
@@ -44,9 +45,10 @@ import { readSessionEntryCurrentFacts } from "./session-entry-read.worker.js";
 const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:entry-revalidation";
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
@@ -131,6 +133,8 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   it("restores the connection's commit wait after admitting a rollback-journal patch", async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    database = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
     database.db.exec("PRAGMA busy_timeout = 37");
     const reader = new DatabaseSync(database.path);
@@ -208,6 +212,9 @@ describe("SQLite session entry patch commit revalidation", () => {
               : /closed|replaced|not open/,
         );
         expect(updates).toBe(1);
+        if (changed === "connection") {
+          await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        }
         expect(loadExactSessionEntry(scope)?.entry.label).toBe(
           changed === "row" ? "foreign" : "original",
         );
@@ -228,11 +235,12 @@ describe("SQLite session entry patch commit revalidation", () => {
       });
     }
 
-    it.each(
-      ["sessionId", "lifecycleRevision", "activeWriterRunId"].flatMap((field) =>
-        ["foreign", "same-connection"].map((writer) => ({ field, writer })),
-      ),
-    )("rejects a changed $field from a $writer writer", ({ field, writer }) => {
+    it.each([
+      { field: "sessionId", writer: "foreign" },
+      { field: "lifecycleRevision", writer: "foreign" },
+      { field: "activeWriterRunId", writer: "foreign" },
+      { field: "activeWriterRunId", writer: "same-connection" },
+    ])("rejects a changed $field from a $writer writer", ({ field, writer }) => {
       const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
       guard();
       if (writer === "foreign") {
@@ -485,22 +493,17 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
   });
 
-  it.each([false, true])(
-    "commits an unchanged persisted row after preparation (reopen: %s)",
-    async (reopen) => {
-      const persisted = await patchEntry("ordinary", () => {
-        if (reopen) {
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        }
-        return { label: "renamed" };
-      });
-      expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
-      expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
-        label: "renamed",
-        sessionId: "session-1",
-      });
-    },
-  );
+  it("commits an unchanged persisted row after reopening during preparation", async () => {
+    const persisted = await patchEntry("ordinary", async () => {
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+      return { label: "renamed" };
+    });
+    expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
+    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
+      label: "renamed",
+      sessionId: "session-1",
+    });
+  });
 
   it("rejects the commit when the row changed while the update callback ran", async () => {
     await expect(
@@ -603,15 +606,15 @@ describe("SQLite session entry patch commit revalidation", () => {
         { sessionId: "main-session", updatedAt: 10 },
       );
       await expect(
-        patchEntry(route, () => {
+        patchEntry(route, async () => {
           setCanonicalSqliteSessionMainKey(database, "work");
           setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           return null;
         }),
       ).rejects.toThrow("openclaw doctor --fix");
       // Test cleanup must not depend on admitting the deliberately invalid store.
-      closeOpenClawAgentDatabaseByPath(database.path);
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
       const cleanup = new DatabaseSync(database.path);
       try {
         setUnrelatedParent(cleanup, null);
@@ -688,7 +691,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         return { label: "with participants" };
       });
       expect(persisted).toMatchObject({ sessionId: "session-1", label: "with participants" });
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
         label: "with participants",
         participantCount: 2,

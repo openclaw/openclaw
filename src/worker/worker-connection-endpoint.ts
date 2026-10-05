@@ -35,10 +35,7 @@ export const WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES = Math.max(
 );
 
 export class WorkerConnectionEndpointError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkerConnectionEndpointError";
-  }
+  override name = "WorkerConnectionEndpointError";
 }
 
 const AccessCredential = z

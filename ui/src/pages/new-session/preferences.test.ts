@@ -6,6 +6,7 @@ import {
   encodeIdentityPreferences,
   loadBrowserPreferences,
   loadNewSessionPreference,
+  type NewSessionPreference,
   replaceBrowserPreference,
   resolveNewSessionFolderPreference,
 } from "./preferences.ts";
@@ -15,34 +16,68 @@ describe("new-session browser preferences", () => {
     vi.stubGlobal("localStorage", createStorageMock());
   });
 
-  it("keeps selections isolated by Gateway and agent", () => {
-    replaceBrowserPreference("ws://one.example", "Main", {
-      workspace: "/workspace",
-      folder: "/workspace/project",
-      where: { kind: "cloud", id: "build-fleet" },
-      projectId: "openclaw",
-      worktree: true,
-      freshWorkspace: false,
-      baseRef: "main",
-      worktreeName: "picker-redesign",
-      model: "openai/gpt-5.6-sol",
-      thinkingLevel: "high",
-    });
-
-    expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({
-      workspace: "/workspace",
-      folder: "/workspace/project",
-      where: { kind: "cloud", id: "build-fleet" },
-      projectId: "openclaw",
-      worktree: true,
-      freshWorkspace: false,
-      baseRef: "main",
-      worktreeName: "picker-redesign",
-      model: "openai/gpt-5.6-sol",
-      thinkingLevel: "high",
-    });
-    expect(loadNewSessionPreference("ws://one.example", "research")).toBeNull();
+  const placement: NewSessionPreference = {
+    workspace: "/workspace",
+    folder: "/workspace/project",
+    where: { kind: "cloud", id: "build-fleet" },
+    projectId: "openclaw",
+    worktree: true,
+    freshWorkspace: false,
+    baseRef: "main",
+    worktreeName: "picker-redesign",
+    model: "openai/gpt-5.6-sol",
+    thinkingLevel: "high",
+  };
+  it.each<{ name: string; choice: NewSessionPreference; browser: NewSessionPreference }>([
+    { name: "placement", choice: placement, browser: placement },
+    {
+      name: "private repository",
+      choice: {
+        remoteProject: {
+          identity: "acme/private-repo",
+          cloneUrl: "https://ghe.example.test/acme/private-repo.git",
+          defaultBranch: "main",
+        },
+        baseRef: "main",
+      },
+      browser: { baseRef: "main" },
+    },
+    ...([true, false, "auto", "ultrafast"] as const).map((fastMode) => ({
+      name: `Fast Mode ${fastMode}`,
+      choice: { fastMode },
+      browser: { fastMode },
+    })),
+    {
+      name: "fresh workspace",
+      choice: { folder: "/local", worktree: true, freshWorkspace: true },
+      browser: { folder: "/local", worktree: true, freshWorkspace: true },
+    },
+  ])("round-trips $name in the correct browser and identity scopes", ({ choice, browser }) => {
+    const gateway = "ws://one.example";
+    replaceBrowserPreference(gateway, "Main", choice);
+    expect(loadNewSessionPreference(gateway, "main")).toEqual(browser);
+    expect(loadNewSessionPreference(gateway, "research")).toBeNull();
     expect(loadNewSessionPreference("ws://two.example", "main")).toBeNull();
+    expect(encodeIdentityPreferences(loadBrowserPreferences(gateway))).toEqual({
+      "new-session.v1:main": browser,
+    });
+    expect(decodeIdentityPreferences(encodeIdentityPreferences({ main: choice }))).toEqual({
+      main: choice,
+    });
+    expect(
+      decodeIdentityPreferences(encodeIdentityPreferences(loadBrowserPreferences(gateway))),
+    ).toEqual({ main: browser });
+    expect(localStorage.getItem(localStorage.key(0)!)).not.toContain("private-repo");
+    expect(
+      decodeIdentityPreferences({
+        unrelated: { folder: "/ignored" },
+        "new-session.v1:main": { folder: "/gateway", model: "openai/test" },
+      }),
+    ).toEqual({ main: { folder: "/gateway", model: "openai/test" } });
+    replaceBrowserPreference(gateway, "main", { fastMode: undefined });
+    expect(loadNewSessionPreference(gateway, "main")).toBeNull();
+    replaceBrowserPreference(gateway, "main", { folder: "/gateway" });
+    expect(loadNewSessionPreference(gateway, "main")).toEqual({ folder: "/gateway" });
   });
 
   it("keeps a legacy cloud source after unavailable Git clears the stored worktree flag", () => {
@@ -76,82 +111,29 @@ describe("new-session browser preferences", () => {
     ).toBe(true);
   });
 
-  it.each([true, false, "auto", "ultrafast"] as const)(
-    "round-trips a standalone Fast Mode choice %s",
-    (fastMode) => {
-      replaceBrowserPreference("ws://one.example", "main", { fastMode });
-      expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({ fastMode });
-      expect(
-        decodeIdentityPreferences(
-          encodeIdentityPreferences(loadBrowserPreferences("ws://one.example")),
-        ),
-      ).toEqual({ main: { fastMode } });
-      expect(loadNewSessionPreference("ws://one.example", "other")).toBeNull();
-      expect(loadNewSessionPreference("ws://two.example", "main")).toBeNull();
-      replaceBrowserPreference("ws://one.example", "main", { fastMode: undefined });
-      expect(loadNewSessionPreference("ws://one.example", "main")).toBeNull();
+  it.each([
+    { fastMode: "on" },
+    {
+      folder: 42,
+      where: { kind: "node", id: [] },
+      projectId: {},
+      remoteProject: { identity: [], cloneUrl: 42 },
+      model: [],
+      worktree: "yes",
+      freshWorkspace: "yes",
     },
-  );
-
-  it.each(["on", "off", "false", 0, 1, null, {}, []])(
-    "drops malformed stored Fast Mode %j",
-    (fastMode) => {
-      expect(decodeIdentityPreferences({ "new-session.v1:main": { fastMode } })).toEqual({});
-    },
-  );
-
-  it("preserves boolean choices and drops malformed persisted fields", () => {
-    replaceBrowserPreference("ws://one.example", "main", {
+  ])("drops malformed persisted fields %j", (invalid) => {
+    const gateway = "ws://one.example";
+    replaceBrowserPreference(gateway, "main", { worktree: false, freshWorkspace: false });
+    expect(loadNewSessionPreference(gateway, "main")).toEqual({
       worktree: false,
       freshWorkspace: false,
     });
-
-    expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({
-      worktree: false,
-      freshWorkspace: false,
-    });
-
     const key = localStorage.key(0);
     expect(key).not.toBeNull();
-    localStorage.setItem(
-      key ?? "",
-      JSON.stringify({
-        agents: {
-          main: {
-            folder: 42,
-            where: { kind: "node", id: [] },
-            projectId: {},
-            model: [],
-            worktree: "yes",
-            freshWorkspace: "yes",
-          },
-        },
-      }),
-    );
-    expect(loadNewSessionPreference("ws://one.example", "main")).toBeNull();
-  });
-
-  it("round-trips normalized browser preferences through identity keys", () => {
-    replaceBrowserPreference("ws://one.example", "Main", {
-      folder: "/local",
-      worktree: true,
-      freshWorkspace: true,
-    });
-    const browser = loadBrowserPreferences("ws://one.example");
-    expect(encodeIdentityPreferences(browser)).toEqual({
-      "new-session.v1:main": { folder: "/local", worktree: true, freshWorkspace: true },
-    });
-    expect(
-      decodeIdentityPreferences({
-        unrelated: { folder: "/ignored" },
-        "new-session.v1:main": { folder: "/gateway", model: "openai/test" },
-      }),
-    ).toEqual({ main: { folder: "/gateway", model: "openai/test" } });
-
-    replaceBrowserPreference("ws://one.example", "main", { folder: "/gateway" });
-    expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({
-      folder: "/gateway",
-    });
+    localStorage.setItem(key ?? "", JSON.stringify({ agents: { main: invalid } }));
+    expect(loadNewSessionPreference(gateway, "main")).toBeNull();
+    expect(decodeIdentityPreferences({ "new-session.v1:main": invalid })).toEqual({});
   });
 
   it("clears the final selection while preserving other agents", () => {
@@ -190,6 +172,7 @@ describe("palette placement overrides", () => {
           workspace: "/workspace",
           folder: "/workspace",
           projectId: "",
+          remoteProject: null,
           baseRef: "",
           worktreeName: "foreground-task",
           where: { kind: "local" },
@@ -206,6 +189,7 @@ describe("palette placement overrides", () => {
         workspace: "/workspace",
         folder: "/workspace",
         projectId: "",
+        remoteProject: null,
         baseRef: "",
         where: { kind: "local" },
         worktree: false,

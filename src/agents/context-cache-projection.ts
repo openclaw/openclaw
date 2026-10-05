@@ -64,15 +64,6 @@ function applyDiscoveredContextWindow(
   }
 }
 
-export function applyDiscoveredContextWindows(params: {
-  cache: Map<string, number>;
-  models: ContextWindowModelEntry[];
-}): void {
-  for (const model of params.models) {
-    applyDiscoveredContextWindow(params.cache, model);
-  }
-}
-
 export function applyConfiguredContextWindows(params: {
   cache: Map<string, number>;
   windowCache: Map<string, number>;
@@ -159,16 +150,19 @@ function yieldToGateway(): Promise<void> {
 
 async function projectModels(params: {
   cache: Map<string, number>;
-  models: ContextWindowModelEntry[];
-  processed: { count: number };
+  modelCatalog: ContextWindowCatalog;
+  processed: number;
   assertCurrent?: () => void;
 }): Promise<void> {
-  for (const model of params.models) {
-    applyDiscoveredContextWindow(params.cache, model);
-    params.processed.count += 1;
-    if (params.processed.count % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
-      await yieldToGateway();
-      params.assertCurrent?.();
+  let processed = params.processed;
+  for (const models of [params.modelCatalog.entries, params.modelCatalog.staticEntries ?? []]) {
+    for (const model of models) {
+      applyDiscoveredContextWindow(params.cache, model);
+      processed += 1;
+      if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+        await yieldToGateway();
+        params.assertCurrent?.();
+      }
     }
   }
 }
@@ -183,7 +177,7 @@ export async function prepareContextWindowCaches(params: {
     discoveredTokenCache: new Map(),
     contextWindowCache: new Map(),
   };
-  const processed = { count: 0 };
+  let processed = 0;
   const providers = params.config.models?.providers;
   if (providers && typeof providers === "object") {
     for (const [providerId, provider] of Object.entries(providers)) {
@@ -197,8 +191,8 @@ export async function prepareContextWindowCaches(params: {
           providerId,
           model,
         });
-        processed.count += 1;
-        if (processed.count % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+        processed += 1;
+        if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
           await yieldToGateway();
           params.assertCurrent?.();
         }
@@ -207,13 +201,7 @@ export async function prepareContextWindowCaches(params: {
   }
   await projectModels({
     cache: caches.discoveredTokenCache,
-    models: params.modelCatalog.entries,
-    processed,
-    assertCurrent: params.assertCurrent,
-  });
-  await projectModels({
-    cache: caches.discoveredTokenCache,
-    models: params.modelCatalog.staticEntries ?? [],
+    modelCatalog: params.modelCatalog,
     processed,
     assertCurrent: params.assertCurrent,
   });
@@ -226,17 +214,10 @@ export async function prepareDiscoveredContextTokenCache(params: {
   assertCurrent?: () => void;
 }): Promise<Map<string, number>> {
   const cache = new Map<string, number>();
-  const processed = { count: 0 };
   await projectModels({
     cache,
-    models: params.modelCatalog.entries,
-    processed,
-    assertCurrent: params.assertCurrent,
-  });
-  await projectModels({
-    cache,
-    models: params.modelCatalog.staticEntries ?? [],
-    processed,
+    modelCatalog: params.modelCatalog,
+    processed: 0,
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();

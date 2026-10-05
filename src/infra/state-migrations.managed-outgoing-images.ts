@@ -62,10 +62,6 @@ type ClaimedLegacySource = {
   parsed: ParsedLegacyRecord;
 };
 
-function resolveLegacyManagedOutgoingImageRecordsDir(stateDir: string): string {
-  return path.join(stateDir, "media", "outgoing", "records");
-}
-
 function sourceNameFromDoctorClaim(name: string): string | null {
   const markerIndex = name.indexOf(DOCTOR_CLAIM_MARKER);
   if (markerIndex < 0) {
@@ -86,7 +82,7 @@ export function detectLegacyManagedOutgoingImages(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
 }): LegacyStateDetection["managedOutgoingImages"] {
-  const sourceDir = resolveLegacyManagedOutgoingImageRecordsDir(params.stateDir);
+  const sourceDir = path.join(params.stateDir, "media", "outgoing", "records");
   let hasLegacy = false;
   if (params.doctorOnlyStateMigrations === true) {
     try {
@@ -307,12 +303,12 @@ function removeClaimedSources(params: {
   }
 }
 
-function isExpiredTransient(record: ManagedImageRecord, nowMs: number, transientTtlMs: number) {
+function isExpiredTransient(record: ManagedImageRecord, nowMs: number) {
   const createdAtMs = Date.parse(record.createdAt);
   return (
     record.messageId === null &&
     Number.isFinite(createdAtMs) &&
-    nowMs - createdAtMs >= transientTtlMs
+    nowMs - createdAtMs >= DEFAULT_TRANSIENT_TTL_MS
   );
 }
 
@@ -360,7 +356,6 @@ export function migrateLegacyManagedOutgoingImages(params: {
   detected: LegacyStateDetection["managedOutgoingImages"];
   stateDir: string;
   nowMs?: number;
-  transientTtlMs?: number;
   beforeClaim?: () => void;
   beforeVerify?: () => void;
   removeSource?: (sourcePath: string) => void;
@@ -394,7 +389,6 @@ export function migrateLegacyManagedOutgoingImages(params: {
   }
 
   const nowMs = params.nowMs ?? Date.now();
-  const transientTtlMs = params.transientTtlMs ?? DEFAULT_TRANSIENT_TTL_MS;
   const discardedIds = new Set<string>();
   const insertedRecords: ParsedLegacyRecord[] = [];
   let claimed: ClaimedLegacySource[];
@@ -425,7 +419,7 @@ export function migrateLegacyManagedOutgoingImages(params: {
             }
             continue;
           }
-          if (isExpiredTransient(parsed.record, nowMs, transientTtlMs)) {
+          if (isExpiredTransient(parsed.record, nowMs)) {
             discardedIds.add(parsed.record.attachmentId);
             continue;
           }

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 extension OpenClawChatViewModel {
     var hasActiveRunForComposerSettings: Bool {
@@ -36,11 +37,7 @@ extension OpenClawChatViewModel {
     }
 
     private var composerCapabilitySessionID: String? {
-        let live = self.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let live, !live.isEmpty { return live }
-        let stored = self.currentSessionEntry()?.sessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return stored?.isEmpty == false ? stored : nil
+        self.sessionId?.trimmedNonEmpty ?? self.currentSessionEntry()?.sessionId?.trimmedNonEmpty
     }
 
     private var composerCapabilityOwnerMatches: Bool {
@@ -158,10 +155,6 @@ extension OpenClawChatViewModel {
         return nil
     }
 
-    var composerToolOverrideMutationHint: String? {
-        self.composerToolOverrideMutationDisabledReason
-    }
-
     var composerWebSearchMutationDisabledReason: String? {
         if self.composerCapabilitiesLoading {
             return String(localized: "Loading composer capabilities.")
@@ -174,10 +167,6 @@ extension OpenClawChatViewModel {
             return String(localized: "Web Search is disabled in the Gateway configuration.")
         }
         return self.composerToolOverrideMutationDisabledReason
-    }
-
-    var composerWebSearchMutationHint: String? {
-        self.composerWebSearchMutationDisabledReason
     }
 
     func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
@@ -457,9 +446,9 @@ extension OpenClawChatViewModel {
                     }
                 }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: scopedPatch)
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    scopedPatch)
                 guard isCurrentMutation() else { return }
                 guard let index = self.sessionIndexForModelState(sessionKey: originalSessionKey) else { return }
                 if let permissionMode = patch.permissionMode {
@@ -477,29 +466,15 @@ extension OpenClawChatViewModel {
                 guard isCurrentMutation() else { return }
                 self.composerCapabilityState.notice = notice
             } catch {
-                await self.recordCapabilityPatchFailure(
-                    error,
-                    target: target,
-                    outboxScope: originalOutboxScope,
-                    updateVisibleState: isCurrentMutation())
+                self.capabilityPatchFailureRevisionsByTarget[target, default: 0] &+= 1
+                self.capabilityPatchFailureMessagesByTarget[target] = error.localizedDescription
+                if let outbox = self.outbox, let scope = originalOutboxScope {
+                    _ = await outbox.parkQueuedCommands(in: scope, lastError: error.localizedDescription)
+                }
+                guard isCurrentMutation() else { return }
+                self.composerCapabilityState.errorMessage = error.localizedDescription
+                self.errorText = error.localizedDescription
             }
-        }
-    }
-
-    func recordCapabilityPatchFailure(
-        _ error: Error,
-        target: ModelPatchTarget,
-        outboxScope: OpenClawChatOutboxScope?,
-        updateVisibleState: Bool) async
-    {
-        self.capabilityPatchFailureRevisionsByTarget[target, default: 0] &+= 1
-        self.capabilityPatchFailureMessagesByTarget[target] = error.localizedDescription
-        if let outbox = self.outbox, let scope = outboxScope {
-            _ = await outbox.parkQueuedCommands(in: scope, lastError: error.localizedDescription)
-        }
-        if updateVisibleState {
-            self.composerCapabilityState.errorMessage = error.localizedDescription
-            self.errorText = error.localizedDescription
         }
     }
 }

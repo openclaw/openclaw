@@ -11,6 +11,7 @@ const loadSessionEntryMock = vi.fn();
 const loadGatewaySessionEntryReadOnlyMock = vi.fn();
 const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
+const getLatestLiveSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const terminateAcceptedCollectorRunMock = vi.fn();
 const chatSendMock = vi.fn();
@@ -30,10 +31,20 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () =>
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
       getLatestSubagentRunByChildSessionKeyMock(...args),
+    getLatestLiveSubagentRunByChildSessionKey: (
+      ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
+    ) => {
+      const run = getLatestLiveSubagentRunByChildSessionKeyMock(...args);
+      return run && run.childSessionKey === args[0].trim() && (!args[1] || args[1](run))
+        ? run
+        : null;
+    },
   };
 });
-vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
-  replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
+
+vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
+  replaceSubagentRunAfterSteerCore: (...args: unknown[]) =>
+    replaceSubagentRunAfterSteerMock(...args),
 }));
 vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
   terminateAcceptedCollectorRun: (...args: unknown[]) => terminateAcceptedCollectorRunMock(...args),
@@ -106,6 +117,7 @@ function completedRun(childSessionKey: string) {
     },
   };
   getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(run);
+  getLatestLiveSubagentRunByChildSessionKeyMock.mockReturnValue(run);
   return run;
 }
 
@@ -116,6 +128,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     loadGatewaySessionEntryReadOnlyMock.mockReset();
     resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
+    getLatestLiveSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
     terminateAcceptedCollectorRunMock.mockReset();
     chatSendMock.mockReset().mockImplementation(async ({ respond }: { respond: RespondFn }) => {
@@ -143,7 +156,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     const childSessionKey = "agent:main:subagent:followup";
     loadSession(childSessionKey, "sess-followup", storePath);
-    const run = completedRun(childSessionKey);
+    completedRun(childSessionKey);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
     const broadcastToConnIds = vi.fn();
     const projection = createSessionRowProjectionFixture({
@@ -182,7 +195,6 @@ describe("sessions.send completed subagent follow-up status", () => {
     expectSubagentFollowupReactivation({
       replaceSubagentRunAfterSteerMock,
       broadcastToConnIds,
-      completedRun: run,
       childSessionKey,
       status: "running",
       task: "follow-up",
@@ -227,7 +239,7 @@ describe("sessions.send completed subagent follow-up status", () => {
   });
 
   it("steers the selected global agent with committed receipt and interrupt facts", async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "work" }] } };
+    const cfg = { agents: { entries: { main: {}, work: {} } } };
     loadSession("global", "sess-work-global", "/tmp/work/sessions.json", cfg);
     const payload = {
       runId: "run-work",

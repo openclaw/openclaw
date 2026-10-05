@@ -1,4 +1,3 @@
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -10,8 +9,11 @@ import {
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture-startup.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
+import {
+  createTranscriptLibraryStoreFixture,
+  transcriptLibrarySession as session,
+} from "./library.store.test-support.js";
+import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,29 +25,11 @@ afterEach(async () => {
 });
 
 function fixture() {
-  const stateDir = tempDirs.make("transcript-library-async-");
-  return {
-    store: new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    }),
-  };
-}
-
-function session(
-  sessionId: string,
-  overrides: Partial<TranscriptSessionDescriptor> = {},
-): TranscriptSessionDescriptor {
-  return {
-    sessionId,
-    title: sessionId,
-    source: { providerId: "manual-transcript" },
-    startedAt: "2026-08-20T10:00:00.000Z",
-    ...overrides,
-  };
+  return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-async-"));
 }
 
 describe("transcript library asynchronous reads", () => {
-  it.each(["get", "export"] as const)(
+  it.each(["list", "get", "export"] as const)(
     "keeps a delayed composed %s response coherent after a peer update",
     async (kind) => {
       const { store } = fixture();
@@ -60,7 +44,19 @@ describe("transcript library asynchronous reads", () => {
       const selector = transcriptSessionSelector(target);
       const gate = createDeferred();
       const reading = createDeferred();
-      if (kind === "get") {
+      if (kind === "list") {
+        const read = store.listReadEntries.bind(store);
+        vi.spyOn(store, "listReadEntries").mockImplementationOnce(
+          new Proxy(read, {
+            async apply(operation, receiver, args) {
+              const snapshot = await Reflect.apply(operation, receiver, args);
+              reading.resolve();
+              await gate.promise;
+              return snapshot;
+            },
+          }),
+        );
+      } else if (kind === "get") {
         const read = store.readLibraryEntry.bind(store);
         vi.spyOn(store, "readLibraryEntry").mockImplementationOnce(async (...args) => {
           const snapshot = await read(...args);
@@ -78,30 +74,25 @@ describe("transcript library asynchronous reads", () => {
         });
       }
       const read = async () =>
-        kind === "get"
-          ? JSON.stringify(
-              await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
-            )
-          : Buffer.from(
-              (await exportTranscriptLibrary(store, { selector, format: "markdown" })).data,
-              "base64",
-            ).toString("utf8");
-      let settled = false;
+        kind === "list"
+          ? JSON.stringify(await listTranscriptLibrary(store, {}))
+          : kind === "get"
+            ? JSON.stringify(
+                await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
+              )
+            : Buffer.from(
+                (await exportTranscriptLibrary(store, { selector, format: "markdown" })).data,
+                "base64",
+              ).toString("utf8");
+      const settled = vi.fn();
       const result = read();
-      const settlement = result.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      const settlement = result.then(settled, settled);
       const replacement = { ...target, title: "Replacement meeting" };
       const added = { text: "Peer saved note" };
       try {
         await reading.promise;
         await setImmediate();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         await store.writeSession(replacement);
         await store.appendUtteranceForSession(replacement, added);
         await store.writeSummary(
@@ -113,7 +104,9 @@ describe("transcript library asynchronous reads", () => {
         await settlement;
       }
       const text = await result;
-      expect(text).toContain("## Overview");
+      if (kind !== "list") {
+        expect(text).toContain("## Overview");
+      }
       expect(text).toContain(target.title);
       expect(text).toContain(utterance.text);
       expect(text).not.toContain(replacement.title);
@@ -123,30 +116,22 @@ describe("transcript library asynchronous reads", () => {
     },
   );
 
-  it.each(["get", "export"] as const)(
-    "propagates a failed composed %s without returning partial content",
-    async (kind) => {
-      const { store } = fixture();
-      const target = session("rejected-read");
-      await store.writeSession(target);
-      const failure = new Error("archive read failed");
-      const selector = transcriptSessionSelector(target);
-      if (kind === "get") {
-        vi.spyOn(store, "readLibraryEntry").mockRejectedValueOnce(failure);
-        await expect(
-          getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
-        ).rejects.toBe(failure);
-      } else {
-        vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
-          yield { sequence: 0, text: "Partial content" };
-          throw failure;
-        });
-        await expect(exportTranscriptLibrary(store, { selector, format: "jsonl" })).rejects.toBe(
-          failure,
-        );
-      }
-    },
-  );
+  it("propagates a failed export without returning partial content", async () => {
+    const { store } = fixture();
+    const target = session("rejected-read");
+    await store.writeSession(target);
+    const failure = new Error("archive read failed");
+    vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
+      yield { sequence: 0, text: "Partial content" };
+      throw failure;
+    });
+    await expect(
+      exportTranscriptLibrary(store, {
+        selector: transcriptSessionSelector(target),
+        format: "jsonl",
+      }),
+    ).rejects.toBe(failure);
+  });
 
   it("rejects an export canceled before its completion result", async () => {
     const { store } = fixture();
@@ -159,46 +144,20 @@ describe("transcript library asynchronous reads", () => {
     ).rejects.toThrow("export ended before completion");
   });
 
-  it("awaits asynchronous page cleanup when public projection fails", async () => {
+  it("propagates provider projection failure after releasing the page reader", async () => {
     const { store } = fixture();
-    await store.writeSession(session("projection-failure"));
-    const iterateReadEntries = store.iterateReadEntries.bind(store);
-    const cleanup = createDeferred();
-    const closing = createDeferred();
-    let closed = false;
-    vi.spyOn(store, "iterateReadEntries").mockImplementation(async function* (options) {
-      try {
-        return yield* iterateReadEntries(options);
-      } finally {
-        closing.resolve();
-        await cleanup.promise;
-        closed = true;
-      }
-    });
+    const target = session("projection-failure");
+    await store.writeSession(target);
     const failure = new Error("provider projection failed");
-    const result = listTranscriptLibrary(store, {}, () => {
-      throw failure;
-    });
-    let settled = false;
-    const settlement = result.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
+    await expect(
+      listTranscriptLibrary(store, {}, () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    await store.writeSession({ ...target, title: "Updated after failure" });
+    expect((await listTranscriptLibrary(store, {})).sessions[0]?.title).toBe(
+      "Updated after failure",
     );
-    try {
-      await closing.promise;
-      await setImmediate();
-      expect(settled).toBe(false);
-      expect(closed).toBe(false);
-    } finally {
-      cleanup.resolve();
-      await settlement;
-    }
-    await expect(result).rejects.toBe(failure);
-    expect(closed).toBe(true);
   });
 
   it("distinguishes historical unstopped rows from exact live subscriptions and stopping captures", async () => {

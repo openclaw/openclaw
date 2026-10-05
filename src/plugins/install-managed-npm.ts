@@ -46,7 +46,6 @@ import {
   type ManagedNpmProjectQuarantine,
   type ManagedNpmRootDependencySpecPreparation,
 } from "./install-managed-npm-state.js";
-import { verifyInstalledNpmResolution } from "./install-npm-resolution.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
 import {
@@ -77,6 +76,50 @@ import {
   normalizePluginDependencySpecs,
 } from "./status-dependencies-core.js";
 
+type InstalledNpmResolutionVerification =
+  | { kind: "ok" }
+  | { kind: "incomplete"; error: string }
+  | { kind: "conflict"; error: string };
+
+function verifyInstalledNpmResolution(params: {
+  packageName: string;
+  expected: NpmSpecResolution;
+  installed: ManagedNpmRootInstalledDependency | null;
+}): InstalledNpmResolutionVerification {
+  if (!params.installed) {
+    return {
+      kind: "incomplete",
+      error: `npm install did not record package-lock metadata for ${params.packageName}`,
+    };
+  }
+  if (params.expected.version && params.installed.version) {
+    if (params.installed.version !== params.expected.version) {
+      return {
+        kind: "conflict",
+        error: `npm install resolved ${params.packageName} to version ${params.installed.version}, expected ${params.expected.version}`,
+      };
+    }
+  }
+  if (params.expected.integrity && params.installed.integrity) {
+    if (params.installed.integrity !== params.expected.integrity) {
+      return {
+        kind: "conflict",
+        error: `npm install resolved ${params.packageName} with integrity ${params.installed.integrity}, expected ${params.expected.integrity}`,
+      };
+    }
+  }
+  if (
+    (params.expected.version && !params.installed.version) ||
+    (params.expected.integrity && !params.installed.integrity)
+  ) {
+    return {
+      kind: "incomplete",
+      error: `npm install recorded incomplete package-lock metadata for ${params.packageName}: ${params.expected.version && !params.installed.version ? "version" : "integrity"} missing`,
+    };
+  }
+  return { kind: "ok" };
+}
+
 export async function installPluginFromManagedNpmRoot(
   params: Omit<
     PackageInstallCommonParams,
@@ -89,8 +132,6 @@ export async function installPluginFromManagedNpmRoot(
     installPolicyRequest: PluginInstallPolicyRequest;
     npmResolution: NpmSpecResolution;
     policyPreflightSourcePath?: string;
-    policyPreflightSourcePathKind?: "file" | "directory";
-    skipPolicyPreflight?: boolean;
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
@@ -124,7 +165,8 @@ export async function installPluginFromManagedNpmRoot(
     return availability;
   }
 
-  if (!params.skipPolicyPreflight) {
+  const policyPreflightSourcePath = params.policyPreflightSourcePath;
+  if (policyPreflightSourcePath) {
     const preflightPolicyResult = await runInstallSourceScan({
       subject: `Plugin "${expectedPluginId ?? params.packageName}"`,
       pluginId: expectedPluginId ?? params.packageName,
@@ -140,8 +182,8 @@ export async function installPluginFromManagedNpmRoot(
           ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
           requestedSpecifier: params.installPolicyRequest.requestedSpecifier ?? params.displaySpec,
           source: params.installPolicyRequest.source,
-          sourcePath: params.policyPreflightSourcePath ?? targetNpmRoot,
-          sourcePathKind: params.policyPreflightSourcePathKind ?? "directory",
+          sourcePath: policyPreflightSourcePath,
+          sourcePathKind: "file",
         }),
     });
     if (preflightPolicyResult) {
@@ -241,18 +283,16 @@ export async function installPluginFromManagedNpmRoot(
     });
     const initialPeerSync = await syncManagedPeerDependenciesForInstall();
     if (!initialPeerSync.ok) {
-      return { ok: false, error: initialPeerSync.error };
+      return initialPeerSync;
     }
-    const npmInstallArgs = resolveNpmCommand([
-      ...createSafeNpmInstallArgs({
-        omitDev: true,
+    const npmInstallArgs = resolveNpmCommand(
+      createSafeNpmInstallArgs({
         omitPeer: true,
-        loglevel: "error",
         legacyPeerDeps: true,
         noAudit: true,
         noFund: true,
       }),
-    ]);
+    );
     const npmInstallOptions = {
       cwd: npmRoot,
       timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),
@@ -280,10 +320,7 @@ export async function installPluginFromManagedNpmRoot(
       });
       const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall();
       if (!aliasRetryPeerSync.ok) {
-        return {
-          ok: false,
-          error: aliasRetryPeerSync.error,
-        };
+        return aliasRetryPeerSync;
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
     }
@@ -311,10 +348,9 @@ export async function installPluginFromManagedNpmRoot(
     for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return { ok: false, error: peerSync.error };
+        return peerSync;
       }
-      const syncedPeerDependencies = peerSync.changed;
-      if (!syncedPeerDependencies) {
+      if (!peerSync.changed) {
         settledManagedPeerDependencies = true;
         break;
       }
@@ -329,7 +365,7 @@ export async function installPluginFromManagedNpmRoot(
     if (!settledManagedPeerDependencies) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return { ok: false, error: peerSync.error };
+        return peerSync;
       }
       settledManagedPeerDependencies = !peerSync.changed;
     }
@@ -353,10 +389,7 @@ export async function installPluginFromManagedNpmRoot(
         : undefined,
     );
     if (!requiredPlatformPackageNames.ok) {
-      return {
-        ok: false,
-        error: requiredPlatformPackageNames.error,
-      };
+      return requiredPlatformPackageNames;
     }
     let incompletePlatformPackages: Awaited<ReturnType<typeof listMissingRequiredPlatformPackages>>;
     try {
@@ -550,7 +583,6 @@ export async function installPluginFromManagedNpmRoot(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       mode: policyMode,
       installPolicyRequest: params.installPolicyRequest,
-      emitSuccessSecurityEvent: false,
     });
     if (!result.ok) {
       return result;

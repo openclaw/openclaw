@@ -1,9 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
-import { QaSuiteInfraError } from "./errors.js";
-import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusEditMessageInput,
   QaBusEvent,
@@ -14,7 +11,10 @@ import type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusWaitForInput,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { QaSuiteInfraError } from "./errors.js";
+import { extractQaFailureReplyText } from "./reply-failure.js";
 
 type QaTransportAdapterDefinition = Awaited<
   ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>
@@ -242,6 +242,11 @@ export type QaTransportAdapter = Omit<
   reset: () => Promise<void>;
   waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
   waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
+  waitForCompletedReply?: (input: {
+    inbound: QaBusMessage;
+    gateway: Parameters<QaTransportAdapterDefinition["waitReady"]>[0]["gateway"];
+    timeoutMs?: number;
+  }) => Promise<QaBusMessage>;
   waitForCondition: <T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
     timeoutMs?: number,
@@ -380,8 +385,14 @@ export function createQaStateBackedTransportAdapter(
   };
 }
 
-function normalizeQaBusOutboundEvent(event: QaBusEvent): QaTransportOutboundEvent | null {
+function normalizeQaTransportOutboundEvent(
+  event: QaBusEvent | QaTransportOutboundEvent,
+): QaTransportOutboundEvent | null {
   switch (event.kind) {
+    case "sent":
+    case "edited":
+    case "deleted":
+      return event;
     case "outbound-message":
       return { cursor: event.cursor, kind: "sent", message: event.message };
     case "message-edited":
@@ -391,12 +402,6 @@ function normalizeQaBusOutboundEvent(event: QaBusEvent): QaTransportOutboundEven
     default:
       return null;
   }
-}
-
-function isQaTransportOutboundEvent(
-  event: QaBusEvent | QaTransportOutboundEvent,
-): event is QaTransportOutboundEvent {
-  return event.kind === "sent" || event.kind === "edited" || event.kind === "deleted";
 }
 
 export async function waitForQaTransportOutboundSequence(params: {
@@ -415,9 +420,7 @@ export async function waitForQaTransportOutboundSequence(params: {
     async () => {
       const ownedEvents = (await params.readEvents())
         .filter((event) => event.cursor > (params.input.sinceCursor ?? 0))
-        .map((event) =>
-          isQaTransportOutboundEvent(event) ? event : normalizeQaBusOutboundEvent(event),
-        )
+        .map(normalizeQaTransportOutboundEvent)
         .filter((event): event is QaTransportOutboundEvent => event !== null)
         .filter(
           ({ message }) =>
@@ -431,15 +434,12 @@ export async function waitForQaTransportOutboundSequence(params: {
           throw new Error(failureReply);
         }
       }
-      const events = ownedEvents.filter(({ message }) => {
-        if (
-          params.input.conversationId &&
-          message.conversation.id !== params.input.conversationId
-        ) {
-          return false;
-        }
-        return !params.input.threadId || message.threadId === params.input.threadId;
-      });
+      const events = ownedEvents.filter(
+        ({ message }) =>
+          (!params.input.conversationId ||
+            message.conversation.id === params.input.conversationId) &&
+          (!params.input.threadId || message.threadId === params.input.threadId),
+      );
       const candidate = events.findLast(
         ({ kind, message }) =>
           kind !== "deleted" &&

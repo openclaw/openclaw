@@ -22,14 +22,13 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderConfig,
 } from "../../talk/provider-types.js";
-import type { TalkBrain, TalkEvent, TalkMode, TalkTransport } from "../../talk/talk-events.js";
+import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
 import {
   getVoiceProviderConfig,
   providerMatchesId,
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
 
 export function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
   return (
@@ -67,36 +66,6 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
     .join("\n\n");
 }
 
-export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
-}
-
-export function broadcastTalkRoomEvents(
-  context: {
-    broadcastToConnIds: (
-      event: string,
-      payload: unknown,
-      connIds: Set<string>,
-      opts?: { dropIfSlow?: boolean },
-    ) => void;
-  },
-  connId: string | undefined,
-  params: { handoffId: string; roomId: string; events: TalkEvent[] },
-): void {
-  if (!connId || params.events.length === 0) {
-    return;
-  }
-  for (const talkEvent of params.events) {
-    context.broadcastToConnIds(
-      "talk.event",
-      { handoffId: params.handoffId, roomId: params.roomId, talkEvent },
-      new Set([connId]),
-      { dropIfSlow: true },
-    );
-  }
-}
-
 function normalizeRealtimeTransport(value: unknown): TalkRealtimeConfig["transport"] {
   const transport = normalizeOptionalLowercaseString(value);
   return transport === "webrtc" ||
@@ -107,10 +76,7 @@ function normalizeRealtimeTransport(value: unknown): TalkRealtimeConfig["transpo
     : undefined;
 }
 
-function getVoiceCallProviderConfig(
-  config: OpenClawConfig,
-  sectionName: "realtime" | "streaming",
-): {
+function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   provider?: string;
   providers?: Record<string, Record<string, unknown>>;
 } {
@@ -118,7 +84,7 @@ function getVoiceCallProviderConfig(
   const entries = asOptionalRecord(plugins?.entries);
   const voiceCall = asOptionalRecord(entries?.["voice-call"]);
   const pluginConfig = asOptionalRecord(voiceCall?.config);
-  const section = asOptionalRecord(pluginConfig?.[sectionName]);
+  const section = asOptionalRecord(pluginConfig?.streaming);
   const providersRaw = asOptionalRecord(section?.providers);
   const providers: Record<string, Record<string, unknown>> = {};
   if (providersRaw) {
@@ -208,7 +174,6 @@ export function buildTalkRealtimeConfig(
   requestedProvider?: string,
   requestedModel?: string,
 ) {
-  const voiceCallRealtime = getVoiceCallProviderConfig(config, "realtime");
   const talkRealtime = asOptionalRecord(config.talk?.realtime);
   const talkRealtimeProviderConfigs = talkRealtime?.providers as
     | Record<string, RealtimeVoiceProviderConfig>
@@ -219,14 +184,8 @@ export function buildTalkRealtimeConfig(
   const singleConfiguredProvider = normalizeOptionalString(
     configuredProviderIds.length === 1 ? configuredProviderIds[0] : undefined,
   );
-  const selectedProvider =
-    explicitProvider ?? singleConfiguredProvider ?? voiceCallRealtime.provider;
-  // Talk-local realtime config wins over the legacy voice-call plugin config,
-  // while the legacy config remains a bridge for existing installations.
-  const providerConfigs = {
-    ...voiceCallRealtime.providers,
-    ...talkRealtimeProviderConfigs,
-  };
+  const selectedProvider = explicitProvider ?? singleConfiguredProvider;
+  const providerConfigs = talkRealtimeProviderConfigs ?? {};
   const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
     config,
     provider: selectedProvider,
@@ -263,7 +222,7 @@ export function buildTalkTranscriptionConfig(
   requestedProvider?: string,
   requestedModel?: string,
 ) {
-  const streamingConfig = getVoiceCallProviderConfig(config, "streaming");
+  const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
   const configuredProviderIds = [provider, ...Object.keys(providerConfigs)];
@@ -403,7 +362,7 @@ function pickRealtimeVoiceLaunchOptions(
   params: RealtimeVoiceLaunchOptionInput,
 ): RealtimeVoiceLaunchOptions {
   const options: RealtimeVoiceLaunchOptions = {};
-  for (const key of ["model", "voice"] as const) {
+  for (const key of ["model", "voice", "reasoningEffort"] as const) {
     const value = normalizeOptionalString(params[key]);
     if (value) {
       options[key] = value;
@@ -414,10 +373,6 @@ function pickRealtimeVoiceLaunchOptions(
     if (typeof value === "number" && Number.isFinite(value)) {
       options[key] = value;
     }
-  }
-  const reasoningEffort = normalizeOptionalString(params.reasoningEffort);
-  if (reasoningEffort) {
-    options.reasoningEffort = reasoningEffort;
   }
   return options;
 }

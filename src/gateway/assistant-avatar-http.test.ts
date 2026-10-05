@@ -99,7 +99,7 @@ it.each([
         ? `data:${mime},${Array.from(body, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`
         : `data:${mime};base64,${sourceKind === "escaped-base64" ? encodeURIComponent(base64) : base64}`;
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", workspace, identity: { avatar } }] },
+    agents: { entries: { main: { workspace, identity: { avatar } } } },
   };
   const { avatar: url } = await resolveGatewayAssistantAvatar({
     cfg: config,
@@ -130,9 +130,8 @@ it.each(["local", "data"])(
     const config: OpenClawConfig = {
       gateway: { controlUi: { basePath: "/control" } },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace,
             identity: {
               avatar:
@@ -141,7 +140,7 @@ it.each(["local", "data"])(
                   : `data:image/png;base64,${original.toString("base64")}`,
             },
           },
-        ],
+        },
       },
     };
     const project = async () =>
@@ -217,7 +216,7 @@ it.each(["local", "data"])(
       fs.writeFileSync(path.join(workspace, "replacement.png"), replacement);
       fs.renameSync(path.join(workspace, "replacement.png"), avatarPath);
     } else {
-      config.agents!.list![0]!.identity!.avatar = `data:image/png;base64,${replacement.toString("base64")}`;
+      config.agents!.entries!.main!.identity!.avatar = `data:image/png;base64,${replacement.toString("base64")}`;
     }
     const replacedUrl = await project();
     expect(replacedUrl).not.toBe(url);

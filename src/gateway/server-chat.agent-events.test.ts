@@ -84,20 +84,15 @@ import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
-  emitAgentEvent,
-  emitAgentEvents,
-  registerChatRun,
-  registerNamedChatRun,
-} from "./server-chat.agent-events.test-helpers.js";
-import {
-  createAgentEventHandler,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createChatAbortMarker,
-  createSessionMessageSubscriberRegistry,
-  type AgentEventHandlerOptions,
-} from "./server-chat.js";
-import { broadcastChatError, broadcastChatFinal } from "./server-methods/chat-broadcast.js";
+  agentBroadcastCalls,
+  answerCandidate,
+  chatBroadcastCalls,
+  createAgentEventTestHarness,
+  widgetResult,
+  type AgentEventTestHarnessOptions,
+} from "./server-chat.agent-events.test-harness.js";
+import { createChatAbortMarker, type AgentEventHandlerOptions } from "./server-chat.js";
+import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -152,87 +147,14 @@ describe("agent event handler", () => {
     resetAgentEventsForTest({ preserveListeners: true });
   });
 
-  function createHarness(params?: {
-    now?: number;
-    resolveSessionKeyForRun?: (runId: string, options?: { agentId?: string }) => string | undefined;
-    lifecycleErrorRetryGraceMs?: number;
-    isChatSendRunActive?: (runId: string) => boolean;
-    settleTrackedTerminal?: AgentEventHandlerOptions["settleTrackedTerminal"];
-    trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
-    resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
-    updateRunToolErrorSummary?: AgentEventHandlerOptions["updateRunToolErrorSummary"];
-    resolveSessionActiveRunState?: AgentEventHandlerOptions["resolveSessionActiveRunState"];
-  }) {
-    const nowSpy =
-      params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-    const nodeSendToSession = vi.fn();
-    const nodeHasSessionSubscribers = vi.fn(() => true);
-    const clearAgentRunContext = vi.fn();
-    const clearTrackedActiveRun =
-      vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
-    const agentRunSeq = new Map<string, number>();
-    const chatRunState = createChatRunState();
-    const toolEventRecipients = chatRunState.toolEventRecipients;
-    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-
+  function createHarness(params?: AgentEventTestHarnessOptions) {
     const projection = lineageProjection;
-    const handler = createAgentEventHandler({
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeHasSessionSubscribers,
-      agentRunSeq,
-      chatRunState,
-      resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
-      clearAgentRunContext,
-      toolEventRecipients,
-      sessionEventSubscribers,
-      sessionMessageSubscribers,
+    return createAgentEventTestHarness({
+      ...params,
       loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
       persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
-      lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
-      isChatSendRunActive: params?.isChatSendRunActive,
-      clearTrackedActiveRun,
-      settleTrackedTerminal: params?.settleTrackedTerminal,
-      trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
-      resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
-      updateRunToolErrorSummary: params?.updateRunToolErrorSummary,
-      resolveSessionActiveRunState: params?.resolveSessionActiveRunState,
       getSessionRowProjection: () => projection,
     });
-
-    return {
-      emit: emitAgentEvent.bind(undefined, handler),
-      emitMany: emitAgentEvents.bind(undefined, handler),
-      end: emitLifecycleEnd.bind(undefined, handler),
-      register: registerChatRun.bind(undefined, chatRunState),
-      registerNamed: registerNamedChatRun.bind(undefined, chatRunState),
-      chat: () => chatBroadcastCalls(broadcast),
-      agent: () => agentBroadcastCalls(broadcast),
-      targetedChat: () => chatBroadcastCalls(broadcastToConnIds),
-      targetedAgent: () => agentBroadcastCalls(broadcastToConnIds),
-      deltas: () => chatDeltaTexts(broadcast),
-      targetedDeltas: () => chatDeltaTexts(broadcastToConnIds),
-      nodeChat: () => sessionChatCalls(nodeSendToSession),
-      nodeAgent: () => sessionAgentCalls(nodeSendToSession),
-      changes: () => sessionChangedCalls(broadcastToConnIds),
-      nowSpy,
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeHasSessionSubscribers,
-      clearAgentRunContext,
-      clearTrackedActiveRun,
-      agentRunSeq,
-      chatRunState,
-      toolEventRecipients,
-      sessionEventSubscribers,
-      sessionMessageSubscribers,
-      handler,
-    };
   }
 
   function mockSessionEntry(
@@ -249,61 +171,6 @@ describe("agent event handler", () => {
       storeKeys: [canonicalKey],
       legacyKey: undefined,
     });
-  }
-
-  function chatBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
-    return broadcast.mock.calls.filter(([event]) => event === "chat");
-  }
-
-  function chatDeltaTexts(broadcast: ReturnType<typeof vi.fn>) {
-    return chatBroadcastCalls(broadcast)
-      .map(([, payload]) => payload as { state?: string; deltaText?: string })
-      .filter((payload) => payload.state === "delta")
-      .map((payload) => payload.deltaText);
-  }
-
-  function agentBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
-    return broadcast.mock.calls.filter(([event]) => event === "agent");
-  }
-
-  function sessionChangedCalls(broadcast: ReturnType<typeof vi.fn>) {
-    return broadcast.mock.calls.filter(([event]) => event === "sessions.changed");
-  }
-
-  function answerCandidate(
-    itemId: string,
-    progressText: string,
-    status: "candidate" | "selected" | "superseded" = "candidate",
-  ) {
-    return {
-      itemId,
-      kind: "answer_candidate",
-      title: "Answer candidate",
-      phase: "update",
-      status,
-      progressText,
-      source: "codex-app-server",
-      hideFromChannelProgress: true,
-    };
-  }
-
-  function sessionChatCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
-    return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
-  }
-
-  function widgetResult(id: string, target = "assistant_message", title = id) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            kind: "canvas",
-            presentation: { target, title, sandbox: "scripts" },
-            view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
-          }),
-        },
-      ],
-    };
   }
 
   it("projects successful widgets into live assistant snapshots without final text", () => {
@@ -701,10 +568,6 @@ describe("agent event handler", () => {
     });
   });
 
-  function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
-    return nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
-  }
-
   const requireRecord = createRequireRecord("object", "label-not-object");
 
   function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
@@ -738,10 +601,6 @@ describe("agent event handler", () => {
     label: string,
   ) {
     return requireRecord(requireMockArg(mock, index, payloadIndex, label), label);
-  }
-
-  function emitLifecycleEnd(handler: Parameters<typeof emitAgentEvent>[0], runId: string, seq = 2) {
-    emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
   }
 
   it("sanitizes only broadcasted assistant buffers while preserving cross-frame tags", () => {
@@ -1144,52 +1003,45 @@ describe("agent event handler", () => {
     }
   });
 
-  it("flushes older cross-stream agent deltas before immediate text", () => {
-    let now = 23_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createHarness();
-    h.registerNamed("agent-cross-stream");
-
-    h.emit("run-agent-cross-stream", "thinking", {
-      text: "Think",
-      delta: "Think",
-    });
-    now = 23_050;
-    h.emit("run-agent-cross-stream", "thinking", { text: "Thinking", delta: "ing" }, { seq: 2 });
-    expect(h.agent()).toHaveLength(1);
-    expect(h.nodeAgent()).toHaveLength(1);
-    now = 23_080;
-    h.emit("run-agent-cross-stream", "assistant", { text: "Answer", delta: "Answer" }, { seq: 3 });
-
-    const agentCalls = h.agent();
-    expect(agentCalls.map(([, payload]) => (payload as { seq?: number }).seq)).toEqual([1, 2, 3]);
-    expect(agentCalls.map(([, payload]) => (payload as { stream?: string }).stream)).toEqual([
-      "thinking",
-      "thinking",
-      "assistant",
-    ]);
-    expectPayloadDataFields(agentCalls[1]?.[1], { delta: "ing" });
-    expect(h.nodeAgent()).toHaveLength(3);
-    nowSpy.mockRestore();
-  });
-
-  it("does not let lifecycle start throttle the first assistant agent event", () => {
-    let now = 25_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createHarness();
-    h.registerNamed("agent-start");
-
-    h.emit("run-agent-start", "lifecycle", { phase: "start" });
-    now = 25_050;
-    h.emit("run-agent-start", "assistant", { text: "Hello", delta: "Hello" }, { seq: 2 });
-
-    const agentCalls = h.agent();
-    expect(agentCalls).toHaveLength(2);
-    expectPayloadFields(agentCalls[0]?.[1], { stream: "lifecycle" });
-    expectPayloadDataFields(agentCalls[1]?.[1], { text: "Hello" });
-    expect(h.nodeAgent()).toHaveLength(2);
-    nowSpy.mockRestore();
-  });
+  it.each(["thinking", "lifecycle"] as const)(
+    "delivers assistant text immediately after %s",
+    (stream) => {
+      const h = createHarness({ now: 23_000 });
+      h.registerNamed("cross-stream");
+      h.emit(
+        "run-cross-stream",
+        stream,
+        stream === "thinking" ? { text: "Think", delta: "Think" } : { phase: "start" },
+      );
+      h.nowSpy?.mockReturnValue(23_050);
+      if (stream === "thinking") {
+        h.emit("run-cross-stream", stream, { text: "Thinking", delta: "ing" }, { seq: 2 });
+        expect(h.agent()).toHaveLength(1);
+        expect(h.nodeAgent()).toHaveLength(1);
+        h.nowSpy?.mockReturnValue(23_080);
+      }
+      const text = stream === "thinking" ? "Answer" : "Hello";
+      h.emit(
+        "run-cross-stream",
+        "assistant",
+        { text, delta: text },
+        { seq: stream === "thinking" ? 3 : 2 },
+      );
+      const expectedStreams =
+        stream === "thinking" ? ["thinking", "thinking", "assistant"] : ["lifecycle", "assistant"];
+      const calls = h.agent();
+      expect(calls.map(([, payload]) => payload.stream)).toEqual(expectedStreams);
+      expect(calls.map(([, payload]) => payload.seq)).toEqual(
+        expectedStreams.map((_, index) => index + 1),
+      );
+      expectPayloadDataFields(calls.at(-1)?.[1], { text });
+      if (stream === "thinking") {
+        expectPayloadDataFields(calls[1]?.[1], { delta: "ing" });
+      }
+      expect(h.nodeAgent()).toHaveLength(expectedStreams.length);
+      h.nowSpy?.mockRestore();
+    },
+  );
 
   it("keeps a media-only assistant event pending without an empty or raw delta", () => {
     const h = createHarness({ now: 1_000 });
@@ -1250,46 +1102,18 @@ describe("agent event handler", () => {
     h.nowSpy?.mockRestore();
   });
 
-  it("preserves an ordinary relative reference without managed-media facts", () => {
-    const text = "MEDIA:./image.png";
+  it.each([
+    { text: "MEDIA:./image.png", delta: "", mediaUrls: ["./image.png"] },
+    { text: "The selected size is\nM" },
+  ])("preserves ordinary MEDIA-like text at completion: $text", (data) => {
     const h = createHarness({ now: 1_000 });
-    h.registerNamed("ordinary-relative-media");
-
-    h.emit(
-      "run-ordinary-relative-media",
-      "assistant",
-      { text, delta: "", mediaUrls: [text.slice("MEDIA:".length)] },
-      { seq: 1 },
-    );
-    h.end("run-ordinary-relative-media", 2);
-
-    const finalPayload = h.chat().at(-1)?.[1] as {
-      state?: string;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    expect(finalPayload.state).toBe("final");
-    expect(finalPayload.message?.content?.[0]?.text).toBe(text);
-    h.nowSpy?.mockRestore();
-  });
-
-  it("restores an ordinary MEDIA-like prefix when the assistant run ends", () => {
-    const h = createHarness({ now: 1_000 });
-    h.registerNamed("terminal-media-prefix");
-
-    h.emit(
-      "run-terminal-media-prefix",
-      "assistant",
-      { text: "The selected size is\nM" },
-      { seq: 1 },
-    );
-    h.end("run-terminal-media-prefix", 2);
-
-    const finalPayload = h.chat().at(-1)?.[1] as {
-      state?: string;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    expect(finalPayload.state).toBe("final");
-    expect(finalPayload.message?.content?.[0]?.text).toBe("The selected size is\nM");
+    h.registerNamed("ordinary-media");
+    h.emit("run-ordinary-media", "assistant", data);
+    h.end("run-ordinary-media", 2);
+    expect(h.chat().at(-1)?.[1]).toMatchObject({
+      state: "final",
+      message: { content: [{ text: data.text }] },
+    });
     h.nowSpy?.mockRestore();
   });
 
@@ -1373,45 +1197,40 @@ describe("agent event handler", () => {
     h.nowSpy?.mockRestore();
   });
 
-  it("flushes merged segmented text before final when latest segment is throttled", () => {
-    let now = 10_800;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createHarness();
-    h.registerNamed("segmented-flush");
-
-    h.emit("run-segmented-flush", "assistant", {
-      text: "Before tool call",
-      delta: "Before tool call",
-    });
-
-    now = 10_860;
-    h.emit(
-      "run-segmented-flush",
-      "assistant",
-      { text: "After tool call", delta: "\nAfter tool call" },
-      { seq: 2 },
-    );
-
-    h.end("run-segmented-flush", 3);
-
-    const chatCalls = h.chat();
-    expect(chatCalls).toHaveLength(3);
-    const flushPayload = chatCalls[1]?.[1] as {
-      state?: string;
-      deltaText?: string;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    const finalPayload = chatCalls[2]?.[1] as {
-      state?: string;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    expect(flushPayload.state).toBe("delta");
-    expect(flushPayload.deltaText).toBe("\nAfter tool call");
-    expect(flushPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
-    expect(finalPayload.state).toBe("final");
-    expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
+  it.each([
+    {
+      name: "segmented text",
+      first: { text: "Before tool call", delta: "Before tool call" },
+      next: { text: "After tool call", delta: "\nAfter tool call" },
+      delta: {
+        deltaText: "\nAfter tool call",
+        message: { content: [{ text: "Before tool call\nAfter tool call" }] },
+      },
+      final: {
+        state: "final",
+        message: { content: [{ text: "Before tool call\nAfter tool call" }] },
+      },
+    },
+    {
+      name: "empty scoped replacement",
+      first: { text: "Hello world", itemId: "message-1" },
+      next: { text: "", itemId: "message-1" },
+      delta: { deltaText: "", replace: true, message: { content: [{ text: "" }] } },
+      final: { state: "final" },
+    },
+  ])("flushes $name before final", ({ first, next, delta, final }) => {
+    const h = createHarness({ now: 10_800 });
+    h.registerNamed("final-flush");
+    h.emit("run-final-flush", "assistant", first);
+    h.nowSpy?.mockReturnValue(10_860);
+    h.emit("run-final-flush", "assistant", next, { seq: 2 });
+    h.end("run-final-flush", 3);
+    const calls = h.chat();
+    expect(calls).toHaveLength(3);
+    expect(calls[1]?.[1]).toMatchObject({ state: "delta", ...delta });
+    expect(calls[2]?.[1]).toMatchObject(final);
     expect(h.nodeChat()).toHaveLength(3);
-    nowSpy.mockRestore();
+    h.nowSpy?.mockRestore();
   });
 
   it("cancels trailing deltas when gateway chat state is cleared", () => {
@@ -1443,85 +1262,23 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
-  it("flushes a scoped replacement empty text before final", () => {
-    const text = "";
-
-    let now = 11_700;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createHarness();
-    h.registerNamed("short-replacement-flush");
-
-    h.emit("run-short-replacement-flush", "assistant", {
-      text: "Hello world",
-      itemId: "message-1",
-    });
-
-    now = 11_760;
-    h.emit("run-short-replacement-flush", "assistant", { text, itemId: "message-1" }, { seq: 2 });
-
-    h.end("run-short-replacement-flush", 3);
-
-    const chatCalls = h.chat();
-    expect(chatCalls).toHaveLength(3);
-    const replacementPayload = chatCalls[1]?.[1] as {
-      state?: string;
-      deltaText?: string;
-      replace?: boolean;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    expect(replacementPayload.state).toBe("delta");
-    expect(replacementPayload.deltaText).toBe(text);
-    expect(replacementPayload.replace).toBe(true);
-    expect(replacementPayload.message?.content?.[0]?.text).toBe(text);
-    expectPayloadFields(chatCalls[2]?.[1], { state: "final" });
-    expect(h.nodeChat()).toHaveLength(3);
-    nowSpy.mockRestore();
-  });
-
   it("keeps item ownership across message-2 correction Hi", () => {
-    const { itemId, text, flags, expected } = {
-      itemId: "message-2",
-      text: "Hi",
-      flags: { replace: true, replaceable: true },
-      expected: "Hi",
-    };
-
-    const h = createHarness({
-      now: 11_800,
-    });
+    const h = createHarness({ now: 11_800 });
     h.registerNamed("item-correction");
-    if (itemId === "message-1") {
-      h.emit(
-        "run-item-correction",
-        "assistant",
-        {
-          itemId: "earlier",
-          text: "Earlier",
-        },
-        { seq: 1 },
-      );
-    }
+    h.emit("run-item-correction", "assistant", {
+      itemId: "message-1",
+      text: "Hello",
+      delta: "Hello",
+    });
     h.emit(
       "run-item-correction",
       "assistant",
-      {
-        itemId: "message-1",
-        text: "Hello",
-        delta: "Hello",
-      },
-      { seq: itemId === "message-1" ? 2 : 1 },
+      { itemId: "message-2", text: "Hi", replace: true, replaceable: true },
+      { seq: 2 },
     );
-    h.emit(
-      "run-item-correction",
-      "assistant",
-      { itemId, ...(text === undefined ? {} : { text }), ...flags },
-      {
-        seq: itemId === "message-1" ? 3 : 2,
-      },
-    );
-    h.end("run-item-correction", itemId === "message-1" ? 4 : 3);
+    h.end("run-item-correction", 3);
 
-    const final = { state: "final", message: { content: [{ type: "text", text: expected }] } };
+    const final = { state: "final", message: { content: [{ type: "text", text: "Hi" }] } };
     expect(h.chat().at(-1)?.[1]).toMatchObject(final);
     expect(h.nodeChat().at(-1)?.[2]).toMatchObject(final);
     h.nowSpy?.mockRestore();
@@ -1581,29 +1338,17 @@ describe("agent event handler", () => {
   });
 
   it("skips unused verbosity reads for registered visible without nodes tool deltas", () => {
-    const audience = {
-      audience: "visible without nodes",
-      visible: true,
-      subscribed: false,
-      heartbeat: false,
-    };
-
     const h = createHarness();
     const runId = "run-unused-verbosity";
     const sessionKey = "session-unused-verbosity";
     h.nodeHasSessionSubscribers.mockReturnValue(false);
     registerAgentRunContext(runId, {
       sessionKey,
-      isControlUiVisible: audience.visible,
-      isHeartbeat: audience.heartbeat,
+      isControlUiVisible: true,
+      isHeartbeat: false,
       verboseLevel: "full",
     });
-    if (audience.subscribed) {
-      h.sessionMessageSubscribers.subscribe("conn-selected", sessionKey);
-    }
-    if (audience.visible && !audience.heartbeat) {
-      h.chatRunState.toolEventRecipients.add(runId, "conn-selected");
-    }
+    h.toolEventRecipients.add(runId, "conn-selected");
     const stop = onAgentRuntimeEvent(h.handler);
     try {
       for (let added = 1; added <= 32; added++) {
@@ -1617,15 +1362,10 @@ describe("agent event handler", () => {
       expect(h.broadcast).not.toHaveBeenCalled();
       expect(h.nodeSendToSession).not.toHaveBeenCalled();
       const delivered = h.targetedAgent();
-      if ((audience.subscribed || audience.visible) && !audience.heartbeat) {
-        expect(delivered.map(([, payload]) => payload.data.diff)).toEqual(
-          Array.from({ length: 32 }, (_, index) => ({ added: index + 1, removed: 0 })),
-        );
-        expect(delivered.every((call) => call[2].has("conn-selected"))).toBe(true);
-      } else {
-        expect(delivered).toHaveLength(0);
-        expect(loadGatewaySessionLifecycleSnapshotMock).not.toHaveBeenCalled();
-      }
+      expect(delivered.map(([, payload]) => payload.data.diff)).toEqual(
+        Array.from({ length: 32 }, (_, index) => ({ added: index + 1, removed: 0 })),
+      );
+      expect(delivered.every((call) => call[2].has("conn-selected"))).toBe(true);
     } finally {
       stop();
       h.handler.dispose();
@@ -2101,159 +1841,84 @@ describe("agent event handler", () => {
     expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 
-  it("cancels deferred lifecycle errors when the handler is disposed", () => {
-    vi.useFakeTimers();
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-dispose",
-      lifecycleErrorRetryGraceMs: 100,
-    });
-
-    h.emit(
-      "run-dispose",
-      "lifecycle",
-      { phase: "error", error: "retryable provider failure" },
-      { sessionKey: "session-dispose", ts: 2_000 },
-    );
-    expect(vi.getTimerCount()).toBe(1);
-
-    h.handler.dispose();
-    expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(100);
-
-    expect(h.clearAgentRunContext).not.toHaveBeenCalled();
-    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
-    expect(h.chat().map(([, payload]) => payload.state)).not.toContain("error");
-  });
-
-  it("projects lifecycle self-aborts with their validation diagnostic", () => {
-    const h = createHarness();
-    h.register("provider-validation-loop", "session-validation-loop", "client-validation-loop");
-
-    h.emit(
-      "provider-validation-loop",
-      "lifecycle",
-      {
-        phase: "end",
+  const terminalProjectionCases: {
+    name: string;
+    sessionKey: string;
+    data: AgentEventPayload["data"];
+    text?: string;
+    expected: Record<string, unknown>;
+    absent?: string;
+  }[] = [
+    {
+      name: "safe validation diagnostic",
+      sessionKey: "session-validation-loop",
+      data: {
         aborted: true,
         toolErrorSummary: "edit tool validation failed: edits: must be an array",
       },
-      { seq: 2, ts: 1_500 },
-    );
-
-    const chatCalls = h.chat();
-    expect(chatCalls).toHaveLength(1);
-    expect(expectDefined(chatCalls[0], "chatCalls[0] test invariant")[1]).toMatchObject({
-      runId: "client-validation-loop",
-      sessionKey: "session-validation-loop",
-      seq: 2,
-      state: "aborted",
-      stopReason: "aborted",
-      errorMessage: "edit tool validation failed: edits: must be an array",
-    });
-    expect(h.nodeChat()).toHaveLength(1);
-    expect(h.chatRunState.registry.peek("provider-validation-loop")).toBeUndefined();
-  });
-
-  it("does not forward unsafe lifecycle abort diagnostics", () => {
-    const h = createHarness();
-    h.register("provider-unsafe-abort", "session-unsafe-abort", "client-unsafe-abort");
-
-    h.emit(
-      "provider-unsafe-abort",
-      "lifecycle",
-      {
-        phase: "end",
+      expected: {
+        state: "aborted",
+        stopReason: "aborted",
+        errorMessage: "edit tool validation failed: edits: must be an array",
+      },
+    },
+    {
+      name: "unsafe abort diagnostic",
+      sessionKey: "session-unsafe-abort",
+      data: {
         aborted: true,
         stopReason: "aborted",
         toolErrorSummary: "browser failed\nsecret output",
       },
-      { seq: 2, ts: 1_500 },
-    );
-
-    const payload = expectDefined(
-      h.chat()[0],
-      "chatBroadcastCalls(broadcast)[0] test invariant",
-    )[1] as Record<string, unknown>;
-    expect(payload.state).toBe("aborted");
-    expect(payload).not.toHaveProperty("errorMessage");
-  });
-
-  it("classifies a timeout end without error text via the recorded outcome", () => {
-    // Idle/run-budget timeouts end with no error field; without deriving
-    // errorKind from the terminal classification the projection falls back
-    // to text-sniffing an undefined error and renders a generic "failed".
-    const h = createHarness();
-    h.register("provider-idle-timeout", "session-idle", "client-idle");
-
-    h.emit(
-      "provider-idle-timeout",
-      "lifecycle",
-      { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
-      { seq: 2, ts: 1_500 },
-    );
-
-    const payload = expectDefined(
-      h.chat()[0],
-      "chatBroadcastCalls(broadcast)[0] test invariant",
-    )[1] as Record<string, unknown>;
-    expect(payload).toMatchObject({
-      runId: "client-idle",
-      state: "error",
-      stopReason: "timeout",
-      errorKind: "timeout",
-    });
-  });
-
-  it("ignores stale aborted markers from older same-key runs for fresh chat lifecycle events (same-millisecond older sequence)", () => {
-    const h = createHarness({ now: 2_000 });
-    h.chatRunState.getOrCreate("client-stale-abort").abortMarker = {
-      abortedAtMs: 2_000,
-      sequence: -1,
-    };
-    h.registerNamed("stale-abort");
-
-    h.emit(
-      "run-stale-abort",
-      "assistant",
-      { text: "Fresh output", delta: "Fresh output" },
-      { ts: 2_100 },
-    );
-    h.emit("run-stale-abort", "lifecycle", { phase: "end" }, { seq: 2, ts: 2_200 });
-
-    const chatCalls = h.chat();
-    expect(chatCalls).toHaveLength(2);
-    const deltaPayload = expectDefined(chatCalls[0], "chatCalls[0] test invariant")[1];
-    const finalPayload = expectDefined(chatCalls[1], "chatCalls[1] test invariant")[1];
-    expect(deltaPayload.state).toBe("delta");
-    expect(finalPayload.state).toBe("final");
-    expect(h.nodeChat()).toHaveLength(2);
-    expect(h.chatRunState.runs.get("client-stale-abort")?.abortMarker).toBeDefined();
-    expect(h.chatRunState.registry.peek("run-stale-abort")).toBeUndefined();
-  });
-
-  it("honors same-millisecond abort markers from the current same-key run", () => {
-    const h = createHarness({ now: 3_000 });
-    h.registerNamed("current-abort");
-    h.chatRunState.getOrCreate("client-current-abort").abortMarker = createChatAbortMarker();
-
-    h.emit(
-      "run-current-abort",
-      "assistant",
-      { text: "Suppressed output", delta: "Suppressed output" },
-      { ts: 3_100 },
-    );
-    h.emit(
-      "run-current-abort",
-      "lifecycle",
-      { phase: "end", aborted: true, stopReason: "rpc" },
-      { seq: 2, ts: 3_200 },
-    );
-
-    expect(h.chat()).toHaveLength(0);
-    expect(h.nodeChat()).toHaveLength(0);
-    expect(h.chatRunState.runs.get("client-current-abort")?.abortMarker).toBeDefined();
-    expect(h.chatRunState.registry.peek("run-current-abort")).toBeUndefined();
-  });
+      expected: { state: "aborted" },
+      absent: "errorMessage",
+    },
+    {
+      name: "timeout without error text",
+      sessionKey: "session-idle",
+      data: { aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
+      expected: { state: "error", stopReason: "timeout", errorKind: "timeout" },
+    },
+    {
+      name: "yielded parent turn",
+      sessionKey: "agent:main:main",
+      text: "Waiting for registered continuation work.",
+      data: { yielded: true, livenessState: "paused", stopReason: "end_turn" },
+      expected: { state: "final", stopReason: "end_turn", yielded: true },
+    },
+    {
+      name: "abort overriding stale yield metadata",
+      sessionKey: "agent:main:main",
+      data: { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
+      expected: { state: "error", stopReason: "end_turn" },
+      absent: "yielded",
+    },
+  ];
+  it.each(terminalProjectionCases)(
+    "projects $name on lifecycle end",
+    ({ sessionKey, data, text, expected, absent }) => {
+      const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+      h.register("provider-terminal", sessionKey, "client-terminal");
+      if (text) {
+        h.emit("provider-terminal", "assistant", { text });
+      }
+      h.emit("provider-terminal", "lifecycle", { phase: "end", ...data }, { seq: 2, ts: 1_500 });
+      expect(h.chat()).toHaveLength(text ? 2 : 1);
+      const terminal = h.chat().filter(([, payload]) => payload.state !== "delta");
+      expect(terminal).toHaveLength(1);
+      expect(terminal[0]?.[1]).toMatchObject({
+        runId: "client-terminal",
+        sessionKey,
+        seq: 2,
+        ...expected,
+      });
+      if (absent) {
+        expect(terminal[0]?.[1]).not.toHaveProperty(absent);
+      }
+      expect(h.nodeChat()).toHaveLength(text ? 2 : 1);
+      expect(h.chatRunState.registry.peek("provider-terminal")).toBeUndefined();
+    },
+  );
 
   it.each([
     {
@@ -2297,152 +1962,59 @@ describe("agent event handler", () => {
     expect(nodeData.partialResult).toBeUndefined();
   });
 
-  it("routes hidden selected-agent global chat events only to matching subscribers", () => {
-    const h = createHarness();
-    h.sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
-    h.sessionMessageSubscribers.subscribe("conn-work", "agent:work:global");
-    h.register("run-hidden-main", "global", "client-hidden-main", {
-      agentId: "main",
-    });
-    registerAgentRunContext("run-hidden-main", {
-      sessionKey: "global",
-      isControlUiVisible: false,
-    });
-    loadGatewaySessionLifecycleSnapshotMock.mockReturnValue({
-      row: { key: "global", kind: "global", updatedAt: 1_000, sessionId: "main-global" },
-    });
-
-    h.emit("run-hidden-main", "assistant", { text: "hidden main global reply" });
-
-    const chatCall = h.broadcastToConnIds.mock.calls.find(([event]) => event === "chat");
-    expect(chatCall?.[2]).toEqual(new Set(["conn-main"]));
-    expect(chatCall?.[1]).toEqual(
-      expect.objectContaining({
-        agentId: "main",
+  it.each([
+    { name: "selected agent", agentId: "main", receiver: "main", systemAgent: "main" },
+    { name: "configured system agent", agentId: undefined, receiver: "ops", systemAgent: "ops" },
+  ])(
+    "routes hidden global events to the $name subscriber",
+    ({ agentId, receiver, systemAgent }) => {
+      if (!agentId) {
+        vi.mocked(getRuntimeConfig).mockReturnValue({
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: systemAgent } },
+            entries: { main: {}, ops: {} },
+          },
+        });
+      }
+      const h = createHarness();
+      for (const id of ["main", "work", "ops"]) {
+        h.sessionMessageSubscribers.subscribe(`conn-${id}`, `agent:${id}:global`);
+      }
+      h.register("run-hidden-global", "global", "client-hidden-global", { agentId });
+      registerAgentRunContext("run-hidden-global", {
         sessionKey: "global",
-      }),
-    );
-    expect(chatCall?.[1]).not.toHaveProperty("session");
-    h.emit(
-      "run-hidden-main",
-      "item",
-      { kind: "status", phase: "update", title: "Working" },
-      { seq: 2 },
-    );
-    expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledWith("global", {
-      agentId: "main",
-    });
-    const agentCall = h.targetedAgent()[0];
-    expect(agentCall?.[2]).toEqual(new Set(["conn-main"]));
-    expect(agentCall?.[1].session).toMatchObject({ key: "global", sessionId: "main-global" });
-  });
-
-  it("routes hidden bare global chat events to the configured default agent subscriber", () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
-    });
-    const h = createHarness();
-    h.sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
-    h.sessionMessageSubscribers.subscribe("conn-ops", "agent:ops:global");
-    h.register("run-hidden-default", "global", "client-hidden-default");
-    registerAgentRunContext("run-hidden-default", {
-      sessionKey: "global",
-      isControlUiVisible: false,
-    });
-    loadGatewaySessionLifecycleSnapshotMock.mockReturnValue({
-      row: { key: "global", kind: "global", updatedAt: 1_000, sessionId: "ops-global" },
-    });
-
-    h.emit("run-hidden-default", "assistant", {
-      text: "hidden default global reply",
-    });
-
-    const chatCall = h.broadcastToConnIds.mock.calls.find(([event]) => event === "chat");
-    expect(chatCall?.[2]).toEqual(new Set(["conn-ops"]));
-    expect(chatCall?.[1]).toEqual(
-      expect.objectContaining({
+        isControlUiVisible: false,
+      });
+      loadGatewaySessionLifecycleSnapshotMock.mockReturnValue({
+        row: { key: "global", kind: "global", updatedAt: 1_000, sessionId: `${receiver}-global` },
+      });
+      h.emit("run-hidden-global", "assistant", { text: "hidden global reply" });
+      const chatCall = h.targetedChat()[0];
+      expect(chatCall?.[2]).toEqual(new Set([`conn-${receiver}`]));
+      expect(chatCall?.[1]).toMatchObject({
         sessionKey: "global",
-      }),
-    );
-    expect(chatCall?.[1]).not.toHaveProperty("session");
-    h.emit(
-      "run-hidden-default",
-      "item",
-      { kind: "status", phase: "update", title: "Working" },
-      { seq: 2 },
-    );
-    expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledWith("global", undefined);
-    const agentCall = h.targetedAgent()[0];
-    expect(agentCall?.[2]).toEqual(new Set(["conn-ops"]));
-    expect(agentCall?.[1].session).toMatchObject({ key: "global", sessionId: "ops-global" });
-  });
-
-  it("keeps chat-linked run remapping alive across per-attempt lifecycle errors", () => {
-    vi.useFakeTimers();
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-fallback",
-      lifecycleErrorRetryGraceMs: 100,
-    });
-    h.register("run-fallback-retry", "session-fallback", "run-fallback-client");
-
-    h.emitMany("run-fallback-retry", [
-      ["assistant", { text: "draft" }],
-      ["lifecycle", { phase: "error", error: "provider failed" }],
-    ]);
-
-    expect(h.chatRunState.registry.peek("run-fallback-retry")).toMatchObject({
-      sessionKey: "session-fallback",
-      clientRunId: "run-fallback-client",
-    });
-    expect(h.clearAgentRunContext).not.toHaveBeenCalled();
-    expect(h.agentRunSeq.get("run-fallback-retry")).toBe(2);
-
-    h.emit(
-      "run-fallback-retry",
-      "lifecycle",
-      {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-      { seq: 3, sessionKey: "session-fallback" },
-    );
-    const agentCalls = h.broadcast.mock.calls.filter(([event]) => event === "agent");
-    const fallbackPayload = agentCalls.at(-1)?.[1] as {
-      runId?: string;
-      data?: Record<string, unknown>;
-    };
-    expect(fallbackPayload.runId).toBe("run-fallback-client");
-    expect(fallbackPayload.data?.phase).toBe("fallback");
-    expect(h.nodeAgent().at(-1)?.[2]).toMatchObject({
-      runId: "run-fallback-client",
-      data: { phase: "fallback" },
-    });
-
-    vi.advanceTimersByTime(100);
-
-    expect(h.chatRunState.registry.peek("run-fallback-retry")).toMatchObject({
-      sessionKey: "session-fallback",
-      clientRunId: "run-fallback-client",
-    });
-    expect(h.chat().map(([, payload]) => payload.state)).not.toContain("error");
-    expect(h.clearAgentRunContext).not.toHaveBeenCalled();
-    expect(h.agentRunSeq.get("run-fallback-retry")).toBe(3);
-
-    h.end("run-fallback-retry", 4);
-
-    expect(h.chat().map(([, payload]) => payload.state)).not.toContain("error");
-    const finalPayload = h.chat().at(-1)?.[1] as {
-      state?: string;
-      runId?: string;
-    };
-    expect(finalPayload.state).toBe("final");
-    expect(finalPayload.runId).toBe("run-fallback-client");
-    expect(h.clearAgentRunContext).toHaveBeenCalledWith("run-fallback-retry");
-    expect(h.agentRunSeq.has("run-fallback-retry")).toBe(false);
-  });
+        ...(agentId ? { agentId } : {}),
+      });
+      expect(chatCall?.[1]).not.toHaveProperty("session");
+      h.emit(
+        "run-hidden-global",
+        "item",
+        { kind: "status", phase: "update", title: "Working" },
+        { seq: 2 },
+      );
+      expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledWith(
+        "global",
+        agentId ? { agentId } : undefined,
+      );
+      const agentCall = h.targetedAgent()[0];
+      expect(agentCall?.[2]).toEqual(new Set([`conn-${receiver}`]));
+      expect(agentCall?.[1].session).toMatchObject({
+        key: "global",
+        sessionId: `${receiver}-global`,
+      });
+    },
+  );
 
   it.each([
     ["fallback exhaustion", { fallbackExhaustedFailure: true }, "error"],
@@ -2652,26 +2224,47 @@ describe("agent event handler", () => {
     }
   });
 
-  it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
-    vi.useFakeTimers();
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-chat-send",
-      lifecycleErrorRetryGraceMs: 100,
-      isChatSendRunActive: (runId) => runId === "run-chat-send",
-    });
-    registerAgentRunContext("run-chat-send", { sessionKey: "session-chat-send" });
-
-    h.emitMany("run-chat-send", [
-      ["assistant", { text: "partial" }],
-      ["lifecycle", { phase: "error", error: "chat.send failed" }],
-    ]);
-
-    vi.advanceTimersByTime(100);
-
-    expect(h.chat().map(([, payload]) => payload.state)).not.toContain("error");
-    expect(h.clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
-    expect(h.agentRunSeq.has("run-chat-send")).toBe(false);
-  });
+  it.each([false, true])(
+    "projects active chat.send errors only with a chat link (linked=%s)",
+    (linked) => {
+      vi.useFakeTimers();
+      const runId = "run-chat-send";
+      const sessionKey = "session-chat-send";
+      const h = createHarness({
+        resolveSessionKeyForRun: () => sessionKey,
+        lifecycleErrorRetryGraceMs: 100,
+        isChatSendRunActive: (id) => id === runId,
+      });
+      if (linked) {
+        h.register(runId, sessionKey, runId);
+      }
+      registerAgentRunContext(runId, { sessionKey });
+      if (!linked) {
+        h.emit(runId, "assistant", { text: "partial" });
+      }
+      h.emit(
+        runId,
+        "lifecycle",
+        { phase: "error", error: "chat.send failed" },
+        { seq: linked ? 1 : 2 },
+      );
+      vi.advanceTimersByTime(100);
+      const errors = h.chat().filter(([, payload]) => payload.state === "error");
+      expect(errors).toHaveLength(linked ? 1 : 0);
+      if (linked) {
+        expectPayloadFields(errors[0]?.[1], {
+          runId,
+          sessionKey,
+          state: "error",
+          errorMessage: "chat.send failed",
+        });
+        expect(errors[0]?.[1]).not.toHaveProperty("message");
+        expect(h.chatRunState.registry.peek(runId)).toBeUndefined();
+      }
+      expect(h.clearAgentRunContext).toHaveBeenCalledWith(runId);
+      expect(h.agentRunSeq.has(runId)).toBe(false);
+    },
+  );
 
   it("publishes the selected saved partial with its terminal error and retains the backstop diagnostic", () => {
     const h = createHarness({
@@ -2710,40 +2303,6 @@ describe("agent event handler", () => {
         __openclaw: { runId, idempotencyKey: "saved-partial" },
       },
     });
-  });
-
-  it("emits lifecycle chat errors for active chat.send runs with a chat run link", () => {
-    vi.useFakeTimers();
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-chat-send",
-      lifecycleErrorRetryGraceMs: 100,
-      isChatSendRunActive: (runId) => runId === "run-chat-send",
-    });
-    h.register("run-chat-send", "session-chat-send", "run-chat-send");
-    registerAgentRunContext("run-chat-send", { sessionKey: "session-chat-send" });
-
-    h.emit("run-chat-send", "lifecycle", {
-      phase: "error",
-      error: "chat.send failed",
-    });
-
-    vi.advanceTimersByTime(100);
-
-    const chatErrors = h
-      .chat()
-      .filter(([, payload]) => (payload as { state?: string }).state === "error");
-    expect(chatErrors).toHaveLength(1);
-    const errorPayload = chatErrors[0]?.[1] as Record<string, unknown>;
-    expectPayloadFields(errorPayload, {
-      runId: "run-chat-send",
-      sessionKey: "session-chat-send",
-      state: "error",
-      errorMessage: "chat.send failed",
-    });
-    expect(errorPayload).not.toHaveProperty("message");
-    expect(h.chatRunState.registry.peek("run-chat-send")).toBeUndefined();
-    expect(h.clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
-    expect(h.agentRunSeq.has("run-chat-send")).toBe(false);
   });
 
   it("drains reply-dispatch text once across global after its source is released", async () => {
@@ -2837,100 +2396,53 @@ describe("agent event handler", () => {
     }
   });
 
-  it.each([
-    [false, false],
-    [true, true],
-  ])(
-    "preserves reply-dispatch ownership (delivery=%s, execution=%s)",
-    async (settled, executionSettled) => {
-      vi.useFakeTimers();
-      const trackTrackedRunTerminalPersistence = vi.fn();
-      const harness = createHarness({
-        resolveSessionKeyForRun: () => "session-reply-dispatch",
-        trackTrackedRunTerminalPersistence,
-      });
-      const { broadcast, chatRunState, clearAgentRunContext, agentRunSeq, handler } = harness;
-      const runId = "run-reply-dispatch";
-      registerChatRun(chatRunState, runId, "session-reply-dispatch", runId);
-      registerAgentRunContext(runId, { sessionKey: "session-reply-dispatch" });
-      chatRunState.getOrCreate(runId).buffer = "pending delivered reply";
-
-      emitAgentEvent(handler, runId, "lifecycle", {
-        phase: "error",
-        error: "ACP turn failed",
-        completionSource: "reply-dispatch",
-        ...(executionSettled ? { executionSettled: true } : {}),
-      });
-      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(
-        executionSettled ? 1 : 0,
-      );
-      expect.soft(chatRunState.runs.get(runId)?.buffer).toBe("pending delivered reply");
-      expect(agentRunSeq.get(runId)).toBe(1);
-      if (settled) {
-        broadcastChatError({
-          context: harness,
-          runId,
-          sessionKey: "session-reply-dispatch",
-          errorMessage: "ACP turn failed",
+  it.each(["recovery provenance", "owner claim"])(
+    "preserves %s in terminal persistence",
+    (metadata) => {
+      const runId = "run-terminal-metadata";
+      const sessionKey = "session-terminal-metadata";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const claimed = metadata === "owner claim";
+      const claimId = claimed
+        ? expectDefined(
+            claimAgentRunContext(runId, { sessionKey }, { exclusive: true, trackOwner: true }),
+            "terminal owner claim",
+          )
+        : undefined;
+      if (!claimed) {
+        registerAgentRunContext(runId, {
+          lifecycleGeneration,
+          mainSessionRestartRecovery: true,
+          sessionKey,
         });
-        chatRunState.clearRun(runId);
-        chatRunState.registry.remove(runId, runId);
       }
-
-      // Drain pending persistence or legacy grace after the dispatch owner's action.
-      await vi.runAllTimersAsync();
-
-      const terminals = chatBroadcastCalls(broadcast);
-      expect(terminals).toHaveLength(settled ? 1 : 0);
-      if (settled) {
-        expectPayloadFields(terminals[0]?.[1], { state: "error", seq: 2 });
-        expect(agentRunSeq.has(runId)).toBe(false);
-      } else {
-        expect(chatRunState.runs.get(runId)?.buffer).toBe("pending delivered reply");
-        expect(chatRunState.registry.peek(runId)?.clientRunId).toBe(runId);
-        expect(agentRunSeq.get(runId)).toBe(1);
-      }
-      expect(clearAgentRunContext).not.toHaveBeenCalled();
-      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledOnce();
-      expect(trackTrackedRunTerminalPersistence).toHaveBeenCalledWith({
-        runId,
-        clientRunId: runId,
-        sessionKey: "session-reply-dispatch",
-        sessionId: undefined,
-        persistence: expect.any(Promise),
+      const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+      let event: Parameters<typeof h.handler>[0] | undefined;
+      const stop = onAgentRuntimeEvent((received) => {
+        event = received;
       });
+      const terminal = { runId, stream: "lifecycle", data: { phase: "end" } };
+      if (claimId) {
+        emitAgentEventForOwner(terminal, claimId);
+      } else {
+        emitRuntimeAgentEvent(terminal);
+      }
+      stop();
+      h.handler(expectDefined(event, "terminal runtime event"));
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining(
+            claimId
+              ? { contextClaimId: claimId }
+              : { lifecycleGeneration, mainSessionRestartRecovery: true, runId },
+          ),
+        }),
+      );
+      if (claimId) {
+        releaseAgentRunContext(runId, claimId);
+      }
     },
   );
-
-  it("forwards restart recovery provenance to terminal persistence", () => {
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-recovery",
-    });
-    registerAgentRunContext("run-recovery", {
-      lifecycleGeneration,
-      mainSessionRestartRecovery: true,
-      sessionKey: "session-recovery",
-    });
-    const stop = onAgentRuntimeEvent(h.handler);
-
-    emitRuntimeAgentEvent({
-      runId: "run-recovery",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-    stop();
-
-    const persistParams = requireRecord(
-      requireMockArg(persistGatewaySessionLifecycleEventMock, 0, 0, "persist lifecycle params"),
-      "persist lifecycle params",
-    );
-    expect(requireRecord(persistParams.event, "persist lifecycle event")).toMatchObject({
-      lifecycleGeneration,
-      mainSessionRestartRecovery: true,
-      runId: "run-recovery",
-    });
-  });
 
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
@@ -2940,7 +2452,7 @@ describe("agent event handler", () => {
     async (stream, data) => {
       const hidden = stream !== "lifecycle";
       const config = {
-        agents: { ownership: "explicit" as const, list: [{ id: "main" }, { id: "work" }] },
+        agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
       };
       vi.mocked(getRuntimeConfig).mockReturnValue(config);
       const runId = `run-owned-${stream}`;
@@ -3392,34 +2904,7 @@ describe("agent event handler", () => {
     expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(persisted);
   });
 
-  it("preserves an owner claim in the terminal persistence handoff", () => {
-    const runId = "claimed-terminal-handoff";
-    const claimId = claimAgentRunContext(
-      runId,
-      { sessionKey: "session-claimed-terminal" },
-      { exclusive: true, trackOwner: true },
-    )!;
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-claimed-terminal",
-    });
-    let event: Parameters<typeof h.handler>[0] | undefined;
-    const stop = onAgentRuntimeEvent((received) => {
-      event = received;
-    });
-    emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, claimId);
-    stop();
-
-    h.handler(expectDefined(event, "claimed terminal event"));
-
-    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({ contextClaimId: claimId }),
-      }),
-    );
-    releaseAgentRunContext(runId, claimId);
-  });
-
-  it("mirrors commentary-phase assistant events only to exact session message subscribers", () => {
+  it.each([false, true])("mirrors hidden commentary only while active (aborted=%s)", (aborted) => {
     const h = createHarness({ now: 1_000, resolveSessionKeyForRun: () => "session-hidden" });
     const runId = "run-hidden-commentary";
     const commentary = "I will inspect the files first.";
@@ -3431,17 +2916,27 @@ describe("agent event handler", () => {
       isControlUiVisible: false,
       verboseLevel: "off",
     });
-    h.emitMany(runId, [
-      ["assistant", { text: commentary, delta: commentary, phase: "commentary" }],
-      ["assistant", { text: untagged, delta: untagged }],
-      ["assistant", { delta: "Untagged delta-only stream must not mirror." }],
-      ["assistant", { text: "Terminal echo without delta" }],
-      ["assistant", { text: "Final answer", delta: "Final answer", phase: "final_answer" }],
-      ["assistant", { delta: "Streaming commentary delta.", phase: "commentary" }],
-    ]);
+    if (aborted) {
+      h.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker(1_000);
+      h.emit(runId, "assistant", { text: commentary, delta: commentary, phase: "commentary" });
+    } else {
+      h.emitMany(runId, [
+        ["assistant", { text: commentary, delta: commentary, phase: "commentary" }],
+        ["assistant", { text: untagged, delta: untagged }],
+        ["assistant", { delta: "Untagged delta-only stream must not mirror." }],
+        ["assistant", { text: "Terminal echo without delta" }],
+        ["assistant", { text: "Final answer", delta: "Final answer", phase: "final_answer" }],
+        ["assistant", { delta: "Streaming commentary delta.", phase: "commentary" }],
+      ]);
+    }
     expect(h.chat()).toHaveLength(0);
     expect(h.agent()).toHaveLength(0);
     expect(h.nodeSendToSession).not.toHaveBeenCalled();
+    if (aborted) {
+      expect(h.broadcastToConnIds).not.toHaveBeenCalled();
+      h.nowSpy?.mockRestore();
+      return;
+    }
     const agentCalls = h.targetedAgent();
     expect(agentCalls).toHaveLength(2);
     for (const [, payload, recipients] of agentCalls) {
@@ -3461,33 +2956,6 @@ describe("agent event handler", () => {
     expect(chatCalls).toHaveLength(1);
     expect(chatCalls[0]?.[2]).toEqual(new Set(["conn-selected"]));
     expectPayloadFields(chatCalls[0]?.[1], { runId, sessionKey: "session-hidden", state: "delta" });
-    h.nowSpy?.mockRestore();
-  });
-
-  it("does not mirror aborted non-control-UI-visible assistant commentary", () => {
-    const h = createHarness({
-      now: 1_000,
-      resolveSessionKeyForRun: () => "session-hidden-aborted",
-    });
-    h.sessionMessageSubscribers.subscribe("conn-selected", "session-hidden-aborted");
-    registerAgentRunContext("run-hidden-commentary-aborted", {
-      sessionKey: "session-hidden-aborted",
-      isControlUiVisible: false,
-      verboseLevel: "off",
-    });
-    h.chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker =
-      createChatAbortMarker(1_000);
-
-    h.emit("run-hidden-commentary-aborted", "assistant", {
-      text: "This aborted commentary must not be mirrored.",
-      delta: "This aborted commentary must not be mirrored.",
-      phase: "commentary",
-    });
-
-    expect(h.chat()).toHaveLength(0);
-    expect(h.agent()).toHaveLength(0);
-    expect(h.broadcastToConnIds).not.toHaveBeenCalled();
-    expect(h.nodeSendToSession).not.toHaveBeenCalled();
     h.nowSpy?.mockRestore();
   });
 
@@ -3511,137 +2979,61 @@ describe("agent event handler", () => {
       });
     }
 
-    it("marks a yielded final as waiting instead of parent-task completion", () => {
-      const h = createHarness({
-        resolveSessionKeyForRun: () => "agent:main:main",
-      });
-
-      h.register("run-yielded", "agent:main:main", "client-yielded");
-      h.emit("run-yielded", "assistant", {
-        text: "Waiting for registered continuation work.",
-      });
-      h.emit(
-        "run-yielded",
-        "lifecycle",
-        {
-          phase: "end",
-          yielded: true,
-          livenessState: "paused",
-          stopReason: "end_turn",
-        },
-        { seq: 2 },
-      );
-
-      const finalCall = expectDefined(
-        h.chat().find(([, payload]) => payload.state === "final"),
-        "yielded final chat call",
-      );
-      expectPayloadFields(finalCall[1], {
-        runId: "client-yielded",
-        sessionKey: "agent:main:main",
-        state: "final",
-        stopReason: "end_turn",
-        yielded: true,
-      });
-    });
-
-    it("does not let stale yield metadata override an aborted lifecycle", () => {
-      const h = createHarness({
-        resolveSessionKeyForRun: () => "agent:main:main",
-      });
-
-      h.register("run-aborted", "agent:main:main", "client-aborted");
-      h.emit("run-aborted", "lifecycle", {
-        phase: "end",
-        aborted: true,
-        yielded: true,
-        livenessState: "paused",
-        stopReason: "end_turn",
-      });
-
-      const finalCall = expectDefined(
-        h.chat().find(([, payload]) => payload.state === "error"),
-        "aborted final chat call",
-      );
-      expectPayloadFields(finalCall[1], {
-        runId: "client-aborted",
-        sessionKey: "agent:main:main",
+    it.each([
+      {
+        name: "dashboard delta",
+        key: "agent:main:dashboard:visible-child",
+        parent: "agent:main:discord:direct:alice",
+        state: "delta",
+        events: [["assistant", { text: "visible child" }]],
+      },
+      {
+        name: "subagent terminal error",
+        key: "agent:coder:subagent:err",
+        parent: "agent:conductor:task:parent-err",
         state: "error",
-        stopReason: "end_turn",
-      });
-      expect(finalCall[1]).not.toHaveProperty("yielded");
-    });
-
-    it("includes spawnedBy in chat broadcasts for spawn-owned dashboard sessions", () => {
-      mockSessionLineage("agent:main:dashboard:visible-child", "agent:main:discord:direct:alice");
+        events: [
+          ["assistant", { text: "partial" }],
+          ["lifecycle", { phase: "error", error: "provider failed" }],
+        ],
+      },
+      {
+        name: "subagent sequence gap",
+        key: "agent:coder:subagent:gap",
+        parent: "agent:conductor:task:parent-gap",
+        state: "gap",
+        events: [
+          ["lifecycle", { phase: "start" }],
+          ["assistant", { text: "skipped seq" }, { seq: 5 }],
+        ],
+      },
+    ] as const)("includes spawnedBy in $name broadcasts", ({ key, parent, state, events }) => {
+      mockSessionLineage(key, parent);
       const h = createHarness({
-        resolveSessionKeyForRun: () => "agent:main:dashboard:visible-child",
-      });
-      h.register(
-        "run-dashboard-child",
-        "agent:main:dashboard:visible-child",
-        "client-dashboard-child",
-      );
-
-      h.emit("run-dashboard-child", "assistant", { text: "visible child" });
-
-      expectPayloadFields(h.chat()[0]?.[1], {
-        sessionKey: "agent:main:dashboard:visible-child",
-        spawnedBy: "agent:main:discord:direct:alice",
-      });
-    });
-
-    it("includes spawnedBy in chat error final broadcasts for subagent sessions", () => {
-      mockSessionLineage("agent:coder:subagent:err", "agent:conductor:task:parent-err");
-
-      const h = createHarness({
-        resolveSessionKeyForRun: () => "agent:coder:subagent:err",
+        resolveSessionKeyForRun: () => key,
         lifecycleErrorRetryGraceMs: 0,
       });
-
-      h.register("run-sub-err", "agent:coder:subagent:err", "client-sub-err");
-
-      h.emitMany("run-sub-err", [
-        ["assistant", { text: "partial" }],
-        ["lifecycle", { phase: "error", error: "provider failed" }],
-      ]);
-
-      const chatCalls = h.chat();
-      const errorCall = expectDefined(
-        chatCalls.find(([, p]) => p.state === "error"),
-        "error chat call",
+      if (state === "gap") {
+        registerAgentRunContext("run-lineage", { sessionKey: key });
+      } else {
+        h.register("run-lineage", key, "client-lineage");
+      }
+      h.emitMany("run-lineage", events);
+      const calls = state === "gap" ? h.agent() : h.chat();
+      const call = expectDefined(
+        calls.find(([, payload]) =>
+          state === "gap"
+            ? payload.stream === "error" && payload.data?.reason === "seq gap"
+            : payload.state === state,
+        ),
+        "lineage broadcast",
       );
-      expectPayloadFields(errorCall[1], {
-        sessionKey: "agent:coder:subagent:err",
-        spawnedBy: "agent:conductor:task:parent-err",
-        state: "error",
-      });
-    });
-
-    it("includes spawnedBy in seq gap error broadcasts for subagent sessions", () => {
-      mockSessionLineage("agent:coder:subagent:gap", "agent:conductor:task:parent-gap");
-
-      const h = createHarness({
-        resolveSessionKeyForRun: () => "agent:coder:subagent:gap",
-      });
-
-      registerAgentRunContext("run-sub-gap", { sessionKey: "agent:coder:subagent:gap" });
-
-      h.emitMany("run-sub-gap", [
-        ["lifecycle", { phase: "start" }],
-        ["assistant", { text: "skipped seq" }, { seq: 5 }],
-      ]);
-
-      const agentCalls = h.broadcast.mock.calls.filter(([event]) => event === "agent");
-      const gapError = expectDefined(
-        agentCalls.find(([, p]) => p.stream === "error" && p.data?.reason === "seq gap"),
-        "seq gap error agent call",
-      );
-      expectPayloadFields(gapError[1], {
-        sessionKey: "agent:coder:subagent:gap",
-        spawnedBy: "agent:conductor:task:parent-gap",
-      });
-      expectPayloadDataFields(gapError[1], { reason: "seq gap", expected: 2, received: 5 });
+      expectPayloadFields(call[1], { sessionKey: key, spawnedBy: parent });
+      if (state === "gap") {
+        expectPayloadDataFields(call[1], { reason: "seq gap", expected: 2, received: 5 });
+      } else {
+        expectPayloadFields(call[1], { state });
+      }
     });
   });
   describe("agent model roster publications", () => {

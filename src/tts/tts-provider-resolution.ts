@@ -101,14 +101,19 @@ function canonicalizeSpeechProviderIdFromInventory(
   if (!providers) {
     return canonicalizeSpeechProviderId(providerId, cfg);
   }
-  const inventoryProvider = providers.find(
+  const inventoryProvider = findInventoryProvider(providers, normalized);
+  // A prepared inventory can omit voice-model-only providers. Preserve the
+  // registry's public alias contract on misses instead of exposing an alias.
+  return inventoryProvider?.id ?? canonicalizeSpeechProviderId(providerId, cfg) ?? normalized;
+}
+
+function findInventoryProvider(providers: readonly SpeechProviderPlugin[], providerId: string) {
+  const normalized = normalizeSpeechProviderId(providerId);
+  return providers.find(
     (provider) =>
       normalizeSpeechProviderId(provider.id) === normalized ||
       provider.aliases?.some((alias) => normalizeSpeechProviderId(alias) === normalized),
   );
-  // A prepared inventory can omit voice-model-only providers. Preserve the
-  // registry's public alias contract on misses instead of exposing an alias.
-  return inventoryProvider?.id ?? canonicalizeSpeechProviderId(providerId, cfg) ?? normalized;
 }
 
 function resolveConfiguredSpeechVoiceModelRefs(
@@ -403,14 +408,7 @@ export function resolvePreparedTtsProvider(params: {
   }
   if (params.preference?.source === "persona") {
     const preferredProvider = params.preference.provider;
-    const inventoryProvider = params.providers.find(
-      (provider) =>
-        normalizeSpeechProviderId(provider.id) === normalizeSpeechProviderId(preferredProvider) ||
-        provider.aliases?.some(
-          (alias) =>
-            normalizeSpeechProviderId(alias) === normalizeSpeechProviderId(preferredProvider),
-        ),
-    );
+    const inventoryProvider = findInventoryProvider(params.providers, preferredProvider);
     const personaProvider = inventoryProvider ?? getSpeechProvider(preferredProvider, effectiveCfg);
     if (personaProvider) {
       return personaProvider.id;
@@ -449,15 +447,10 @@ export function resolveTtsProviderOrder(
     const provider =
       canonicalizeSpeechProviderIdFromInventory(ref.provider, effectiveCfg, providers) ??
       ref.provider;
-    if (provider !== normalizedPrimary) {
-      ordered.add(provider);
-    }
+    ordered.add(provider);
   }
   for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg, providers)) {
-    const normalized = provider.id;
-    if (normalized !== normalizedPrimary) {
-      ordered.add(normalized);
-    }
+    ordered.add(provider.id);
   }
   return [...ordered];
 }

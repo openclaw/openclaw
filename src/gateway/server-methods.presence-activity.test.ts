@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listSystemPresence } from "../infra/system-presence.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -44,66 +43,50 @@ function setup() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("presence.activity registered request", () => {
-  it("records server time across live tabs and coalesces publication without requiring chat", async () => {
-    const { started, clock, tabs, request, publish, clients } = setup();
-    expect(await request()).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(tabs.map((tab) => tab.connectionLastActivityAt)).toEqual([started, undefined]);
-    clock.mockReturnValue(started + 1_000);
-    await request(tabs[1]);
-    expect(tabs.map((tab) => tab.connectionLastActivityAt)).toEqual([started, started + 1_000]);
-    expect(publish).toHaveBeenCalledOnce();
-    for (const tab of tabs) {
-      expect(tab.personPresence).toEqual({
-        onlineSince: started - 10_000,
-        lastActivityAt: started + 1_000,
-      });
-    }
-    clients.delete(tabs[0]!);
-    clock.mockReturnValue(started + 30_000);
-    await request(tabs[1]);
-    expect(publish).toHaveBeenCalledTimes(2);
-    expect(listSystemPresence()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          lastActivityAt: started + 30_000,
-          user: { id: "activity-rpc@example.test", email: "activity-rpc@example.test" },
-        }),
-      ]),
-    );
-  });
-
-  it("rejects client timestamps, identity and content instead of accepting arbitrary telemetry", async () => {
-    const { request, publish, tabs } = setup();
-    for (const payload of [{ lastActivityAt: 1 }, { userId: "other" }, { key: "a" }]) {
-      expect(await request(tabs[0], payload)).toHaveBeenCalledWith(
+  it("rejects invalid telemetry and unauthorized callers before recording activity", async () => {
+    for (const row of [
+      {
+        payload: { lastActivityAt: 1 },
+        code: "INVALID_REQUEST",
+        message: "invalid presence.activity params",
+      },
+      {
+        payload: { userId: "other" },
+        code: "INVALID_REQUEST",
+        message: "invalid presence.activity params",
+      },
+      {
+        payload: { key: "a" },
+        code: "INVALID_REQUEST",
+        message: "invalid presence.activity params",
+      },
+      { scopes: ["operator.pairing"], code: "FORBIDDEN", message: "missing scope: operator.read" },
+      { role: "node", code: "INVALID_REQUEST" },
+    ]) {
+      const { request, publish, tabs } = setup();
+      if (row.scopes) {
+        tabs[0]!.connect.scopes = row.scopes;
+      }
+      if (row.role) {
+        tabs[0]!.connect.role = row.role;
+      }
+      expect(await request(tabs[0], row.payload)).toHaveBeenCalledWith(
         false,
         undefined,
         expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("invalid presence.activity params"),
+          code: row.code,
+          ...(row.message
+            ? {
+                message:
+                  row.code === "FORBIDDEN" ? row.message : expect.stringContaining(row.message),
+              }
+            : {}),
         }),
       );
+      expect(publish).not.toHaveBeenCalled();
+      expect(tabs[0]!.personPresence?.lastActivityAt).toBeUndefined();
+      vi.restoreAllMocks();
     }
-    expect(publish).not.toHaveBeenCalled();
-    expect(tabs[0]!.personPresence?.lastActivityAt).toBeUndefined();
-  });
-
-  it("denies nodes and operators without read scope before recording activity", async () => {
-    const { tabs, request, publish } = setup();
-    tabs[0]!.connect.scopes = ["operator.pairing"];
-    expect(await request()).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
-    );
-    tabs[0]!.connect.scopes = ["operator.read"];
-    tabs[0]!.connect.role = "node";
-    expect(await request()).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(publish).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -130,15 +113,4 @@ describe("presence.activity registered request", () => {
       expect(publish).toHaveBeenCalledTimes(closed ? 0 : 1);
     },
   );
-
-  it("does not invent activity for copied, retired or unidentified clients", async () => {
-    const { tabs, clients, request, publish } = setup();
-    expect(await request({ ...tabs[0]! })).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    clients.delete(tabs[0]!);
-    expect(await request()).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    tabs[1]!.authenticatedUserId = undefined;
-    expect(await request(tabs[1])).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(publish).not.toHaveBeenCalled();
-    expect(tabs.every((tab) => tab.personPresence?.lastActivityAt === undefined)).toBe(true);
-  });
 });

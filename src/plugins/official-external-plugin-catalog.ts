@@ -52,15 +52,10 @@ type OfficialExternalProviderContract =
 function getFeedEntryInstallCandidates(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogInstallCandidate[] {
-  const state = normalizeOptionalString(entry.state);
-  if (state !== "available") {
-    return [];
-  }
-  const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
-  if (publisherTrust !== "official") {
-    return [];
-  }
-  return getFeedEntryInstallCandidateRecords(entry);
+  return normalizeOptionalString(entry.state) === "available" &&
+    normalizeOptionalString(entry.publisher?.trust) === "official"
+    ? getFeedEntryInstallCandidateRecords(entry)
+    : [];
 }
 
 const BUNDLED_CATALOG_SOURCE_REFS = new Set(

@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkerLiveEventErrorDetails as ErrorDetails,
   WorkerLiveEventParams as Params,
@@ -27,6 +25,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../../trajectory/runtime-store.sqlite.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
 import * as liveProjection from "./live-event-projection.js";
@@ -57,6 +56,7 @@ import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.j
 import * as workerRunOwner from "./worker-turn-run-owner.js";
 
 describe("worker live events", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-worker-live-");
   let root: string;
   let store: string;
   const sources = new Map<string, WorkerTurnTranscriptSource>();
@@ -129,7 +129,7 @@ describe("worker live events", () => {
   const deltas = () => events.map((event) => event.data.delta);
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-live-"));
+    root = sessionDirs.make();
     store = path.join(root, "agents", "main", "sessions", "sessions.json");
     sources.clear();
     durableAckedSeq = 0;
@@ -147,7 +147,6 @@ describe("worker live events", () => {
     clearRuntimeConfigSnapshot();
     await drainStoreWriterQueuesForTest(SQLITE_SESSION_WRITER_QUEUES, "live receiver test cleanup");
     closeOpenClawAgentDatabasesForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("persists cloud-worker progress for sessions tail", async () => {
@@ -323,6 +322,7 @@ describe("worker live events", () => {
         throw failure;
       },
       isCancelled: () => false,
+      isCancelledFinishing: () => false,
     });
     const writer = holdWorkerTranscriptWriter(store);
     await writer.entered;
@@ -448,13 +448,15 @@ describe("worker live events", () => {
     const source = sourceFor();
     const receipt = vi.spyOn(source, "receiptAuthority");
     const record = vi.fn();
+    const finishing = live(1, lifecycle({ phase: "finishing", aborted: true, endedAt: 200 }));
     const owner = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
       isCancelled: () => true,
+      isCancelledFinishing: (request) => request === finishing,
       record,
     });
     try {
       await fail(msg(1, "late"), "invalid-event");
-      await ack(live(1, lifecycle({ phase: "finishing", aborted: true, endedAt: 200 })));
+      await ack(finishing);
       expect(receipt).not.toHaveBeenCalled();
       expect(record).not.toHaveBeenCalled();
       expect(events).toEqual([]);
@@ -728,9 +730,11 @@ describe("worker live events", () => {
         });
       }
       const diagnostic = vi.fn();
-      const recorder = vi
-        .spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner")
-        .mockReturnValue({ record: diagnostic, isCancelled: () => false });
+      const recorder = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+        record: diagnostic,
+        isCancelled: () => false,
+        isCancelledFinishing: () => false,
+      });
       const stop = onAgentRuntimeEvent((event) => {
         if (event.runId === RUN && event.stream === stream) {
           rx.clearEnvironment(ID.environmentId, EPOCH);

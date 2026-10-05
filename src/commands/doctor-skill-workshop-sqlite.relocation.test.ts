@@ -135,10 +135,10 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
 
     const config = {
       agents: {
-        list: [
-          { id: "alpha", default: true, workspace: workspaceDir },
-          { id: "beta", workspace: workspaceDir },
-        ],
+        entries: {
+          alpha: { workspace: workspaceDir },
+          beta: { workspace: workspaceDir },
+        },
       },
     };
     const result = await migrateLegacySkillWorkshopProposals({
@@ -184,7 +184,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     ]);
 
     const config = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+      agents: { entries: { main: { workspace: workspaceDir } } },
     };
     await expect(
       inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
@@ -504,7 +504,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       config: {
         agents: {
           entries: {
-            main: { default: true, workspace: currentWorkspace },
+            main: { workspace: currentWorkspace },
             other: { workspace: secondWorkspace },
           },
         },

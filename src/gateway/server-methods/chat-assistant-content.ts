@@ -213,7 +213,7 @@ export async function buildAssistantReplyContentFromInputs(
   for (const entry of plan) {
     const payload = entry.payload;
     const metadataSource = payloads[entry.sourceIndex] ?? payload;
-    const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
+    const mediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
     const statusNotice = isReplyPayloadStatusNotice(payload);
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;

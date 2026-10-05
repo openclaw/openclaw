@@ -43,8 +43,7 @@ final class VoiceWakeTester {
         self.lastLoggedAt = nil
         self.lastTranscript = nil
         self.lastTranscriptAt = nil
-        self.silenceTask?.cancel()
-        self.silenceTask = nil
+        SimpleTaskSupport.stop(task: &self.silenceTask)
         self.currentTriggers = triggers
         let chosenLocale = localeID.flatMap { Locale(identifier: $0) } ?? Locale.current
         let recognizer = SFSpeechRecognizer(locale: chosenLocale)
@@ -195,8 +194,7 @@ final class VoiceWakeTester {
         self.lastLoggedAt = nil
         self.lastTranscript = nil
         self.lastTranscriptAt = nil
-        self.silenceTask?.cancel()
-        self.silenceTask = nil
+        SimpleTaskSupport.stop(task: &self.silenceTask)
         self.currentTriggers = []
     }
 
@@ -357,6 +355,11 @@ final class VoiceWakeTester {
     }
 
     private nonisolated static func ensurePermissions() async throws -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            let granted = PermissionManager.voiceWakePermissionsGranted()
+            if !granted { PermissionManager.reportDeferredRequest() }
+            return granted
+        }
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         if speechStatus == .notDetermined {
             let granted = await withCheckedContinuation { continuation in
@@ -374,11 +377,7 @@ final class VoiceWakeTester {
         case .authorized: return true
 
         case .notDetermined:
-            return await withCheckedContinuation { continuation in
-                AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
+            return await AVCaptureDevice.requestAccess(for: .audio)
 
         default:
             return false

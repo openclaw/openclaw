@@ -25,11 +25,13 @@ import {
   type PreparedSessionTranscriptProjectionMetadata,
 } from "./session-transcript-projection-rebuild.js";
 import type { MemoryTranscriptProjectionSource } from "./session-transcript-reconcile-memory.js";
+import type { EncodedTranscriptFtsChunk } from "./session-transcript-reconcile.worker.js";
 
 const PROJECTION_WRITE_CHUNK_ROWS = 512;
 export type ReconcileDatabaseOptions = OpenClawAgentDatabaseOptions & {
   env: NodeJS.ProcessEnv;
   path: string;
+  assertCurrent?: () => void;
 };
 export type ProjectionPublisher = Pick<
   SqliteWorkerStore<TranscriptProjectionPublicationOperations>,
@@ -39,6 +41,9 @@ export type ActivePreparedProjection = {
   claimId: number;
   plan: PreparedSessionTranscriptProjectionMetadata;
 };
+type ProjectionRows = Parameters<
+  typeof appendPreparedSessionTranscriptProjectionChunkInTransaction
+>[1];
 export async function runProjectionWrite<T>(
   databaseOptions: ReconcileDatabaseOptions,
   operationLabel: Extract<SqliteSessionWriteOperation, `sessions.transcript-index.${string}`>,
@@ -52,11 +57,21 @@ export async function runProjectionWrite<T>(
         // Disposal revokes a memory source. Check inside the queue before the opener
         // can materialize a successor database for a late worker result.
         memorySource?.assertCurrentOwner();
-        return runOpenClawAgentWriteTransaction(operation, databaseOptions, { operationLabel });
+        databaseOptions.assertCurrent?.();
+        return runOpenClawAgentWriteTransaction(
+          (database) => {
+            databaseOptions.assertCurrent?.();
+            const result = operation(database);
+            databaseOptions.assertCurrent?.();
+            return result;
+          },
+          databaseOptions,
+          { operationLabel },
+        );
       };
       return !isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions) &&
         !getOpenClawAgentDatabaseIfOpen(databaseOptions)
-        ? withOpenClawAgentDatabaseAsync(databaseOptions, write)
+        ? withOpenClawAgentDatabaseAsync(databaseOptions, write, databaseOptions.assertCurrent)
         : write();
     },
     operationLabel,
@@ -86,24 +101,18 @@ export async function claimPreparedSessionTranscriptProjection(
 
   let deleteResult = { hasMore: true, owned: true };
   while (deleteResult.hasMore && deleteResult.owned) {
+    const input = {
+      maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
+      sessionId: plan.sessionId,
+      claimId,
+    };
     deleteResult = publication
-      ? await publication.execute({
-          type: "deleteChunk",
-          input: {
-            maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
-            sessionId: plan.sessionId,
-            claimId,
-          },
-        })
+      ? await publication.execute({ type: "deleteChunk", input })
       : await runProjectionWrite(
           databaseOptions,
           "sessions.transcript-index.delete-chunk",
           (database) =>
-            deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
-              maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
-              sessionId: plan.sessionId,
-              claimId,
-            }),
+            deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
           memorySource,
         );
     await yieldToGateway();
@@ -114,43 +123,39 @@ export async function claimPreparedSessionTranscriptProjection(
   return { claimId, plan };
 }
 
+function decodeFtsChunk(chunk: EncodedTranscriptFtsChunk) {
+  const decoder = new TextDecoder();
+  return chunk.rows.map((row) => ({
+    messageId: row.messageId,
+    role: row.role,
+    text: decoder.decode(
+      chunk.textBytes.subarray(row.textByteOffset, row.textByteOffset + row.textByteLength),
+    ),
+    timestamp: row.timestamp,
+  }));
+}
+
 export async function appendPreparedProjectionChunk(
   databaseOptions: ReconcileDatabaseOptions,
   active: ActivePreparedProjection,
-  rows:
-    | {
-        activeRows: Parameters<
-          typeof appendPreparedSessionTranscriptProjectionChunkInTransaction
-        >[1]["activeRows"];
-      }
-    | {
-        ftsRows: Parameters<
-          typeof appendPreparedSessionTranscriptProjectionChunkInTransaction
-        >[1]["ftsRows"];
-      },
+  rows: { activeRows: ProjectionRows["activeRows"] } | { ftsChunk: EncodedTranscriptFtsChunk },
   memorySource?: MemoryTranscriptProjectionSource,
   publication?: ProjectionPublisher,
 ): Promise<boolean> {
+  const input = {
+    ...("activeRows" in rows ? rows : { ftsRows: decodeFtsChunk(rows.ftsChunk) }),
+    claimId: active.claimId,
+    sessionId: active.plan.sessionId,
+  };
   const owned = publication
-    ? await publication.execute({
-        type: "appendChunk",
-        input: {
-          ...rows,
-          claimId: active.claimId,
-          sessionId: active.plan.sessionId,
-        },
-      })
+    ? await publication.execute({ type: "appendChunk", input })
     : await runProjectionWrite(
         databaseOptions,
         "activeRows" in rows
           ? "sessions.transcript-index.active-chunk"
           : "sessions.transcript-index.fts-chunk",
         (database) =>
-          appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
-            ...rows,
-            claimId: active.claimId,
-            sessionId: active.plan.sessionId,
-          }),
+          appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
         memorySource,
       );
   await yieldToGateway();

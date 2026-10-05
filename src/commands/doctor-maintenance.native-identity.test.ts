@@ -50,7 +50,7 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => ({
 vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   inspectGatewayRestart: vi.fn(async () => ({ healthy: true })),
-  waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
+  waitForGatewayHealthyRestart: vi.fn(async () => ({ outcome: "ready", healthy: true })),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

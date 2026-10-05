@@ -18,8 +18,13 @@ import {
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createPreparedReadHandler } from "./server-methods/prepared-read.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { dispatchSharedRead, invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 const mocks = vi.hoisted(() => ({
   createRuntime: vi.fn(),
@@ -114,6 +119,14 @@ it.each([false, true])(
     const { lifecycle: pending, sidecarOwner } = createLifecycle(true);
     const lifecycle = await pending;
     await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
+    expect(mocks.createRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ beforeRefresh: expect.any(Function), refreshOnRead: true }),
+    );
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.registerAuthListener).not.toHaveBeenCalled();
+    expect(mocks.registerModelListener).not.toHaveBeenCalled();
+    expect(mocks.registerSkillsListener).not.toHaveBeenCalled();
+    expect(sidecarOwner.snapshot()).toHaveLength(1);
     publishSessionCostUsageUpdated("main", failed);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
@@ -128,6 +141,7 @@ it.each([false, true])(
     );
     expect(mocks.refresh).not.toHaveBeenCalled();
     await sidecarOwner.stop();
+    expect(mocks.stop).toHaveBeenCalledOnce();
     publishSessionCostUsageUpdated("main");
     expect(broadcast).toHaveBeenCalledTimes(1);
   },
@@ -464,33 +478,51 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
-  it("does not rebuild or broadcast unchanged metadata after unrelated skill and catalog events", async () => {
-    const harness = await createRealMetadataLifecycle();
-    try {
-      const before = await harness.lifecycle.read({ agentId: "main" });
-      for (let event = 0; event < 14; event += 1) {
-        harness.events.skills();
-        harness.events.catalog();
-        expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
-      }
-      expect(harness.buildCommands).toHaveBeenCalledOnce();
-      expect(harness.broadcast).toHaveBeenCalledOnce();
-    } finally {
-      await harness.stop();
-    }
-  });
-
-  it.each(["queued", "building"] as const)(
-    "keeps readers waiting when %s metadata refresh is superseded by owner publication",
-    async (stage) => {
+  it.each(["unchanged facts", "nonfatal catalog failure"])(
+    "keeps metadata available after %s",
+    async (event) => {
       const harness = await createRealMetadataLifecycle();
-      const queued = harness.queueRefresh(stage);
-      let read: Promise<unknown> | undefined;
       try {
-        await queued.entered;
-        harness.invalidateOwner();
-        let settled = false;
-        read = harness.lifecycle.read({ agentId: "main" }).then(
+        const before = await harness.lifecycle.read({ agentId: "main" });
+        for (let repeat = 0; repeat < 2; repeat += 1) {
+          if (event === "unchanged facts") {
+            harness.events.skills();
+            harness.events.catalog();
+          } else {
+            harness.modelEvent({
+              phase: "catalog-failed",
+              error: new Error("catalog attempt failed"),
+              modelFactsChanged: false,
+            });
+          }
+          expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
+        }
+        expect(harness.buildCommands).toHaveBeenCalledOnce();
+        expect(harness.broadcast).toHaveBeenCalledOnce();
+        expect(harness.warn).not.toHaveBeenCalled();
+        expect(mocks.fail).not.toHaveBeenCalled();
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
+
+  it.each(["queued", "building", "initial build", "missing owner"] as const)(
+    "keeps readers waiting for owner publication after %s",
+    async (stage) => {
+      const initial = stage === "initial build";
+      const missing = stage === "missing owner";
+      const harness = await createRealMetadataLifecycle({
+        attach: !initial && !missing,
+        ownerAvailable: !missing,
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const queued =
+        stage === "queued" || stage === "building" ? harness.queueRefresh(stage) : undefined;
+      let settled = false;
+      const readMetadata = () =>
+        harness.lifecycle.read({ agentId: "main" }).then(
           (value) => {
             settled = true;
             return value;
@@ -500,10 +532,32 @@ describe("gateway chat metadata lifecycle", () => {
             return error;
           },
         );
-        queued.release();
-        await queued.obsolete.catch(() => undefined);
+      let read: Promise<unknown> | undefined;
+      try {
+        if (initial) {
+          harness.buildCommands.mockImplementationOnce(async () => {
+            entered.resolve();
+            await release.promise;
+            return { commands: [] };
+          });
+          await harness.attach();
+          read = readMetadata();
+          await entered.promise;
+        } else if (missing) {
+          await harness.attach();
+          expect(harness.warn).not.toHaveBeenCalled();
+          await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
+            ChatMetadataSnapshotUnavailableError,
+          );
+        } else {
+          await queued?.entered;
+        }
+        harness.invalidateOwner();
+        read ??= readMetadata();
+        release.resolve();
+        queued?.release();
+        await queued?.obsolete.catch(() => undefined);
         await nextEventLoopTurn();
-
         expect(harness.warn).not.toHaveBeenCalled();
         expect(settled).toBe(false);
         harness.replaceOwner();
@@ -511,9 +565,10 @@ describe("gateway chat metadata lifecycle", () => {
           models: [expect.objectContaining({ id: "after-publication" })],
         });
       } finally {
-        queued.release();
+        release.resolve();
+        queued?.release();
         await harness.stop();
-        await Promise.all([read, queued.reading]);
+        await Promise.all([read, queued?.reading]);
       }
     },
   );
@@ -551,79 +606,6 @@ describe("gateway chat metadata lifecycle", () => {
       }
     },
   );
-
-  it("publishes initial facts before agent work and fences its read during owner replacement", async () => {
-    const harness = await createRealMetadataLifecycle({ attach: false });
-    const entered = createDeferred();
-    const release = createDeferred();
-    harness.buildCommands.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return { commands: [] };
-    });
-    await harness.attach();
-    let read: Promise<unknown> | undefined;
-    try {
-      let settled = false;
-      read = harness.lifecycle.read({ agentId: "main" }).then(
-        (value) => {
-          settled = true;
-          return value;
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
-      await entered.promise;
-      harness.invalidateOwner();
-      release.resolve();
-      await nextEventLoopTurn();
-      expect(settled).toBe(false);
-      expect(harness.warn).not.toHaveBeenCalled();
-      harness.replaceOwner();
-      await expect(read).resolves.toMatchObject({
-        models: [expect.objectContaining({ id: "after-publication" })],
-      });
-    } finally {
-      release.resolve();
-      await harness.stop();
-      await read;
-    }
-  });
-
-  it("waits for first publication after an initial missing-owner catch-up", async () => {
-    const harness = await createRealMetadataLifecycle({ attach: false, ownerAvailable: false });
-    let read: Promise<unknown> | undefined;
-    try {
-      await harness.attach();
-      expect(harness.warn).not.toHaveBeenCalled();
-      await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
-        ChatMetadataSnapshotUnavailableError,
-      );
-      harness.modelEvent({ phase: "invalidated" });
-      let settled = false;
-      read = harness.lifecycle.read({ agentId: "main" }).then(
-        (value) => {
-          settled = true;
-          return value;
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
-      await nextEventLoopTurn();
-      expect(settled).toBe(false);
-      harness.replaceOwner();
-      await expect(read).resolves.toMatchObject({
-        models: [expect.objectContaining({ id: "after-publication" })],
-      });
-    } finally {
-      await harness.stop();
-      await read;
-    }
-  });
 
   it("broadcasts settled metadata through the production lifecycle without a failure feedback loop", async () => {
     const actual = await vi.importActual<
@@ -833,158 +815,138 @@ describe("gateway chat metadata lifecycle", () => {
     },
   );
 
-  it("keeps minimal Gateway attachment lazy while owning shutdown", async () => {
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(true);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-
-    expect(mocks.createRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        beforeRefresh: expect.any(Function),
-        refreshOnRead: true,
-      }),
-    );
-    expect(mocks.refresh).not.toHaveBeenCalled();
-    expect(mocks.registerAuthListener).not.toHaveBeenCalled();
-    expect(mocks.registerModelListener).not.toHaveBeenCalled();
-    expect(mocks.registerSkillsListener).not.toHaveBeenCalled();
-    expect(sidecarOwner.snapshot()).toHaveLength(1);
-    await sidecarOwner.stop();
-    expect(mocks.stop).toHaveBeenCalledOnce();
-  });
-
-  it("logs unexpected catch-up failures without rejecting startup", async () => {
-    mocks.refresh.mockRejectedValueOnce(new Error("metadata unavailable"));
-    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await expect(lifecycle.attachContext(context, sidecarOwner.publish)).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      "chat metadata catch-up refresh failed: Error: metadata unavailable",
-    );
-  });
-
-  it("retries subordinate changes after a published owner's catch-up build fails", async () => {
-    mocks.refresh.mockRejectedValueOnce(new Error("projection failed"));
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
-
-    authListener();
-
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-  });
-
-  it("defers subordinate changes until an invalidated model owner publishes", async () => {
-    mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
-    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-    expect(mocks.refresh).toHaveBeenCalledOnce();
-
-    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
-    const skillsListener = mocks.registerSkillsListener.mock.calls[0]?.[0];
-    expect(modelListener).toEqual(expect.any(Function));
-    expect(authListener).toEqual(expect.any(Function));
-    expect(skillsListener).toEqual(expect.any(Function));
-
-    modelListener({ phase: "invalidated" });
-    modelListener({ phase: "catalog-published" });
-    modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
-    authListener();
-    skillsListener({ reason: "watch" });
-
-    expect(mocks.refresh).toHaveBeenCalledOnce();
-    expect(warn).not.toHaveBeenCalled();
-
-    modelListener({ phase: "published" });
-
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("refreshes subordinate changes immediately while the model owner is published", async () => {
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
-    const skillsListener = mocks.registerSkillsListener.mock.calls[0]?.[0];
-
-    authListener();
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-    skillsListener({ reason: "watch" });
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
-  });
-
-  it("keeps real metadata reads available after a nonfatal catalog attempt failure", async () => {
-    const harness = await createRealMetadataLifecycle();
-    try {
-      const before = await harness.lifecycle.read({ agentId: "main" });
-      harness.modelEvent({
-        phase: "catalog-failed",
-        error: new Error("catalog attempt failed"),
-        modelFactsChanged: false,
-      });
-      const after = await harness.lifecycle.read({ agentId: "main" });
-      expect(after).toEqual(before);
-      expect(harness.warn).not.toHaveBeenCalled();
-      expect(mocks.fail).not.toHaveBeenCalled();
-    } finally {
-      await harness.stop();
-    }
-  });
+  it.each(["published", "build failed", "catalog during attachment", "owner invalidated"] as const)(
+    "refreshes subordinate changes after %s catch-up",
+    async (startup) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      if (startup === "build failed") {
+        mocks.refresh.mockRejectedValueOnce(new Error("metadata unavailable"));
+      } else if (startup === "owner invalidated") {
+        mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
+      } else if (startup === "catalog during attachment") {
+        mocks.refresh.mockImplementationOnce(() => {
+          entered.resolve();
+          return release.promise;
+        });
+      }
+      const { lifecycle: pending, sidecarOwner, warn } = createLifecycle(false);
+      const lifecycle = await pending;
+      const attachment = lifecycle.attachContext(context, sidecarOwner.publish);
+      try {
+        if (startup === "catalog during attachment") {
+          await entered.promise;
+          expect(mocks.refresh).toHaveBeenCalledOnce();
+          mocks.registerModelListener.mock.calls[0]![0]({ phase: "catalog-published" });
+          release.resolve();
+        }
+        await expect(attachment).resolves.toBeUndefined();
+        expect(mocks.refresh).toHaveBeenCalledOnce();
+        if (startup === "build failed") {
+          expect(warn).toHaveBeenCalledWith(
+            "chat metadata catch-up refresh failed: Error: metadata unavailable",
+          );
+        } else {
+          expect(warn).not.toHaveBeenCalled();
+        }
+        const modelListener = mocks.registerModelListener.mock.calls[0]![0];
+        const authListener = mocks.registerAuthListener.mock.calls[0]![0];
+        const skillsListener = mocks.registerSkillsListener.mock.calls[0]![0];
+        for (const listener of [modelListener, authListener, skillsListener]) {
+          expect(listener).toEqual(expect.any(Function));
+        }
+        if (startup === "owner invalidated") {
+          modelListener({ phase: "invalidated" });
+          modelListener({ phase: "catalog-published" });
+          modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
+          authListener();
+          skillsListener({ reason: "watch" });
+          expect(mocks.refresh).toHaveBeenCalledOnce();
+          expect(warn).not.toHaveBeenCalled();
+          modelListener({ phase: "published" });
+          expect(mocks.refresh).toHaveBeenCalledTimes(2);
+          expect(warn).not.toHaveBeenCalled();
+        } else {
+          authListener();
+          expect(mocks.refresh).toHaveBeenCalledTimes(2);
+          skillsListener({ reason: "watch" });
+          expect(mocks.refresh).toHaveBeenCalledTimes(3);
+        }
+      } finally {
+        release.resolve();
+        await attachment;
+      }
+    },
+  );
 
   it.each([
     { modelFactsChanged: true, refreshStatusChanged: false, refreshes: true },
     { modelFactsChanged: false, refreshStatusChanged: false, refreshes: false },
     { modelFactsChanged: undefined, refreshStatusChanged: false, refreshes: true },
     { modelFactsChanged: false, refreshStatusChanged: true, refreshes: true },
+    {
+      phase: "catalog-status",
+      modelFactsChanged: false,
+      refreshStatusChanged: false,
+      refreshes: false,
+    },
   ])(
     "refreshes catalog metadata only for a change (%j)",
-    async ({ modelFactsChanged, refreshStatusChanged, refreshes }) => {
+    async ({ phase = "catalog-published", modelFactsChanged, refreshStatusChanged, refreshes }) => {
       const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
       const lifecycle = await pendingLifecycle;
+      const requestContext = { ...context, broadcast: vi.fn(), getRuntimeConfig: () => config };
+      let pending = true;
+      let payloadJson: string | undefined;
+      const produce = vi.fn(() => ({ pendingProviders: pending ? ["synthetic"] : undefined }));
+      const handler = createPreparedReadHandler(() => ({
+        run: (respond) => respond(true, produce()),
+      }));
+      const options = {
+        req: { type: "req", id: "catalog", method: "models.list" },
+        params: {},
+        client: null,
+        context: requestContext,
+        isWebchatConnect: () => false,
+        respond: (_ok, payload) => {
+          payloadJson = JSON.stringify(payload);
+        },
+      } satisfies GatewayRequestHandlerOptions;
+      const sharing = {
+        shareKey: () => "catalog",
+        shareInvalidationEvents: ["chat.metadata.changed"],
+        shareMaxAgeMs: 1_000,
+      };
+      const read = () => dispatchSharedRead(handler, options, sharing, () => {});
+      vi.useFakeTimers();
+      try {
+        await lifecycle.attachContext(requestContext, sidecarOwner.publish);
+        const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+        modelListener({ phase: "published" });
+        expect(mocks.refresh).toHaveBeenCalledTimes(2);
+        mocks.invalidate.mockClear();
+        await read();
+        await read();
+        expect(produce).toHaveBeenCalledOnce();
+        expect(payloadJson).toBe('{"pendingProviders":["synthetic"]}');
 
-      await lifecycle.attachContext(context, sidecarOwner.publish);
-      const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-      modelListener({ phase: "published" });
-      await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-      mocks.invalidate.mockClear();
+        pending = false;
+        modelListener({ phase, modelFactsChanged, refreshStatusChanged });
+        await read();
 
-      modelListener({ phase: "catalog-published", modelFactsChanged, refreshStatusChanged });
-
-      expect(mocks.invalidate).not.toHaveBeenCalled();
-      expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
-      if (refreshes) {
-        expect(mocks.refresh).toHaveBeenLastCalledWith({
-          notifyIfUnchanged: refreshStatusChanged,
-        });
+        expect(payloadJson).toBe("{}");
+        expect(produce).toHaveBeenCalledTimes(2);
+        expect(mocks.invalidate).not.toHaveBeenCalled();
+        expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
+        if (refreshes) {
+          expect(mocks.refresh).toHaveBeenLastCalledWith({
+            notifyIfUnchanged: refreshStatusChanged,
+          });
+        }
+      } finally {
+        invalidateSharedReadResponses(requestContext.broadcast);
+        vi.useRealTimers();
       }
     },
   );
-
-  it("keeps an owner available when a subordinate catalog publishes during attachment", async () => {
-    const pendingRefresh = createDeferred();
-    mocks.refresh.mockReturnValueOnce(pendingRefresh.promise);
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    const attachment = lifecycle.attachContext(context, sidecarOwner.publish);
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
-    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-    modelListener({ phase: "catalog-published" });
-    pendingRefresh.resolve();
-    await attachment;
-
-    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
-    authListener();
-
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-  });
 });

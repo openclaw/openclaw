@@ -66,6 +66,7 @@ export function createSessionMaintenanceFollowup(params: {
     | "thinkLevel"
     | "verboseLevel"
     | "timeoutMs"
+    | "senderIsOwner"
   >;
   sessionEntry: SessionEntry;
   cfg: OpenClawConfig;
@@ -110,6 +111,8 @@ export function createSessionMaintenanceFollowup(params: {
       timeoutMs: run.timeoutMs,
       senderIsOwner: false,
     },
+    // A pre-compaction flush resolves the source turn's audience from this, not the run's grant.
+    memoryAudienceSenderIsOwner: run.senderIsOwner === true,
   };
 }
 

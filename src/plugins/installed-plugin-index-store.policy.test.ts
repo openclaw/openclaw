@@ -154,56 +154,18 @@ describe("installed plugin index policy refresh", () => {
     expect(rebuilt.plugins[0]?.sourceAdmissions).toBeUndefined();
   });
 
-  it("falls back to a source rebuild when a policy refresh target is missing", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    const nextPluginDir = path.join(stateDir, "plugins", "next-demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.mkdirSync(nextPluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-    const nextCandidate = createCandidate(nextPluginDir, { id: "next-demo" });
-    const env = {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
-    await refreshPersistedInstalledPluginIndex({
-      reason: "manual",
-      stateDir,
-      candidates: [candidate],
-      env,
-    });
-
-    const refreshed = await refreshPersistedInstalledPluginIndex({
-      reason: "policy-changed",
-      stateDir,
-      candidates: [candidate, nextCandidate],
-      env,
-      config: {
-        plugins: {
-          entries: {
-            "next-demo": {
-              enabled: false,
-            },
-          },
-        },
-      },
-      policyPluginIds: ["next-demo"],
-    });
-
-    expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
-  });
-
-  it.each(["path", "npm", "archive", "git", "clawhub", "marketplace"] as const)(
-    "restores an installed %s plugin missing from a policy refresh projection",
-    async (source) => {
+  it.each(["policy target", "installed projection"] as const)(
+    "rebuilds source when the %s is missing",
+    async (missing) => {
       const stateDir = makeTempDir();
       const pluginDir = path.join(stateDir, "plugins", "demo");
       fs.mkdirSync(pluginDir, { recursive: true });
       const candidate = createCandidate(pluginDir);
-      const installRecords = {
-        demo: { source, installPath: pluginDir },
-      } satisfies InstalledPluginIndex["installRecords"];
+      const candidates = [candidate];
+      const installRecords: InstalledPluginIndex["installRecords"] | undefined =
+        missing === "installed projection"
+          ? { demo: { source: "path", installPath: pluginDir } }
+          : undefined;
       const env = {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         OPENCLAW_VERSION: "2026.4.25",
@@ -212,26 +174,40 @@ describe("installed plugin index policy refresh", () => {
       const initial = await refreshPersistedInstalledPluginIndex({
         reason: "manual",
         stateDir,
-        candidates: [candidate],
+        candidates,
         installRecords,
         env,
       });
-      await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
-
+      if (missing === "installed projection") {
+        await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
+      } else {
+        const nextPluginDir = path.join(stateDir, "plugins", "next-demo");
+        fs.mkdirSync(nextPluginDir, { recursive: true });
+        candidates.push(createCandidate(nextPluginDir, { id: "next-demo" }));
+      }
       const refreshed = await refreshPersistedInstalledPluginIndex({
         reason: "policy-changed",
         stateDir,
-        candidates: [candidate],
+        candidates,
         installRecords,
         env,
+        ...(missing === "policy target"
+          ? {
+              config: { plugins: { entries: { "next-demo": { enabled: false } } } },
+              policyPluginIds: ["next-demo"],
+            }
+          : {}),
       });
-
-      expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-      expect(
-        (await readPersistedInstalledPluginIndex({ stateDir }))?.plugins.map(
-          (plugin) => plugin.pluginId,
-        ),
-      ).toEqual(["demo"]);
+      if (missing === "policy target") {
+        expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
+      } else {
+        expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
+        expect(
+          (await readPersistedInstalledPluginIndex({ stateDir }))?.plugins.map(
+            (plugin) => plugin.pluginId,
+          ),
+        ).toEqual(["demo"]);
+      }
     },
   );
 });

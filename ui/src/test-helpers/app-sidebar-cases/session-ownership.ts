@@ -506,16 +506,8 @@ describe("AppSidebar session ownership", () => {
         ?.querySelector(".sidebar-recent-sessions__head")
         ?.getAttribute("draggable"),
     ).toBe("false");
-    // Derived person sections carry no stored-group menu; the only header action
-    // is the owner filter, which reuses the group-actions reveal styling.
-    expect(
-      ownerSections()[0]?.querySelector('.sidebar-session-group-actions[aria-haspopup="menu"]'),
-    ).toBeNull();
-    expect(
-      ownerSections()[0]
-        ?.querySelector(".sidebar-session-person-filter")
-        ?.getAttribute("aria-label"),
-    ).toBe("Show only Zoe");
+    // Derived person sections keep filtering in the shared Sessions toolbar.
+    expect(ownerSections()[0]?.querySelector(".sidebar-session-group-actions")).toBeNull();
 
     result.owners = undefined;
     harness.publishList({ result, agentId: "main" });

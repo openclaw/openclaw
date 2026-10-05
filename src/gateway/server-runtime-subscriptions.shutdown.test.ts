@@ -7,15 +7,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import * as sessionObserverModel from "./session-observer-model.js";
 
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
@@ -30,27 +25,6 @@ vi.mock("../audit/audit-recorder.js", () => ({
     stop: vi.fn(async () => {}),
   }),
 }));
-
-function createParams(signal: AbortSignal): Parameters<typeof startGatewayEventSubscriptions>[0] {
-  const chatRunState = createChatRunState();
-  return {
-    scheduler: createTestGatewayScheduler(),
-    signal,
-    log: createSubsystemLogger("test/subscriptions-shutdown"),
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeHasSessionSubscribers: () => false,
-    nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map(),
-    chatRunState,
-    toolEventRecipients: chatRunState.toolEventRecipients,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
-    restartRecoveryCandidates: new Map(),
-    refreshConnectedUserProfiles: vi.fn(),
-  };
-}
 
 it.for(["before startup", "before inherited connection drain"] as const)(
   "cancels auxiliary model work %s",
@@ -101,7 +75,11 @@ it.for(["before startup", "before inherited connection drain"] as const)(
       if (phase === "before startup") {
         connectionWork.beginClose();
       }
-      unsubs = startGatewayEventSubscriptions(createParams(connectionWork.signal));
+      unsubs = startGatewayEventSubscriptions({
+        ...createSubscriptionTestFixture().createParams(),
+        signal: connectionWork.signal,
+        log: createSubsystemLogger("test/subscriptions-shutdown"),
+      });
       if (phase === "before startup") {
         expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("unavailable");
         expect(prepared).not.toHaveBeenCalled();

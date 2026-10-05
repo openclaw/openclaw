@@ -626,10 +626,10 @@ export async function runSecretsAudit(
     };
     collectShadowingFindings(collector);
     collector.findings.push(
-      ...findSecretStorePlaintextResidueFindings({
+      ...(await findSecretStorePlaintextResidueFindings({
         assignments: collector.configPlaintextAssignments,
         database: { env },
-      }),
+      })),
     );
   } else {
     addFinding(collector, {
@@ -649,14 +649,14 @@ export async function runSecretsAudit(
     }
   }
   collector.findings.push(
-    ...findSecretStoreRedactedValueFindings({
+    ...(await findSecretStoreRedactedValueFindings({
       database: { env },
       excludeNames: new Set(
         collector.refAssignments
           .filter((assignment) => assignment.ref.source === "store")
           .map((assignment) => assignment.ref.id),
       ),
-    }),
+    })),
   );
   collectLegacyAuthSourceFindings({ config, stateDir, env, collector });
   const summary = summarizeFindings(collector.findings);

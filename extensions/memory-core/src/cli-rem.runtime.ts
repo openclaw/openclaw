@@ -55,14 +55,14 @@ export async function runMemorySessionBackfill(
         agentId,
         workspaceDir,
         pluginConfig,
-        ...(opts.from !== undefined ? { from: opts.from } : {}),
-        ...(opts.to !== undefined ? { to: opts.to } : {}),
-        ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
-        ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
-        ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
-        ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
-        ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
-        ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
+        from: opts.from,
+        to: opts.to,
+        limitDays: opts.limitDays,
+        rem: opts.rem,
+        apply: opts.apply,
+        rollback: opts.rollback,
+        archiveFiles: opts.archiveFiles,
+        timezone: remConfig.timezone,
       });
       if (opts.json) {
         defaultRuntime.writeJson(result);
@@ -336,7 +336,7 @@ export async function runMemoryRemBackfill(
             workspaceSourceFiles.map(
               (scratchPath, index) =>
                 [
-                  normalizeRelativePath(scratchDir, scratchPath),
+                  path.relative(scratchDir, scratchPath).replace(/\\/g, "/"),
                   sourceFiles[index] ?? scratchPath,
                 ] as const,
             ),
@@ -494,9 +494,6 @@ async function withHistoricalMemoryWorkspace<T>(
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILENAME_RE);
   return match?.[1] ?? null;
-}
-function normalizeRelativePath(baseDir: string, filePath: string): string {
-  return path.relative(baseDir, filePath).replace(/\\/g, "/");
 }
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
   return markdown

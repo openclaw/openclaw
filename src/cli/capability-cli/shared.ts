@@ -29,22 +29,15 @@ import type { CapabilityTransport } from "./metadata.js";
 export function resolveTransport(opts: {
   local?: boolean;
   gateway?: boolean;
-  supported: Array<CapabilityTransport>;
   defaultTransport: CapabilityTransport;
 }): CapabilityTransport {
   if (opts.local && opts.gateway) {
     throw new Error("Pass only one of --local or --gateway.");
   }
   if (opts.local) {
-    if (!opts.supported.includes("local")) {
-      throw new Error("This command does not support --local.");
-    }
     return "local";
   }
   if (opts.gateway) {
-    if (!opts.supported.includes("gateway")) {
-      throw new Error("This command does not support --gateway.");
-    }
     return "gateway";
   }
   return opts.defaultTransport;

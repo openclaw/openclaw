@@ -1,10 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -15,11 +11,8 @@ it("loads installed tooling when the prepared CLI validates native Vitest option
 }) => {
   const directory = tempDirs.make("openclaw-compiled-tooling-");
   const result = await runNodeScript(
-    [
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.testProjects),
-        resolveTestNodeExecPath(),
-      ),
+    (workerArgv) => [
+      ...workerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.testProjects)),
       "test/scripts/test-projects.test.ts",
       "--",
       "--invalid-native-vitest-option",

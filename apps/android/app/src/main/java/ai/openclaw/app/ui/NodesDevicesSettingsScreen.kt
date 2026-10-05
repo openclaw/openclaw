@@ -253,9 +253,11 @@ private fun DevicePairingConfirmationDialog(
       is DevicePairingConfirmation.Reject -> nativeString("Reject")
       is DevicePairingConfirmation.Remove -> nativeString("Remove")
     }
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(title) },
+  AppConfirmationDialog(
+    title = title,
+    confirmLabel = confirmLabel,
+    onConfirm = onConfirm,
+    onDismiss = onDismiss,
     text = {
       when (confirmation) {
         is DevicePairingConfirmation.Approve -> {
@@ -285,16 +287,6 @@ private fun DevicePairingConfirmationDialog(
         is DevicePairingConfirmation.Remove -> {
           Text(nativeString("This device will lose its trusted Gateway access."))
         }
-      }
-    },
-    confirmButton = {
-      TextButton(onClick = onConfirm) {
-        Text(confirmLabel)
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(nativeString("Cancel"))
       }
     },
   )

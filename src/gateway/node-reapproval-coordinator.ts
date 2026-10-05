@@ -1,4 +1,5 @@
 // Coordinates paired-node reapproval requests before they enter pairing storage.
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
 import {
   finalizeNodePairingCleanupClaim,
@@ -46,14 +47,6 @@ export type NodeReapprovalCoordinator = {
   dispose: () => void;
 };
 
-function normalizeFingerprintList(value: string[] | undefined): string[] | undefined {
-  return value
-    ? [
-        ...new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
-      ].toSorted()
-    : undefined;
-}
-
 function buildRequestFingerprint(input: NodePairingRequestInput): string {
   const permissions = input.permissions
     ? Object.fromEntries(
@@ -71,8 +64,8 @@ function buildRequestFingerprint(input: NodePairingRequestInput): string {
     uiVersion: input.uiVersion,
     deviceFamily: input.deviceFamily,
     modelIdentifier: input.modelIdentifier,
-    caps: normalizeFingerprintList(input.caps),
-    commands: normalizeFingerprintList(input.commands),
+    caps: input.caps && normalizeSortedUniqueTrimmedStringList(input.caps),
+    commands: input.commands && normalizeSortedUniqueTrimmedStringList(input.commands),
     permissions,
     remoteIp: input.remoteIp,
     silent: Boolean(input.silent),

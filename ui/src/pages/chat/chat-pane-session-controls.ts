@@ -73,9 +73,9 @@ export function readChatPaneComposerAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
   session: GatewaySessionRow | undefined,
   catalog: boolean,
-) {
+): boolean {
   const auth = snapshot.hello?.auth ?? null;
-  const canSend =
+  return (
     hasOperatorWriteAccess(auth) ||
     (!catalog &&
       readSessionMethodScopeAccess(auth, {
@@ -83,8 +83,8 @@ export function readChatPaneComposerAccess(
         requiredScope: "operator.write",
         sessionScope: true,
         session,
-      }).allowed);
-  return { canCompose: canSend, canSend };
+      }).allowed)
+  );
 }
 
 export function readChatPaneMutationAccess(
@@ -108,6 +108,24 @@ export function readChatPaneMutationAccess(
     }),
     permission: scopedPatchAccess({ permissionMode: "guarded" }),
     unarchive: scopedPatchAccess({ archived: false }),
+  };
+}
+
+export function readChatPublicationAccess(
+  snapshot: ApplicationGatewaySnapshot,
+  session: GatewaySessionRow,
+  participationBlocked: boolean,
+) {
+  const canMutate = !session.archived && !participationBlocked;
+  return {
+    canPublishShared:
+      canMutate &&
+      readSessionMethodAccess(snapshot, {
+        method: "sessions.github.publish",
+        requiredScope: "operator.sessions.write",
+        session,
+      }).allowed,
+    canPublishPersonal: canMutate && hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
   };
 }
 

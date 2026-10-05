@@ -641,7 +641,7 @@ describe("secret egress registration lifecycle", () => {
     // OpenSSL uses the native clock. Advance the cache's clock into the leaf's
     // renewal window while real TLS verifies both certificates and the same CA.
     vi.spyOn(Date, "now").mockReturnValue(previous.validToDate.getTime() - 30 * 60_000);
-    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel()]);
+    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel(register().env)]);
     for (const socket of renewed) {
       await sendCredential(socket);
     }
@@ -726,12 +726,18 @@ describe("secret egress registration lifecycle", () => {
     },
   );
 
-  it("does not reuse a revoked registration's cached TLS bindings on a fresh connection", async () => {
-    await sendCredential(await openTlsTunnel());
+  it("reuses certificates across registrations without reusing revoked TLS bindings", async () => {
+    const generateLeaf = vi.spyOn(proxyCa, "generateLocalProxyLeaf");
+    const grants = [grant, ...Array.from({ length: 4 }, register)];
+    await Promise.all(grants.map(async ({ env }) => sendCredential(await openTlsTunnel(env))));
+    expect(observed).toHaveLength(5);
     grant.revoke();
     grant = proxy.registerProcess();
     await sendCredential(await openTlsTunnel());
-    expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
+    expect(observed).toHaveLength(5);
+    await sendCredential(await openTlsTunnel(register().env));
+    expect(observed).toHaveLength(6);
+    expect(generateLeaf).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, 100 * 1024 * 1024 + 1, Number.MAX_SAFE_INTEGER])(

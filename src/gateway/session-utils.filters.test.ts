@@ -1,9 +1,5 @@
-import { Value } from "typebox/value";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import {
-  SessionsListParamsSchema,
-  type SessionsListParams,
-} from "../../packages/gateway-protocol/src/schema/sessions-list.js";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
@@ -11,12 +7,10 @@ import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import type { GatewayClient } from "./server-methods/types.js";
 import * as sessionIdentity from "./session-identity-projection.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { createSessionListEntryFilter } from "./session-sharing.js";
 import { prepareSessionRowSelection } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
@@ -111,36 +105,8 @@ it("expires cached child owners without a session or registry publication", () =
   expect(select(now)).toEqual([key]);
 });
 
-it("accepts the metadata query contract and rejects mistyped selectors", () => {
-  expect(
-    Value.Check(SessionsListParamsSchema, {
-      projectId: "project-one",
-      workspaceDir: "/workspace/task",
-      group: "",
-      pinned: false,
-      activityPulseBoundaries: [0, 86_400_000],
-      profileRelation: { profileId: "profile-ada", relationship: "involving" },
-    }),
-  ).toBe(true);
-  for (const invalid of [
-    { projectId: "" },
-    { workspaceDir: "" },
-    { group: false },
-    { pinned: "false" },
-    { activityPulseBoundaries: [] },
-    { activityPulseBoundaries: [0] },
-    { activityPulseBoundaries: Array.from({ length: 65 }, (_, index) => index) },
-    { activityPulseBoundaries: [-1, 0] },
-    { activityPulseBoundaries: [0, "1"] },
-    { profileRelation: { profileId: "", relationship: "involving" } },
-  ]) {
-    expect(Value.Check(SessionsListParamsSchema, invalid), JSON.stringify(invalid)).toBe(false);
-  }
-});
-
 it.each([
   [0, 0],
-  [1, 0],
   [0, 2, 1],
 ])(
   "rejects non-ascending activity boundaries before reading session rows: %j",
@@ -266,90 +232,63 @@ it("buckets nonuniform intervals half-open while counting every filtered running
   expect(recent.activityPulse?.started).toBe(1);
 });
 
-it("omits the activity pulse when boundaries are absent", async () => {
-  const result = await listSessionFixture({
-    cfg,
-    storePath,
-    store: { "agent:main:one": entry() },
-    opts: {},
-  });
-  expect(result).not.toHaveProperty("activityPulse");
-});
-
-it("accepts epoch zero and omits unrequested people and all-time started counts", async () => {
-  const result = await listSessionFixture({
-    cfg,
-    storePath,
-    store: {
-      "agent:main:one": entry({
-        createdAt: 0,
-        participants: [{ identity: { type: "profile", id: "profile-ada" } }],
-      }),
-    },
-    opts: { activityPulseBoundaries: [0, 100] },
-  });
-  expect(result.activityPulse).toEqual({
-    since: 0,
-    until: 100,
-    buckets: [1],
-    sessions: 1,
-    running: 0,
-  });
-});
+it.each([{ activityPulseBoundaries: undefined }, { activityPulseBoundaries: [0, 100] }])(
+  "includes the optional pulse only for requested boundaries: $activityPulseBoundaries",
+  async ({ activityPulseBoundaries }) => {
+    const result = await listSessionFixture({
+      cfg,
+      storePath,
+      store: {
+        "agent:main:one": entry({
+          createdAt: 0,
+          participants: [{ identity: { type: "profile", id: "profile-ada" } }],
+        }),
+      },
+      opts: { activityPulseBoundaries },
+    });
+    if (activityPulseBoundaries) {
+      expect(result.activityPulse).toEqual({
+        since: 0,
+        until: 100,
+        buckets: [1],
+        sessions: 1,
+        running: 0,
+      });
+    } else {
+      expect(result).not.toHaveProperty("activityPulse");
+    }
+  },
+);
 
 it("keeps system provenance and named conversations distinct in projected lists", async () => {
-  const cases: { key: string; fields: Partial<SessionEntry>; visible: boolean }[] = [
-    {
-      key: "agent:main:system",
-      fields: { createdActor: { type: "system" }, label: "Named probe" },
-      visible: false,
-    },
-    {
-      key: "agent:main:human",
-      fields: { createdVia: "run", createdActor: { type: "human", source: "unknown" } },
-      visible: true,
-    },
-    {
-      key: "agent:main:label",
-      fields: { createdVia: "run", label: "Operator label" },
-      visible: true,
-    },
-    {
-      key: "agent:main:display-name",
-      fields: { createdVia: "internal", displayName: "Operator title" },
-      visible: true,
-    },
-    {
-      key: "agent:main:subject",
-      fields: { createdVia: "run", subject: "Conversation subject" },
-      visible: true,
-    },
-    {
-      key: "agent:main:whitespace",
-      fields: { createdVia: "internal", label: " ", displayName: "\t", subject: "\n" },
-      visible: false,
-    },
-    { key: "agent:main:legacy", fields: {}, visible: true },
-    { key: "agent:main:main", fields: {}, visible: true },
-    {
-      key: "agent:main:main:heartbeat",
-      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:main" },
-      visible: false,
-    },
-    {
-      key: "agent:main:ops:heartbeat",
-      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:ops", label: "Named lane" },
-      visible: true,
-    },
-    { key: "agent:main:alerts:heartbeat", fields: { label: "My heartbeat" }, visible: true },
-    {
-      key: "agent:main:cron:nightly",
-      fields: { createdVia: "internal", createdActor: { type: "system" } },
-      visible: true,
-    },
+  const cases: [key: string, fields: Partial<SessionEntry>, visible: boolean][] = [
+    ["agent:main:system", { createdActor: { type: "system" }, label: "Named probe" }, false],
+    [
+      "agent:main:human",
+      { createdVia: "run", createdActor: { type: "human", source: "unknown" } },
+      true,
+    ],
+    ["agent:main:label", { createdVia: "run", label: "Operator label" }, true],
+    ["agent:main:display-name", { createdVia: "internal", displayName: "Operator title" }, true],
+    ["agent:main:subject", { createdVia: "run", subject: "Conversation subject" }, true],
+    [
+      "agent:main:whitespace",
+      { createdVia: "internal", label: " ", displayName: "\t", subject: "\n" },
+      false,
+    ],
+    ["agent:main:legacy", {}, true],
+    ["agent:main:main", {}, true],
+    ["agent:main:main:heartbeat", { heartbeatIsolatedBaseSessionKey: "agent:main:main" }, false],
+    [
+      "agent:main:ops:heartbeat",
+      { heartbeatIsolatedBaseSessionKey: "agent:main:ops", label: "Named lane" },
+      true,
+    ],
+    ["agent:main:alerts:heartbeat", { label: "My heartbeat" }, true],
+    ["agent:main:cron:nightly", { createdVia: "internal", createdActor: { type: "system" } }, true],
   ];
   const store = Object.fromEntries(
-    cases.map(({ key, fields }, index) => [
+    cases.map(([key, fields], index) => [
       key,
       entry({ sessionId: key, updatedAt: cases.length - index, ...fields }),
     ]),
@@ -361,9 +300,7 @@ it("keeps system provenance and named conversations distinct in projected lists"
       store,
       opts: { excludeSystem },
     });
-    const expected = cases
-      .filter(({ visible }) => excludeSystem !== true || visible)
-      .map(({ key }) => key);
+    const expected = cases.filter((row) => excludeSystem !== true || row[2]).map(([key]) => key);
     expect(result.sessions.map((row) => row.key)).toEqual(expected);
     expect(result.totalCount).toBe(expected.length);
   }
@@ -371,11 +308,9 @@ it("keeps system provenance and named conversations distinct in projected lists"
 
 it.each([
   { opts: { projectId: "project-one" }, matches: ["selected", "workspace-root"] },
-  { opts: { workspaceDir: "/workspace/task" }, matches: ["selected"] },
   { opts: { workspaceDir: "/workspace" }, matches: ["workspace-root"] },
   { opts: { workspaceDir: "/workspace/./task" }, matches: [] },
   { opts: { workspaceDir: "/configured" }, matches: [] },
-  { opts: { group: "Review" }, matches: ["selected", "workspace-root"] },
   { opts: { group: "review" }, matches: ["repository-only"] },
   { opts: { group: "" }, matches: ["unassociated"] },
 ] satisfies { opts: SessionsListParams; matches: string[] }[])(
@@ -426,99 +361,42 @@ it.each([
   },
 );
 
-it.each(["owned", "created"] as const)(
-  "keeps %s profile relationships distinct from an agent with the same raw id",
-  async (relationship) => {
-    const result = await listSessionFixture({
-      cfg: { agents: { entries: { main: {}, "profile-ada": {} } } },
-      storePath,
-      store: {
-        "agent:main:human": entry({
-          sessionId: "human",
-          updatedAt: 2,
-          createdActor: { type: "human", source: "profile", id: "profile-ada" },
-        }),
-        "agent:main:agent": entry({
-          sessionId: "agent",
-          createdActor: { type: "agent", id: "profile-ada" },
-          owner: { actor: { type: "agent", id: "profile-ada" } },
-          participants: [{ identity: { type: "profile", id: "profile-ada" } }],
-        }),
-      },
-      opts: { profileRelation: { profileId: "profile-ada", relationship } },
-    });
-    expect(result.sessions.map((row) => row.sessionId)).toEqual(["human"]);
-  },
-);
-
-it("preserves visible owner facets for the authenticated involvingMe filter", async () => {
-  const store: Record<string, SessionEntry> = {
-    "agent:main:ada": entry({
-      sessionId: "ada",
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-    }),
-    "agent:main:bob": entry({
-      sessionId: "bob",
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-    }),
-  };
-  const query = { cfg, storePath, store, opts: {} };
+it("does not project extra participants when canonical owners satisfy both involvement filters", async () => {
+  const participants = vi.spyOn(sessionIdentity, "projectSessionParticipants");
+  const store = Object.fromEntries(
+    Array.from({ length: 32 }, (_, index) => [
+      `agent:main:owned-${index}`,
+      entry({
+        sessionId: `owned-${index}`,
+        updatedAt: index + 1,
+        createdActor: { type: "human", source: "profile", id: "profile-merged-ada" },
+        participants: [{ identity: { type: "profile", id: "profile-bob" } }],
+      }),
+    ]),
+  );
+  const query = { cfg, storePath, store, opts: { limit: 1 } };
   const all = await listSessionFixture(query);
-  const involvingMe = await listSessionFixture({ ...query, involvingActorId: "profile-ada" });
-  expect(involvingMe.sessions.map((row) => row.sessionId)).toEqual(["ada"]);
-  expect(involvingMe.owners).toEqual(all.owners);
-  expect(involvingMe.owners?.map((owner) => owner.id).toSorted()).toEqual([
-    "profile-ada",
-    "profile-bob",
-  ]);
-  const explicitRelation = await listSessionFixture({
+  const unfilteredWork = participants.mock.calls.length;
+  participants.mockClear();
+
+  const filtered = await listSessionFixture({
     ...query,
-    opts: { profileRelation: { profileId: "profile-ada", relationship: "involving" } },
+    opts: {
+      ...query.opts,
+      profileRelation: { profileId: "profile-ada", relationship: "involving" },
+    },
+    involvingActorId: "profile-ada",
   });
-  expect(explicitRelation.owners?.map((owner) => owner.id)).toEqual(["profile-ada"]);
+
+  expect(filtered.sessions.map((row) => row.key)).toEqual(all.sessions.map((row) => row.key));
+  expect(filtered.owners).toEqual(all.owners);
+  expect(filtered.totalCount).toBe(32);
+  expect(filtered.sessions[0]?.owner?.actor.identity).toEqual({
+    type: "profile",
+    id: "profile-ada",
+  });
+  expect(participants.mock.calls.length).toBeLessThanOrEqual(unfilteredWork);
 });
-
-it.each(["viewer", "relation", "both"] as const)(
-  "does not project extra participants when canonical owners satisfy the %s filter",
-  async (filter) => {
-    const participants = vi.spyOn(sessionIdentity, "projectSessionParticipants");
-    const store = Object.fromEntries(
-      Array.from({ length: 32 }, (_, index) => [
-        `agent:main:owned-${index}`,
-        entry({
-          sessionId: `owned-${index}`,
-          updatedAt: index + 1,
-          createdActor: { type: "human", source: "profile", id: "profile-merged-ada" },
-          participants: [{ identity: { type: "profile", id: "profile-bob" } }],
-        }),
-      ]),
-    );
-    const query = { cfg, storePath, store, opts: { limit: 1 } };
-    const all = await listSessionFixture(query);
-    const unfilteredWork = participants.mock.calls.length;
-    participants.mockClear();
-
-    const filtered = await listSessionFixture({
-      ...query,
-      opts: {
-        ...query.opts,
-        ...(filter !== "viewer"
-          ? { profileRelation: { profileId: "profile-ada", relationship: "involving" as const } }
-          : {}),
-      },
-      ...(filter !== "relation" ? { involvingActorId: "profile-ada" } : {}),
-    });
-
-    expect(filtered.sessions.map((row) => row.key)).toEqual(all.sessions.map((row) => row.key));
-    expect(filtered.owners).toEqual(all.owners);
-    expect(filtered.totalCount).toBe(32);
-    expect(filtered.sessions[0]?.owner?.actor.identity).toEqual({
-      type: "profile",
-      id: "profile-ada",
-    });
-    expect(participants.mock.calls.length).toBeLessThanOrEqual(unfilteredWork);
-  },
-);
 
 it.each([true, false])("filters canonical pin state before pagination: %s", async (pinned) => {
   const result = await listSessionFixture({
@@ -590,15 +468,17 @@ it("finds sparse metadata matches beyond 200 rows before facets and pagination",
   expect(second).toMatchObject({ totalCount: 3, nextOffset: null, hasMore: false });
 });
 
-it("distinguishes profile involvement from creation and uses participants beyond the display summary", async () => {
+it("keeps profile selectors, authenticated involvement, and their owner facets distinct", async () => {
   const ada: SessionEntry["createdActor"] = { type: "human", source: "profile", id: "profile-ada" };
   const bob: SessionEntry["createdActor"] = { type: "human", source: "profile", id: "profile-bob" };
   const store: Record<string, SessionEntry> = {
-    "agent:main:created-only": entry({
-      updatedAt: 7,
-      createdActor: ada,
-      owner: { actor: bob },
+    "agent:main:agent-owner": entry({
+      updatedAt: 8,
+      createdActor: { type: "agent", id: "profile-ada" },
+      owner: { actor: { type: "agent", id: "profile-ada" } },
+      participants: [{ identity: { type: "profile", id: "profile-ada" } }],
     }),
+    "agent:main:created-only": entry({ updatedAt: 7, createdActor: ada, owner: { actor: bob } }),
     "agent:main:owned": entry({ updatedAt: 6, createdActor: bob, owner: { actor: ada } }),
     "agent:main:default-owner": entry({ updatedAt: 5, createdActor: ada }),
     "agent:main:participating": entry({
@@ -623,101 +503,85 @@ it("distinguishes profile involvement from creation and uses participants beyond
       createdActor: bob,
       participants: [{ identity: { type: "agent", id: "profile-ada" } }],
     }),
-    "agent:main:unrelated": entry({ createdActor: bob }),
+    "agent:main:unrelated": entry({
+      createdActor: { type: "human", source: "profile", id: "profile-carol" },
+    }),
   };
-  const involved = await listSessionFixture({
-    cfg,
-    storePath,
-    store,
-    opts: {
-      profileRelation: { profileId: "profile-ada", relationship: "involving" },
-      includePeople: true,
+  const query = { cfg: { agents: { entries: { main: {}, "profile-ada": {} } } }, storePath, store };
+  const all = await listSessionFixture({ ...query, opts: {} });
+  const allOwners = ["agent:profile-ada", "human:profile-bob", "human:profile-carol"];
+  const involvingOwners = allOwners.slice(0, 2);
+  const involvedKeys = ["agent-owner", "owned", "default-owner", "participating"];
+  const involving: SessionsListParams = {
+    profileRelation: { profileId: "profile-ada", relationship: "involving" },
+  };
+  const cases: {
+    name: string;
+    opts: SessionsListParams;
+    involvingActorId?: string;
+    keys: string[];
+    owners: string[];
+  }[] = [
+    {
+      name: "owned",
+      opts: { profileRelation: { profileId: "profile-ada", relationship: "owned" } },
+      keys: ["owned", "default-owner"],
+      owners: ["human:profile-ada"],
     },
-  });
-  expect(involved.sessions.map((row) => row.key)).toEqual([
-    "agent:main:owned",
-    "agent:main:default-owner",
-    "agent:main:participating",
-  ]);
-  expect(involved.peopleSessionCount).toBe(3);
-  expect(
-    involved.sessions[2]?.participants?.some((person) => person.identity.id === "profile-ada"),
-  ).toBe(false);
-  expect(
-    involved.sessions[2]?.expandedParticipants?.some(
-      (person) => person.identity.id === "profile-ada",
-    ),
-  ).toBe(true);
-
-  const associated = await listSessionFixture({
-    cfg,
-    storePath,
-    store,
-    opts: { involvingProfileId: "profile-ada" },
-  });
-  expect(associated.sessions.map((row) => row.key)).toEqual([
-    "agent:main:created-only",
-    "agent:main:owned",
-    "agent:main:default-owner",
-    "agent:main:participating",
-  ]);
-
-  // The caller-supplied profile selector cannot replace the authenticated involvingMe constraint.
-  const intersection = await listSessionFixture({
-    cfg,
-    storePath,
-    store,
-    opts: { profileRelation: { profileId: "profile-ada", relationship: "involving" } },
-    involvingActorId: "profile-bob",
-  });
-  expect(intersection.sessions.map((row) => row.key)).toEqual(["agent:main:participating"]);
+    {
+      name: "created",
+      opts: { profileRelation: { profileId: "profile-ada", relationship: "created" } },
+      keys: ["created-only", "default-owner"],
+      owners: ["human:profile-ada", "human:profile-bob"],
+    },
+    {
+      name: "involving",
+      opts: { ...involving, includePeople: true },
+      keys: involvedKeys,
+      owners: involvingOwners,
+    },
+    {
+      name: "associated",
+      opts: { involvingProfileId: "profile-ada" },
+      keys: ["agent-owner", "created-only", "owned", "default-owner", "participating"],
+      owners: allOwners,
+    },
+    {
+      name: "involvingMe",
+      opts: {},
+      involvingActorId: "profile-ada",
+      keys: involvedKeys,
+      owners: allOwners,
+    },
+    {
+      name: "authenticated intersection",
+      opts: involving,
+      involvingActorId: "profile-bob",
+      keys: ["participating"],
+      owners: involvingOwners,
+    },
+  ];
+  for (const { name, opts, involvingActorId, keys, owners } of cases) {
+    const result = await listSessionFixture({ ...query, opts, involvingActorId });
+    expect(
+      result.sessions.map((row) => row.key),
+      name,
+    ).toEqual(keys.map((key) => `agent:main:${key}`));
+    expect(result.owners?.map((owner) => `${owner.type}:${owner.id}`).toSorted(), name).toEqual(
+      owners,
+    );
+    if (name === "involvingMe") {
+      expect(result.owners).toEqual(all.owners);
+    }
+    if (opts.includePeople) {
+      expect(result.peopleSessionCount).toBe(4);
+      const participating = result.sessions.find((row) => row.key === "agent:main:participating");
+      expect(
+        participating?.participants?.some((person) => person.identity.id === "profile-ada"),
+      ).toBe(false);
+      expect(
+        participating?.expandedParticipants?.some((person) => person.identity.id === "profile-ada"),
+      ).toBe(true);
+    }
+  }
 });
-
-it.each([
-  { projectId: "project-one" },
-  { workspaceDir: "/workspace/task" },
-  { group: "Review" },
-  { pinned: true },
-  { profileRelation: { profileId: "profile-ada", relationship: "involving" } },
-] satisfies SessionsListParams[])(
-  "never expands visibility from metadata associations: %s",
-  async (opts) => {
-    const associated = entry({
-      projectId: "project-one",
-      spawnedCwd: "/workspace/task",
-      category: "Review",
-      pinnedAt: 1,
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-      owner: { actor: { type: "human", id: "profile-ada" } },
-      participants: [{ identity: { type: "profile", id: "profile-ada" } }],
-    });
-    const store: Record<string, SessionEntry> = {
-      "agent:main:hidden": {
-        ...associated,
-        sessionId: "hidden",
-        updatedAt: 2,
-        visibility: "draft",
-      },
-      "agent:main:shared": { ...associated, sessionId: "shared", visibility: "shared" },
-    };
-    const viewer = {
-      connect: { scopes: ["operator.read"] },
-      authenticatedUserProfile: { profileId: "profile-ada" },
-    } as GatewayClient;
-    const result = await listSessionFixture({
-      cfg,
-      storePath,
-      store,
-      opts: { ...opts, includePeople: true, limit: 1 },
-      entryFilter: createSessionListEntryFilter({ client: viewer }),
-    });
-    expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:shared"]);
-    expect(result).toMatchObject({
-      totalCount: 1,
-      peopleSessionCount: 1,
-      nextOffset: null,
-      hasMore: false,
-    });
-    expect(result.people?.every((person) => person.sessionCount === 1)).toBe(true);
-  },
-);

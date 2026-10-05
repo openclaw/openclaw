@@ -187,8 +187,8 @@ function sanitizePresentationTextFields(
   return presentation;
 }
 
-function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
-  for (const key of keys) {
+function readAttachmentMediaParam(params: Record<string, unknown>): string {
+  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"]) {
     const value = readToolStringParam(params, key);
     if (value) {
       return value;
@@ -226,9 +226,7 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
   const attachmentMedia = readStructuredAttachmentMediaParam(params.attachments);
   const hasPayload = hasReplyPayloadContent({
     text,
-    mediaUrl:
-      readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]) ||
-      attachmentMedia,
+    mediaUrl: readAttachmentMediaParam(params) || attachmentMedia,
     mediaUrls,
     presentation: params.presentation,
     interactive: params.interactive,

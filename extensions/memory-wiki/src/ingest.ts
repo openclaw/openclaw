@@ -45,91 +45,6 @@ function isEmptyExistingSourcePage(error: unknown): boolean {
   );
 }
 
-async function ingestMemoryWikiSourceUnlocked(params: {
-  config: ResolvedMemoryWikiConfig;
-  inputPath: string;
-  title?: string;
-  nowMs?: number;
-  signal?: AbortSignal;
-}): Promise<IngestMemoryWikiSourceResult> {
-  await initializeMemoryWikiVault(params.config, {
-    ...(params.nowMs !== undefined ? { nowMs: params.nowMs } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  params.signal?.throwIfAborted();
-  const sourcePath = path.resolve(params.inputPath);
-  const buffer = await fs.readFile(sourcePath);
-  params.signal?.throwIfAborted();
-  const content = assertUtf8Text(buffer, sourcePath);
-  const title = resolveSourceTitle(sourcePath, params.title);
-  const slug = slugifyWikiSegment(title);
-  const pageStem = slugifyWikiPageStem(title);
-  const pageId = `source.${slug}`;
-  const pageRelativePath = path.join("sources", `${pageStem}.md`);
-  const pagePath = path.join(params.config.vault.path, pageRelativePath);
-  const created = !(await pathExists(pagePath));
-  const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
-
-  const markdown = renderImportedSourcePage({
-    frontmatter: {
-      pageType: "source",
-      id: pageId,
-      title,
-      sourceType: "local-file",
-      sourcePath,
-      ingestedAt: timestamp,
-      updatedAt: timestamp,
-      status: "active",
-    },
-    sourceHeading: "Source",
-    sourceDetails: [
-      `- Type: \`local-file\``,
-      `- Path: \`${sourcePath}\``,
-      `- Bytes: ${buffer.byteLength}`,
-      `- Updated: ${timestamp}`,
-    ],
-    content,
-    language: "text",
-  });
-
-  const existing = created
-    ? ""
-    : await readExistingWikiPage(() => fs.readFile(pagePath, "utf8"), isEmptyExistingSourcePage);
-  params.signal?.throwIfAborted();
-  await fs.writeFile(
-    pagePath,
-    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
-    "utf8",
-  );
-  params.signal?.throwIfAborted();
-  await appendMemoryWikiLog(params.config.vault.path, {
-    type: "ingest",
-    timestamp,
-    details: {
-      inputPath: sourcePath,
-      pageId,
-      pagePath: pageRelativePath.split(path.sep).join("/"),
-      bytes: buffer.byteLength,
-      created,
-    },
-  });
-  params.signal?.throwIfAborted();
-  const compile = await compileMemoryWikiVault(
-    params.config,
-    params.signal ? { signal: params.signal } : undefined,
-  );
-
-  return {
-    sourcePath,
-    pageId,
-    pagePath: pageRelativePath.split(path.sep).join("/"),
-    title,
-    bytes: buffer.byteLength,
-    created,
-    indexUpdatedFiles: compile.updatedFiles,
-  };
-}
-
 export async function ingestMemoryWikiSource(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
@@ -137,10 +52,83 @@ export async function ingestMemoryWikiSource(params: {
   nowMs?: number;
   signal?: AbortSignal;
 }): Promise<IngestMemoryWikiSourceResult> {
-  // Ingest read-modify-writes the source page and recompiles the vault; hold
-  // the vault mutation lock across the whole span so it cannot interleave
-  // with the other serialized vault mutators (apply/compile/source-sync).
-  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
-    ingestMemoryWikiSourceUnlocked(params),
-  );
+  // Keep the source read-modify-write and nested compile under one vault mutation lease.
+  return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
+    await initializeMemoryWikiVault(params.config, {
+      ...(params.nowMs !== undefined ? { nowMs: params.nowMs } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    params.signal?.throwIfAborted();
+    const sourcePath = path.resolve(params.inputPath);
+    const buffer = await fs.readFile(sourcePath);
+    params.signal?.throwIfAborted();
+    const content = assertUtf8Text(buffer, sourcePath);
+    const title = resolveSourceTitle(sourcePath, params.title);
+    const slug = slugifyWikiSegment(title);
+    const pageStem = slugifyWikiPageStem(title);
+    const pageId = `source.${slug}`;
+    const pageRelativePath = path.join("sources", `${pageStem}.md`);
+    const pagePath = path.join(params.config.vault.path, pageRelativePath);
+    const created = !(await pathExists(pagePath));
+    const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
+
+    const markdown = renderImportedSourcePage({
+      frontmatter: {
+        pageType: "source",
+        id: pageId,
+        title,
+        sourceType: "local-file",
+        sourcePath,
+        ingestedAt: timestamp,
+        updatedAt: timestamp,
+        status: "active",
+      },
+      sourceHeading: "Source",
+      sourceDetails: [
+        `- Type: \`local-file\``,
+        `- Path: \`${sourcePath}\``,
+        `- Bytes: ${buffer.byteLength}`,
+        `- Updated: ${timestamp}`,
+      ],
+      content,
+      language: "text",
+    });
+
+    const existing = created
+      ? ""
+      : await readExistingWikiPage(() => fs.readFile(pagePath, "utf8"), isEmptyExistingSourcePage);
+    params.signal?.throwIfAborted();
+    await fs.writeFile(
+      pagePath,
+      existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
+      "utf8",
+    );
+    params.signal?.throwIfAborted();
+    await appendMemoryWikiLog(params.config.vault.path, {
+      type: "ingest",
+      timestamp,
+      details: {
+        inputPath: sourcePath,
+        pageId,
+        pagePath: pageRelativePath.split(path.sep).join("/"),
+        bytes: buffer.byteLength,
+        created,
+      },
+    });
+    params.signal?.throwIfAborted();
+    const compile = await compileMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+
+    return {
+      sourcePath,
+      pageId,
+      pagePath: pageRelativePath.split(path.sep).join("/"),
+      title,
+      bytes: buffer.byteLength,
+      created,
+      indexUpdatedFiles: compile.updatedFiles,
+    };
+  });
 }

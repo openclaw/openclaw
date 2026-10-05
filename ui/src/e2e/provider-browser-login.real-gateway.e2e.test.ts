@@ -139,6 +139,8 @@ suite.define(() => {
           }),
         );
         await page.goto(url.href);
+        // Read the login document only after its UI is ready, not during document replacement.
+        await page.getByLabel("Gateway secret", { exact: true }).waitFor();
         expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
         await page
           .getByLabel("Gateway secret", { exact: true })

@@ -110,26 +110,12 @@ export function createTransportAwareStreamFnForModel(
   return streamFn;
 }
 
-/** Creates a managed OpenClaw transport stream for explicit fallback/runtime callers. */
-export function createOpenClawTransportStreamFnForModel(
-  model: Model,
-  ctx?: ProviderTransportStreamContext,
-): StreamFn | undefined {
-  // Explicit fallback callers use this when they need OpenClaw's HTTP
-  // transport semantics regardless of the default embedded-runner strategy.
-  // Native OpenAI HTTP still depends on this path for strict tool shaping,
-  // attribution, cache-boundary stripping, and runtime credential injection.
-  return createSupportedTransportStreamFn(model, ctx);
-}
-
-export function createBoundaryAwareStreamFnForModel(
-  model: Model,
-  ctx?: ProviderTransportStreamContext,
-): StreamFn | undefined {
-  // Default embedded-runner fallback. Keep OpenAI-family APIs here while native
-  // HTTP streams preserve the same OpenClaw request contract.
-  return createSupportedTransportStreamFn(model, ctx);
-}
+// Public entry points share the same transport dispatch; managed selection retains its guard.
+export {
+  createSupportedTransportStreamFn as createOpenClawTransportStreamFnForModel,
+  createSupportedTransportStreamFn as createBoundaryAwareStreamFnForModel,
+  createTransportAwareStreamFnForModel as buildTransportAwareSimpleStreamFn,
+};
 
 export function prepareTransportAwareSimpleModel<TApi extends Api>(
   model: Model<TApi>,
@@ -144,11 +130,4 @@ export function prepareTransportAwareSimpleModel<TApi extends Api>(
     ...model,
     api: alias,
   });
-}
-
-export function buildTransportAwareSimpleStreamFn(
-  model: Model,
-  ctx?: ProviderTransportStreamContext,
-): StreamFn | undefined {
-  return createTransportAwareStreamFnForModel(model, ctx);
 }

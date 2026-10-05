@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
@@ -32,6 +33,44 @@ describe("one-shot session PR reads", () => {
     await owner.pollNow();
     expect(load).toHaveBeenCalledTimes(1);
     expect(broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
+  it("keeps a forced watcher snapshot when an older prepared read settles later", async ({
+    signal,
+  }) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const selected = { ...target, source: "/synthetic/repository" };
+    owner = createTestControlUiSessionPrSubscriptions({
+      scheduler,
+      broadcastToConnIds: vi.fn(),
+      prepareRead: async () => async () => selected,
+      load: async ({ refresh }) => {
+        if (!refresh) {
+          entered.resolve();
+          await release.promise;
+        }
+        return {
+          pullRequests: [],
+          rateLimited: false,
+          repository: { owner: "synthetic", repo: refresh ? "fresh" : "old" },
+        };
+      },
+    });
+    expect(owner.readPrepared(selected)).toBeUndefined();
+    const reading = owner.read(selected, () => {});
+    try {
+      await withinTest(entered.promise, signal);
+      const { sessionKey } = selected.params;
+      await withinTest(owner.replace("viewer", [sessionKey], new Set([sessionKey])), signal);
+      expect(owner.readPrepared(selected)?.repository?.repo).toBe("fresh");
+      release.resolve();
+      await withinTest(reading, signal);
+      expect(owner.readPrepared(selected)?.repository?.repo).toBe("fresh");
+    } finally {
+      release.resolve();
+      await reading;
+    }
   });
 
   it.each(["caller", "session", "owner"] as const)(

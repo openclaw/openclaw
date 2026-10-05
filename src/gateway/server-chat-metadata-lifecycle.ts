@@ -1,11 +1,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
 import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -96,6 +98,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
     });
   };
   const refreshForSubordinateChange = (notifyIfUnchanged = false) => {
+    if (context) {
+      invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
+    }
     // Auth and skill facts are subordinate to the prepared model owner. During replacement the
     // publication event owns the one catch-up refresh after every related fact is committed.
     if (preparedModelRuntimeState === "available") {
@@ -119,18 +124,25 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
-        if (event.phase === "catalog-published" || event.phase === "catalog-failed") {
-          if (
-            event.phase === "catalog-published" &&
+        if (
+          event.phase === "catalog-status" ||
+          (event.phase === "catalog-published" &&
             event.modelFactsChanged === false &&
-            !event.refreshStatusChanged
-          ) {
-            return;
+            !event.refreshStatusChanged)
+        ) {
+          if (context) {
+            invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
           }
+          return;
+        }
+        if (event.phase === "catalog-published" || event.phase === "catalog-failed") {
           refreshForSubordinateChange(
             event.phase === "catalog-published" && event.refreshStatusChanged === true,
           );
           return;
+        }
+        if (context) {
+          invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
         }
         preparedModelRuntimeEventVersion += 1;
         if (event.phase === "invalidated") {
@@ -159,7 +171,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
       registerRuntimeAuthProfileStoreMutationListener(() => {
         refreshForSubordinateChange();
       });
+    const unregisterTopology = sessionChanges.subscribe((change) => {
+      if (isSessionStoreTopologyChange(change)) {
+        refreshForSubordinateChange();
+      }
+    });
     return () => {
+      unregisterTopology();
       unregisterRuntimeAuthProfileStoreMutation();
       unregisterPreparedModelRuntimePublication();
       unregisterSkillsChange();

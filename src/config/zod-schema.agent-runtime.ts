@@ -77,40 +77,28 @@ export const HeartbeatSchema = z
       return;
     }
     const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
-    const validateTime = (raw: string | undefined, opts: { allow24: boolean }, path: string) => {
+    for (const path of ["start", "end"] as const) {
+      const raw = active[path];
       if (!raw) {
-        return;
+        continue;
       }
-      if (!timePattern.test(raw)) {
+      const match = timePattern.exec(raw);
+      let message: string | undefined;
+      if (!match) {
+        message = 'invalid time (use "HH:MM" 24h format)';
+      } else if (match[1] === "24" && match[2] !== "00") {
+        message = "invalid time (24:00 is the only allowed 24:xx value)";
+      } else if (match[1] === "24" && path === "start") {
+        message = "invalid time (start cannot be 24:00)";
+      }
+      if (message) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["activeHours", path],
-          message: 'invalid time (use "HH:MM" 24h format)',
-        });
-        return;
-      }
-      const [hourStr, minuteStr] = raw.split(":");
-      const hour = Number(hourStr);
-      const minute = Number(minuteStr);
-      if (hour === 24 && minute !== 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message: "invalid time (24:00 is the only allowed 24:xx value)",
-        });
-        return;
-      }
-      if (hour === 24 && !opts.allow24) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message: "invalid time (start cannot be 24:00)",
+          message,
         });
       }
-    };
-
-    validateTime(active.start, { allow24: false }, "start");
-    validateTime(active.end, { allow24: true }, "end");
+    }
   })
   .optional();
 
@@ -660,11 +648,23 @@ const AgentToolsSchema = z
     /** Exec tool defaults for this agent. */
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
-    github: GitHubToolIdentitySchema,
+    github: GitHubToolIdentitySchema.unwrap()
+      .extend({
+        /** Explicitly expose this agent's managed identity inside its own sandbox (default: false). */
+        allowInSandbox: z.boolean().optional(),
+      })
+      .optional(),
     /** Filesystem tool path guards. */
     fs: ToolFsSchema,
     /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
     loopDetection: ToolLoopDetectionSchema,
+    /** Explicit outbound destinations; does not grant session reads or bypass global/sandbox policy. */
+    agentToAgent: z
+      .strictObject({
+        /** Agent ids or * globs for sessions_send. Omitted inherits visibility; [] denies cross-agent sends. */
+        send: z.array(z.string()).optional(),
+      })
+      .optional(),
     /** Message tool configuration for this agent. */
     message: MessageToolConfigSchema,
     sandbox: NestedToolPolicySchema,

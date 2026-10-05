@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -18,7 +18,12 @@ import {
 } from "../session-row-projection.js";
 import { buildHealthAgentSummaries, resolveHealthAgentOrder } from "./collector.js";
 
-afterEach(() => vi.restoreAllMocks());
+// Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 async function settleProjection(projection: SessionRowProjection) {
   do {
@@ -124,7 +129,7 @@ describe("health and status resident session summaries", () => {
   it("uses no SQLite for clean repeats and follows dirty and topology publications", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       };
       const mainKey = "agent:main:primary";
       const backfill = observeSessionRowBackfill([mainKey]);

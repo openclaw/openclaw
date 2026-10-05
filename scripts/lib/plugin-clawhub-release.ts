@@ -56,12 +56,6 @@ type PluginReleasePlan = {
   failedPublication: PluginReleasePlanItem[];
 };
 
-type ClawHubTrustedPublisherConfig = {
-  repository?: unknown;
-  workflowFilename?: unknown;
-  environment?: unknown;
-};
-
 export type ClawHubPackageObservation = {
   publication: ClawHubPublicationState;
   packageExists: boolean;
@@ -529,21 +523,13 @@ export async function observeClawHubPackage(
     packageExists,
     publication,
     alreadyPublished: publication.state === "published",
-    hasTrustedPublisher: isOpenClawPluginTrustedPublisher(trustedPublisher),
+    hasTrustedPublisher:
+      trustedPublisher !== null &&
+      trustedPublisher.repository === OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY &&
+      trustedPublisher.workflowFilename === OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME &&
+      trustedPublisher.environment === null,
     trustedPublisher,
   };
-}
-
-function isOpenClawPluginTrustedPublisher(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const trustedPublisher = value as ClawHubTrustedPublisherConfig;
-  return (
-    trustedPublisher.repository === OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY &&
-    trustedPublisher.workflowFilename === OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME &&
-    trustedPublisher.environment == null
-  );
 }
 
 function stripPackageReleaseState(

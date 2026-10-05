@@ -82,7 +82,7 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     const config = {
       agents: {
         entries: {
-          arthur: { default: true, workspace: workspaceDir },
+          arthur: { workspace: workspaceDir },
           merlin: { workspace: siblingWorkspaceDir },
         },
       },
@@ -323,8 +323,6 @@ describe("writeCliImages", () => {
     });
 
     expect(argv).toEqual(["--output-format", "json", "--prompt", prepared.prompt]);
-
-    await prepared.cleanupImages?.();
   });
 
   it("prefers explicit images over prompt refs through the helper seams", async () => {
@@ -361,8 +359,6 @@ describe("writeCliImages", () => {
     await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(
       Buffer.from(explicitImage.data, "base64"),
     );
-
-    await prepared.cleanupImages?.();
   });
 
   it("merges inline payloads with offloaded refs in attachment order", async () => {
@@ -405,8 +401,6 @@ describe("writeCliImages", () => {
       expect(prepared.imagePaths).toHaveLength(2);
       await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(offloadedImage);
       await expect(fs.readFile(prepared.imagePaths?.[1] ?? "")).resolves.toEqual(inlineImage);
-
-      await prepared.cleanupImages?.();
     } finally {
       envSnapshot.restore();
     }

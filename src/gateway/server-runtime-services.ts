@@ -23,7 +23,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -43,6 +43,7 @@ import {
   createNoopHeartbeatRunner,
   type GatewayRuntimeServiceLogger,
 } from "./server-runtime-service-shared.js";
+import { measureStartup } from "./server-startup-trace.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export {
   startGatewayChannelHealthMonitor,
@@ -53,9 +54,15 @@ const loadHeartbeatExecution = createLazyRuntimeModule(
   () => import("../infra/heartbeat-runner-run.js"),
 );
 
-type GatewayPostReadyLogger = {
-  warn: (message: string) => void;
+type StartupMaintenanceParams = Parameters<
+  typeof import("./server-startup-plugins.js").runGatewayPostReadyStartupMaintenance
+>[0];
+type GatewayStartupMaintenance = {
+  startupSessionDatabases: StartupMaintenanceParams["databases"];
+  pluginRuntime: { registry: ReturnType<StartupMaintenanceParams["getPluginRegistry"]> };
+  startupTrace?: StartupMaintenanceParams["startupTrace"];
 };
+type GatewayPostReadyLogger = StartupMaintenanceParams["log"];
 
 /** Starts cron without making the surrounding startup or reload transaction wait. */
 export function startGatewayCronWithLogging(params: {
@@ -96,6 +103,8 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   signal: AbortSignal;
   delayMs: number;
   isClosing: () => boolean;
+  waitForPostReadyWork: () => Promise<void>;
+  startupMaintenance: GatewayStartupMaintenance;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
   shouldStartCron: () => boolean;
@@ -116,6 +125,32 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       }
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
+          await params.waitForPostReadyWork();
+          if (params.isClosing()) {
+            return;
+          }
+          try {
+            await measureStartup(
+              params.startupMaintenance.startupTrace,
+              "post-ready.startup-maintenance",
+              async () => {
+                const { runGatewayPostReadyStartupMaintenance } =
+                  await import("./server-startup-plugins.js");
+                await runGatewayPostReadyStartupMaintenance({
+                  getConfig: getRuntimeConfig,
+                  getPluginRegistry: () => params.startupMaintenance.pluginRuntime.registry,
+                  databases: params.startupMaintenance.startupSessionDatabases,
+                  startupTrace: params.startupMaintenance.startupTrace,
+                  signal: params.signal,
+                  log: params.log,
+                });
+              },
+            );
+          } catch (error) {
+            if (!params.isClosing()) {
+              params.log.warn(`Gateway post-ready startup maintenance failed: ${String(error)}`);
+            }
+          }
           try {
             if (!params.isClosing()) {
               const maintenance = await params.startMaintenance();
@@ -247,12 +282,9 @@ function startPendingOutboundDeliveryRecovery(params: {
           undefined,
           recoveryContext,
         );
-        const { listLegacyDeliveryQueueArtifacts } =
-          await import("../infra/delivery-queue-legacy-files.js");
-        const legacyFiles = listLegacyDeliveryQueueArtifacts(recoveryContext.stateDir);
-        if (remaining > 0 || legacyFiles.length > 0) {
+        if (remaining > 0) {
           logRecovery.warn(
-            `${remaining} legacy outbound deliveries and ${legacyFiles.length} legacy queue files need repair. Stop the Gateway and run openclaw doctor --fix.`,
+            `${remaining} legacy outbound deliveries need repair. Stop the Gateway and run openclaw doctor --fix.`,
           );
         }
         await recoverPendingDeliveries(

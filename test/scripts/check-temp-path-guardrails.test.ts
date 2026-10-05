@@ -12,6 +12,8 @@ it("reports unsafe runtime paths without mistaking quoted delimiters or test fix
   const root = tempDirs.make("openclaw-temp-path-guard-");
   const sources = {
     "src/dynamic.ts": "path.join(os.tmpdir(), `run-${id}`);",
+    "src/comment-text.ts": 'path.join(os.tmpdir(), `run-${"//"}`);',
+    "src/concatenated.ts": 'path.join(os.tmpdir(), `run-${id}` + ".json");',
     "src/nested.ts": 'path.join(os.tmpdir(), choose(")", { close: ["]"] }), `run-${id}`);',
     "src/escaped.ts": 'path.join(os.tmpdir(), choose("escaped \\" quote, )"), `run-${id}`);',
     "extensions/probe/random.ts": "const id = Date.now() + Math.random();",
@@ -20,6 +22,8 @@ it("reports unsafe runtime paths without mistaking quoted delimiters or test fix
       'path.join(other(")"), `run-${id}`);',
       'path.join(os.tmpdir(), `fixed`, nested({ value: ["closing )"] }));',
       "// path.join(os.tmpdir(), `comment-${id}`);",
+      'const example = "path.join(os.tmpdir(), `example-${id}`)";',
+      "path.join(os.tmpdir(), `fixed-\\${id}`);",
     ].join("\n"),
     "src/fixture.test.ts": "path.join(os.tmpdir(), `test-${id}`);",
   };
@@ -45,12 +49,14 @@ it("reports unsafe runtime paths without mistaking quoted delimiters or test fix
   expect(rejected.stdout).toBe("");
   expect(rejected.stderr.replaceAll("\\", "/")).toBe(
     "Dynamic os.tmpdir()/path.join() template paths found:\n" +
-      "- src/dynamic.ts\n- src/escaped.ts\n- src/nested.ts\n" +
+      "- src/comment-text.ts\n- src/concatenated.ts\n- src/dynamic.ts\n- src/escaped.ts\n- src/nested.ts\n" +
       "Weak Date.now()+Math.random() same-line IDs found:\n- extensions/probe/random.ts\n",
   );
 
   for (const file of [
     "src/dynamic.ts",
+    "src/comment-text.ts",
+    "src/concatenated.ts",
     "src/escaped.ts",
     "src/nested.ts",
     "extensions/probe/random.ts",

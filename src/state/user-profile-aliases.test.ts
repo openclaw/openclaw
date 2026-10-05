@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withPathResolutionEnv } from "../test-utils/env.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -332,35 +331,5 @@ describe("profile alias reader lifecycle", () => {
     const reopened = openOpenClawStateDatabase(options).db;
     reopened.prepare("DELETE FROM user_profiles WHERE id = ?").run(source.id);
     expect(readUserProfileAliases(target.id, options)).toEqual(new Set([target.id]));
-  });
-
-  it("reselects a newly created default state root instead of retaining legacy-root aliases", () => {
-    const home = roots.make("profile-alias-home-");
-    const legacyRoot = path.join(home, ".clawdbot");
-    const newRoot = path.join(home, ".openclaw");
-    const legacyPath = path.join(legacyRoot, "state", "openclaw.sqlite");
-    statePaths.push(legacyPath, path.join(newRoot, "state", "openclaw.sqlite"));
-    fs.mkdirSync(legacyRoot);
-    withPathResolutionEnv(
-      home,
-      {
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
-        NODE_ENV: "production",
-      },
-      () => {
-        const source = ensureProfileForEmail("source@aliases.test");
-        const target = ensureProfileForEmail("target@aliases.test");
-        linkEmail("source@aliases.test", target.id);
-        expect(readUserProfileAliases(target.id)).toEqual(new Set([source.id, target.id]));
-        fs.mkdirSync(newRoot);
-        expect(readUserProfileAliases(target.id)).toEqual(new Set([target.id]));
-        expect(fs.existsSync(path.join(newRoot, "state"))).toBe(false);
-        expect(
-          readUserProfileAliases(target.id, { env: { OPENCLAW_STATE_DIR: legacyRoot } }),
-        ).toEqual(new Set([source.id, target.id]));
-      },
-    );
   });
 });

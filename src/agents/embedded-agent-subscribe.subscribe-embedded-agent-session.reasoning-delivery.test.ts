@@ -126,10 +126,15 @@ describe("commentary preambles", () => {
         ["update", "First. Second."],
         ["update", "First. Second. Updated."],
         ["end", "First. Second. Updated."],
-      ].map(([phase, progressText]) => ({
-        stream: "item",
-        data: { kind: "preamble", title: "Preamble", phase, progressText },
-      })),
+      ].map(([phase, progressText], index) =>
+        Object.assign(
+          {
+            stream: "item",
+            data: { kind: "preamble", title: "Preamble", phase, progressText },
+          },
+          index === 0 ? { transcriptStart: null } : {},
+        ),
+      ),
     );
   });
 });

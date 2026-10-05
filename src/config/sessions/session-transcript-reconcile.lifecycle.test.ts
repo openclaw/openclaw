@@ -29,7 +29,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
-import * as coordination from "./session-accessor.sqlite-worker-coordination.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
 import { getSessionTranscriptReconcileWorkerPoolSnapshot } from "./session-transcript-reconcile-pool.js";
 import {
@@ -224,22 +223,24 @@ describe("session transcript reconcile worker lifecycle", () => {
     const hostLeases: string[] = [];
     const allQueued = createDeferred();
     let queued = 0;
-    const coordinate = coordination.withSqliteWorkerLifecycleCoordination;
-    const coordinated = vi
-      .spyOn(coordination, "withSqliteWorkerLifecycleCoordination")
-      .mockImplementation((context, actorId, run, settleFailure, mode) =>
-        coordinate(
-          context,
-          actorId,
-          (binding) => {
-            const pending = run(binding);
-            if (actorId.startsWith("transcript:disk:") && ++queued === agents.length) {
-              allQueued.resolve();
-            }
-            return pending;
-          },
-          settleFailure,
-          mode,
+    const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
+    const operationSpy = vi
+      .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
+      .mockImplementation((generation, run, owner) =>
+        runOperation(
+          generation,
+          (operation) =>
+            run({
+              ...operation,
+              startTask: (...args) => {
+                const pending = operation.startTask(...args);
+                if (args[0].mode === "disk" && ++queued === agents.length) {
+                  allQueued.resolve();
+                }
+                return pending;
+              },
+            }),
+          owner,
         ),
       );
     try {
@@ -311,7 +312,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       expect(idleLeases).toHaveLength(1);
       expect([...canonical.leases.values()]).toContain(idleLeases[0]);
     } finally {
-      coordinated.mockRestore();
+      operationSpy.mockRestore();
       canonical.restore();
       await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
       await closeOpenClawAgentDatabasesAsync();

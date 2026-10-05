@@ -120,54 +120,55 @@ function normalizePluginSurfaceRefreshParams(
   return { surface, ...(observedUrl ? { observedUrl } : {}) };
 }
 
-function respondRefreshedPluginSurface(params: {
-  surface: string;
-  observedUrl?: string;
-  client: GatewayClient | null;
-  respond: RespondFn;
-}) {
-  const currentUrl = params.client?.pluginSurfaceUrls?.[params.surface];
-  const capabilitySurface = params.client?.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
-    surface: params.surface,
+const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, client }) => {
+  const parsed = normalizePluginSurfaceRefreshParams(params);
+  if (!parsed) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
+    return;
+  }
+  const { surface, observedUrl } = parsed;
+  const currentUrl = client?.pluginSurfaceUrls?.[surface];
+  const capabilitySurface = client?.pluginNodeCapabilitySurfaces?.[surface] ?? {
+    surface,
   };
   if (
-    params.client &&
+    client &&
     currentUrl &&
-    params.observedUrl &&
-    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, params.observedUrl) &&
+    observedUrl &&
+    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, observedUrl) &&
     hasAuthorizedClientPluginNodeCapabilityUrl({
-      client: params.client,
+      client,
       surface: capabilitySurface,
       url: currentUrl,
     })
   ) {
     // A prior in-flight request already rotated this capability. Return its
     // result instead of invalidating it with a second rotation.
-    params.respond(
+    respond(
       true,
       {
-        surface: params.surface,
-        pluginSurfaceUrls: { [params.surface]: currentUrl },
+        surface,
+        pluginSurfaceUrls: { [surface]: currentUrl },
       },
       undefined,
     );
     return;
   }
-  const refreshed = params.client
+  const refreshed = client
     ? refreshClientPluginNodeCapability({
-        client: params.client,
+        client,
         surface: capabilitySurface,
       })
     : undefined;
   if (!refreshed) {
-    params.respond(
+    respond(
       false,
       undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${params.surface} plugin surface unavailable`),
+      errorShape(ErrorCodes.UNAVAILABLE, `${surface} plugin surface unavailable`),
     );
     return;
   }
-  params.respond(
+  respond(
     true,
     {
       surface: refreshed.surface,
@@ -176,20 +177,6 @@ function respondRefreshedPluginSurface(params: {
     },
     undefined,
   );
-}
-
-const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, client }) => {
-  const parsed = normalizePluginSurfaceRefreshParams(params);
-  if (!parsed) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
-    return;
-  }
-  respondRefreshedPluginSurface({
-    surface: parsed.surface,
-    observedUrl: parsed.observedUrl,
-    client,
-    respond,
-  });
 };
 
 export function refreshConnectedNodeSurfaceCaches(params: {

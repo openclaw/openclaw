@@ -103,7 +103,7 @@ function createGuardedStopFixture() {
         activeRunIds: [`${runId}-capacity`],
       }),
     ).toBe(true);
-    const registration = registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: scope.sessionKey,
       requesterSessionKey,
@@ -116,9 +116,6 @@ function createGuardedStopFixture() {
       queued: true,
       expectsCompletionMessage: false,
     });
-    if (registration) {
-      await registration;
-    }
     const start = vi.fn(async () => {});
     activateSwarmRun({
       groupId,

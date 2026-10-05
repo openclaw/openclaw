@@ -4,7 +4,8 @@ import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
-import type { SandboxContext } from "./types.js";
+import { withWorktreeAllocationLease } from "../worktrees/allocation.js";
+import type { SandboxConfig, SandboxContext } from "./types.js";
 
 /** A writable project is an exact managed projection, never a role-policy override. */
 export async function prepareLocalSandboxWorkspace(params: {
@@ -12,19 +13,35 @@ export async function prepareLocalSandboxWorkspace(params: {
   agentId: string;
   sessionKey: string;
   workspaceDir?: string;
-  backend: string;
+  sandbox: SandboxConfig;
+  signal?: AbortSignal;
   assertCurrent?: () => void;
 }) {
   const owner = resolveLocalWorkspaceOwner(params);
   if (!owner) {
     return undefined;
   }
-  if (params.backend !== "docker" && params.backend !== "podman") {
+  if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
     throw new Error(
       "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
     );
   }
-  const workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const existing = await withLocalWorkspaceProjection(owner, (state) => state.reuse());
+  const workspaceDir =
+    existing ??
+    (params.cfg.worktreeAcceleration === false
+      ? await withLocalWorkspaceProjection(owner, (state) => state.prepare())
+      : await withWorktreeAllocationLease(
+          {
+            env: owner.env ?? process.env,
+            signal: params.signal,
+            commitGuard: owner.assertCurrent,
+          },
+          (allocation) =>
+            withLocalWorkspaceProjection(owner, (state) =>
+              state.prepare({ sandbox: params.sandbox, allocation }),
+            ),
+        ));
   owner.assertCurrent();
   return {
     workspaceDir,

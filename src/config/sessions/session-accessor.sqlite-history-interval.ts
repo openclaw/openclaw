@@ -8,12 +8,12 @@ import {
   resolveHistoryAnchorPageRange,
   type TranscriptAnchorPageOptions,
 } from "../../sessions/transcript-anchor-page.js";
-import type { SessionTranscriptMessageAnchorPage } from "./session-accessor.sqlite-active-events.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-display-position.js";
 import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  type SessionTranscriptMessageAnchorPage,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
@@ -360,6 +360,20 @@ export function resolveHistoricalHistoryEvent(
     eventSeq: row.event_seq,
     seq: countHistoricalDisplayEvents(projection, interval, row.active_position) + 1,
   };
+}
+
+export function readHistoricalHistoryPrecedingEvent(
+  projection: CurrentTranscriptProjection,
+  row: NonNullable<ReturnType<typeof readDisplayableActiveEventById>>,
+  event: SessionTranscriptMessageEvent,
+): SessionTranscriptMessageEvent | undefined {
+  const interval = resolveClosedResetIntervalForDisplayable(projection, row);
+  return interval && event.seq > 1
+    ? readHistoricalDisplayEventRange(projection, undefined, interval, event.seq - 2, 1, {
+        activePosition: row.active_position,
+        displayPosition: event.seq - 1,
+      })[0]
+    : undefined;
 }
 
 export function readHistoricalHistoryAnchorPage(

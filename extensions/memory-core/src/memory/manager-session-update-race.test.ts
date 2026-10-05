@@ -870,10 +870,10 @@ describe("memory session update sync", () => {
     });
     cfg.agents = {
       ...cfg.agents,
-      list: [
-        { id: "main", default: true, workspace: fixture.paths.workspace },
-        { id: "peer", workspace: fixture.paths.workspace },
-      ],
+      entries: {
+        main: { workspace: fixture.paths.workspace },
+        peer: { workspace: fixture.paths.workspace },
+      },
     };
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
     await fs.writeFile(

@@ -61,6 +61,41 @@ export type DurableComposerDraftAttachment = Omit<
   blob: Blob;
 };
 
+export type DurableComposerDraftScope = {
+  gatewayOwner: string;
+  recoveryScope: string;
+  scopeKey: string;
+};
+
+export type DurableChatDraftPresence = { revision: number; active: boolean };
+
+export type DurableQuestionDraft = {
+  itemId: string;
+  signature: string;
+  edited: boolean;
+  dismissed?: boolean;
+  answers: { selected: string[]; freeText: string }[];
+  reopenedAfterBoundary?: string;
+};
+
+export type DurableDraftModelSelection = {
+  agentId: string;
+  model: string;
+  agentRuntime?: string;
+  thinkingLevel: string;
+};
+
+export type DurableComposerDraft = {
+  revision: number;
+  text: string;
+  mentions?: readonly HumanMention[];
+  goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
+  modelSelection?: DurableDraftModelSelection;
+  attachments: DurableComposerDraftAttachment[];
+  questionDrafts?: DurableQuestionDraft[];
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
@@ -122,6 +157,8 @@ export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
 
 export type ChatQueueItem = {
   id: string;
+  /** Captured local storage identity; never a server credential. */
+  storageScope?: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
   asyncQuestionItemId?: string;
   workContext?: ChatWorkContext;
@@ -192,6 +229,7 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
+      sessionsYield?: "waiting" | "resumed";
     }
   | {
       kind: "divider";
@@ -382,7 +420,7 @@ export type MessageContentItem =
   | {
       type: "attachment_error";
       attachment: {
-        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        code: "file-not-found" | "unsupported-format" | "delivery-failed" | "invalid-reference";
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;

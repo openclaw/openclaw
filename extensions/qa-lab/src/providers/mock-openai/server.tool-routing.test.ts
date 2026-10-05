@@ -116,43 +116,51 @@ it.each([
   },
 );
 
-it("plans runtime-fixture sessions_spawn happy and failure calls deterministically", async () => {
-  const turn = await startTurn(
-    "QA routing marker: tool search qa check target=sessions_spawn. Call sessions_spawn directly exactly once and summarize its acceptance.",
-    { model: "gpt-5.6-luna", tools: [{ type: "function", name: "sessions_spawn" }] },
-  );
-  expect(callArgs(outputToolCall(await turn.request(), "sessions_spawn"))).toMatchObject({
-    mode: "run",
-    expectsCompletionMessage: false,
-  });
-  turn.input.splice(
-    0,
-    1,
-    makeUserInput(
-      'QA routing marker: tool search qa failure target=sessions_spawn. Call sessions_spawn directly exactly once with task="". Do not repair, omit, replace, or retry the empty task.',
-    ),
-  );
-  expect(callArgs(outputToolCall(await turn.request(), "sessions_spawn"))).toEqual({ task: "" });
-});
-
-it("routes the directory fixture through ls with valid happy and missing-directory inputs", async () => {
-  const config = readQaScenarioExecutionConfig("runtime-tool-fs-list") ?? {};
-  const toolName = normalizeOptionalString(config.toolName) ?? "";
-  const turn = await startTurn("", {
-    tools: ["ls", "read"].map((name) => ({ type: "function", name })),
-  });
-  const cases: Array<[prompt: string, expectedPath: string]> = [
-    [normalizeOptionalString(config.happyPrompt) ?? `tool search qa check target=${toolName}`, "."],
-    [
-      normalizeOptionalString(config.failurePrompt) ?? `tool search qa failure target=${toolName}`,
-      "runtime-tool-fixture-missing-directory",
-    ],
-  ];
-  for (const [prompt, expectedPath] of cases) {
-    turn.input.splice(0, 1, makeUserInput(prompt));
-    expect(callArgs(outputToolCall(await turn.request(), "ls"))).toEqual({ path: expectedPath });
-  }
-});
+it.each(["sessions_spawn", "ls"])(
+  "routes %s runtime fixtures without mistaking instruction arguments for fixture targets",
+  async (toolName) => {
+    const config =
+      toolName === "ls" ? (readQaScenarioExecutionConfig("runtime-tool-fs-list") ?? {}) : {};
+    const fixtureTarget = normalizeOptionalString(config.toolName) ?? "";
+    const cases: Array<[prompt: string, args: unknown]> =
+      toolName === "sessions_spawn"
+        ? [
+            [
+              "QA routing marker: tool search qa check target=sessions_spawn. Call sessions_spawn directly exactly once and summarize its acceptance.",
+              expect.objectContaining({ mode: "run", expectsCompletionMessage: false }),
+            ],
+            [
+              'QA routing marker: tool search qa failure target=sessions_spawn. Call sessions_spawn directly exactly once with task="". Do not repair, omit, replace, or retry the empty task.',
+              { task: "" },
+            ],
+          ]
+        : [
+            [
+              normalizeOptionalString(config.happyPrompt) ??
+                `tool search qa check target=${fixtureTarget}`,
+              { path: "." },
+            ],
+            [
+              normalizeOptionalString(config.failurePrompt) ??
+                `tool search qa failure target=${fixtureTarget}`,
+              { path: "runtime-tool-fixture-missing-directory" },
+            ],
+          ];
+    const turn = await startTurn("", {
+      ...(toolName === "sessions_spawn" ? { model: "gpt-5.6-luna" } : {}),
+      instructions:
+        "Available deferred-schema tools:\n- skill_workshop: Omit target for Workshop proposals. Set target=personal only for personal library operations.",
+      tools: (toolName === "ls" ? ["ls", "read"] : [toolName]).map((name) => ({
+        type: "function",
+        name,
+      })),
+    });
+    for (const [prompt, args] of cases) {
+      turn.input.splice(0, 1, makeUserInput(prompt));
+      expect(callArgs(outputToolCall(await turn.request(), toolName))).toEqual(args);
+    }
+  },
+);
 
 it("does not mistake shell exec or discovery without invocation for spawn authority", async () => {
   const turn = await startTurn("Subagent terminal reply QA check: visible.", {
@@ -218,43 +226,43 @@ it.each([true, false])(
   },
 );
 
-it("sends a private-source completion once through the catalog and never respawns", async () => {
-  const turn = await startTurn("Subagent terminal reply QA check: silent.", {
-    model: "gpt-5.6-luna",
+it.each([
+  {
+    scenario: "silent",
     instructions:
       "## Messaging\n### message tool\nVisible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
-  });
-  turn.input.push(
-    makeUserInput(
+    completion:
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n[Internal task completion event]\nTask: qa-terminal-silent\nResult: (no output)\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-    ),
-  );
-  const call = outputToolCall(await turn.request(), "tool_call");
-  expect(callArgs(call)).toEqual({
-    id: "message",
+    target: "message",
     args: { action: "send", message: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED", final: true },
-  });
-  expect(outputText(await turn.complete(call, catalogResult("message", { ok: true })))).toBe("");
-});
-
-it("keeps the private second-child completion silent with catalog-only tools", async () => {
-  const turn = await startTurn("Subagent terminal reply QA check: private.", {
-    model: "gpt-5.6-luna",
-  });
-  turn.input.push(
-    makeUserInput(
+    receipt: { ok: true },
+    reply: "",
+  },
+  {
+    scenario: "private",
+    completion:
       "[Internal task completion event]\nTask: qa-terminal-private-first\nResult: QA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF\nMEDIA:./qa-private-result.png",
-    ),
-  );
-  const call = outputToolCall(await turn.request(), "tool_call");
-  expect(callArgs(call)).toMatchObject({
-    id: "sessions_spawn",
-    args: { label: "qa-terminal-private-second", completionTarget: "parent" },
-  });
-  expect(
-    outputText(await turn.complete(call, catalogResult("sessions_spawn", { status: "accepted" }))),
-  ).toBe("NO_REPLY");
-});
+    target: "sessions_spawn",
+    args: expect.objectContaining({
+      label: "qa-terminal-private-second",
+      completionTarget: "parent",
+    }),
+    receipt: { status: "accepted" },
+    reply: "Second worker started.",
+  },
+])(
+  "routes the $scenario completion through the catalog once",
+  async ({ scenario, instructions, completion, target, args, receipt, reply }) => {
+    const turn = await startTurn(`Subagent terminal reply QA check: ${scenario}.`, {
+      model: "gpt-5.6-luna",
+      instructions,
+    });
+    turn.input.push(makeUserInput(completion));
+    const call = outputToolCall(await turn.request(), "tool_call");
+    expect(callArgs(call)).toEqual({ id: target, args });
+    expect(outputText(await turn.complete(call, catalogResult(target, receipt)))).toBe(reply);
+  },
+);
 
 it("drives yielded-parent fallback through catalog spawn and namespaced yield", async () => {
   const tools = [

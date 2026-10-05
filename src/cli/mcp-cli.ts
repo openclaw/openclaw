@@ -2,7 +2,10 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -169,21 +172,6 @@ function parseMcpApprovalModeOption(
   return mode;
 }
 
-function parseOAuthConfig(opts: {
-  scope?: string;
-  redirectUrl?: string;
-  clientMetadataUrl?: string;
-}): Record<string, string> | undefined {
-  const oauth: Record<string, string> = {};
-  for (const key of ["scope", "redirectUrl", "clientMetadataUrl"] as const) {
-    const value = opts[key]?.trim();
-    if (value) {
-      oauth[key] = value;
-    }
-  }
-  return Object.keys(oauth).length > 0 ? oauth : undefined;
-}
-
 function setOptionalField(target: Record<string, unknown>, key: string, value: unknown): void {
   if (value !== undefined) {
     target[key] = value;
@@ -206,7 +194,6 @@ function applyMcpTimeoutOptions(
 function applyMcpOAuthOptions(
   server: Record<string, unknown>,
   opts: McpServerControlOptions,
-  merge: boolean,
 ): void {
   const auth = normalizeLowercaseStringOrEmpty(normalizeStringifiedOptionalString(opts.auth) ?? "");
   if (auth && auth !== "oauth") {
@@ -215,13 +202,19 @@ function applyMcpOAuthOptions(
   if (auth) {
     server.auth = auth;
   }
-  const oauth = parseOAuthConfig({
-    scope: opts.oauthScope,
-    redirectUrl: opts.oauthRedirectUrl,
-    clientMetadataUrl: opts.oauthClientMetadataUrl,
-  });
-  if (oauth) {
-    server.oauth = merge ? { ...asRecord(server.oauth), ...oauth } : oauth;
+  const oauth: Record<string, string> = {};
+  for (const [field, input] of [
+    ["scope", opts.oauthScope],
+    ["redirectUrl", opts.oauthRedirectUrl],
+    ["clientMetadataUrl", opts.oauthClientMetadataUrl],
+  ] as const) {
+    const value = input?.trim();
+    if (value) {
+      oauth[field] = value;
+    }
+  }
+  if (Object.keys(oauth).length > 0) {
+    server.oauth = { ...asRecord(server.oauth), ...oauth };
   }
 }
 
@@ -380,7 +373,7 @@ async function collectMcpDoctorIssues(params: {
   const { name, server } = params;
   const resolved = resolveMcpTransportConfig(name, server);
   const disabled = server.enabled === false;
-  if (server.enabled === false) {
+  if (disabled) {
     issues.push(issue("warning", "server is disabled"));
   }
   if (!disabled) {
@@ -636,11 +629,7 @@ function createMcpProbeRuntime(
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
 
 function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
-  if (
-    typeof server.connectionTimeoutMs === "number" &&
-    Number.isFinite(server.connectionTimeoutMs) &&
-    server.connectionTimeoutMs > 0
-  ) {
+  if (asPositiveFiniteNumber(server.connectionTimeoutMs) !== undefined) {
     return server;
   }
   return {
@@ -670,7 +659,7 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): Promise<Awaited<ReturnType<typeof readMcpProbeResult>>> {
+}): Promise<void> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
       name,
@@ -688,7 +677,6 @@ async function probeMcpServersOrFail(params: {
     if (probeIssue) {
       fail(probeIssue);
     }
-    return result;
   } finally {
     await runtime.dispose();
   }
@@ -1026,7 +1014,7 @@ export function registerMcpCli(program: Command) {
           server.url = url;
           setOptionalField(server, "transport", normalizeStringifiedOptionalString(opts.transport));
           setOptionalField(server, "headers", parseKeyValueEntries(opts.header, "--header"));
-          applyMcpOAuthOptions(server, opts, false);
+          applyMcpOAuthOptions(server, opts);
           applyMcpTlsOptions(server, opts);
         }
         if (opts.disabled) {
@@ -1206,7 +1194,7 @@ export function registerMcpCli(program: Command) {
           delete next.auth;
           delete next.oauth;
         }
-        applyMcpOAuthOptions(next, opts, true);
+        applyMcpOAuthOptions(next, opts);
         if (opts.clearTls) {
           delete next.sslVerify;
           delete next.ssl_verify;

@@ -190,7 +190,7 @@ async function withDispatchLifecycle(
           heartbeat: { every: "0m" },
           modelPolicy: { allow: ["opencode/*"] },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
       plugins: {
@@ -320,13 +320,10 @@ async function withDispatchLifecycle(
   }
 }
 
-it.for([
-  { scenario: "held discovery control", patchOtherSession: false },
-  { scenario: "another session label changes", patchOtherSession: true },
-])(
-  "models.list keeps the selected session catalog when $scenario",
+it(
+  "models.list keeps the selected session catalog when another session label changes",
   { timeout: 180_000 },
-  async ({ patchOtherSession }, { signal }) => {
+  async ({ signal }) => {
     await withDispatchLifecycle(signal, async (fixture) => {
       const expectedIds = [
         "account-a-only",
@@ -395,14 +392,12 @@ it.for([
         try {
           await withTestTimeout(held.started, 30_000, "Selected session discovery did not start");
           expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
-          if (patchOtherSession) {
-            await expect(
-              fixture.client.request("sessions.patch", {
-                key: other.key,
-                label: "Other session renamed",
-              }),
-            ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
-          }
+          await expect(
+            fixture.client.request("sessions.patch", {
+              key: other.key,
+              label: "Other session renamed",
+            }),
+          ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
         } finally {
           held.release();
           await pending;
@@ -479,7 +474,7 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     });
     await expect(fixture.send("account-a-only", "withdrawn-after-restart")).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("The selected model is unavailable from the provider"),
+      error: expect.stringContaining("This model was not found."),
     });
     expect(fixture.requests).toHaveLength(3);
   });
@@ -505,7 +500,7 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
       );
       await expect(fixture.send("account-a-only", "during-replacement")).resolves.toMatchObject({
         status: "error",
-        error: expect.stringContaining("The selected model is unavailable from the provider"),
+        error: expect.stringContaining("This model was not found."),
       });
       expect(fixture.requests).toHaveLength(1);
     } finally {

@@ -1,18 +1,14 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { persistAbortTargetEntry, persistCommandSession } from "./commands-session-store.js";
 
-async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-session-store-"));
-  try {
-    return await run(path.join(dir, "sessions.json"));
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-command-session-store-");
+
+function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
+  return run(path.join(sessionDirs.make(), "sessions.json"));
 }
 
 describe("commands session store persistence", () => {

@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
@@ -22,11 +21,6 @@ import {
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
 import { requireActivePluginRegistry } from "./runtime.js";
-
-type PluginHttpRouteHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<boolean | void> | boolean | void;
 
 type PluginHttpRouteRegistrationLease = Pick<PluginRuntimeCapabilityLease, "isActive" | "retain">;
 type LegacyListener = NonNullable<PluginHttpRouteRegistration["legacyListeners"]>[number];
@@ -258,7 +252,7 @@ export function withPluginHttpRouteRegistry<T>(
 export function registerPluginHttpRoute(params: {
   path?: string | null;
   fallbackPath?: string | null;
-  handler: PluginHttpRouteHandler;
+  handler: PluginHttpRouteRegistration["handler"];
   auth: PluginHttpRouteRegistration["auth"];
   match?: PluginHttpRouteRegistration["match"];
   gatewayRuntimeScopeSurface?: PluginHttpRouteRegistration["gatewayRuntimeScopeSurface"];
@@ -286,7 +280,7 @@ export function registerPluginHttpRoute(params: {
     ? getPluginInstanceOwner(instance)?.record
     : registry.plugins.find((entry) => entry.id === params.pluginId);
   const instanceOwner = record ? resolvePluginInstanceOwner(record, registry) : undefined;
-  if (instanceOwner) {
+  if (instanceOwner && !instanceOwner.revoked) {
     registry = instanceOwner.registry;
   }
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";

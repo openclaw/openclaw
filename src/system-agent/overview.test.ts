@@ -67,7 +67,7 @@ describe("loadSystemAgentOverview", () => {
           model: { primary: "openai/gpt-5.2" },
           systemAgent: { agentId: "main" },
         },
-        list: [{ id: "main" }, { id: "work", name: "Work" }],
+        entries: { main: {}, work: { name: "Work" } },
       },
       gateway: { port: 19001 },
     };
@@ -123,11 +123,12 @@ describe("loadSystemAgentOverview", () => {
         ...(separated ? { meta: { migrations: { utilityModelSeparation: true as const } } } : {}),
         agents: {
           defaults: {
+            systemAgent: { agentId: "main" },
             utilityModel: "helper@local:utility",
             models: { "local-utility/small": { alias: "helper" } },
           },
           entries: {
-            main: { default: true },
+            main: {},
             ops: { utilityModel: "helper@local:ops" },
           },
         },

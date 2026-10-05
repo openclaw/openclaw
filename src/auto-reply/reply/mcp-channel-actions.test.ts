@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const materialize = vi.hoisted(() => vi.fn());
 vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
@@ -10,6 +10,10 @@ import type { ReplyPayload } from "../types.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 
 const view = { viewId: "view-latest" };
+const connectAction = {
+  serverName: "calendar",
+  authorizationUrl: "https://auth.example/authorize?state=opaque",
+};
 const presentation = {
   blocks: [
     {
@@ -36,84 +40,63 @@ function attachApp(payloads: ReplyPayload[], channel: string | undefined) {
   return attachMcpAppChannelAction({ payloads, channel, sessionKey: "agent:main:main", view });
 }
 
-describe("attachMcpAppChannelAction", () => {
-  it("attaches one action to the latest visible reply and preserves original text", () => {
-    const payloads = attachApp(
-      [
-        { text: "progress", isStatusNotice: true },
-        { text: "First answer" },
-        { text: "Final answer" },
-      ],
-      "telegram",
-    );
-
-    expect(payloads[1]).toEqual({ text: "First answer" });
-    const finalPayload = payloads[2];
-    expect(finalPayload).toEqual({ text: "Final answer", presentation });
-    if (!finalPayload) {
-      throw new Error("expected final payload");
-    }
-    expect(renderMessagePresentationFallbackText(finalPayload)).toBe(
-      "Final answer\n\n- Open app: https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
-    );
-  });
-
-  it("keeps Control UI inline-only without minting a duplicate action", () => {
-    const payloads = [{ text: "Final answer" }];
-
-    expect(attachApp(payloads, "webchat")).toBe(payloads);
-    expect(materialize).not.toHaveBeenCalled();
-  });
-
-  it("does not mint without a resolved channel transport", () => {
-    const payloads = [{ text: "Final answer" }];
-
-    expect(attachApp(payloads, undefined)).toBe(payloads);
-    expect(materialize).not.toHaveBeenCalled();
-  });
-
-  it("preserves the original payloads when late materialization is unavailable", () => {
-    materialize.mockReturnValue(undefined);
-    const payloads = [{ text: "Final answer" }];
-
-    expect(attachApp(payloads, "telegram")).toBe(payloads);
-  });
-
-  it("does not mint for status, error, or non-text terminal payloads", () => {
-    const payloads = [
-      { text: "status", isStatusNotice: true },
-      { text: "error", isError: true },
-      { mediaUrl: "https://example.test/image.png" },
-    ];
-
-    expect(attachApp(payloads, "telegram")).toBe(payloads);
-    expect(materialize).not.toHaveBeenCalled();
-  });
+it.each([
+  [
+    "app",
+    "Final answer",
+    "Open app: https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+  ],
+  [
+    "connect",
+    "Sign in to continue.",
+    "Connect calendar: https://auth.example/authorize?state=opaque",
+  ],
+])("attaches one %s action to the final visible reply", (kind, text, fallback) => {
+  const input = [{ text: "progress", isStatusNotice: true }, { text: "First answer" }, { text }];
+  const payloads =
+    kind === "app"
+      ? attachApp(input, "telegram")
+      : attachMcpConnectChannelAction({ payloads: input, action: connectAction });
+  expect(payloads[1]).toEqual({ text: "First answer" });
+  if (kind === "app") {
+    expect(payloads[2]).toEqual({ text, presentation });
+  }
+  expect(renderMessagePresentationFallbackText(payloads[2]!)).toBe(`${text}\n\n- ${fallback}`);
 });
 
-describe("attachMcpConnectChannelAction", () => {
-  it("adds one portable URL action to the final visible reply", () => {
-    const payloads = attachMcpConnectChannelAction({
-      payloads: [{ text: "progress", isStatusNotice: true }, { text: "Sign in to continue." }],
-      action: {
-        serverName: "calendar",
-        authorizationUrl: "https://auth.example/authorize?state=opaque",
-      },
-    });
-
-    expect(renderMessagePresentationFallbackText(payloads[1]!)).toBe(
-      "Sign in to continue.\n\n- Connect calendar: https://auth.example/authorize?state=opaque",
-    );
-  });
-
-  it("preserves payloads without an action or eligible terminal reply", () => {
-    const payloads = [{ text: "failed", isError: true }];
-    expect(attachMcpConnectChannelAction({ payloads })).toBe(payloads);
-    expect(
-      attachMcpConnectChannelAction({
-        payloads,
-        action: { serverName: "calendar", authorizationUrl: "https://auth.example/authorize" },
-      }),
-    ).toBe(payloads);
-  });
+it("preserves payloads when no channel action can be attached", () => {
+  const visible = [{ text: "Final answer" }];
+  const error = [{ text: "failed", isError: true }];
+  const ineligible = [
+    { text: "status", isStatusNotice: true },
+    { text: "error", isError: true },
+    { mediaUrl: "https://example.test/image.png" },
+  ];
+  const cases: Array<
+    [string, ReplyPayload[], (payloads: ReplyPayload[]) => ReplyPayload[], boolean?]
+  > = [
+    ["Control UI", visible, (payloads) => attachApp(payloads, "webchat")],
+    ["unresolved channel", visible, (payloads) => attachApp(payloads, undefined)],
+    ["no terminal text", ineligible, (payloads) => attachApp(payloads, "telegram")],
+    ["no connect action", error, (payloads) => attachMcpConnectChannelAction({ payloads })],
+    [
+      "connect error",
+      error,
+      (payloads) => attachMcpConnectChannelAction({ payloads, action: connectAction }),
+    ],
+    [
+      "late materialization unavailable",
+      visible,
+      (payloads) => attachApp(payloads, "telegram"),
+      true,
+    ],
+  ];
+  for (const [name, payloads, attach, materializationUnavailable] of cases) {
+    materialize.mockReset();
+    materialize.mockReturnValue(materializationUnavailable ? undefined : presentation);
+    expect(attach(payloads), name).toBe(payloads);
+    if (!materializationUnavailable) {
+      expect(materialize, name).not.toHaveBeenCalled();
+    }
+  }
 });

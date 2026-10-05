@@ -129,7 +129,15 @@ function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}
 }
 
 function runMergeVerification(
-  checks: "api-error" | "invalid-json" | "invalid-row" | "no-required" | "pending" | "cancelled",
+  checks:
+    | "api-error"
+    | "invalid-json"
+    | "invalid-row"
+    | "no-required"
+    | "pending"
+    | "cancelled"
+    | "failed",
+  investigatedLocalFailure = false,
 ) {
   const fixtureRoot = tempDirs.make("openclaw-pr-merge-verification-");
   const localDir = join(fixtureRoot, ".local");
@@ -137,6 +145,22 @@ function runMergeVerification(
   mkdirSync(localDir);
   const review = validReadyReview();
   review.pr = { number: 42, headSha: head };
+  if (investigatedLocalFailure) {
+    Object.assign(review.tests, {
+      result: "fail",
+      investigatedLocalFailures: {
+        head,
+        failures: [
+          {
+            failure: "A local live check returned an incomplete reply.",
+            reproductionAttempts: ["A same-head diagnostic replay passed."],
+            evidence: ["Original failure and diagnostic logs recorded in the PR."],
+            remainingUncertainty: "The cause remains unknown; the replay does not prove a fix.",
+          },
+        ],
+      },
+    });
+  }
   writeReviewArtifacts(fixtureRoot, review, { headSha: head, prNumber: 42 });
   writeFileSync(join(localDir, "prep.env"), `PREP_HEAD_SHA=${head}\n`);
   writeFileSync(join(localDir, "gates.env"), "GATES_MODE=full\n");
@@ -147,6 +171,7 @@ function runMergeVerification(
       "echo \"no required checks reported on the 'review-branch' branch\" >&2; return 1",
     pending: `printf '%s\\n' '[{"name":"CI","bucket":"pending","state":"IN_PROGRESS"}]'; return 8`,
     cancelled: `printf '%s\\n' '[{"name":"CI","bucket":"cancel","state":"CANCELLED"}]'`,
+    failed: `printf '%s\\n' '[{"name":"CI","bucket":"fail","state":"FAILURE"}]'`,
     "invalid-json": "printf '%s\\n' 'not valid JSON'",
     "invalid-row": `printf '%s\\n' '["malformed required row"]'`,
   }[checks];
@@ -482,6 +507,14 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(result.stderr).toContain("GitHub API unavailable");
     expect(result.stdout).not.toContain("merge-verify passed");
     expect(result.stdout).not.toContain("No required checks configured");
+  });
+
+  it("keeps required CI failures blocking after local failure investigation", () => {
+    const result = runMergeVerification("failed", true);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Required checks are failing");
+    expect(result.stdout).not.toContain("merge-verify passed");
   });
 
   it("preserves GitHub CLI behavior when a branch has no required checks", () => {

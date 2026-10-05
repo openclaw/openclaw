@@ -45,7 +45,7 @@ type DeletedSessionShell = {
   recoverNotFoundRoute: () => void;
   updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
   observeDeletedSessions: (state: ApplicationContext["sessions"]["state"]) => void;
-  recoverDeletedActiveSession: (state: ApplicationContext["sessions"]["state"]) => void;
+  recoverDeletedActiveSession: () => void;
 };
 
 const mainKey = "agent:main:main";
@@ -125,6 +125,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       recoveryScope: "original-principal",
       scopeKey: `chat:v3:${scopeKey}`,
     };
+    const target = storageTargetForGateway(owner.gatewayOwner, owner.recoveryScope);
     const client = {
       gatewayUrl: owner.gatewayOwner,
       recoveryScope: owner.recoveryScope,
@@ -146,7 +147,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
           { expectedRevision: 0, writeId: "readiness" },
         ),
       ).toMatchObject({ status: "persisted" });
-      writeStoredOutboxStore(storage, storageTargetForGateway(owner.gatewayOwner), {
+      writeStoredOutboxStore(storage, target, {
         version: 4,
         recovery: {},
         gatewayOwner: owner.gatewayOwner,
@@ -159,7 +160,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
           },
         },
       });
-      const stored = storage.getItem(storageTargetForGateway(owner.gatewayOwner).key);
+      const stored = storage.getItem(target.key);
       if (transition === "initial readiness") {
         client.recoveryScope = "";
         client.recoveryScopeReady = false;
@@ -207,7 +208,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
           .soft(toast.textContent)
           .toContain("Session deleted; browser draft remains. Clear site data.");
         expect.soft(toast.querySelectorAll(".app-toast")).toHaveLength(1);
-        expect.soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key)).toBe(stored);
+        expect.soft(storage.getItem(target.key)).toBe(stored);
         expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
         vi.useRealTimers();
         client.recoveryScope = owner.recoveryScope;
@@ -221,7 +222,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       if (late) {
         await vi.dynamicImportSettled();
         expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-        expect.soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key)).toBe(stored);
+        expect.soft(storage.getItem(target.key)).toBe(stored);
         expect.soft(toast.textContent).toBe("");
       }
       client.recoveryScope =
@@ -232,7 +233,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
 
       if (transition === "late principal change") {
         expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-        expect.soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key)).toBe(stored);
+        expect.soft(storage.getItem(target.key)).toBe(stored);
         expect
           .soft(toast.textContent)
           .toContain("Session deleted; browser draft remains. Clear site data.");
@@ -279,21 +280,30 @@ describe("OpenClaw shell deleted-session recovery", () => {
               { expectedRevision: 0, writeId: owner.recoveryScope },
             ),
           ).toMatchObject({ status: "persisted" });
-          writeStoredOutboxStore(storage, storageTargetForGateway(owner.gatewayOwner), {
-            version: 4,
-            recovery: {},
-            gatewayOwner: owner.gatewayOwner,
-            sessions: {
-              [scopeKey]: {
-                draft: owner.gatewayOwner,
-                draftRevision: 1,
-                queue: [{ id: "queued", text: owner.gatewayOwner, createdAt: 1 }],
-                updatedAt: 1,
+          writeStoredOutboxStore(
+            storage,
+            storageTargetForGateway(owner.gatewayOwner, owner.recoveryScope),
+            {
+              version: 4,
+              recovery: {},
+              gatewayOwner: owner.gatewayOwner,
+              sessions: {
+                [scopeKey]: {
+                  draft: owner.gatewayOwner,
+                  draftRevision: 1,
+                  queue: [{ id: "queued", text: owner.gatewayOwner, createdAt: 1 }],
+                  updatedAt: 1,
+                },
               },
             },
-          });
+          );
         }
-        const otherStored = storage.getItem(storageTargetForGateway(other.gatewayOwner).key);
+        const originalTarget = storageTargetForGateway(
+          original.gatewayOwner,
+          original.recoveryScope,
+        );
+        const otherTarget = storageTargetForGateway(other.gatewayOwner, other.recoveryScope);
+        const otherStored = storage.getItem(otherTarget.key);
         const client = {
           gatewayUrl: original.gatewayOwner,
           recoveryScope: original.recoveryScope,
@@ -302,7 +312,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         const context = shell.runtime.context;
         context.gateway.snapshot.client = client as GatewayBrowserClient;
         context.gateway.connection.gatewayUrl = original.gatewayOwner;
-        const originalStored = storage.getItem(storageTargetForGateway(original.gatewayOwner).key);
+        const originalStored = storage.getItem(originalTarget.key);
         const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
 
         shell.observeDeletedSessions(context.sessions.state);
@@ -325,18 +335,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
           status: "found",
           draft: { text: other.recoveryScope },
         });
-        expect
-          .soft(storage.getItem(storageTargetForGateway(original.gatewayOwner).key))
-          .toBe(originalStored);
+        expect.soft(storage.getItem(originalTarget.key)).toBe(originalStored);
         expect
           .soft(toast.textContent)
           .toContain("Session deleted; browser draft remains. Clear site data.");
         expect.soft(toast.querySelectorAll(".app-toast")).toHaveLength(1);
-        if (other.gatewayOwner !== original.gatewayOwner) {
-          expect
-            .soft(storage.getItem(storageTargetForGateway(other.gatewayOwner).key))
-            .toBe(otherStored);
-        }
+        expect.soft(storage.getItem(otherTarget.key)).toBe(otherStored);
       } finally {
         shell.runtime.context.chatAttachmentHandoff.dispose();
         await requestResult(indexedDb.deleteDatabase("openclaw-control-ui"));
@@ -363,12 +367,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
       },
       retryable: false,
     });
-    shell.recoverDeletedActiveSession(context.sessions.state);
+    shell.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(deletedKey);
     expect(replace).not.toHaveBeenCalled();
     expect(setSessionKey).not.toHaveBeenCalled();
     get.mockReturnValue(null);
-    shell.recoverDeletedActiveSession(context.sessions.state);
+    shell.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(mainKey);
     expect(replace).toHaveBeenCalledOnce();
   });
@@ -394,7 +398,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         sessionKeys: [deletedKey, mainKey],
         sessions,
       });
-      const stop = sessions.subscribe((state) => shell.recoverDeletedActiveSession(state));
+      const stop = sessions.subscribe(() => shell.recoverDeletedActiveSession());
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
       try {
         const operation =
@@ -484,7 +488,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         sessionKeys: [deletedKey],
         sessions,
       });
-      const stop = sessions.subscribe((state) => shell.recoverDeletedActiveSession(state));
+      const stop = sessions.subscribe(() => shell.recoverDeletedActiveSession());
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
       const operation = sessions.delete(deletedKey, { expectedSessionId: "predecessor" });
       try {
@@ -521,7 +525,9 @@ describe("OpenClaw shell deleted-session recovery", () => {
       const storage = createStorageMock();
       vi.stubGlobal("sessionStorage", storage);
       const gatewayUrl = "ws://gateway.test";
-      const storageKey = storageTargetForGateway(gatewayUrl).key;
+      const recoveryScope = "deleted-session-owner";
+      const target = storageTargetForGateway(gatewayUrl, recoveryScope);
+      const storageKey = target.key;
       const replacement = { ...h.alpha, sessionId: "generation-b" };
       const { shell, replace } = createSessionRecoveryShell({
         activeSessionKey: h.alpha.key,
@@ -530,6 +536,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       });
       shell.runtime.context.gateway.snapshot.client = {
         gatewayUrl,
+        recoveryScope,
         recoveryScopeReady: true,
       } as GatewayBrowserClient;
       shell.runtime.context.gateway.connection.gatewayUrl = gatewayUrl;
@@ -564,7 +571,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         const draft = storage.getItem(storageKey);
         stop = h.sessions.subscribe((state) => {
           shell.observeDeletedSessions(state);
-          shell.recoverDeletedActiveSession(state);
+          shell.recoverDeletedActiveSession();
         });
         const payload = {
           sessionKey: h.alpha.key,
@@ -585,7 +592,6 @@ describe("OpenClaw shell deleted-session recovery", () => {
         h.setRows([h.sibling]);
         const currentDelete = { ...payload, sessionId: replacement.sessionId };
         h.emitEvent({ type: "event", event: "sessions.changed", payload: currentDelete });
-        const target = storageTargetForGateway(gatewayUrl);
         const scopeKey = storedChatOutboxScopeKey({ sessionKey: h.alpha.key, agentId: "main" });
         const retired = h.sessions.state.deletedSessions.find(({ key }) => key === h.alpha.key)!;
         await vi.waitFor(() => {
@@ -611,7 +617,9 @@ describe("OpenClaw shell deleted-session recovery", () => {
     const gatewayUrl = "ws://gateway.test";
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
-    const storageKey = storageTargetForGateway(gatewayUrl).key;
+    const recoveryScope = "deleted-session-owner";
+    const target = storageTargetForGateway(gatewayUrl, recoveryScope);
+    const storageKey = target.key;
     storage.setItem(
       storageKey,
       JSON.stringify({
@@ -646,7 +654,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
           connectionRevision: 0,
           snapshot: {
             assistantAgentId: "main",
-            client: { gatewayUrl, recoveryScopeReady: true },
+            client: { gatewayUrl, recoveryScope, recoveryScopeReady: true },
             hello: null,
           },
         },
@@ -667,7 +675,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       expect(
         storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`),
       ).toBeNull();
-      const stored = readStoredOutboxStore(storage, storageTargetForGateway(gatewayUrl));
+      const stored = readStoredOutboxStore(storage, target);
       const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
       expect(stored.sessions[scopeKey]).toEqual({
         draftRevision: expect.any(Number),
@@ -683,103 +691,80 @@ describe("OpenClaw shell deleted-session recovery", () => {
     expect(toast.querySelectorAll(".app-toast")).toHaveLength(1);
   });
 
-  it("replaces an unresolvable session with the owning agent's main chat", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+  it.each([
+    {
+      name: "unresolvable session",
       activeSessionKey: deletedKey,
       sessionKeys: [mainKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
-  });
-
-  it("preserves the owning non-default agent when its session is deleted", () => {
-    const researchKey = "agent:research:main";
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      selected: mainKey,
+      pathname: "/chat/main",
+    },
+    {
+      name: "non-default owner",
       activeSessionKey: "agent:research:deleted-thread",
       agentIds: ["main", "research"],
-      sessionKeys: [mainKey, researchKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(researchKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/research" });
-  });
-
-  it("recovers to a known agent when the deleted session's owner was removed", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      sessionKeys: [mainKey, "agent:research:main"],
+      selected: "agent:research:main",
+      pathname: "/chat/research",
+    },
+    {
+      name: "removed owner",
       activeSessionKey: "agent:retired:deleted-thread",
       agentIds: ["main"],
       sessionKeys: [mainKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
-  });
-
-  it("does not replace a main route with the same deleted main session", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      selected: mainKey,
+      pathname: "/chat/main",
+    },
+    {
+      name: "deleted main route",
       activeSessionKey: mainKey,
       deletedSessionKeys: [mainKey],
       sessionKeys: [mainKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
-  });
-
-  it("keeps a resolvable active session when a different chat route is not found", () => {
-    const existingKey = "agent:main:existing-thread";
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
-      activeSessionKey: existingKey,
-      sessionKeys: [existingKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
+      selected: null,
+      pathname: null,
+    },
+    {
+      name: "resolvable active session",
+      activeSessionKey: "agent:main:existing-thread",
+      sessionKeys: ["agent:main:existing-thread"],
+      selected: null,
       pathname: "/chat/main/existing-thread",
-    });
-  });
-
-  it("keeps an active session outside the filtered list when another route fails", () => {
-    const existingKey = "agent:main:outside-window";
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
-      activeSessionKey: existingKey,
+    },
+    {
+      name: "active session outside the list",
+      activeSessionKey: "agent:main:outside-window",
       sessionKeys: [mainKey],
-    });
-    shell.routeState = {
-      routeId: "chat",
-      location: { pathname: "/chat/main/unrelated-missing", search: "", hash: "" },
-    };
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
+      attemptedPath: "/chat/main/unrelated-missing",
+      selected: null,
       pathname: "/chat/main/outside-window",
-    });
-  });
-
-  it("honors a deleted session event before its stale cached row is refreshed", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+    },
+    {
+      name: "deleted event before roster refresh",
       activeSessionKey: deletedKey,
       deletedSessionKeys: [deletedKey],
       sessionKeys: [deletedKey, mainKey],
-    });
-
+      selected: mainKey,
+      pathname: "/chat/main",
+    },
+  ])("recovers a failed route with a $name", (scenario) => {
+    const { replace, setSessionKey, shell } = createSessionRecoveryShell(scenario);
+    if (scenario.attemptedPath) {
+      shell.routeState = {
+        routeId: "chat",
+        location: { pathname: scenario.attemptedPath, search: "", hash: "" },
+      };
+    }
     shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
+    if (scenario.selected) {
+      expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(scenario.selected);
+    } else {
+      expect(setSessionKey).not.toHaveBeenCalled();
+    }
+    if (scenario.pathname) {
+      expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: scenario.pathname });
+    } else {
+      expect(replace).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects a late route commit for a session already marked deleted", () => {

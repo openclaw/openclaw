@@ -12,6 +12,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
@@ -55,6 +56,7 @@ async function startBus(
   > = {},
 ) {
   cleanupBus = await startBuzzBus({
+    scheduler: createTestPluginServiceScheduler(),
     accountId: randomUUID(),
     relayUrl: fixture.relayUrl,
     privateKey: fixture.botPrivateKey,
@@ -214,7 +216,10 @@ it("recovers the Gateway account after silent presence without replaying pre-act
       }
     },
   });
-  const lifecycle = startBuzzGatewayAccount(ctx);
+  const lifecycle = startBuzzGatewayAccount({
+    ...ctx,
+    scheduler: createTestPluginServiceScheduler(),
+  });
   const stoppedBeforeReady = lifecycle.then(() => {
     throw new Error("Buzz account stopped before becoming ready");
   });

@@ -13,7 +13,7 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -25,7 +25,6 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
-import { showToast } from "../../lib/toast.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
@@ -37,6 +36,7 @@ import {
   createChatPaneSessionActionCallbacks,
   readChatPaneComposerAccess,
   readChatPaneMutationAccess,
+  readChatPublicationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import {
@@ -171,8 +171,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       selectedSession,
       placementStartup !== null,
     );
-    const canDismissProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
-    this.providerReview.sync(canDismissProgressCard && !selectedSessionArchived);
+    const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
+    this.providerReview.sync(canWriteProgressCard && !selectedSessionArchived);
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
@@ -284,7 +284,8 @@ export class ChatPane extends ChatPaneLayoutRender {
     if (
       !publicationScope ||
       !publicationRow ||
-      !isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish")
+      isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") !== true ||
+      !canCallGatewayMethod(gatewaySnapshot, "sessions.github.options", "operator.read")
     ) {
       this.githubPublication?.detach();
       this.githubPublication = null;
@@ -299,7 +300,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       }
       const publication = this.githubPublication;
       publication?.sync({
-        canWrite: !selectedSessionArchived && !sessionParticipationBlocked && hasWriteScope,
+        ...readChatPublicationAccess(gatewaySnapshot, publicationRow, sessionParticipationBlocked),
         personalReady:
           !hasAbortableSessionRun(state) &&
           (!isCloudWorkerPlacementState(placement?.state) ||
@@ -336,13 +337,13 @@ export class ChatPane extends ChatPaneLayoutRender {
           !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend) &&
           (!pendingReason || initialHistoryUnavailable));
     const composerAvailability = {
-      canCompose: composerAccess.canCompose && composerAvailable,
-      canSend: composerAccess.canSend && composerAvailable,
+      canCompose: composerAccess && composerAvailable,
+      canSend: composerAccess && composerAvailable,
       ...chatSubmitState(state, initialHistoryUnavailable, !catalog && !suggestionViewer),
       modelRequiredReason,
       disabledReason:
         catalogDisabledReason ??
-        (!composerAccess.canSend ? t("chat.sessionSharing.scopeReadOnlyNotice") : null) ??
+        (!composerAccess ? t("chat.sessionSharing.scopeReadOnlyNotice") : null) ??
         disabledReason ??
         placementComposer.busyMessage ??
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
@@ -350,7 +351,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           : null) ??
         (state.connected && (placementStartup || initialHistoryUnavailable) ? null : pendingReason),
       disabledReasonTone:
-        !composerAccess.canSend ||
+        !composerAccess ||
         disabledReason ||
         placementComposer.busyMessage ||
         (sessionParticipationBlocked && !suggestionViewer)
@@ -361,7 +362,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
     };
     const progressCardRefresh =
-      canDismissProgressCard &&
+      canWriteProgressCard &&
       composerAvailability.canSend &&
       !catalogKey &&
       !suggestionViewer &&
@@ -422,12 +423,10 @@ export class ChatPane extends ChatPaneLayoutRender {
         lockChatScroll(state);
         this.transcript.cancelScroll();
       },
-      onDismissProgressCard: canDismissProgressCard
-        ? (card) =>
-            void this.progressCard
-              .dismiss(card)
-              .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }))
+      onDismissProgressCard: progressPresentation
+        ? (card) => this.hideProgressCard(card)
         : undefined,
+      onClearSavedProgressCard: canWriteProgressCard ? this.clearSavedProgressCard : undefined,
       gatewayQuestionPrompts,
       asyncQuestionStorage:
         !catalogKey && !suggestionViewer ? this.chatState.composerPersistence.durableScope : null,
@@ -660,7 +659,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       agentsList: state.agentsList,
       currentAgentId,
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
-      loadFullAssistantMessage: createSidebarFullMessageLoader(state, catalog),
+      loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,

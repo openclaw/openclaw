@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { scheduleGatewayPostReadyMaintenance } from "./server-runtime-services.js";
 
 type StartSessionDeliveryRuntime =
@@ -41,7 +42,6 @@ const runtimeServiceMocks = vi.hoisted(() => {
       deferredBackoff: 0,
     })),
     countPendingDeliveryQueueEntries: vi.fn(() => 0),
-    listLegacyDeliveryQueueArtifacts: vi.fn(() => [] as string[]),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
@@ -78,10 +78,6 @@ vi.mock("../infra/delivery-queue-sqlite.js", async (importOriginal) => ({
   countPendingDeliveryQueueEntries: runtimeServiceMocks.countPendingDeliveryQueueEntries,
 }));
 
-vi.mock("../infra/delivery-queue-legacy-files.js", () => ({
-  listLegacyDeliveryQueueArtifacts: runtimeServiceMocks.listLegacyDeliveryQueueArtifacts,
-}));
-
 vi.mock("./conversation-route-ownership.js", () => ({
   assertQueuedConversationDeliveryAttemptAuthorized:
     runtimeServiceMocks.assertQueuedConversationDeliveryAttemptAuthorized,
@@ -116,6 +112,7 @@ export function waitForFast<T>(
 export function createLog() {
   return {
     child: vi.fn(() => createInfoWarnErrorLogger()),
+    info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   };
@@ -149,6 +146,11 @@ export function createPostReadyMaintenanceScheduleParams(
     signal: new AbortController().signal,
     delayMs: 1,
     isClosing: () => false,
+    waitForPostReadyWork: async () => {},
+    startupMaintenance: {
+      startupSessionDatabases: [],
+      pluginRuntime: { registry: createEmptyPluginRegistry() },
+    },
     startMaintenance: vi.fn(async () => null),
     applyMaintenance: vi.fn(),
     shouldStartCron: () => true,
@@ -191,7 +193,6 @@ export function resetRuntimeServiceMocks() {
     deferredBackoff: 0,
   });
   runtimeServiceMocks.countPendingDeliveryQueueEntries.mockReset().mockReturnValue(0);
-  runtimeServiceMocks.listLegacyDeliveryQueueArtifacts.mockReset().mockReturnValue([]);
   runtimeServiceMocks.drainPendingDeliveries.mockReset();
   runtimeServiceMocks.drainPendingDeliveries.mockResolvedValue(undefined);
   runtimeServiceMocks.recoverPendingRestartContinuationDeliveries.mockClear();

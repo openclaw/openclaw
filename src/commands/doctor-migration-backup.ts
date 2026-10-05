@@ -10,6 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import nodePath from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -21,10 +22,13 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
+import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
+import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
 /** Preserve the old database generation before Doctor advances its schemas. */
 export async function backupDoctorMigrationDatabases(params: {
@@ -34,25 +38,45 @@ export async function backupDoctorMigrationDatabases(params: {
   databasePaths: readonly string[];
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
 }): Promise<MigrationMessages> {
-  const { detectOpenClawStateDatabaseSchemaMigrations } =
-    await import("../state/openclaw-state-db-schema-discovery.js");
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
-  if (detectOpenClawStateDatabaseSchemaMigrations({ env: params.env }).length > 0) {
+  if (existsSync(sharedPath) && needsOpenClawStateDatabaseSchemaRepair(sharedPath)) {
     pending.add(sharedPath);
   }
   if (pending.size === 0) {
     return { changes: [], warnings: [] };
   }
-  // The registry and migration receipts must roll back with their agent databases.
-  if (existsSync(sharedPath)) {
-    pending.add(sharedPath);
-  }
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
-  maintenance.assertAdmission();
+  return backupDoctorSqliteDatabases({
+    ...params,
+    pendingDatabasePaths: [...pending],
+    authority: { assertCurrent: () => maintenance.assertAdmission() },
+  });
+}
+
+/** Schema and same-schema repairs share verified snapshots under their existing Doctor owner. */
+export async function backupDoctorSqliteDatabases(params: {
+  env: NodeJS.ProcessEnv;
+  pendingDatabasePaths: readonly string[];
+  databasePaths: readonly string[];
+  authority: DoctorSqliteMaintenanceAuthority;
+  repair?: { key: string; validate: (database: DatabaseSync) => void };
+  verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
+}): Promise<MigrationMessages> {
+  const pending = new Set(params.pendingDatabasePaths);
+  if (pending.size === 0) {
+    return { changes: [], warnings: [] };
+  }
+  // The registry and migration receipts must roll back with their agent databases.
+  const sharedPath = resolveOpenClawStateSqlitePath(params.env);
+  if (existsSync(sharedPath)) {
+    pending.add(sharedPath);
+  }
+  const { authority } = params;
+  authority.assertCurrent();
   const disposable = createDoctorRehearsalDatabaseCoverage(params.env);
   disposable?.admit([...pending, ...params.databasePaths]);
   const retainedPaths = [...new Set([...pending, ...params.databasePaths])].filter(
@@ -65,7 +89,7 @@ export async function backupDoctorMigrationDatabases(params: {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   const { sanitizeOpenClawStateLeaseRows } =
     await import("../state/openclaw-state-snapshot-sanitizer.js");
-  maintenance.assertAdmission();
+  authority.assertCurrent();
   disposable?.assertCurrent();
   const sources = [
     ...new Set(
@@ -97,6 +121,7 @@ export async function backupDoctorMigrationDatabases(params: {
   const backupDigest = createHash("sha256")
     .update(
       JSON.stringify([
+        ...(params.repair ? [params.repair.key] : []),
         VERSION,
         resolveRuntimeServiceBuildId(),
         resolveRuntimeServiceCommit(),
@@ -115,7 +140,7 @@ export async function backupDoctorMigrationDatabases(params: {
     backupDigest.slice(20, 32),
   ].join("-");
   const assertInventory = () => {
-    maintenance.assertAdmission();
+    authority.assertCurrent();
     disposable?.assertCurrent();
     for (const { path: pathname, identity } of inventory) {
       const current = statSync(pathname, { bigint: true });
@@ -202,6 +227,7 @@ export async function backupDoctorMigrationDatabases(params: {
           await loadSqliteVecExtension({ db: snapshot });
           assertCapture();
           assertSqliteIntegrity(snapshot, targetPath);
+          params.repair?.validate(snapshot);
         } finally {
           snapshot.close();
         }
@@ -230,6 +256,7 @@ export async function backupDoctorMigrationDatabases(params: {
       preserveRowIds: true,
       transform: sanitizeOpenClawStateLeaseRows,
       beforePublish: assertCapture,
+      validate: params.repair?.validate,
     });
     assertCapture();
     changes.push(`Saved pre-migration SQLite backup: ${backup.path}`);
@@ -247,5 +274,13 @@ export async function backupDoctorMigrationDatabases(params: {
       { kind: "data-at-risk", reason: "incomplete-migration" },
     );
   }
-  return { changes, warnings: [] };
+  const warnings: string[] = [];
+  try {
+    recordDoctorMigrationBackups(params.env, backupId, inventory);
+  } catch (error) {
+    warnings.push(
+      `Migration backups remain protected; cleanup registration failed: ${formatErrorMessage(error)}`,
+    );
+  }
+  return { changes, warnings };
 }

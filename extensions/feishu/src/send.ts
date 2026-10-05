@@ -94,40 +94,6 @@ type FeishuGetMessageResponse = {
   };
 };
 
-async function sendFallbackDirect(
-  client: ReturnType<typeof createFeishuClient>,
-  params: {
-    receiveId: string;
-    receiveIdType: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
-    content: string;
-    msgType: string;
-  },
-  errorPrefix: string,
-): Promise<FeishuSendResult> {
-  const response = await requestFeishuApi(
-    () =>
-      withFeishuMessageDispatch(() =>
-        client.im.message.create({
-          params: { receive_id_type: params.receiveIdType },
-          data: {
-            receive_id: params.receiveId,
-            content: params.content,
-            msg_type: params.msgType,
-          },
-        }),
-      ),
-    errorPrefix,
-    { includeNestedErrorLogId: true },
-  );
-  assertFeishuApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(
-    response,
-    params.receiveId,
-    resolveFeishuReceiptKind(params.msgType),
-    errorPrefix,
-  );
-}
-
 export async function sendReplyOrFallbackDirect(
   target: ReturnType<typeof resolveFeishuSendTarget>,
   params: {
@@ -141,14 +107,32 @@ export async function sendReplyOrFallbackDirect(
   },
 ): Promise<FeishuSendResult> {
   const { client, receiveId, receiveIdType } = target;
-  const directParams = {
-    receiveId,
-    receiveIdType,
-    content: params.content,
-    msgType: params.msgType,
+  const sendDirect = async (): Promise<FeishuSendResult> => {
+    const response = await requestFeishuApi(
+      () =>
+        withFeishuMessageDispatch(() =>
+          client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: {
+              receive_id: receiveId,
+              content: params.content,
+              msg_type: params.msgType,
+            },
+          }),
+        ),
+      params.directErrorPrefix,
+      { includeNestedErrorLogId: true },
+    );
+    assertFeishuApiSuccess(response, params.directErrorPrefix);
+    return toFeishuSendResult(
+      response,
+      receiveId,
+      resolveFeishuReceiptKind(params.msgType),
+      params.directErrorPrefix,
+    );
   };
   if (!params.replyToMessageId) {
-    return sendFallbackDirect(client, directParams, params.directErrorPrefix);
+    return sendDirect();
   }
 
   const replyTargetFallbackError =
@@ -182,13 +166,13 @@ export async function sendReplyOrFallbackDirect(
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
     }
-    return sendFallbackDirect(client, directParams, params.directErrorPrefix);
+    return sendDirect();
   }
   if (shouldFallbackFromReplyTarget(response)) {
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
     }
-    return sendFallbackDirect(client, directParams, params.directErrorPrefix);
+    return sendDirect();
   }
   assertFeishuApiSuccess(response, params.replyErrorPrefix);
   return toFeishuSendResult(

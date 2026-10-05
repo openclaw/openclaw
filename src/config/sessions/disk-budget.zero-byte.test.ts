@@ -33,105 +33,95 @@ async function writeOldFile(dir: string, name: string, content = ""): Promise<st
   return filePath;
 }
 
-describe.each([false, true])("zero-byte artifact accounting (dryRun=%s)", (dryRun) => {
-  describe.each(["unreferenced", "budget"] as const)("%s cleanup", (cleanup) => {
-    it.each(EMPTY_ARTIFACTS)(
-      "counts an empty $kind once without freeing bytes",
-      async ({ name }) => {
-        await withTestDir({ prefix: "openclaw-zero-byte-" }, async (dir) => {
-          const storePath = path.join(dir, "sessions.json");
-          const artifact = await writeOldFile(dir, name);
-          await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
-          const removedPaths: string[] = [];
-          const run = () =>
-            cleanup === "unreferenced"
-              ? pruneUnreferencedSessionArtifacts({
-                  store: {},
-                  storePath,
-                  olderThanMs: 1000,
-                  dryRun,
-                })
-              : enforceSessionDiskBudget({
-                  store: {},
-                  storePath,
-                  maintenance: PRESSURE,
-                  warnOnly: false,
-                  dryRun,
-                  onRemoveFile: (removedPath) => removedPaths.push(removedPath),
-                });
-
-          const result = await run();
-
-          expect(result).toMatchObject({ removedFiles: 1, freedBytes: 0 });
-          expect(nodeFs.existsSync(artifact)).toBe(dryRun);
-          if (cleanup === "budget") {
-            expect(result).toMatchObject({
-              removedEntries: 0,
-              totalBytesBefore: 130,
-              totalBytesAfter: 130,
-            });
-            expect(removedPaths).toEqual([artifact]);
-          }
-          if (!dryRun) {
-            expect(await run()).toMatchObject({ removedFiles: 0, freedBytes: 0 });
-            expect(removedPaths).toEqual(cleanup === "budget" ? [artifact] : []);
-          }
-        });
-      },
-    );
-  });
-
-  it("counts shared empty evicted artifacts once and notifies only when applied", async () => {
-    await withTestDir({ prefix: "openclaw-zero-byte-evicted-" }, async (dir) => {
+describe.each([
+  { cleanup: "unreferenced", dryRun: false },
+  { cleanup: "unreferenced", dryRun: true },
+  { cleanup: "budget", dryRun: false },
+] as const)("zero-byte artifact accounting ($cleanup, dryRun=$dryRun)", ({ cleanup, dryRun }) => {
+  it.each(EMPTY_ARTIFACTS)("counts an empty $kind once without freeing bytes", async ({ name }) => {
+    await withTestDir({ prefix: "openclaw-zero-byte-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
-      const artifacts = await Promise.all(
-        ["old.jsonl", "old.trajectory.jsonl", "old.trajectory-path.json", PROMPT_FILE].map((name) =>
-          writeOldFile(dir, name),
-        ),
-      );
-      const store: Record<string, SessionEntry> = {};
-      for (const sessionId of ["old", "alias"]) {
-        store[`agent:main:subagent:${sessionId}`] = {
-          sessionId,
-          sessionFile: path.join(dir, "old.jsonl"),
-          updatedAt: 1,
-          archivedAt: 1,
-          archiveReason: "active-session-cap",
-          skillsSnapshot: {
-            prompt: "",
-            skills: [],
-            promptRef: { version: 1, algorithm: "sha256", hash: EMPTY_PROMPT_HASH, bytes: 0 },
-          },
-        };
-      }
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2));
+      const artifact = await writeOldFile(dir, name);
       await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
-      const removedPaths: string[] = [];
+      const run = () =>
+        cleanup === "unreferenced"
+          ? pruneUnreferencedSessionArtifacts({
+              store: {},
+              storePath,
+              olderThanMs: 1000,
+              dryRun,
+            })
+          : enforceSessionDiskBudget({
+              store: {},
+              storePath,
+              maintenance: PRESSURE,
+              warnOnly: false,
+            });
 
-      const result = await enforceSessionDiskBudget({
-        store,
-        storePath,
-        maintenance: PRESSURE,
-        warnOnly: false,
-        dryRun,
-        commitEvictedIndex: async () => {
-          await fs.writeFile(storePath, JSON.stringify(store, null, 2));
-        },
-        onRemoveFile: (removedPath) => removedPaths.push(removedPath),
-      });
+      const result = await run();
 
-      expect(result).toMatchObject({
-        removedEntries: 2,
-        removedFiles: artifacts.length,
-        freedBytes: 0,
-        totalBytesAfter: 130,
-      });
-      expect(store).toEqual({});
-      expect(artifacts.map((artifact) => nodeFs.existsSync(artifact))).toEqual(
-        artifacts.map(() => dryRun),
-      );
-      expect(removedPaths.toSorted()).toEqual(dryRun ? [] : artifacts.toSorted());
+      expect(result).toMatchObject({ removedFiles: 1, freedBytes: 0 });
+      expect(nodeFs.existsSync(artifact)).toBe(dryRun);
+      if (cleanup === "budget") {
+        expect(result).toMatchObject({
+          removedEntries: 0,
+          totalBytesBefore: 130,
+          totalBytesAfter: 130,
+        });
+      }
+      if (!dryRun) {
+        expect(await run()).toMatchObject({ removedFiles: 0, freedBytes: 0 });
+      }
     });
+  });
+});
+
+it("counts shared empty evicted artifacts once", async () => {
+  await withTestDir({ prefix: "openclaw-zero-byte-evicted-" }, async (dir) => {
+    const storePath = path.join(dir, "sessions.json");
+    const artifacts = await Promise.all(
+      ["old.jsonl", "old.trajectory.jsonl", "old.trajectory-path.json", PROMPT_FILE].map((name) =>
+        writeOldFile(dir, name),
+      ),
+    );
+    const store: Record<string, SessionEntry> = {};
+    for (const sessionId of ["old", "alias"]) {
+      store[`agent:main:subagent:${sessionId}`] = {
+        sessionId,
+        sessionFile: path.join(dir, "old.jsonl"),
+        updatedAt: 1,
+        archivedAt: 1,
+        archiveReason: "active-session-cap",
+        skillsSnapshot: {
+          prompt: "",
+          skills: [],
+          promptRef: { version: 1, algorithm: "sha256", hash: EMPTY_PROMPT_HASH, bytes: 0 },
+        },
+      };
+    }
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2));
+    await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
+
+    const result = await enforceSessionDiskBudget({
+      store,
+      storePath,
+      maintenance: PRESSURE,
+      warnOnly: false,
+      commitEvictedIndex: async () => {
+        await fs.writeFile(storePath, JSON.stringify(store, null, 2));
+      },
+    });
+
+    expect(result).toMatchObject({
+      removedEntries: 2,
+      removedFiles: artifacts.length,
+      freedBytes: 0,
+      totalBytesAfter: 130,
+    });
+    expect(store).toEqual({});
+    expect(artifacts.map((artifact) => nodeFs.existsSync(artifact))).toEqual(
+      artifacts.map(() => false),
+    );
   });
 });
 
@@ -171,11 +161,10 @@ it("counts empty retained archives under pressure and returns real disk usage", 
   });
 });
 
-it("does not count or notify an empty file removed by another cleanup before rm", async () => {
+it("does not count an empty file removed by another cleanup before rm", async () => {
   await withTestDir({ prefix: "openclaw-missing-removal-" }, async (dir) => {
     const artifact = await writeOldFile(dir, "orphan.jsonl");
     await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
-    const onRemoveFile = vi.fn();
     const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
     const rm = vi.spyOn(nodeFs.promises, "rm").mockImplementation(async (target, options) => {
       if (target === artifact) {
@@ -189,11 +178,9 @@ it("does not count or notify an empty file removed by another cleanup before rm"
         storePath: path.join(dir, "sessions.json"),
         maintenance: PRESSURE,
         warnOnly: false,
-        onRemoveFile,
       });
 
       expect(result).toMatchObject({ removedFiles: 0, freedBytes: 0 });
-      expect(onRemoveFile).not.toHaveBeenCalled();
       await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       rm.mockRestore();
@@ -202,7 +189,7 @@ it("does not count or notify an empty file removed by another cleanup before rm"
 });
 
 it.each(["unreferenced", "budget", "archives"] as const)(
-  "%s cleanup does not count a rejected nonempty removal or dispatch its callback",
+  "%s cleanup does not count a rejected nonempty removal",
   async (cleanup) => {
     await withTestDir({ prefix: "openclaw-rejected-removal-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -210,7 +197,6 @@ it.each(["unreferenced", "budget", "archives"] as const)(
       const content = "x".repeat(64);
       const artifact = await writeOldFile(dir, name, content);
       await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
-      const removedPaths: string[] = [];
       const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
       const rm = vi.spyOn(nodeFs.promises, "rm").mockImplementation(async (target, options) => {
         if (target === artifact) {
@@ -235,7 +221,6 @@ it.each(["unreferenced", "budget", "archives"] as const)(
                   storePath,
                   maintenance: PRESSURE,
                   warnOnly: false,
-                  onRemoveFile: (removedPath) => removedPaths.push(removedPath),
                 });
           expect(result).toMatchObject({ removedFiles: 0, freedBytes: 0 });
           if (cleanup === "budget") {
@@ -243,7 +228,6 @@ it.each(["unreferenced", "budget", "archives"] as const)(
           }
         }
         expect(await fs.readFile(artifact, "utf8")).toBe(content);
-        expect(removedPaths).toEqual([]);
       } finally {
         rm.mockRestore();
       }

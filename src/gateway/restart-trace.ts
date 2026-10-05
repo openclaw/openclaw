@@ -28,15 +28,6 @@ function isRestartTraceEnabled(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE);
 }
 
-function normalizeMetricEntries(
-  metrics?: RestartTraceMetrics,
-): Array<readonly [string, RestartTraceMetricValue]> {
-  if (!metrics) {
-    return [];
-  }
-  return Array.isArray(metrics) ? [...metrics] : Object.entries(metrics);
-}
-
 function formatMetricKey(key: string): string {
   // Metric keys are log tokens, not structured JSON. Keep them compact and
   // shell-friendly so trace lines remain grepable.
@@ -70,7 +61,7 @@ function formatMetricValue(value: RestartTraceMetricValue): string | null {
 
 function formatMetrics(metrics?: RestartTraceMetrics): string {
   const parts: string[] = [];
-  for (const [key, value] of normalizeMetricEntries(metrics)) {
+  for (const [key, value] of Array.isArray(metrics) ? metrics : Object.entries(metrics ?? {})) {
     const formatted = formatMetricValue(value);
     if (formatted === null) {
       continue;
@@ -197,58 +188,29 @@ export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [st
     ["externalMb", toMb(usage.external)],
     ["arrayBuffersMb", toMb(usage.arrayBuffers)],
   ];
-  metrics.push(...collectGatewayProcessResourceCounts());
-  return metrics;
-}
-
-function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, number]> {
   const processWithResourceAccess = process as NodeJS.Process & {
     _getActiveHandles?: () => unknown[];
     _getActiveRequests?: () => unknown[];
-    getActiveResourcesInfo?: () => string[];
   };
   const activeHandles = processWithResourceAccess["_getActiveHandles"]?.();
   const activeRequests = processWithResourceAccess["_getActiveRequests"]?.();
-  const activeResources = processWithResourceAccess.getActiveResourcesInfo?.();
-  const metrics: Array<readonly [string, number]> = [
+  const activeResources = process.getActiveResourcesInfo();
+  metrics.push(
     ["processSigintListenersCount", process.listenerCount("SIGINT")],
     ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
     ["processRestartListenersCount", process.listenerCount("SIGUSR2")],
-  ];
+  );
   if (activeHandles) {
     metrics.push(["activeHandlesCount", activeHandles.length]);
   }
   if (activeRequests) {
     metrics.push(["activeRequestsCount", activeRequests.length]);
   }
-  const activeTimersCount = activeResources
-    ? countActiveTimersFromResourceInfo(activeResources)
-    : activeHandles
-      ? countActiveTimersFromHandles(activeHandles)
-      : undefined;
-  if (activeTimersCount !== undefined) {
-    metrics.push(["activeTimersCount", activeTimersCount]);
-  }
+  metrics.push([
+    "activeTimersCount",
+    activeResources.filter((resource) => resource === "Timeout" || resource === "Timer").length,
+  ]);
   return metrics;
-}
-
-function countActiveTimersFromResourceInfo(activeResources: readonly string[]): number {
-  return activeResources.filter((resource) => resource === "Timeout" || resource === "Timer")
-    .length;
-}
-
-function countActiveTimersFromHandles(activeHandles: readonly unknown[]): number {
-  let count = 0;
-  for (const handle of activeHandles) {
-    if (typeof handle !== "object" || handle === null) {
-      continue;
-    }
-    const constructorName = (handle as { constructor?: { name?: string } }).constructor?.name;
-    if (constructorName === "Timeout" || constructorName === "Timer") {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {

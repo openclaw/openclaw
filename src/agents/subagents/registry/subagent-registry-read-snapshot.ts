@@ -6,17 +6,13 @@ import {
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import {
-  getSubagentRunIdLookup,
-  getSubagentSessionReadLookup,
-} from "./subagent-registry-memory.js";
+import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
   consumeSubagentRuns,
   getPersistedSubagentRunsSnapshot,
-  getPersistedRunIdLookup,
   getSessionListLookup,
   mergeSelectedFullRuns,
   prepareSubagentRunsCache,
@@ -107,8 +103,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       let liveKeys: string[];
       let persistedKeys: string[];
       if ("runIds" in readScope) {
-        liveKeys = getSubagentRunIdLookup(inMemoryRuns).select(readScope.runIds);
-        persistedKeys = getPersistedRunIdLookup(compactCache, compact).select(
+        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectRunIds(readScope.runIds);
+        persistedKeys = getSessionListLookup(compactCache, compact).selectRunIds(
           readScope.runIds,
           liveKeys,
         );
@@ -288,7 +284,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
     assertSubagentReadContext(context);
   };
   let changed: (ids: readonly string[] | undefined) => void = () => {};
-  const unsubscribe = subscribeSubagentRunChanges((ids) => changed(ids));
+  const unsubscribe = subscribeSubagentRunChanges("projection", ({ runIds }) => changed(runIds));
   const dispose = () => {
     disposed = true;
     unsubscribe();
@@ -390,7 +386,7 @@ export type PreparedSubagentMaintenanceRead = {
   dispose(): void;
 };
 
-/** Fresh physical maintenance facts share the existing cache's unpublished-intent overlays. */
+/** Fresh physical maintenance facts combine with current published resident rows. */
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
@@ -414,17 +410,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     context ? selectSubagentCacheStateForRead(cache.state, context) : {};
   const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
     assertCurrent();
-    const state = stateForRead();
-    const runs = new Map(state.replacementPending ? state.snapshot : persisted);
-    for (const [runId, { entry, committed }] of state.changes ?? []) {
-      if (!committed) {
-        if (entry) {
-          runs.set(runId, entry);
-        } else {
-          runs.delete(runId);
-        }
-      }
-    }
+    const runs = new Map(persisted);
     for (const [runId, entry] of inMemoryRuns) {
       runs.set(runId, cache.project(entry));
     }
@@ -442,73 +428,68 @@ export async function prepareSubagentMaintenanceReadSnapshot(
   let published: (runIds: readonly string[] | undefined) => void = () => {
     invalidated = true;
   };
-  const unsubscribe = subscribeSubagentRunChanges((runIds) => published(runIds));
+  const unsubscribe = subscribeSubagentRunChanges("projection", ({ runIds }) => published(runIds));
   const dispose = () => {
     disposed = true;
     unsubscribe();
   };
   try {
-    for (;;) {
-      assertCurrent();
-      invalidated = false;
-      const reply = await executeExistingOpenClawStateRead(
-        { path: context.admission.databasePath, env: context.environment },
-        { type: "subagents.runs", scope: { kind: "maintenance" } },
-        { context, current: true },
-      );
-      assertCurrent();
-      if (
-        reply &&
-        (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
-      ) {
-        throw new Error("Unexpected subagent maintenance read result");
-      }
-      if (invalidated) {
-        continue;
-      }
-      const persisted = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
-      // Cache representation may change on publication; compare the actual compact rows.
-      published = (runIds) => {
-        const state = stateForRead();
-        if (state.sourceIdentity !== context.admission.identity.key) {
-          return;
-        }
-        if (runIds === undefined) {
-          const replacement = state.snapshot;
-          invalidated ||=
-            !replacement ||
-            replacement.size !== persisted.size ||
-            [...persisted].some(
-              ([runId, entry]) => !isDeepStrictEqual(entry, replacement.get(runId)),
-            );
-          return;
-        }
-        invalidated ||= runIds.some((runId) => {
-          const change = state.changes?.get(runId);
-          const entry = change ? change.entry : state.snapshot?.get(runId);
-          return !isDeepStrictEqual(persisted.get(runId), entry);
-        });
-      };
-      const basis: SubagentMaintenanceDurableBasis = Object.freeze({
-        databasePath: context.admission.databasePath,
-        databaseIdentity: context.admission.identity.key,
-        ...(context.admission.identity.birthtime
-          ? { databaseBirthtime: context.admission.identity.birthtime }
-          : {}),
-        digest: reply?.maintenanceDigest ?? null,
-      });
-      return {
-        basis,
-        dispose,
-        capture() {
-          assertCurrent();
-          if (invalidated) {
-            throw new Error("Subagent maintenance facts changed during preparation");
-          }
-          return capture(persisted);
-        },
-      };
+    assertCurrent();
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "subagents.runs", scope: { kind: "maintenance" } },
+      { context, current: true },
+    );
+    assertCurrent();
+    if (
+      reply &&
+      (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
+    ) {
+      throw new Error("Unexpected subagent maintenance read result");
     }
+    // Return revoked facts after publication races; the maintenance owner bounds retries.
+    const persisted = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+    // Cache representation may change on publication; compare the actual compact rows.
+    published = (runIds) => {
+      const state = stateForRead();
+      if (state.sourceIdentity !== context.admission.identity.key) {
+        return;
+      }
+      if (runIds === undefined) {
+        const replacement = state.snapshot;
+        invalidated ||=
+          !replacement ||
+          replacement.size !== persisted.size ||
+          [...persisted].some(
+            ([runId, entry]) => !isDeepStrictEqual(entry, replacement.get(runId)),
+          );
+        return;
+      }
+      invalidated ||= runIds.some((runId) => {
+        const change = state.changes?.get(runId);
+        const entry = change ? change.entry : state.snapshot?.get(runId);
+        return !isDeepStrictEqual(persisted.get(runId), entry);
+      });
+    };
+    const basis: SubagentMaintenanceDurableBasis = Object.freeze({
+      databasePath: context.admission.databasePath,
+      databaseIdentity: context.admission.identity.key,
+      ...(context.admission.identity.birthtime
+        ? { databaseBirthtime: context.admission.identity.birthtime }
+        : {}),
+      digest: reply?.maintenanceDigest ?? null,
+    });
+    return {
+      basis,
+      dispose,
+      capture() {
+        assertCurrent();
+        if (invalidated) {
+          throw new Error("Subagent maintenance facts changed during preparation");
+        }
+        return capture(persisted);
+      },
+    };
   } catch (error) {
     dispose();
     throw error;

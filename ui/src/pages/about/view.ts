@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
+import { brandIcons } from "../../components/brand-icons.ts";
 import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
@@ -9,19 +10,18 @@ import {
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { currentThemeBranding } from "../../components/neutral-mark.ts";
+import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
-import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/about.css";
-import { brandIcons } from "./brand-icons.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 
@@ -63,10 +63,7 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
   },
 ];
 
-function formatControlUiBuildDate(
-  value: string | null,
-  locales?: Intl.LocalesArgument,
-): string | null {
+function formatControlUiBuildDate(value: string | null): string | null {
   if (!value) {
     return null;
   }
@@ -74,7 +71,7 @@ function formatControlUiBuildDate(
   if (Number.isNaN(date.getTime())) {
     return null;
   }
-  return new Intl.DateTimeFormat(locales, {
+  return new Intl.DateTimeFormat(i18n.getLocale(), {
     dateStyle: "medium",
     timeZone: "UTC",
   }).format(date);
@@ -190,7 +187,7 @@ function renderHero(props: AboutProps) {
 }
 
 export function renderAbout(props: AboutProps) {
-  const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
+  const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt);
   const buildFacts = html`
     <dl class="settings-kv about-build-grid" aria-label=${t("aboutPage.artifactDetails")}>
       <dt>${t("aboutPage.version")}</dt>

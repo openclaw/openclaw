@@ -78,8 +78,7 @@ type VerificationResult = {
 };
 
 function isJsonVerificationResponse(res: Response): boolean {
-  const contentType =
-    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.trim()) {
     return true;
   }

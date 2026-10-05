@@ -16,6 +16,21 @@ import {
   successfulSendInputOutput,
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
+import type { CodexServerNotification } from "./protocol.js";
+
+function spawnNotification(
+  childThreadId = "child-thread",
+  turnId = "parent-turn",
+): CodexServerNotification {
+  return {
+    method: "item/completed",
+    params: {
+      threadId: "parent-thread",
+      turnId,
+      item: directSpawnItem("v2", "parent-thread", childThreadId),
+    },
+  };
+}
 
 function createCustody() {
   const holds: AgentHarnessCompletionCustody[] = [];
@@ -114,14 +129,7 @@ describe("native assignment completion custody", () => {
       let pendingSuccessor: ReturnType<typeof registerParent> | undefined;
       try {
         await notifyChildStarted(client, "parent-thread", "early-child");
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            item: directSpawnItem("v2", "parent-thread", "early-child"),
-          },
-        });
+        await client.notify(spawnNotification("early-child", "parent-turn"));
         expect(claimChildThread).not.toHaveBeenCalled();
         expect(claimDirectChild).not.toHaveBeenCalled();
         expect(runtime.createAgentHarnessCompletionEventSink).not.toHaveBeenCalled();
@@ -155,14 +163,7 @@ describe("native assignment completion custody", () => {
         if (ending === "ready") {
           const owner = await pending;
           owner.bindTurn("parent-turn");
-          await client.notify({
-            method: "item/completed",
-            params: {
-              threadId: "parent-thread",
-              turnId: "parent-turn",
-              item: directSpawnItem("v2", "parent-thread", "child-thread"),
-            },
-          });
+          await client.notify(spawnNotification("child-thread", "parent-turn"));
           expect(claimDirectChild).toHaveBeenCalledExactlyOnceWith("child-thread");
           expect(runtime.createAgentHarnessCompletionEventSink).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({
@@ -186,14 +187,7 @@ describe("native assignment completion custody", () => {
             await notifyChildStarted(client);
             expect(runtime.createAgentHarnessCompletionEventSink).not.toHaveBeenCalled();
             expect(replacement.live()).toHaveLength(1);
-            await client.notify({
-              method: "item/completed",
-              params: {
-                threadId: "parent-thread",
-                turnId: "replacement-turn",
-                item: directSpawnItem("v2", "parent-thread", "child-thread"),
-              },
-            });
+            await client.notify(spawnNotification("child-thread", "replacement-turn"));
             expect(runtime.createAgentHarnessCompletionEventSink).toHaveBeenCalledOnce();
             expect(replacement.live()).toHaveLength(2);
             await successor.unregister();
@@ -240,14 +234,7 @@ describe("native assignment completion custody", () => {
         const other = await registerParent(monitor);
         other.bindTurn("other-turn");
         // Native spawn evidence can arrive before the admitting turn/start response.
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            item: directSpawnItem("v2", "parent-thread", "child-thread"),
-          },
-        });
+        await client.notify(spawnNotification("child-thread", "parent-turn"));
         owner.bindTurn("parent-turn");
         await owner.unregister();
         expect(first.live()).toHaveLength(1);
@@ -294,14 +281,7 @@ describe("native assignment completion custody", () => {
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     for (const child of ["child-thread", "other-child"]) {
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: directSpawnItem("v2", "parent-thread", child),
-        },
-      });
+      await client.notify(spawnNotification(child, "parent-turn"));
       await client.notify(turnStartedNotification("child-turn", { threadId: child }));
     }
     await parent.unregister();
@@ -328,14 +308,7 @@ describe("native assignment completion custody", () => {
     });
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: directSpawnItem("v2", "parent-thread", "child-thread"),
-      },
-    });
+    await client.notify(spawnNotification("child-thread", "parent-turn"));
     await client.notify({
       method: "item/completed",
       params: {

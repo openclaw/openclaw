@@ -22,6 +22,21 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionEnd"];
 
 describe("reply runtime public progress contracts", () => {
+  it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
+    type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
+    type LegacyAgentRunStart = (
+      runId: string,
+      executionIdentityToken?: Parameters<AgentRunStart>[1],
+      options?: Parameters<AgentRunStart>[2],
+    ) => unknown;
+
+    expectTypeOf<[string]>().toExtend<Parameters<AgentRunStart>>();
+    expectTypeOf<Parameters<LegacyAgentRunStart>>().toExtend<Parameters<AgentRunStart>>();
+    expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
+    expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
+    expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
+  });
+
   it("still accepts the deprecated suppressToolErrorWarnings option as a no-op", () => {
     // Removal window: first stable release after 2026.10 (see GetReplyOptions).
     expectTypeOf<GetReplyOptions["suppressToolErrorWarnings"]>().toEqualTypeOf<

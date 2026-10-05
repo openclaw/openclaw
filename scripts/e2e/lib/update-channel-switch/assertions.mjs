@@ -224,14 +224,9 @@ function assertConfigChannel(channel) {
   );
 }
 
-function assertDryRun(kind, channel, selection) {
+function assertDryRun(kind, channel) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
-  const reportedKind =
-    kind === "git" &&
-    selection === "stored" &&
-    process.env.OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT === "1"
-      ? "package"
-      : kind;
+  const reportedKind = kind;
   assert.equal(preview.dryRun, true);
   assert.equal(preview.installKind, "package");
   assert.equal(preview.storedChannel, "dev");
@@ -258,15 +253,12 @@ function assertInstalledVersion(root, expectedVersion) {
   }
 }
 
-function assertDirtyExit(statusRaw, frozenCompat) {
+function assertDirtyExit(statusRaw) {
   const status = Number(statusRaw);
-  const acceptsZero = frozenCompat === "1";
-  if (status === 1 || (status === 0 && acceptsZero)) {
+  if (status === 1) {
     return;
   }
-  throw new Error(
-    `unexpected dirty-worktree update exit ${statusRaw}; expected ${acceptsZero ? "0 or 1" : "1"}`,
-  );
+  throw new Error(`unexpected dirty-worktree update exit ${statusRaw}; expected 1`);
 }
 
 switch (command) {

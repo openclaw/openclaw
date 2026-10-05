@@ -18,6 +18,7 @@ import {
   resolveLatestCompatibleNpmResolution,
   resolveTrustedOfficialPrereleaseResolution,
   validateNpmResolutionCompatibility,
+  type TrustedOfficialPrereleaseResolution,
 } from "./install-npm-metadata.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
@@ -44,7 +45,11 @@ export async function installPluginFromNpmSpec(
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
-    npmMetadata?: { spec: string; metadata: NpmSpecResolution };
+    npmMetadata?: {
+      spec: string;
+      metadata: NpmSpecResolution;
+      trustedPrereleaseResolution?: TrustedOfficialPrereleaseResolution;
+    };
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   },
 ): Promise<InstallPluginResult> {
@@ -74,12 +79,12 @@ export async function installPluginFromNpmSpec(
   }
 
   // A channel fallback changes the attempt's spec and must resolve its own metadata.
-  const metadataResult =
-    params.npmMetadata?.spec === spec
-      ? { ok: true as const, metadata: params.npmMetadata.metadata }
-      : await withInstallActivity(logger, "resolve", () =>
-          resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
-        );
+  const preparedMetadata = params.npmMetadata?.spec === spec ? params.npmMetadata : undefined;
+  const metadataResult = preparedMetadata
+    ? { ok: true as const, metadata: preparedMetadata.metadata }
+    : await withInstallActivity(logger, "resolve", () =>
+        resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
+      );
   if (!metadataResult.ok) {
     return {
       ok: false,
@@ -102,16 +107,21 @@ export async function installPluginFromNpmSpec(
       resolvedVersion: npmResolution.version,
     })
   ) {
+    const preparedResolution = preparedMetadata?.trustedPrereleaseResolution;
     const trustedResolution = params.trustedSourceLinkedOfficialInstall
-      ? await resolveTrustedOfficialPrereleaseResolution({
-          spec: parsedSpec,
-          resolvedPrereleaseVersion: npmResolution.version,
-          timeoutMs,
-          signal: params.signal,
-          killProcessTree: true,
-          logger,
-        })
+      ? preparedResolution?.resolvedPrereleaseVersion === npmResolution.version
+        ? preparedResolution
+        : await resolveTrustedOfficialPrereleaseResolution({
+            spec: parsedSpec,
+            resolvedPrereleaseVersion: npmResolution.version,
+            timeoutMs,
+            signal: params.signal,
+            killProcessTree: true,
+          })
       : null;
+    if (trustedResolution) {
+      logger.warn?.(trustedResolution.warning);
+    }
     if (trustedResolution?.kind === "stable" || trustedResolution?.kind === "prerelease-only") {
       Object.assign(npmResolution, trustedResolution.resolution, {
         resolvedAt: npmResolution.resolvedAt,
@@ -245,7 +255,6 @@ export async function installPluginFromNpmSpec(
       logger,
       mode,
       dryRun,
-      skipPolicyPreflight: true,
       expectedPluginId,
       expectedReplacementPluginId: params.expectedReplacementPluginId,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

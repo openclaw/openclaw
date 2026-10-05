@@ -1,10 +1,10 @@
 // Core doctor compatibility migration pipeline for current config objects.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
-import { migrateLegacySecretRefEnvMarkers } from "../../../secrets/legacy-secretref-env-marker.js";
 import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
@@ -12,6 +12,7 @@ import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-core-normalizers.js";
 import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
+import { migrateLegacySecretInputs } from "./legacy-secret-inputs.js";
 import { migrateReservedMcpServerNames } from "./reserved-mcp-server-name-migrate.js";
 
 function repairAgentRoster(
@@ -110,20 +111,24 @@ function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): Open
   return next;
 }
 
-/** Normalize current config through core, plugin setup, channel, and secret-ref migrations. */
+/** Normalize pre-admission config through core, plugin setup, channel, and secret-ref migrations. */
 export function normalizeCompatibilityConfigValues(
-  cfg: OpenClawConfig,
+  raw: unknown,
   options: {
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     sourceRaw?: unknown;
   } = {},
 ): {
-  config: OpenClawConfig;
+  config: OpenClawConfigWithLegacyRoster;
   changes: string[];
   warnings?: string[];
 } {
+  if (!isRecord(raw)) {
+    throw new TypeError("Compatibility config normalization requires an object");
+  }
   const changes: string[] = [];
-  const reservedMcpServerNames = migrateReservedMcpServerNames(cfg, options.sourceRaw);
+  const warnings: string[] = [];
+  const reservedMcpServerNames = migrateReservedMcpServerNames(raw, options.sourceRaw);
   changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
     reservedMcpServerNames.config,
@@ -132,9 +137,7 @@ export function normalizeCompatibilityConfigValues(
       const setupMigration = runPluginSetupConfigMigrations({
         config,
       });
-      if (setupMigration.changes.length === 0) {
-        return config;
-      }
+      warnings.push(...(setupMigration.warnings ?? []));
       changes.push(...setupMigration.changes);
       return setupMigration.config;
     },
@@ -144,12 +147,15 @@ export function normalizeCompatibilityConfigValues(
   if (stripRetiredTuningKnobs(tuningCandidate, changes)) {
     next = tuningCandidate;
   }
-  const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  const channelMigrations = applyChannelDoctorCompatibilityMigrations(next, {
+    historicalWebhookListeners: true,
+  });
+  warnings.push(...(channelMigrations.warnings ?? []));
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
   }
-  const secretRefMarkers = migrateLegacySecretRefEnvMarkers(next);
+  const secretRefMarkers = migrateLegacySecretInputs(next);
   if (secretRefMarkers.changes.length > 0) {
     next = secretRefMarkers.config;
     changes.push(...secretRefMarkers.changes);
@@ -163,6 +169,6 @@ export function normalizeCompatibilityConfigValues(
   return {
     config: next,
     changes,
-    ...(channelMigrations.warnings?.length ? { warnings: channelMigrations.warnings } : {}),
+    ...(warnings.length ? { warnings } : {}),
   };
 }

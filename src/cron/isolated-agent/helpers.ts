@@ -70,6 +70,17 @@ function formatCronRunLevelError(error: unknown): string | undefined {
   return detail ? `cron isolated run failed: ${detail}` : "cron isolated run failed";
 }
 
+/**
+ * Returns the explanation when a reply reports AUTOMATION_FAILED on its exact first line.
+ * A reply that only quotes the token elsewhere stays ordinary output.
+ */
+export function readAutomationFailedReport(text: string | undefined): string | undefined {
+  const [firstLine, ...detail] = (text ?? "").trim().split("\n");
+  return firstLine?.trim() === AUTOMATION_FAILED_TOKEN
+    ? (normalizeOptionalString(detail.join("\n")) ?? "The automation run reported that it failed.")
+    : undefined;
+}
+
 /** Picks a bounded cron run summary from plain text output. */
 export function pickSummaryFromOutput(text: string | undefined) {
   const clean = (text ?? "").trim();
@@ -293,17 +304,9 @@ export function resolveCronPayloadOutcome(params: {
       ? { ...params.failureSignal, message: failureMessage }
       : undefined;
   const runLevelError = formatCronRunLevelError(params.runLevelError);
-  // Only an exact first line counts; a reply that quotes the token stays ordinary output.
-  const [reportedFirstLine, ...reportedDetail] = (
-    normalizedFinalAssistantVisibleText ??
-    fallbackOutputText ??
-    ""
-  ).split("\n");
-  const reportedFailure =
-    reportedFirstLine?.trim() === AUTOMATION_FAILED_TOKEN
-      ? (normalizeOptionalString(reportedDetail.join("\n")) ??
-        "The automation run reported that it failed.")
-      : undefined;
+  const reportedFailure = readAutomationFailedReport(
+    normalizedFinalAssistantVisibleText ?? fallbackOutputText,
+  );
   const hasFatalErrorPayload =
     hasFatalStructuredErrorPayload ||
     failureSignal !== undefined ||

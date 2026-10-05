@@ -57,43 +57,48 @@ describe("Slack bot-message admission", () => {
     expect(prepared?.ctxPayload.BodyForAgent).toContain("Readiness probe failed");
   });
 
-  it("drops bot room messages when no owner is present (#59284)", async () => {
-    const test = fixture({ allowBots: true });
-    test.members.mockResolvedValue({ members: ["UOTHER"], response_metadata: {} });
-    expect(await test.prepare()).toBeNull();
-    expect(test.members).toHaveBeenCalledWith({ token: "token", channel: "C123", limit: 999 });
-  });
-
-  it("allows bot room messages by default when an owner is present", async () => {
-    const test = fixture();
-    expect((await test.prepare())?.ctxPayload.RawBody).toBe("Readiness probe failed");
-    expect(test.members).toHaveBeenCalledTimes(1);
-  });
-
-  it("honors a room allowBots false override before checking owner presence", async () => {
-    const test = fixture({ allowBots: true });
-    test.ctx.channelsConfig = { C123: { allowBots: false } };
-    test.ctx.channelsConfigKeys = ["C123"];
-    expect(await test.prepare()).toBeNull();
-    expect(test.members).not.toHaveBeenCalled();
-  });
-
-  it("ignores its own bot id without a user id", async () => {
-    const test = fixture();
-    test.message.bot_id = "B1";
-    expect(await test.prepare()).toBeNull();
-    expect(test.members).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "requires an explicit bot mention for mentions mode: %s",
-    async (mentioned) => {
-      const test = fixture({ allowBots: "mentions" });
-      test.ctx.channelsConfig = { C123: { users: ["B_OTHER"] } };
-      test.ctx.channelsConfigKeys = ["C123"];
-      test.message.text = mentioned ? "hey <@B1> status failed" : "status failed";
+  it.each(["present", "absent", "lookup failure"] as const)(
+    "requires owner presence when no room users are configured: %s (#59284)",
+    async (owner) => {
+      const test = fixture(owner === "present" ? {} : { allowBots: true });
+      if (owner === "lookup failure") {
+        test.members.mockRejectedValue(new Error("missing_scope"));
+      } else {
+        test.members.mockResolvedValue({
+          members: [owner === "present" ? "UOWNER" : "UOTHER"],
+          response_metadata: {},
+        });
+      }
       const prepared = await test.prepare();
-      if (mentioned) {
+      if (owner === "present") {
+        expect(prepared?.ctxPayload.RawBody).toBe("Readiness probe failed");
+      } else {
+        expect(prepared).toBeNull();
+      }
+      expect(test.members).toHaveBeenCalledExactlyOnceWith({
+        token: "token",
+        channel: "C123",
+        limit: 999,
+      });
+    },
+  );
+
+  it.each(["room override", "self", "unmentioned", "mentioned"] as const)(
+    "applies bot admission before owner lookup: %s",
+    async (mode) => {
+      const test = fixture({
+        allowBots: mode === "room override" ? true : mode === "self" ? undefined : "mentions",
+      });
+      if (mode !== "self") {
+        test.ctx.channelsConfig = {
+          C123: mode === "room override" ? { allowBots: false } : { users: ["B_OTHER"] },
+        };
+        test.ctx.channelsConfigKeys = ["C123"];
+      }
+      test.message.bot_id = mode === "self" ? "B1" : "B_OTHER";
+      test.message.text = mode === "mentioned" ? "hey <@B1> status failed" : "status failed";
+      const prepared = await test.prepare();
+      if (mode === "mentioned") {
         expect(prepared?.ctxPayload.RawBody).toContain("status failed");
       } else {
         expect(prepared).toBeNull();
@@ -101,10 +106,4 @@ describe("Slack bot-message admission", () => {
       expect(test.members).not.toHaveBeenCalled();
     },
   );
-
-  it("fails closed when owner presence lookup fails (#59284)", async () => {
-    const test = fixture({ allowBots: true });
-    test.members.mockRejectedValue(new Error("missing_scope"));
-    expect(await test.prepare()).toBeNull();
-  });
 });

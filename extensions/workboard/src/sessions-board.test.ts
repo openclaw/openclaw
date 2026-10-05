@@ -1,20 +1,38 @@
-import type {
-  WorkboardSessionFacts,
-  WorkboardSessionsBoardSpec,
-  WorkboardSessionsColumn,
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  createDefaultWorkboardSessionsBoardSpec,
+  type WorkboardSessionFacts,
+  type WorkboardSessionsBoardSpec,
+  type WorkboardSessionsColumn,
 } from "@openclaw/workboard-contract";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorkboardSessionsBoardService } from "./sessions-board.js";
-import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
+import { WorkboardBoardStore } from "./store-boards.js";
+import { createKernelStores } from "./test/sqlite-kernel.js";
+
+// The service consumes the redaction contract, not the host diagnostics scheduler.
+vi.mock("openclaw/plugin-sdk/logging-core", () => ({
+  redactToolPayloadText: (text: string) => text,
+}));
+
+let tempDir: string;
+let nextDatabase = 0;
+beforeAll(() => {
+  // openclaw-temp-dir: allow keeps this synchronous SQLite fixture out of test-env's compiled-worker graph.
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-board-"));
+});
+afterAll(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 type ServiceParams = Parameters<typeof createWorkboardSessionsBoardService>[0];
-type Completion = NonNullable<ServiceParams["complete"]>;
 const BOARD_ID = "sessions";
 const NOW = 10_000_000;
 const FOCUS_COLUMN: WorkboardSessionsColumn = {
   id: "focus",
   label: "Focus",
-  description: "Sessions requiring attention.",
+  description: "Active sessions.",
+  match: { run: ["active"] },
 };
 const OTHER_COLUMN: WorkboardSessionsColumn = {
   id: "other",
@@ -22,14 +40,12 @@ const OTHER_COLUMN: WorkboardSessionsColumn = {
   description: "Remaining sessions.",
   fallback: true,
 };
-const MODEL_COLUMNS = [FOCUS_COLUMN, OTHER_COLUMN];
-
+const DEFAULT_COLUMNS = ["needs-input", "stuck", "working", "in-review", "merged", "done"];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(NOW);
 });
 afterEach(() => vi.useRealTimers());
-
 function facts(id: string, overrides: Partial<WorkboardSessionFacts> = {}): WorkboardSessionFacts {
   return {
     key: `agent:main:${id}`,
@@ -43,23 +59,8 @@ function facts(id: string, overrides: Partial<WorkboardSessionFacts> = {}): Work
     ...overrides,
   };
 }
-
-function placements(sessions: readonly WorkboardSessionFacts[], columnId = "focus") {
-  return JSON.stringify({
-    placements: sessions.map((session) => ({
-      sessionKey: session.key,
-      columnId,
-      reason: "Needs attention",
-    })),
-  });
-}
-
 async function withService(
-  options: {
-    facts: WorkboardSessionFacts[];
-    spec?: Partial<WorkboardSessionsBoardSpec>;
-    complete?: Completion;
-  },
+  options: Parameters<typeof createFixture>[0],
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
 ) {
   const fixture = await createFixture(options);
@@ -67,185 +68,274 @@ async function withService(
     await run(fixture);
   } finally {
     await fixture.service.stop();
+    await fixture.store.close();
   }
 }
-
 async function createFixture(options: {
   facts: WorkboardSessionFacts[];
   spec?: Partial<WorkboardSessionsBoardSpec>;
-  complete?: Completion;
 }) {
-  const { store, stores } = createWorkboardSqliteTestHarness();
+  const stores = createKernelStores(path.join(tempDir, `${nextDatabase++}.sqlite`));
+  const store = new WorkboardBoardStore(stores.cards, {
+    ...stores,
+    runWithWriteAuthority: async (assertCurrent, run) => {
+      assertCurrent();
+      return await run();
+    },
+  });
   await store.upsertBoard({ id: BOARD_ID, kind: "sessions" });
-  await store.updateSessionsBoard(BOARD_ID, { columns: MODEL_COLUMNS, ...options.spec });
-  const state = {
-    facts: options.facts,
-    roster: options.facts.map(({ key, sessionId }) => ({ key, sessionId })),
-  };
-  const request = vi.fn().mockImplementation(async () => ({
-    sessions: state.roster,
-    hasMore: false,
-  }));
+  await store.updateSessionsBoard(BOARD_ID, {
+    columns: [FOCUS_COLUMN, OTHER_COLUMN],
+    ...options.spec,
+  });
+  const state = { facts: options.facts, roster: options.facts };
+  const request = vi
+    .fn()
+    .mockImplementation(async () => ({ sessions: state.roster, hasMore: false }));
   const readSessionFacts = vi
     .fn<ServiceParams["gateway"]["readSessionFacts"]>()
     .mockImplementation(async ({ sessionKeys }) => ({
       sessions: state.facts.filter((session) => sessionKeys.includes(session.key)),
     }));
-  const complete = vi.fn<Completion>(
-    options.complete ?? (async ({ sessions }) => placements(sessions)),
-  );
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const service = createWorkboardSessionsBoardService({
-    store,
-    gateway: { request, readSessionFacts, isAvailable: async () => true },
-    getConfig: () => ({ agents: { entries: { main: {} } } }),
-    complete,
+  let listener: Parameters<ServiceParams["gateway"]["subscribeSessionChanges"]>[0] | undefined;
+  const unsubscribe = vi.fn(() => {
+    listener = undefined;
   });
-  await service.start({ config: {}, stateDir: "unused", logger });
-  return { store, stores, state, request, readSessionFacts, complete, logger, service };
+  const gateway = {
+    request,
+    readSessionFacts,
+    subscribeSessionChanges: (callback: NonNullable<typeof listener>) => {
+      listener = callback;
+      return unsubscribe;
+    },
+  };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const service = createWorkboardSessionsBoardService({ store, gateway });
+  const context = { config: {}, stateDir: "unused", logger };
+  const repair = vi.spyOn(store, "repairSessionPlacements");
+  await service.start(context);
+  return {
+    store,
+    stores,
+    state,
+    request,
+    readSessionFacts,
+    logger,
+    service,
+    unsubscribe,
+    repair,
+    context,
+    emit: (key: string, factsInvalidated?: string) =>
+      listener?.({ agentId: "main", sessionKey: key, factsInvalidated }),
+  };
 }
 
-describe("Sessions board classification service", () => {
-  it.each(["update", "move"] as const)(
-    "rejects %s when caller authority ends while persistence is pending",
-    async (action) => {
-      await withService({ facts: [facts("one")] }, async ({ service, store, stores }) => {
-        await service.sweep();
-        const board = await store.getSessionsBoard(BOARD_ID);
-        const previous = await store.listSessionPlacements(BOARD_ID);
-        const entered = Promise.withResolvers<void>();
-        const release = Promise.withResolvers<void>();
-        let active = true;
-        const caller = {
-          assertCurrent() {
-            if (!active) {
-              throw new Error("Caller authority is no longer active.");
-            }
-          },
-        };
-        const pause = async () => {
-          entered.resolve();
-          await release.promise;
-        };
-        const update = stores.sessionsBoard.update.bind(stores.sessionsBoard);
-        const write = stores.sessionsBoard.writePlacements.bind(stores.sessionsBoard);
-        using updateSpy = vi.spyOn(stores.sessionsBoard, "update");
-        updateSpy.mockImplementation(async (...args) => {
-          await pause();
-          return update(...args);
-        });
-        using writeSpy = vi.spyOn(stores.sessionsBoard, "writePlacements");
-        writeSpy.mockImplementation(async (...args) => {
-          await pause();
-          return write(...args);
-        });
-        const pending =
-          action === "update"
-            ? service.update(BOARD_ID, { instructions: "Revoked edit" }, caller)
-            : service.move(BOARD_ID, facts("one").key, "other", caller);
-        const rejected = expect(pending).rejects.toThrow("Caller authority is no longer active.");
-        try {
-          await entered.promise;
-          active = false;
-        } finally {
-          release.resolve();
-        }
-        await rejected;
-        expect(await store.getSessionsBoard(BOARD_ID)).toEqual(board);
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(previous);
+describe("Sessions board rules and live facts", () => {
+  it("filters automation at the roster source unless the scope opts in", async () => {
+    await withService({ facts: [] }, async ({ service, request, store }) => {
+      await service.read(BOARD_ID);
+      expect(request.mock.calls[0]?.[1]).toMatchObject({
+        excludeCron: true,
+        excludeSystem: true,
       });
-    },
-  );
-
-  it("rejects a revoked refresh before scheduling classification", async () => {
-    await withService({ facts: [facts("one")] }, async ({ service, readSessionFacts }) => {
-      await expect(
-        service.refresh(BOARD_ID, {
-          assertCurrent() {
-            throw new Error("Caller authority is no longer active.");
-          },
-        }),
-      ).rejects.toThrow("Caller authority is no longer active.");
-      await service.stop();
-      expect(readSessionFacts).not.toHaveBeenCalled();
+      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("excludeSubagents");
+      await expect(service.move(BOARD_ID, "agent:main:cron:job:trigger", "other")).rejects.toThrow(
+        "not available in this board's scope",
+      );
+      expect(request.mock.lastCall?.[1]).toMatchObject({ excludeCron: true, excludeSystem: true });
+      expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+      await service.update(BOARD_ID, { scope: { includeAutomation: true } });
+      await service.read(BOARD_ID);
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeCron");
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSystem");
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSubagents");
     });
   });
 
-  it("takes the first full rule match and distinguishes unknown PR state from confirmed none", async () => {
-    const digest = { health: "on-track", headline: "Making progress", revision: 1 } as const;
-    await withService(
-      {
-        spec: {
-          scope: { includeArchived: true },
-          columns: [
-            {
-              id: "review",
-              label: "Review",
-              description: "Active reviewed work.",
-              match: {
+  it.each([undefined, "home"])(
+    "excludes each agent's configured Home session (%s) before facts reads and moves",
+    async (mainKey) => {
+      const home = { ...facts(mainKey ?? "main"), isMain: true };
+      const otherHome = {
+        ...facts("other-home", { key: `agent:ops:${mainKey ?? "main"}`, agentId: "ops" }),
+        isMain: true,
+      };
+      const work = facts("subagent:worker");
+      await withService(
+        { facts: [home, otherHome, work] },
+        async ({ service, readSessionFacts, store }) => {
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([work.key]);
+          expect(readSessionFacts).toHaveBeenCalledExactlyOnceWith({ sessionKeys: [work.key] });
+          await expect(service.move(BOARD_ID, home.key, "other")).rejects.toThrow(
+            "not available in this board's scope",
+          );
+          expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+          await service.update(BOARD_ID, { scope: { includeHome: true } });
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([
+            home.key,
+            otherHome.key,
+            work.key,
+          ]);
+          await service.move(BOARD_ID, home.key, "focus");
+          await service.update(BOARD_ID, { scope: { includeHome: false } });
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([work.key]);
+        },
+      );
+    },
+  );
+
+  it("rejects a move when caller authority ends during the facts read", async () => {
+    await withService({ facts: [facts("one")] }, async ({ service, store, readSessionFacts }) => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let active = true;
+      readSessionFacts.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { sessions: [facts("one")] };
+      });
+      const pending = service.move(BOARD_ID, facts("one").key, "other", {
+        assertCurrent() {
+          if (!active) {
+            throw new Error("Caller authority is no longer active.");
+          }
+        },
+      });
+      const rejected = expect(pending).rejects.toThrow("Caller authority is no longer active.");
+      await entered.promise;
+      active = false;
+      release.resolve();
+      await rejected;
+      expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+    });
+  });
+
+  const digest = { health: "on-track", headline: "Making progress", revision: 1 } as const;
+  it.each([
+    {
+      name: "custom rules with conjunctions, alternatives, and unknown PR state",
+      spec: {
+        scope: { includeArchived: true },
+        columns: [
+          {
+            id: "review",
+            label: "Review",
+            description: "Active reviewed work.",
+            match: [
+              {
                 health: ["on-track"],
                 run: ["active"],
                 pullRequest: ["open"],
                 archived: false,
               },
-            },
-            {
-              id: "active",
-              label: "Active",
-              description: "All active work.",
-              match: { run: ["active"] },
-            },
-            {
-              id: "no-pr",
-              label: "No PR",
-              description: "Confirmed no pull request.",
-              match: { pullRequest: ["none"] },
-            },
-            OTHER_COLUMN,
-          ],
-        },
-        facts: [
-          facts("all", {
-            run: "active",
-            observerDigest: digest,
-            pullRequests: [{ number: 1, state: "open" }],
-          }),
-          facts("no-digest", { run: "active", pullRequests: [{ number: 2, state: "open" }] }),
-          facts("active-no-pr", { run: "active", observerDigest: digest }),
-          facts("archived", {
-            run: "active",
-            observerDigest: digest,
-            archived: true,
-            pullRequests: [{ number: 3, state: "open" }],
-          }),
-          facts("idle-pr", {
-            observerDigest: digest,
-            pullRequests: [{ number: 4, state: "open" }],
-          }),
-          facts("none"),
-          facts("unknown", { pullRequestsUnavailable: true }),
+              { run: ["failed"], archived: false },
+            ],
+          },
+          {
+            id: "active",
+            label: "Active",
+            description: "All active work.",
+            match: { run: ["active"] },
+          },
+          {
+            id: "no-pr",
+            label: "No PR",
+            description: "Confirmed no pull request.",
+            match: { pullRequest: ["none"] },
+          },
+          OTHER_COLUMN,
         ],
-        complete: async () => '{"placements":[]}',
       },
-      async ({ service, complete, request }) => {
-        await service.sweep();
-        const result = await service.read(BOARD_ID);
+      facts: [
+        facts("all", {
+          run: "active",
+          observerDigest: digest,
+          pullRequests: [{ number: 1, state: "open" }],
+        }),
+        facts("no-digest", { run: "active", pullRequests: [{ number: 2, state: "open" }] }),
+        facts("active-no-pr", { run: "active", observerDigest: digest }),
+        facts("archived", {
+          run: "active",
+          observerDigest: digest,
+          archived: true,
+          pullRequests: [{ number: 3, state: "open" }],
+        }),
+        facts("idle-pr", {
+          observerDigest: digest,
+          pullRequests: [{ number: 4, state: "open" }],
+        }),
+        facts("none"),
+        facts("unknown", { pullRequestsUnavailable: true }),
+        facts("failed", { run: "failed" }),
+      ],
+      placements: [
+        ["all", "review"],
+        ["no-digest", "active"],
+        ["active-no-pr", "active"],
+        ["archived", "active"],
+        ["idle-pr", "other"],
+        ["none", "no-pr"],
+        ["unknown", "other"],
+        ["failed", "review"],
+      ],
+      columns: ["review", "active", "no-pr", "other"],
+      warning: "Pull-request facts for 1 session are not loaded yet.",
+    },
+    {
+      name: "default rule priority for unobserved runs and PRs",
+      spec: createDefaultWorkboardSessionsBoardSpec(),
+      facts: [
+        facts("active", { run: "active" }),
+        facts("failed", { run: "failed" }),
+        facts("unhealthy-active", {
+          run: "active",
+          observerDigest: { health: "stuck", headline: "Stuck", revision: 1 },
+        }),
+        facts("needs-input", {
+          run: "active",
+          observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
+        }),
+        facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
+        facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
+        facts("idle"),
+      ],
+      placements: [
+        ["active", "working"],
+        ["failed", "stuck"],
+        ["unhealthy-active", "stuck"],
+        ["needs-input", "needs-input"],
+        ["review", "in-review"],
+        ["merged", "merged"],
+        ["idle", "done"],
+      ],
+      columns: DEFAULT_COLUMNS,
+      warning: undefined,
+    },
+  ] satisfies Array<{
+    name: string;
+    spec: Partial<WorkboardSessionsBoardSpec>;
+    facts: WorkboardSessionFacts[];
+    placements: string[][];
+    columns: string[];
+    warning: string | undefined;
+  }>)(
+    "classifies sessions using $name",
+    async ({ spec, facts: rows, placements, columns, warning }) => {
+      await withService({ spec, facts: rows }, async ({ service, store, request }) => {
+        const read = await service.read(BOARD_ID);
+        expect(read.columns.map((column) => column.id)).toEqual(columns);
         expect(
-          result.sessions.map(({ label, columnId, source }) => ({ label, columnId, source })),
-        ).toEqual([
-          { label: "all", columnId: "review", source: "state" },
-          { label: "no-digest", columnId: "active", source: "state" },
-          { label: "active-no-pr", columnId: "active", source: "state" },
-          { label: "archived", columnId: "active", source: "state" },
-          { label: "idle-pr", columnId: "other", source: "model" },
-          { label: "none", columnId: "no-pr", source: "state" },
-          { label: "unknown", columnId: "other", source: "model" },
-        ]);
-        expect(complete.mock.calls[0]?.[0].sessions.map((session) => session.label)).toEqual([
-          "idle-pr",
-          "unknown",
-        ]);
-        expect(result.warning).toContain("pull-request information is unavailable");
+          read.sessions.map(({ label, columnId, source }) => [label, columnId, source]),
+        ).toEqual(placements.map(([label, columnId]) => [label, columnId, "state"]));
+        expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+        if (warning) {
+          expect(read.warning).toContain(warning);
+          expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
+            "facts-unavailable",
+          );
+        } else {
+          expect(read.warning).toBeUndefined();
+        }
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
           expect.objectContaining({
@@ -255,124 +345,573 @@ describe("Sessions board classification service", () => {
           }),
           { scopes: ["operator.read"] },
         );
-      },
-    );
-  });
+      });
+    },
+  );
 
-  it("keeps unviewed boards quiet during background sweeps and ignores activity ticks", async () => {
+  it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
     await withService(
-      {
-        facts: [
-          facts("one", { observerDigest: { health: "stuck", headline: "Stuck", revision: 1 } }),
-        ],
-      },
-      async ({ service, state, request, readSessionFacts, complete, store }) => {
-        await service.sweep({ viewedWithinMs: 60_000 });
-        expect(request).not.toHaveBeenCalled();
-        expect(readSessionFacts).not.toHaveBeenCalled();
+      { facts: [] },
+      async ({ service, store, context, logger, repair, readSessionFacts }) => {
+        expect(repair).toHaveBeenCalledOnce();
         await service.read(BOARD_ID);
-        await service.sweep({ viewedWithinMs: 60_000 });
-        expect(readSessionFacts).toHaveBeenCalled();
-        const classified = await store.listSessionPlacements(BOARD_ID);
-        expect(classified).toHaveLength(1);
-        state.facts = [facts("one", { ...state.facts[0], lastActivityAt: NOW + 5_000 })];
-        vi.setSystemTime(NOW + 30_000);
-        await service.sweep({ viewedWithinMs: 60_000 });
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(classified);
-        expect(complete).toHaveBeenCalledOnce();
-        vi.setSystemTime(NOW + 120_000);
-        readSessionFacts.mockClear();
-        await service.sweep({ viewedWithinMs: 60_000 });
+        await service.read(BOARD_ID);
+        expect(repair).toHaveBeenCalledOnce();
         expect(readSessionFacts).not.toHaveBeenCalled();
-      },
-    );
-  });
-
-  it("fits model output into eight-session batches spaced at least 30 seconds apart", async () => {
-    const callTimes: number[] = [];
-    await withService(
-      {
-        facts: Array.from({ length: 41 }, (_, index) => facts(String(index))),
-        complete: async ({ sessions }) => {
-          callTimes.push(Date.now());
-          return placements(sessions);
-        },
-      },
-      async ({ service, complete, store, readSessionFacts }) => {
-        await service.sweep();
-        expect(complete.mock.calls.map(([input]) => input.sessions.length)).toEqual([8]);
-        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys.length)).toEqual([
-          40, 1,
-        ]);
-        expect(
-          (await store.listSessionPlacements(BOARD_ID)).filter((entry) => entry.source === "model"),
-        ).toHaveLength(8);
-        for (let expectedCalls = 2; expectedCalls <= 6; expectedCalls += 1) {
-          await vi.advanceTimersByTimeAsync(29_999);
-          await service.sweep();
-          expect(complete).toHaveBeenCalledTimes(expectedCalls - 1);
-          await vi.advanceTimersByTimeAsync(1);
-          await service.sweep();
-          expect(complete).toHaveBeenCalledTimes(expectedCalls);
+        await service.stop();
+        const oldSpec = createDefaultWorkboardSessionsBoardSpec();
+        const oldOrder = ["needs-input", "working", "stuck", "in-review", "merged", "done"];
+        oldSpec.columns.sort((a, b) => oldOrder.indexOf(a.id) - oldOrder.indexOf(b.id));
+        for (const column of oldSpec.columns) {
+          if (column.id === "working") {
+            column.match = { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] };
+            column.label = "Building";
+            column.description = "My own description";
+          } else if (column.id === "stuck") {
+            column.match = { health: ["stuck", "failed"] };
+          }
         }
-        expect(complete.mock.calls.map(([input]) => input.sessions.length)).toEqual([
-          8, 8, 8, 8, 8, 1,
-        ]);
-        expect(callTimes).toEqual(Array.from({ length: 6 }, (_, index) => NOW + index * 30_000));
-        expect((await service.read(BOARD_ID)).sessions).toHaveLength(41);
-        const classified = await store.listSessionPlacements(BOARD_ID);
-        expect(classified).toHaveLength(41);
-        expect(classified.every((entry) => entry.source === "model")).toBe(true);
-        await vi.advanceTimersByTimeAsync(30_000);
-        await service.sweep();
-        expect(complete).toHaveBeenCalledTimes(6);
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(classified);
-      },
-    );
-  });
-
-  it("classifies queued sessions even when earlier sessions keep changing", async () => {
-    await withService(
-      { facts: Array.from({ length: 9 }, (_, index) => facts(String(index))) },
-      async ({ service, state, complete }) => {
-        await service.sweep();
-        expect(complete.mock.calls[0]?.[0].sessions.map((session) => session.key)).toEqual(
-          Array.from({ length: 8 }, (_, index) => facts(String(index)).key),
+        oldSpec.scope = { maxAgeHours: 24 };
+        await store.updateSessionsBoard(BOARD_ID, oldSpec);
+        await store.upsertBoard({ id: "custom", kind: "sessions" });
+        const customSpec = structuredClone(oldSpec);
+        customSpec.columns = customSpec.columns.map((column) =>
+          column.id === "working" ? { ...column, match: { run: ["active"] } } : column,
         );
-        const changedFacts = structuredClone(state.facts);
-        for (const session of changedFacts.slice(0, 8)) {
-          session.lastMessagePreview = "New activity";
+        const custom = await store.updateSessionsBoard("custom", customSpec);
+        await store.upsertBoard({ id: "custom-order", kind: "sessions" });
+        const reordered = structuredClone(oldSpec);
+        reordered.columns.reverse();
+        await store.updateSessionsBoard("custom-order", reordered);
+        logger.info.mockClear();
+        await service.start(context);
+        const repaired = await store.getSessionsBoard(BOARD_ID);
+        expect(repaired.sessions.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
+        expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
+          label: "Building",
+          description: "My own description",
+          match: { run: ["active"] },
+        });
+        expect(repaired.sessions.columns.find((column) => column.id === "stuck")?.match).toEqual([
+          { health: ["stuck", "failed"] },
+          { run: ["failed"] },
+        ]);
+        expect(repaired.sessions.scope).toEqual({ maxAgeHours: 24 });
+        expect(await store.getSessionsBoard("custom")).toEqual(custom);
+        expect(
+          (await store.getSessionsBoard("custom-order")).sessions.columns.map(
+            (column) => column.id,
+          ),
+        ).toEqual(oldOrder.toReversed());
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "Sessions board updated default rules on 2 boards.",
+        );
+        await service.stop();
+        await service.start(context);
+        expect(await store.getSessionsBoard(BOARD_ID)).toEqual(repaired);
+        expect(logger.info).toHaveBeenCalledOnce();
+        await service.stop();
+        repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
+        logger.info.mockClear();
+        await service.start(context);
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "Sessions board removed 3 non-operator placements.",
+        );
+      },
+    );
+  });
+
+  it("coalesces notifications and refreshes board facts after publications", async () => {
+    await withService(
+      { facts: [facts("one"), facts("two")] },
+      async ({ service, store, state, emit, readSessionFacts, unsubscribe }) => {
+        const changed = vi.spyOn(store, "announceChangeEpoch");
+        expect(readSessionFacts).not.toHaveBeenCalled();
+        emit(facts("one").key);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(changed).not.toHaveBeenCalled();
+        await service.read(BOARD_ID);
+        await store.upsertBoard({ id: "second", kind: "sessions" });
+        expect((await service.read("second")).sessions).toHaveLength(2);
+        changed.mockClear();
+        state.facts = [facts("one", { run: "active" }), facts("two")];
+        emit(facts("one").key);
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
+        state.facts = [
+          facts("one", { run: "active", label: "Updated during burst" }),
+          facts("two"),
+        ];
+        for (let event = 1; event < 100; event += 1) {
+          await vi.advanceTimersByTimeAsync(40);
+          emit(event === 99 ? "agent:main:not-cached" : facts("one").key);
         }
-        state.facts = changedFacts;
-        await vi.advanceTimersByTimeAsync(29_999);
-        await service.sweep();
-        expect(complete).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1_039);
+        expect(changed).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
-        await service.sweep();
-        expect(complete).toHaveBeenCalledTimes(2);
-        expect(complete.mock.calls[1]?.[0].sessions.map((session) => session.key)).toContain(
-          facts("8").key,
-        );
-        expect(
-          (await service.read(BOARD_ID)).sessions.find((session) => session.key === facts("8").key),
-        ).toMatchObject({ source: "model" });
+        expect(changed).toHaveBeenCalledOnce();
+        const read = await service.read(BOARD_ID);
+        expect(read.sessions[0]).toMatchObject({
+          columnId: "focus",
+          label: "Updated during burst",
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(changed).toHaveBeenCalledOnce();
+        emit(facts("two").key);
+        await service.stop();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(unsubscribe).toHaveBeenCalledOnce();
+        expect(changed).toHaveBeenCalledOnce();
       },
     );
   });
 
-  it("keeps the board's own agent conversation off the board", async () => {
+  it.each([false, true])(
+    "retains ready PR facts through unavailable reads (rate limited: %s) while updating run and health",
+    async (rateLimited) => {
+      const known = [
+        facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
+        facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
+        facts("none"),
+      ];
+      await withService(
+        { facts: known, spec: createDefaultWorkboardSessionsBoardSpec() },
+        async ({ service, state, emit }) => {
+          await service.read(BOARD_ID);
+          state.roster = [...known, facts("unknown")];
+          state.facts = state.roster.map((row) => ({
+            ...row,
+            label: "Fresh facts",
+            pullRequests: [],
+            pullRequestsUnavailable: rateLimited ? undefined : true,
+            ...(rateLimited ? { pullRequestsRateLimited: true as const } : {}),
+          }));
+          for (const row of known) {
+            emit(row.key);
+          }
+          const read = await service.read(BOARD_ID);
+          expect(read.sessions.map(({ columnId }) => columnId)).toEqual([
+            "in-review",
+            "merged",
+            "done",
+            "done",
+          ]);
+          expect(read.sessions.map(({ pullRequests }) => pullRequests)).toEqual([
+            [{ number: 1, state: "open" }],
+            [{ number: 2, state: "merged" }],
+            [],
+            [],
+          ]);
+          expect(read.sessions.every(({ label }) => label === "Fresh facts")).toBe(true);
+          expect(read.sessions.slice(2).map(({ reason }) => reason)).toEqual([
+            "fallback",
+            "facts-unavailable",
+          ]);
+          const suffix = rateLimited ? " (GitHub rate limited)" : "";
+          expect(read.warning).toBe(
+            `Pull-request facts for 3 sessions are stale${suffix}. Pull-request facts for 1 session are not loaded yet${suffix}.`,
+          );
+          state.facts[0] = { ...state.facts[0]!, run: "active" };
+          state.facts[1] = {
+            ...state.facts[1]!,
+            observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
+          };
+          emit(known[0]!.key);
+          emit(known[1]!.key);
+          const changed = await service.read(BOARD_ID);
+          expect(changed.sessions.slice(0, 2)).toMatchObject([
+            { run: "active", columnId: "working", pullRequests: known[0]!.pullRequests },
+            {
+              observerDigest: { health: "waiting-on-user" },
+              columnId: "needs-input",
+              pullRequests: known[1]!.pullRequests,
+            },
+          ]);
+          state.facts[0] = {
+            ...state.facts[0]!,
+            lifecycleRevision: "replacement",
+            run: "idle",
+          };
+          emit(known[0]!.key);
+          expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
+            pullRequests: [],
+            columnId: "done",
+            reason: "facts-unavailable",
+          });
+        },
+      );
+    },
+  );
+
+  it("announces new sessions and backs off unavailable PR retries until success", async () => {
+    await withService({ facts: [] }, async ({ service, store, state, emit, readSessionFacts }) => {
+      expect((await service.read(BOARD_ID)).sessions).toEqual([]);
+      const changed = vi.spyOn(store, "announceChangeEpoch");
+      state.roster = state.facts = [facts("new", { pullRequestsUnavailable: true })];
+      emit(facts("new").key);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changed).toHaveBeenCalledOnce();
+      await service.read(BOARD_ID);
+      let calls = 1;
+      for (const delay of [60_000, 120_000, 240_000, 480_000, 900_000, 900_000]) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        const before = await service.read(BOARD_ID);
+        expect(readSessionFacts).toHaveBeenCalledTimes(calls);
+        await vi.advanceTimersByTimeAsync(1);
+        const reads = await Promise.all([
+          service.read(BOARD_ID),
+          service.read(BOARD_ID),
+          service.read(BOARD_ID),
+        ]);
+        expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+        expect(reads.every((read) => read === reads[0])).toBe(true);
+        expect(reads[0]!.revision!.revision).toBe(before.revision!.revision);
+        expect(reads[0]!.revision!.scope).not.toBe(before.revision!.scope);
+      }
+      state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
+      emit(facts("new").key);
+      expect((await service.read(BOARD_ID)).warning).toBeUndefined();
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      state.facts = [facts("new", { pullRequestsUnavailable: true })];
+      emit(facts("new").key);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      await vi.advanceTimersByTimeAsync(30_000);
+      emit(facts("new").key);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      state.roster = [...state.roster, facts("second")];
+      state.facts = [...state.facts, facts("second", { pullRequestsUnavailable: true })];
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([
+        facts("new").key,
+        facts("second").key,
+      ]);
+      await vi.advanceTimersByTimeAsync(29_999);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(calls);
+      await vi.advanceTimersByTimeAsync(1);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([facts("new").key]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(calls + 1);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([facts("second").key]);
+    });
+  });
+
+  it("shares one projection for 25 authorized rosters and retains unchanged facts", async () => {
+    await withService(
+      { facts: Array.from({ length: 81 }, (_, index) => facts(String(index))) },
+      async ({ service, store, request, readSessionFacts, emit }) => {
+        const placements = vi.spyOn(store, "listSessionPlacements");
+        const boards = vi.spyOn(store, "getSessionsBoard");
+        const changes = vi.fn();
+        store.subscribeChanges(changes);
+        const readers = await Promise.all(
+          Array.from({ length: 25 }, () =>
+            service.read(BOARD_ID, undefined, { assertCurrent() {} }),
+          ),
+        );
+        const first = readers[0]!;
+        expect(readers.every((read) => read === first)).toBe(true);
+        expect(first.sessions).toHaveLength(81);
+        expect(request).toHaveBeenCalledTimes(25);
+        expect(boards).toHaveBeenCalledOnce();
+        expect(placements).toHaveBeenCalledOnce();
+        expect(Object.isFrozen(first.sessions[0])).toBe(true);
+        emit(facts("0").key, "category");
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(changes).not.toHaveBeenCalled();
+        expect(await service.read(BOARD_ID)).toBe(first);
+        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys.length)).toEqual([
+          40, 40, 1,
+        ]);
+        vi.setSystemTime(NOW + 10 * 60_000 - 1);
+        await service.read(BOARD_ID);
+        expect(readSessionFacts).toHaveBeenCalledTimes(3);
+        vi.setSystemTime(NOW + 10 * 60_000);
+        await service.read(BOARD_ID);
+        expect(readSessionFacts).toHaveBeenCalledTimes(3);
+        expect(placements).toHaveBeenCalledOnce();
+        emit(facts("0").key);
+        await vi.advanceTimersByTimeAsync(5_000);
+        const next = await service.read(BOARD_ID);
+        expect(next.revision!.revision).toBeGreaterThan(first.revision!.revision);
+        expect(changes).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ sessionsRevision: next.revision!.revision }),
+        );
+        expect(placements).toHaveBeenCalledTimes(2);
+        expect(boards).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
+  it("keeps each visibility projection within its caller's roster and people", async () => {
+    await withService(
+      { facts: [facts("shared"), facts("private")] },
+      async ({ service, request, readSessionFacts }) => {
+        const people = [
+          { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 2 },
+        ];
+        request
+          .mockResolvedValueOnce({ sessions: [facts("shared"), facts("private")], people })
+          .mockResolvedValueOnce({ sessions: [facts("shared")], people: [] });
+        const [owner, viewer] = await Promise.all([
+          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
+          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
+        ]);
+        expect(owner.sessions.map(({ label }) => label)).toEqual(["shared", "private"]);
+        expect(owner.people).toEqual(people);
+        expect(viewer.sessions.map(({ label }) => label)).toEqual(["shared"]);
+        expect(viewer.people).toEqual([]);
+        expect(viewer.revision!.scope).not.toBe(owner.revision!.scope);
+        request.mockResolvedValueOnce({ sessions: [facts("shared")], people });
+        const otherPeople = await service.read(BOARD_ID, { includePeople: true });
+        expect(otherPeople.sessions).toEqual(viewer.sessions);
+        expect(otherPeople.people).toEqual(people);
+        expect(otherPeople.revision!.scope).not.toBe(viewer.revision!.scope);
+        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys)).toEqual([
+          [facts("shared").key, facts("private").key],
+          [facts("shared").key],
+          [facts("shared").key],
+        ]);
+      },
+    );
+  });
+
+  it("expires a cached projection when a session leaves the board's age window", async () => {
+    await withService(
+      { facts: [facts("one")], spec: { scope: { maxAgeHours: 1 } } },
+      async ({ service }) => {
+        const first = await service.read(BOARD_ID);
+        vi.setSystemTime(NOW + 3_600_000);
+        expect(await service.read(BOARD_ID)).toBe(first);
+        vi.setSystemTime(NOW + 3_600_001);
+        const expired = await service.read(BOARD_ID);
+        expect(expired.sessions).toEqual([]);
+        expect(expired.revision!.scope).not.toBe(first.revision!.scope);
+      },
+    );
+  });
+
+  it("checks authority after the caller's roster read even with a warm projection", async () => {
+    await withService({ facts: [facts("one")] }, async ({ service, request }) => {
+      const first = await service.read(BOARD_ID);
+      let active = true;
+      request.mockImplementationOnce(async () => {
+        active = false;
+        return { sessions: [facts("one")] };
+      });
+      await expect(
+        service.read(BOARD_ID, undefined, {
+          assertCurrent() {
+            if (!active) {
+              throw new Error("Caller authority expired");
+            }
+          },
+        }),
+      ).rejects.toThrow("Caller authority expired");
+      expect(await service.read(BOARD_ID)).toBe(first);
+    });
+  });
+
+  it.each(["owner", "joiner"] as const)(
+    "rejects an expired %s without retiring the other caller's authority",
+    async (expired) => {
+      await withService(
+        { facts: [facts("one")] },
+        async ({ service, request, readSessionFacts }) => {
+          const entered = Promise.withResolvers<void>();
+          const joined = Promise.withResolvers<void>();
+          const release = Promise.withResolvers<void>();
+          let active = true;
+          let joinerRosterRead = false;
+          const caller = (name: "owner" | "joiner") => ({
+            assertCurrent() {
+              if (!active && name === expired) {
+                throw new Error("Caller authority expired");
+              }
+              if (name === "joiner" && joinerRosterRead) {
+                joined.resolve();
+              }
+            },
+          });
+          readSessionFacts.mockImplementationOnce(async () => {
+            entered.resolve();
+            await release.promise;
+            return { sessions: [facts("one")] };
+          });
+          const owner = service.read(BOARD_ID, undefined, caller("owner"));
+          await entered.promise;
+          request.mockImplementationOnce(async () => {
+            joinerRosterRead = true;
+            return { sessions: [facts("one")] };
+          });
+          const joiner = service.read(BOARD_ID, undefined, caller("joiner"));
+          const rejected = expect(expired === "owner" ? owner : joiner).rejects.toThrow(
+            "Caller authority expired",
+          );
+          await joined.promise;
+          active = false;
+          release.resolve();
+          await rejected;
+          const survivor = await (expired === "owner" ? joiner : owner);
+          expect(survivor.sessions).toMatchObject([{ key: facts("one").key }]);
+          expect((await service.read(BOARD_ID)).sessions).toEqual(survivor.sessions);
+        },
+      );
+    },
+  );
+
+  it("keeps pins across fact changes and returns to rules when their column is deleted", async () => {
+    await withService(
+      { facts: [facts("one", { run: "active" })] },
+      async ({ service, store, state, emit }) => {
+        await service.move(BOARD_ID, facts("one").key, "other");
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
+          columnId: "other",
+          source: "operator",
+        });
+        state.facts = [
+          facts("one", { observerDigest: { health: "stuck", headline: "Stuck", revision: 1 } }),
+        ];
+        emit(facts("one").key);
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
+          columnId: "other",
+          source: "operator",
+        });
+        await service.update(BOARD_ID, {
+          columns: [FOCUS_COLUMN, { ...OTHER_COLUMN, id: "fallback" }],
+        });
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
+          columnId: "fallback",
+          source: "state",
+        });
+        expect(
+          (await store.listSessionPlacements(BOARD_ID)).every((pin) => pin.source === "operator"),
+        ).toBe(true);
+      },
+    );
+  });
+
+  it("shows failure reasons, keeps stale facts, and falls back for unread sessions", async () => {
+    await withService(
+      { facts: [facts("known", { run: "active" })] },
+      async ({ service, state, emit, readSessionFacts, logger }) => {
+        await service.read(BOARD_ID);
+        state.roster = [...state.roster, facts("new")];
+        emit(facts("known").key);
+        readSessionFacts.mockRejectedValue(new Error("facts backend offline"));
+        const read = await service.read(BOARD_ID);
+        expect(read.warning).toContain(
+          "Session facts are unavailable for 2 sessions: Error: facts backend offline. Showing the last known placement.",
+        );
+        expect(read.sessions).toMatchObject([
+          { key: facts("known").key, run: "active", columnId: "focus" },
+          { key: facts("new").key, columnId: "other", reason: "facts-unavailable" },
+        ]);
+        await service.read(BOARD_ID);
+        expect(logger.warn).toHaveBeenCalledOnce();
+        readSessionFacts.mockResolvedValue({ sessions: state.roster });
+        const recovered = await service.read(BOARD_ID);
+        expect(recovered.warning).toBeUndefined();
+        expect(recovered.revision!.revision).toBe(read.revision!.revision);
+        expect(recovered.revision!.scope).not.toBe(read.revision!.scope);
+        expect(await service.read(BOARD_ID)).toBe(recovered);
+        emit(facts("known").key);
+        readSessionFacts.mockResolvedValue({ sessions: [] });
+        expect((await service.read(BOARD_ID)).sessions).toEqual([]);
+        readSessionFacts.mockRejectedValue(new Error("second outage"));
+        const unavailable = await service.read(BOARD_ID);
+        expect(unavailable.warning).toContain("second outage");
+        expect(unavailable.sessions).toMatchObject([
+          { key: facts("known").key, columnId: "other", reason: "facts-unavailable" },
+          { key: facts("new").key, columnId: "other", reason: "facts-unavailable" },
+        ]);
+        expect(logger.warn).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
+  it("does not let an in-flight read overwrite a newer invalidation", async () => {
+    await withService(
+      { facts: [facts("one")] },
+      async ({ service, store, emit, readSessionFacts }) => {
+        await service.read(BOARD_ID);
+        emit(facts("one").key);
+        const admittedRevision = store.sessionsRevision;
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        readSessionFacts.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return { sessions: [facts("one")] };
+        });
+        const pending = service.read(BOARD_ID);
+        await entered.promise;
+        emit(facts("one").key);
+        readSessionFacts.mockResolvedValue({ sessions: [facts("one", { run: "active" })] });
+        const current = await service.read(BOARD_ID);
+        release.resolve();
+        const previous = await pending;
+        expect(previous.revision!.revision).toBe(admittedRevision.revision);
+        expect(current.sessions[0]).toMatchObject({ columnId: "focus" });
+        expect(current.revision!.revision).toBeGreaterThan(previous.revision!.revision);
+        expect(await service.read(BOARD_ID)).toBe(current);
+        emit(facts("one").key);
+        readSessionFacts.mockRejectedValue(new Error("facts backend offline"));
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
+      },
+    );
+  });
+
+  it("completes during continuous roster invalidation without caching a stale revision", async () => {
+    await withService(
+      { facts: [facts("one")] },
+      async ({ service, store, state, request, emit }) => {
+        const admittedRevision = store.sessionsRevision;
+        let rosterReads = 0;
+        request.mockImplementation(async () => {
+          if (++rosterReads > 2) {
+            throw new Error("Sessions board kept retrying an invalidated roster");
+          }
+          emit(facts("one").key);
+          return { sessions: state.roster };
+        });
+        const duringChurn = await service.read(BOARD_ID);
+        expect(rosterReads).toBe(1);
+        expect(duringChurn.revision!.revision).toBe(admittedRevision.revision);
+        expect(duringChurn.revision!.revision).toBeLessThan(store.sessionsRevision.revision);
+        request.mockImplementation(async () => ({ sessions: state.roster }));
+        const current = await service.read(BOARD_ID);
+        expect(current.revision!.revision).toBe(store.sessionsRevision.revision);
+        expect(current.revision!.scope).not.toBe(duringChurn.revision!.scope);
+        expect(await service.read(BOARD_ID)).toBe(current);
+        state.facts = [facts("one", { run: "active" })];
+        emit(facts("one").key);
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
+      },
+    );
+  });
+
+  it("intersects each caller roster with current identities and excludes the Board agent", async () => {
     const own = facts("board-agent");
     await withService(
-      { facts: [own, facts("one")], spec: { agentSessionKey: own.key } },
-      async ({ service, store, complete }) => {
-        await service.sweep();
-        expect(
-          (await store.listSessionPlacements(BOARD_ID)).map((entry) => entry.sessionKey),
-        ).toEqual([facts("one").key]);
-        expect(complete).toHaveBeenCalledOnce();
+      { facts: [own, facts("one"), facts("hidden")], spec: { agentSessionKey: own.key } },
+      async ({ service, state }) => {
         expect((await service.read(BOARD_ID)).sessions.map((session) => session.key)).toEqual([
           facts("one").key,
+          facts("hidden").key,
         ]);
+        state.roster = [facts("one", { sessionId: "replacement" })];
+        expect((await service.read(BOARD_ID)).sessions).toEqual([]);
+        state.facts = state.roster;
+        expect((await service.read(BOARD_ID)).sessions).toMatchObject([
+          { sessionId: "replacement" },
+        ]);
+        state.roster = [own];
         await expect(service.move(BOARD_ID, own.key, "other")).rejects.toThrow(
           "not available in this board's scope",
         );
@@ -380,235 +919,12 @@ describe("Sessions board classification service", () => {
     );
   });
 
-  it("accepts utility-model JSON wrapped in a markdown code fence", async () => {
-    await withService(
-      {
-        facts: [facts("one")],
-        complete: async ({ sessions }) => "```json\n" + placements(sessions) + "\n```",
-      },
-      async ({ service, store, logger }) => {
-        await service.sweep();
-        expect((await store.listSessionPlacements(BOARD_ID))[0]).toMatchObject({
-          columnId: "focus",
-          source: "model",
-        });
-        expect(logger.warn).not.toHaveBeenCalled();
-      },
-    );
-  });
-
-  it("uses fallback for unknown or missing model column IDs and omitted sessions", async () => {
-    const sessions = [
-      facts("valid"),
-      facts("unknown"),
-      facts("missing-column"),
-      facts("omitted"),
-    ] as const;
-    await withService(
-      {
-        facts: [...sessions],
-        complete: async () =>
-          JSON.stringify({
-            placements: [
-              { sessionKey: sessions[0].key, columnId: "focus", reason: "Attention" },
-              { sessionKey: sessions[1].key, columnId: "invented", reason: "Invalid" },
-              { sessionKey: sessions[2].key, reason: "Missing" },
-              { sessionKey: "agent:main:outside", columnId: "focus", reason: "Not in batch" },
-            ],
-          }),
-      },
-      async ({ service, store }) => {
-        await service.sweep();
-        const result = await service.read(BOARD_ID);
-        expect(
-          result.sessions.map(({ columnId, source, reason }) => ({ columnId, source, reason })),
-        ).toEqual([
-          { columnId: "focus", source: "model", reason: "Attention" },
-          ...Array.from({ length: 3 }, () => ({
-            columnId: "other",
-            source: "model",
-            reason: "unresolved",
-          })),
-        ]);
-        expect(await store.listSessionPlacements(BOARD_ID)).toHaveLength(4);
-      },
-    );
-  });
-
-  it("retains previous placements on model failure and logs once until recovery", async () => {
-    await withService(
-      { facts: [facts("one")] },
-      async ({ service, state, store, complete, logger }) => {
-        await service.sweep();
-        const previous = await store.listSessionPlacements(BOARD_ID);
-        state.facts = [facts("one", { lastMessagePreview: "New question?" })];
-        complete.mockRejectedValue(new Error("provider unavailable"));
-        vi.setSystemTime(NOW + 30_000);
-        await service.sweep();
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(previous);
-        expect((await service.read(BOARD_ID)).warning).toContain(
-          "Previous placements are retained",
-        );
-        vi.setSystemTime(NOW + 60_000);
-        await service.sweep();
-        expect(logger.warn).toHaveBeenCalledOnce();
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(previous);
-
-        complete.mockImplementation(async ({ sessions }) => placements(sessions, "other"));
-        vi.setSystemTime(NOW + 90_000);
-        await service.sweep();
-        expect((await service.read(BOARD_ID)).warning).toBeUndefined();
-        expect((await store.listSessionPlacements(BOARD_ID))[0]).toMatchObject({
-          columnId: "other",
-          source: "model",
-        });
-        state.facts = [facts("one", { lastMessagePreview: "Another question?" })];
-        complete.mockRejectedValue(new Error("provider unavailable again"));
-        vi.setSystemTime(NOW + 120_000);
-        await service.sweep();
-        expect(logger.warn).toHaveBeenCalledTimes(2);
-      },
-    );
-  });
-
-  it("skips stable facts, preserves operator pins, and retires pins when facts change", async () => {
-    await withService({ facts: [facts("one")] }, async ({ service, state, store, complete }) => {
-      await service.sweep();
-      const classified = await store.listSessionPlacements(BOARD_ID);
-      await service.sweep();
-      expect(await store.listSessionPlacements(BOARD_ID)).toEqual(classified);
-      expect(complete).toHaveBeenCalledOnce();
-      await service.move(BOARD_ID, facts("one").key, "other");
-      const pinned = await store.listSessionPlacements(BOARD_ID);
-      expect(pinned[0]).toMatchObject({ columnId: "other", source: "operator" });
-      await service.sweep();
-      expect(await store.listSessionPlacements(BOARD_ID)).toEqual(pinned);
-      expect(complete).toHaveBeenCalledOnce();
-
-      state.facts = [
-        facts("one", {
-          observerDigest: { health: "waiting-on-user", headline: "Needs approval", revision: 2 },
-        }),
-      ];
-      complete.mockRejectedValueOnce(new Error("utility temporarily unavailable"));
-      vi.setSystemTime(NOW + 30_000);
-      await service.sweep();
-      expect((await store.listSessionPlacements(BOARD_ID))[0]).toMatchObject({
-        columnId: "other",
-        source: "state",
-        reason: "unresolved",
-      });
-      vi.setSystemTime(NOW + 60_000);
-      await service.sweep();
-      expect((await store.listSessionPlacements(BOARD_ID))[0]).toMatchObject({
-        columnId: "focus",
-        source: "model",
-      });
-      expect(complete).toHaveBeenCalledTimes(3);
-    });
-  });
-
-  it("reclassifies changed specs and lets instructions override deterministic rules", async () => {
-    const columns: WorkboardSessionsColumn[] = [
-      { id: "focus", label: "Focus", description: "Active work.", match: { run: ["active"] } },
-      OTHER_COLUMN,
-    ];
-    await withService(
-      {
-        facts: [facts("one", { run: "active" })],
-        spec: { columns },
-        complete: async ({ sessions }) => placements(sessions, "other"),
-      },
-      async ({ service, store, complete }) => {
-        await service.sweep();
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "focus",
-          source: "state",
-        });
-        expect(complete).not.toHaveBeenCalled();
-        await service.update(BOARD_ID, { instructions: "Place active sessions in Other." });
-        await service.sweep();
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "other",
-          source: "model",
-        });
-        expect(complete).toHaveBeenCalledOnce();
-        vi.setSystemTime(NOW + 30_000);
-        const changedColumns = structuredClone(columns);
-        for (const column of changedColumns) {
-          column.description += " Updated.";
-        }
-        await store.updateSessionsBoard(BOARD_ID, {
-          columns: changedColumns,
-        });
-        await service.sweep();
-        expect(complete).toHaveBeenCalledTimes(2);
-        await service.sweep();
-        expect(complete).toHaveBeenCalledTimes(2);
-      },
-    );
-  });
-
-  it("returns cached placements while the model is still pending", async () => {
-    const entered = Promise.withResolvers<void>();
-    const answer = Promise.withResolvers<string>();
-    await withService(
-      {
-        facts: [facts("one")],
-        complete: async () => {
-          entered.resolve();
-          return await answer.promise;
-        },
-      },
-      async ({ service }) => {
-        const pending = service.sweep();
-        try {
-          await entered.promise;
-          const cached = await service.read(BOARD_ID);
-          expect(cached.sessions[0]).toMatchObject({ columnId: "other", reason: "unresolved" });
-        } finally {
-          answer.resolve(placements([facts("one")]));
-          await pending;
-        }
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "focus",
-          source: "model",
-        });
-      },
-    );
-  });
-
-  it("filters cached facts against the caller's current roster and reused session identities", async () => {
-    await withService(
-      {
-        facts: [facts("one", { run: "active" }), facts("hidden", { run: "active" })],
-        spec: { columns: [{ ...FOCUS_COLUMN, match: { run: ["active"] } }, OTHER_COLUMN] },
-      },
-      async ({ service, state }) => {
-        await service.sweep();
-        await service.move(BOARD_ID, facts("one").key, "other");
-        state.roster = state.roster.filter(({ key }) => key === facts("one").key);
-        expect((await service.read(BOARD_ID)).sessions.map((session) => session.label)).toEqual([
-          "one",
-        ]);
-        state.roster = [{ key: facts("one").key, sessionId: "replacement" }];
-        expect((await service.read(BOARD_ID)).sessions).toEqual([]);
-        state.facts = [facts("one", { run: "active", sessionId: "replacement" })];
-        await service.sweep();
-        expect((await service.read(BOARD_ID)).sessions).toMatchObject([
-          { sessionId: "replacement", columnId: "focus", source: "state" },
-        ]);
-      },
-    );
-  });
-
-  it("forwards people views only for reads and intersects the filtered roster with classified sessions", async () => {
+  it("forwards people views without changing the board or pins", async () => {
     await withService(
       { facts: [facts("one"), facts("two")] },
       async ({ service, store, request }) => {
-        await service.sweep();
+        await service.read(BOARD_ID);
         const board = await store.getSessionsBoard(BOARD_ID);
-        const classified = await store.listSessionPlacements(BOARD_ID);
         const people = [
           { identity: { type: "profile", id: "profile-one" }, label: "Alex", sessionCount: 1 },
         ];
@@ -618,11 +934,7 @@ describe("Sessions board classification service", () => {
           { involvingMe: false, includePeople: false },
         ]) {
           request.mockClear();
-          request.mockResolvedValueOnce({
-            sessions: [facts("one"), facts("unclassified")],
-            people,
-            hasMore: false,
-          });
+          request.mockResolvedValueOnce({ sessions: [facts("one")], people, hasMore: false });
           const read = await service.read(BOARD_ID, view);
           expect(request).toHaveBeenCalledExactlyOnceWith(
             "sessions.list",
@@ -633,49 +945,7 @@ describe("Sessions board classification service", () => {
           expect(read.people).toBe(view.includePeople ? people : undefined);
         }
         expect(await store.getSessionsBoard(BOARD_ID)).toEqual(board);
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(classified);
-
-        request.mockClear();
-        await service.sweep();
-        await service.move(BOARD_ID, facts("two").key, "other");
-        expect(request).toHaveBeenCalled();
-        for (const [, input] of request.mock.calls) {
-          expect(input).not.toHaveProperty("involvingMe");
-          expect(input).not.toHaveProperty("involvingProfileId");
-          expect(input).not.toHaveProperty("includePeople");
-        }
-        expect((await service.read(BOARD_ID)).sessions).toMatchObject([
-          { key: facts("one").key, columnId: "focus" },
-          { key: facts("two").key, columnId: "other", source: "operator" },
-        ]);
-      },
-    );
-  });
-
-  it("fences pending model writes and drains the operation when the service stops", async () => {
-    const entered = Promise.withResolvers<Parameters<Completion>[0]>();
-    const answer = Promise.withResolvers<string>();
-    await withService(
-      {
-        facts: [facts("one")],
-        complete: async (input) => {
-          entered.resolve(input);
-          return await answer.promise;
-        },
-      },
-      async ({ service, store }) => {
-        const pending = service.sweep();
-        const input = await entered.promise;
-        const previous = await store.listSessionPlacements(BOARD_ID);
-        const stopped = service.stop();
-        try {
-          expect(input.signal.aborted).toBe(true);
-        } finally {
-          answer.resolve(placements(input.sessions));
-          await Promise.all([pending, stopped]);
-        }
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(previous);
-        expect(() => service.read(BOARD_ID)).toThrow("service is unavailable");
+        expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
       },
     );
   });

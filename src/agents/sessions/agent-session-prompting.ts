@@ -9,8 +9,10 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import { buildCurrentInboundSteeringPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { attachSteeringRuntimeContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
+  isOpenClawSystemUpdateMessage,
+  orderSystemUpdateMessages,
   resolvePendingRuntimeContextReplay,
   type CurrentInboundPromptContext,
 } from "../internal-runtime-context.js";
@@ -46,9 +48,29 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
   private promptPreparation?: () => Promise<void | (() => void)>;
 
-  [agentSessionQueuePromptContext](message: CustomMessage): () => void {
-    // The carrier belongs immediately after its user, ahead of queued extension context.
-    this.pendingNextTurnMessages.unshift(message);
+  [agentSessionQueuePromptContext](message: CustomMessage): () => void;
+  [agentSessionQueuePromptContext](
+    message: CustomMessage,
+    options: { delivery: "current-request" },
+  ): Promise<void>;
+  [agentSessionQueuePromptContext](
+    message: CustomMessage,
+    options?: { delivery: "current-request" },
+  ): (() => void) | Promise<void> {
+    if (options?.delivery === "current-request") {
+      return this.persistCustomMessage(message);
+    }
+    if (this.logicalPromptActive && isOpenClawSystemUpdateMessage(message)) {
+      this.agent.steer(message);
+      return () => {
+        this.agent.cancelSteeringMessage((pending) => pending === message);
+      };
+    }
+    if (isOpenClawSystemUpdateMessage(message)) {
+      this.pendingNextTurnMessages.push(message);
+    } else {
+      this.pendingNextTurnMessages.unshift(message);
+    }
     return () => {
       this.pendingNextTurnMessages = this.pendingNextTurnMessages.filter(
         (pending) => pending !== message,
@@ -148,7 +170,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     // Messages queued by agent_end handlers arrive after the loop's final queue drain.
-    return this.agent.hasQueuedMessages() ? "continue" : "settled";
+    // A failed request stays unanswered for the run owner to retry, so queued input
+    // must not continue past it; a steer's caller re-queues it when this run settles.
+    return msg.stopReason !== "error" && this.agent.hasQueuedMessages() ? "continue" : "settled";
   }
 
   private createUserMessage(
@@ -338,7 +362,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     preflightResult?.(true);
-    await this.runAgentPrompt(messages);
+    await this.runAgentPrompt(orderSystemUpdateMessages(messages));
   }
 
   /**
@@ -431,9 +455,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     const expandedText = this.expandPrompt(text);
-    // Expand commands before adding this turn's model-only context.
-    const steeringPrompt = buildCurrentInboundSteeringPrompt(expandedText, currentInboundContext);
-
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
     // Transcript preparation may outlive the captured attempt. Recheck its owner
     // fence immediately before enqueue so a successor cannot inherit this steer.
@@ -441,7 +462,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       throw new Error("active session is finalizing");
     }
     await this.queueSteer(
-      steeringPrompt,
+      expandedText,
       images,
       preparedMessage && userTurnTranscriptRecorder
         ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
@@ -449,6 +470,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       media,
       imageOrder,
       queueIdentity,
+      currentInboundContext,
     );
   }
 
@@ -478,11 +500,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
+    currentInboundContext?: CurrentInboundPromptContext,
   ): Promise<void> {
     const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
+    attachSteeringRuntimeContext(promptMessage, currentInboundContext);
     setSteeringMessageIdentity(promptMessage, queueIdentity);
     this.trackQueuedUserMessage(promptMessage, "steering", text);
     this.agent.steer(
@@ -546,18 +570,22 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } else if (options?.triggerTurn) {
       await this.runAgentPrompt(appMessage);
     } else {
-      await withSessionManagerWrite(this.sessionManager, () => {
-        this.sessionManager.appendCustomMessageEntry(
-          appMessage.customType,
-          appMessage.content,
-          appMessage.display,
-          appMessage.details,
-        );
-        this.agent.state.messages.push(appMessage);
-      });
-      this.emit({ type: "message_start", message: appMessage });
-      this.emit({ type: "message_end", message: appMessage });
+      await this.persistCustomMessage(appMessage);
     }
+  }
+
+  private async persistCustomMessage(message: CustomMessage): Promise<void> {
+    await withSessionManagerWrite(this.sessionManager, async () => {
+      await this.sessionManager.appendCustomMessageEntryAsync(
+        message.customType,
+        message.content,
+        message.display,
+        message.details,
+      );
+      this.agent.state.messages.push(message);
+    });
+    this.emit({ type: "message_start", message });
+    this.emit({ type: "message_end", message });
   }
 
   /**

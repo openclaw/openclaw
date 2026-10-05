@@ -13,6 +13,8 @@ import {
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import {
@@ -249,9 +251,10 @@ async function runActualInstallPolicyCommandIfNeeded(
   return await actualExecModule.runCommandWithTimeout(args, options);
 }
 
-function countMockedCommands(executable: string): number {
-  return vi.mocked(runCommandWithTimeout).mock.calls.filter(([args]) => args[0] === executable)
-    .length;
+function countNpmCommands(): number {
+  return vi
+    .mocked(runCommandWithTimeout)
+    .mock.calls.filter(([args]) => npmCommandArgs(args) !== undefined).length;
 }
 
 function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?: string }) {
@@ -260,7 +263,7 @@ function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?
     if (policyResult) {
       return policyResult;
     }
-    if (args[0] !== "npm" || args[1] !== "install") {
+    if (npmCommandArgs(args)?.[0] !== "install") {
       throw new Error(`unexpected command: ${args.join(" ")}`);
     }
     if (!args.includes("--package-lock-only")) {
@@ -404,16 +407,7 @@ function expectHookRequest(
 function mockSuccessfulCommandRun(run: ReturnType<typeof vi.mocked<typeof runCommandWithTimeout>>) {
   run.mockImplementation(async (args, options) => {
     const policyResult = await runActualInstallPolicyCommandIfNeeded(args, options);
-    return (
-      policyResult ?? {
-        code: 0,
-        stdout: "",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      }
-    );
+    return policyResult ?? createCommandResult();
   });
 }
 
@@ -975,9 +969,8 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(countMockedCommands("npm")).toBe(1);
-    expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
-      "npm",
+    expect(countNpmCommands()).toBe(1);
+    expect(npmCommandArgs(vi.mocked(runCommandWithTimeout).mock.calls[0]![0])).toEqual([
       "view",
       `${packageName}@1.0.0`,
       "name",
@@ -1225,7 +1218,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(countMockedCommands("npm")).toBe(1);
+    expect(countNpmCommands()).toBe(1);
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
@@ -1306,7 +1299,7 @@ describe("installPluginFromDir", () => {
     expect(serialized).not.toContain(extensionsDir);
   });
 
-  it("emits git source family for git-backed installed package installs", async () => {
+  it("leaves install success emission to the caller that commits the staged package", async () => {
     const caseDir = suiteTempRootTracker.makeTempDir();
     const pluginDir = path.join(caseDir, "repo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -1328,16 +1321,7 @@ describe("installPluginFromDir", () => {
     }
 
     expect(result!.ok).toBe(true);
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      action: "plugin.installed",
-      outcome: "success",
-      target: { kind: "plugin", name: "git-backed-plugin" },
-      attributes: {
-        source_family: "git",
-        mode: "install",
-      },
-    });
+    expect(captured.events).toHaveLength(0);
   });
 
   it("ignores installed managed npm peer dependency code during install-time code scans", async () => {

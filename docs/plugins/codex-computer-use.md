@@ -18,9 +18,10 @@ turns check installation and tool availability without running a live probe.
 Explicit status/install commands, strict-readiness startup, and enabled periodic
 health checks run live probes. These use
 `list_apps` when the server exposes the legacy Computer Use surface. A newer
-server that exposes `js` instead is probed with one `await cua.getState();`
-call. An MCP response with `isError: true` fails readiness instead of counting
-as a successful response.
+server that exposes `js` instead is probed with one `await cua.listApps();`
+call. Both probes check native app control without inventorying browser surfaces.
+An MCP response with `isError: true` fails readiness instead of counting as a
+successful response.
 
 Use this page when OpenClaw is already using the native Codex harness. For the
 runtime setup itself, see [Codex harness](/plugins/codex-harness).
@@ -333,7 +334,7 @@ or legacy MCP/tool restrictions prevent automatic replacement and cache refresh.
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.158.0. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.160.0. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 

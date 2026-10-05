@@ -571,31 +571,19 @@ export class EmbeddedBlockChunker {
     }
     const preference = chunking.breakPreference ?? "paragraph";
 
-    if (preference === "paragraph") {
-      const paragraphIdx = findSafeLineBreakIndex({
+    const separators: Array<"\n" | "\n\n"> =
+      preference === "paragraph" ? ["\n\n", "\n"] : preference === "newline" ? ["\n"] : [];
+    for (const separator of separators) {
+      const index = findSafeLineBreakIndex({
         text: buffer,
         unsafeSpans,
         minChars,
         reverse,
-        separator: "\n\n",
+        separator,
         offset,
       });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
-      }
-    }
-
-    if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeLineBreakIndex({
-        text: buffer,
-        unsafeSpans,
-        minChars,
-        reverse,
-        separator: "\n",
-        offset,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
+      if (index !== -1) {
+        return { index };
       }
     }
 

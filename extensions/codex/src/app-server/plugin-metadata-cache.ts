@@ -185,27 +185,16 @@ function buildMetadataCacheEntryKey(
   requestParams?: v2.PluginListParams | v2.PluginInstalledParams,
   catalogScope?: string,
 ): string {
-  if (queryKind !== "installed") {
-    const listParams = requestParams as v2.PluginListParams | undefined;
-    // Repository marketplaces are scoped to the supplied roots, while explicit
-    // marketplace kinds select different remote catalogs. Sharing either
-    // snapshot across requests could expose another workspace's plugins.
-    const entry = [
-      appCacheKey,
-      queryKind,
-      listParams?.cwds ?? [],
-      Array.from(new Set(listParams?.marketplaceKinds ?? [])).toSorted(),
-      ...(catalogScope ? [catalogScope] : []),
-    ];
-    return JSON.stringify(entry);
-  }
-  const installedParams = requestParams as v2.PluginInstalledParams | undefined;
-  // Codex discovers workspace marketplaces from these exact roots. Reusing one
-  // runtime's installed snapshot for another cwd exposes the wrong plugins.
+  // Workspace roots, catalog kinds, and install suggestions each scope discovery.
+  const names =
+    queryKind === "installed"
+      ? (requestParams as v2.PluginInstalledParams | undefined)?.installSuggestionPluginNames
+      : (requestParams as v2.PluginListParams | undefined)?.marketplaceKinds;
   return JSON.stringify([
     appCacheKey,
     queryKind,
-    installedParams?.cwds ?? [],
-    Array.from(new Set(installedParams?.installSuggestionPluginNames ?? [])).toSorted(),
+    requestParams?.cwds ?? [],
+    Array.from(new Set(names ?? [])).toSorted(),
+    ...(queryKind !== "installed" && catalogScope ? [catalogScope] : []),
   ]);
 }

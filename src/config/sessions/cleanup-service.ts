@@ -325,7 +325,6 @@ async function previewStoreCleanup(params: {
     pruned,
     capped,
   } = planSessionEntryMaintenance({
-    profile: "write",
     maintenance: params.maintenance,
     initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
     // Cleanup previews apply the same immediate cap as the apply path.
