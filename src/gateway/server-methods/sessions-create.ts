@@ -499,6 +499,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       visibility: p.visibility,
       allowExistingModelSelection,
       parentSessionKey,
+      independent: p.independent,
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,
