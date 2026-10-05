@@ -51,6 +51,7 @@ import {
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
+import { runOutsideOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 
 // Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
@@ -574,8 +575,13 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
     // The listener owns its context until Gateway close; callers own only requests.
     // The first turn's work and plugin generation can retire before later requests.
     const work = new AsyncWorkScope();
-    activeMcpLoopbackServerPromise = runOutsidePluginRuntimeGenerationScope(() =>
-      runOutsideGatewayRootWorkAdmission(() => work.run(() => startMcpLoopbackServer(port, work))),
+    // A process-owned listener must not retain its creator's temporary tool authority.
+    activeMcpLoopbackServerPromise = runOutsideOperatorToolGatewayAuthority(() =>
+      runOutsidePluginRuntimeGenerationScope(() =>
+        runOutsideGatewayRootWorkAdmission(() =>
+          work.run(() => startMcpLoopbackServer(port, work)),
+        ),
+      ),
     )
       .then((close) => {
         closeActiveMcpLoopbackServer = close;
