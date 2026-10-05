@@ -339,20 +339,21 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
     const session = await create("async-preview-grant");
     await append(session, "preview content");
     const target = { ...targetInput(session), agentId: actor.agentId, storePath: actor.path, env };
+    const grant: IncognitoSessionAuthority = { assertCurrent() {} };
+    // Inject an invalid runtime hook to exercise the synchronous-grant boundary.
+    Object.defineProperty(grant, "authorize", {
+      value(stage: "transaction" | "commit") {
+        if (stage === "transaction") {
+          return Promise.reject(new Error("asynchronous grant denied"));
+        }
+        return undefined;
+      },
+    });
     await expect(
       readSessionPreviewItemsFromTranscriptAsync(target, 10, 100, "model-context", {
         actor,
         target,
-        authority: {
-          assertCurrent() {},
-          // oxlint-disable-next-line typescript/no-misused-promises -- Prove composed policies reject asynchronous native grants.
-          authorize(stage) {
-            if (stage === "transaction") {
-              return Promise.reject(new Error("asynchronous grant denied"));
-            }
-            return undefined;
-          },
-        },
+        authority: grant,
       }),
     ).rejects.toThrow("Incognito session grants must remain synchronous");
   });
