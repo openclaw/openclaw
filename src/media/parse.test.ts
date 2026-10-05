@@ -30,6 +30,18 @@ describe("splitMediaFromOutput", () => {
     }
   }
 
+  it.each([
+    ["Caption\nMEDIA:./screenshot.png\nDone", "Caption\nDone"],
+    ["Caption\nMEDIA:./ok.png leftover-words\nDone", "Caption\nDone"],
+    [
+      "First  paragraph\n\nMEDIA:./image.png\n\n  Indented  text",
+      "First  paragraph\n\n\n  Indented  text",
+    ],
+    ["```text\nMEDIA:./example.png\n```\nMEDIA:./image.png", "```text\nMEDIA:./example.png\n```"],
+  ])("strips streamed MEDIA without extracting attachments: %s", (input, text) => {
+    expectParsedMediaOutputCase(input, { text }, { extractMediaDirectives: false });
+  });
+
   function expectStableAudioAsVoiceDetectionCase(input: string) {
     for (const output of [splitMediaFromOutput(input), splitMediaFromOutput(input)]) {
       expect(output.audioAsVoice).toBe(true);

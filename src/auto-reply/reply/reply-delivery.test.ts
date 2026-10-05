@@ -369,10 +369,10 @@ describe("createBlockReplyDeliveryHandler", () => {
       mediaUrls: [],
     },
     {
-      name: "disabled parsing",
+      name: "disabled attachment extraction",
       payload: { text: "Result\nMEDIA: ./image.png" },
       extractMediaDirectives: false,
-      text: "Result\nMEDIA: ./image.png",
+      text: "Result",
     },
     { name: "plain reply", payload: { text: "plain reply" }, text: "plain reply" },
   ])(

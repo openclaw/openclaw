@@ -1,3 +1,4 @@
+import { fstatSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -359,26 +360,28 @@ describe("probeMediaFilesWithinBudget", () => {
 });
 
 describe("probeVideoDimensions", () => {
-  it("keeps buffer callers on the canonical probe path", async () => {
+  it("probes buffer input through a seekable descriptor and closes it", async () => {
     const buffer = Buffer.from("video");
-    runFfprobe.mockResolvedValueOnce(
-      JSON.stringify({ streams: [{ codec_type: "video", width: 720, height: 1280 }] }),
-    );
+    let descriptor: number | undefined;
+    runFfprobe.mockImplementationOnce(async (_args, options) => {
+      descriptor = options?.stdinFileDescriptor;
+      expect(descriptor).toEqual(expect.any(Number));
+      if (descriptor === undefined) {
+        throw new Error("video probe did not receive a descriptor");
+      }
+      expect(readFileSync(descriptor)).toEqual(buffer);
+      return JSON.stringify({ streams: [{ codec_type: "video", width: 720, height: 1280 }] });
+    });
 
     await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 720, height: 1280 });
     expect(runFfprobe).toHaveBeenCalledWith(
-      [
-        "-v",
-        "error",
-        "-protocol_whitelist",
-        "pipe",
-        "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height,sample_aspect_ratio:stream_disposition=default,attached_pic:stream_side_data=rotation",
-        "-of",
-        "json",
-        "pipe:0",
-      ],
-      { input: buffer },
+      expect.arrayContaining(["-protocol_whitelist", "fd", "-fd", "0", "fd:"]),
+      { stdinFileDescriptor: expect.any(Number) },
     );
+    if (descriptor === undefined) {
+      throw new Error("video probe did not run");
+    }
+    const closedDescriptor = descriptor;
+    expect(() => fstatSync(closedDescriptor)).toThrow();
   });
 });

@@ -462,7 +462,7 @@ export function splitMediaOutput(
         );
   const extractMarkdownImages = imageExtraction !== undefined;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
-  const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
+  const mayContainMediaToken = /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && trimmedRaw.includes("![");
   const mayContainAudioTag = trimmedRaw.includes("[[");
   if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
@@ -549,7 +549,7 @@ export function splitMediaOutput(
     }
 
     const linePrefix = line.trimStart().slice(0, "MEDIA:".length);
-    if (!extractMediaDirectives || !linePrefix.toUpperCase().startsWith("MEDIA:")) {
+    if (!linePrefix.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({
             line,
@@ -642,16 +642,25 @@ export function splitMediaOutput(
     let cleanedLine: string;
     if (media.length > mediaStartIndex) {
       foundMediaToken = true;
-      for (const url of media.slice(mediaStartIndex)) {
-        segments.push({ type: "media", url });
+      if (extractMediaDirectives) {
+        for (const url of media.slice(mediaStartIndex)) {
+          segments.push({ type: "media", url });
+        }
+        cleanedLine = cleanLineText(invalidParts.join(" "));
+      } else {
+        // Streaming strips the directive while final delivery owns its attachment.
+        media.splice(mediaStartIndex);
+        cleanedLine = "";
       }
-      cleanedLine = cleanLineText(invalidParts.join(" "));
     } else if (looksLikeLocalPath || rejectedMediaCount > rejectedBefore) {
       // Rejected references can contain private paths or credentials; delivery owns their notice.
       foundMediaToken = true;
       cleanedLine = "";
     } else {
       cleanedLine = cleanLineText(line);
+    }
+    if (!extractMediaDirectives) {
+      rejectedMediaCount = rejectedBefore;
     }
     if (cleanedLine) {
       keepLine(cleanedLine);

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import {
   asPositiveSafeInteger as parsePositiveInteger,
@@ -6,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -263,6 +265,17 @@ type VideoDimensions = {
 
 /** Probes a video buffer while preserving the existing public media-runtime API. */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
-  const { width, height } = toMediaProbeResult(await probeMediaSource({ input: buffer }, "video"));
-  return width && height ? { width, height } : undefined;
+  try {
+    return await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-ffprobe-" },
+      async (workspace) => {
+        // A seekable descriptor lets ffprobe read MP4 metadata at the end of the file.
+        const tempPath = await workspace.write("video.bin", buffer);
+        const { width, height } = await probeMediaFile(tempPath, "video");
+        return width && height ? { width, height } : undefined;
+      },
+    );
+  } catch {
+    return undefined;
+  }
 }
