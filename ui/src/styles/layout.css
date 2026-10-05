@@ -3383,7 +3383,7 @@ a:is(
 
 .sidebar-nav__lead {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   min-width: 0;
   min-height: 32px;
   padding-inline-end: 8px;
@@ -3400,7 +3400,6 @@ a:is(
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-block-start: 5px;
   flex: none;
   border: none;
   border-radius: var(--radius-md);
