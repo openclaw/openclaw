@@ -294,7 +294,7 @@ describe("tailscale helpers", () => {
       );
     });
 
-    it.each(["Running", "Stopped", "NeedsLogin", "NeedsMachineAuth"])(
+    it.each(["Running", "NeedsLogin", "NeedsMachineAuth"])(
       "does not wait on the settled backend state %s",
       async (state) => {
         const exec = vi.fn().mockResolvedValue(status(state));
@@ -306,6 +306,14 @@ describe("tailscale helpers", () => {
         expect(info).not.toHaveBeenCalled();
       },
     );
+
+    it("classifies a stopped daemon without waiting or starting it", async () => {
+      const exec = vi.fn().mockResolvedValue(status("Stopped"));
+      await expect(
+        waitForTailscaleBackendReady({ bin: tailscaleBin, info: vi.fn(), exec }),
+      ).rejects.toMatchObject({ code: "gateway.tailscale_backend_stopped" });
+      expect(exec).toHaveBeenCalledExactlyOnceWith(tailscaleBin, statusArgs, execOptions);
+    });
 
     it("does not wait on an unreadable or failed status", async () => {
       for (const exec of [

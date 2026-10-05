@@ -256,6 +256,46 @@ describe("gateway crash-loop breaker", () => {
     });
   });
 
+  it("keeps channels eligible after completed stopped-daemon failures but counts unknown crashes", () => {
+    const lifecycle = createLifecycleDb();
+    const nowMs = 1_000_000;
+    for (let index = 0; index < 3; index++) {
+      const bootId = recordGatewayBootStart(lifecycle.env, nowMs + index);
+      completeGatewayBootLifecycle(
+        bootId,
+        {
+          outcome: "startup_failed",
+          startupReason: "gateway.tailscale_backend_stopped",
+          reason: "Tailscale is stopped",
+        },
+        lifecycle.env,
+        nowMs + index + 1,
+      );
+    }
+    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 4)).toMatchObject({
+      tripped: false,
+      uncleanBoots: 0,
+    });
+    insertBootRows(lifecycle, [
+      {
+        bootId: "unclean-dependency",
+        startedAtMs: nowMs + 5,
+        startupReason: "gateway.tailscale_backend_stopped",
+      },
+      { bootId: "unclean-channel", startedAtMs: nowMs + 6 },
+      {
+        bootId: "unknown-failure",
+        startedAtMs: nowMs + 7,
+        completedAtMs: nowMs + 8,
+        outcome: "startup_failed",
+      },
+    ]);
+    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 9)).toMatchObject({
+      tripped: true,
+      uncleanBoots: 3,
+    });
+  });
+
   it("writes the breaker bundle only on a persisted transition into tripped state", () => {
     const db = createLifecycleDb();
     const nowMs = 1_000_000;

@@ -36,6 +36,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "projects-startup-migration",
   "workshop-doctor-recovery",
   "update-report-recovery",
+  "gateway-boot-lifecycle",
   "dreaming-cron-doctor",
   "cron-owner-doctor",
 ]);
@@ -59,6 +60,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "projects-startup-migration" &&
     scenario !== "workshop-doctor-recovery" &&
     scenario !== "update-report-recovery" &&
+    scenario !== "gateway-boot-lifecycle" &&
     scenario !== "dreaming-cron-doctor" &&
     scenario !== "cron-owner-doctor" &&
     scenario !== "mobile-pairing-reconnect" &&
@@ -253,6 +255,9 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
     return baselineSpec === "openclaw@2026.9.4";
   }
   if (scenario === "update-report-recovery") {
+    return baselineSpec === "openclaw@2026.9.6";
+  }
+  if (scenario === "gateway-boot-lifecycle") {
     return baselineSpec === "openclaw@2026.9.6";
   }
   const minimumBaseline = scenarioMinimumBaselines.get(scenario);

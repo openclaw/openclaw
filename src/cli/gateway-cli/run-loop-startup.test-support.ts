@@ -248,4 +248,29 @@ export function registerGatewayStartupFailureTests(
       });
     });
   });
+
+  it("records the proven stopped-daemon prerequisite without blaming channels", async () => {
+    await withIsolatedSignals(async () => {
+      const { TailscaleBackendStoppedError } =
+        await import("../../infra/tailscale-backend-stopped-error.js");
+      const failure = new TailscaleBackendStoppedError();
+      const { runtime } = createRuntimeWithExitSignal();
+      const completeBoot = vi.fn();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      await expect(
+        runGatewayLoop({
+          start: vi.fn(async () => {
+            throw failure;
+          }),
+          runtime,
+          completeBoot,
+        }),
+      ).rejects.toBe(failure);
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: "startup_failed",
+        reason: failure.message,
+        startupReason: failure.code,
+      });
+    });
+  });
 }

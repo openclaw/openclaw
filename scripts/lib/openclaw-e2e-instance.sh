@@ -356,9 +356,10 @@ openclaw_e2e_gateway_log_port_from_text() {
   sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
 }
 openclaw_e2e_wait_gateway_ready() {
-  local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
+  local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" required_log_text="${6:-}" _ saw_ready_log=false saw_required_log=false
   local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
   local ready_log_pattern='\[gateway\] ready'
+  [ -z "$required_log_text" ] && saw_required_log=true
   # Published baselines logged their listener before the modern ready marker existed.
   if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
     ready_log_pattern='\[gateway\] (ready|listening on)'
@@ -370,7 +371,7 @@ openclaw_e2e_wait_gateway_ready() {
       tail -n 120 "$log" 2>/dev/null || true
       return 1
     }
-    if [ "$saw_ready_log" != "true" ] && [ -f "$log" ]; then
+    if { [ "$saw_ready_log" != "true" ] || [ "$saw_required_log" != "true" ]; } && [ -f "$log" ]; then
       local log_bytes="0"
       log_bytes="$(wc -c <"$log" 2>/dev/null || echo 0)"
       log_bytes="${log_bytes//[[:space:]]/}"
@@ -397,9 +398,12 @@ openclaw_e2e_wait_gateway_ready() {
           saw_ready_log=true
           [ -n "$ready_port" ] || ready_port="$(printf "%s" "$ready_log_lines" | openclaw_e2e_gateway_log_port_from_text)"
         fi
+        if [ "$saw_required_log" != "true" ] && [[ "$scan_text" == *"$required_log_text"* ]]; then
+          saw_required_log=true
+        fi
       fi
     fi
-    if [ "$saw_ready_log" = "true" ]; then
+    if [ "$saw_ready_log" = "true" ] && [ "$saw_required_log" = "true" ]; then
       [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
       if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
         openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
@@ -409,7 +413,9 @@ openclaw_e2e_wait_gateway_ready() {
     fi
     sleep 0.25
   done
-  if [ "$saw_ready_log" = "true" ]; then
+  if [ "$saw_required_log" != "true" ]; then
+    echo "Gateway did not publish required startup evidence"
+  elif [ "$saw_ready_log" = "true" ]; then
     if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
       echo "Gateway startup log was found, but TCP listener probe never succeeded"
     else

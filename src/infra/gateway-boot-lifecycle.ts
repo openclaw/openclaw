@@ -16,6 +16,7 @@ import {
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
+import { TAILSCALE_BACKEND_STOPPED_REASON } from "./tailscale-backend-stopped-error.js";
 
 // Retain the released media-only tag while its bounded boot history expires.
 const maintenanceStartupReasons = [
@@ -152,7 +153,8 @@ export function inspectGatewayCrashLoopBreaker(
     const windowStartMs = nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS;
     // Unclean means startup_failed by completion time, or an open boot row
     // whose process disappeared. forced_stop is operator shutdown pressure,
-    // not a startup crash-loop signal.
+    // not a startup crash-loop signal. Completed failures from a proven stopped
+    // Tailscale daemon preceded channel startup; unfinished boots still count.
     const uncleanRow = executeSqliteQueryTakeFirstSync(
       db,
       kysely
@@ -169,6 +171,10 @@ export function inspectGatewayCrashLoopBreaker(
             eb.and([eb("completed_at_ms", "is", null), eb("started_at_ms", ">=", windowStartMs)]),
             eb.and([
               eb("outcome", "=", "startup_failed"),
+              eb.or([
+                eb("startup_reason", "is", null),
+                eb("startup_reason", "!=", TAILSCALE_BACKEND_STOPPED_REASON),
+              ]),
               eb("completed_at_ms", ">=", windowStartMs),
             ]),
           ]),
