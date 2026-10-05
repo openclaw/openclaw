@@ -25,7 +25,8 @@ import type {
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
-  relocateRuntimeEntry,
+  relocateRuntimeSymlink,
+  resolveRuntimeFileRelocator,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
@@ -696,7 +697,11 @@ export async function copyUpdateCandidatePluginTrees(
   for (const entry of plan.entries) {
     if (entry.kind !== "directory") {
       const target = destinationFor(entry.path);
-      await relocateRuntimeEntry(target, entry.path, target, entry.kind, relocations);
+      const relocate =
+        entry.kind === "symlink" ? relocateRuntimeSymlink : resolveRuntimeFileRelocator(target);
+      if (relocate) {
+        await relocate(target, entry.path, target, relocations);
+      }
     }
   }
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({

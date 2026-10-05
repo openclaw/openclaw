@@ -43,6 +43,7 @@ export function resolveRestartRecoveryTerminalClientRunId(
 
 export async function discoverRestartRecoveryStoreTargets(params: {
   cfg?: OpenClawConfig;
+  agentIds?: ReadonlySet<string>;
   stateDir?: string;
   statuses?: Parameters<typeof hasSessionEntriesByStatusReadOnly>[1];
   shouldContinue?: () => boolean;
@@ -57,7 +58,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     // Recovery must not reopen a deleted or otherwise unconfigured agent database merely
     // because its old directory still exists on disk. Those stores are intentionally fenced
     // by the deletion journal, and stale auth-probe directories are not agent roster entries.
-    const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg);
+    const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg).filter(
+      (agentId) => !params.agentIds || params.agentIds.has(agentId),
+    );
     const configuredStorePaths = new Set(
       configuredAgentIds.map((agentId) =>
         path.resolve(resolveSessionStorePathCore(params.cfg?.session?.store, { agentId, env })),
@@ -96,6 +99,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   }
   const eligibleTargets: SessionStoreTarget[] = [];
   for (const target of storeTargets) {
+    if (!params.cfg && params.agentIds && !params.agentIds.has(target.agentId)) {
+      continue;
+    }
     if (params.shouldContinue?.() === false) {
       return [];
     }

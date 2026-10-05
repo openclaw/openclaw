@@ -214,7 +214,17 @@ Streaming reads `post.mention.create` events from X's `data.payload` envelope,
 checks that the post addresses the bot, and ignores other event types and blank
 keep-alives. It reconnects with backoff after a stalled or disconnected stream.
 Each connection runs a mentions backfill with the user token from the saved
-cursor; post IDs deduplicate stream and polling events.
+cursor, then repeats it every `events.pollSeconds × 4`
+(minimum 60 seconds, default 240 seconds) while streaming. This safety backfill
+recovers mentions missed by the stream. Only completed backfill pages advance
+the cursor, so newer stream events cannot hide older missed mentions. Post IDs
+deduplicate stream and polling events.
+
+After three consecutive unparseable mention events or malformed lines, the
+plugin logs one warning and shows it in the channel status `message`. Blank
+keep-alives and intentionally ignored event types do not count toward this
+warning. It includes the event type and top-level keys, without post content.
+The next parseable mention event clears the warning.
 
 In `auto` mode, any subscription setup failure switches to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the

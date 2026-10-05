@@ -120,10 +120,15 @@ async function fixture(enabled = false) {
   return { args, scriptPath, launcherPath, original, registration, assertRestored, assertBackups };
 }
 
-it.each(["runtime", "arguments", "environment"])(
-  "replaces a running registered task before publishing a changed %s",
-  async (change) => {
-    const { args, scriptPath, original } = await fixture(true);
+it.each(
+  ["runtime", "arguments", "environment"].flatMap((change) => [
+    { change, unattended: false },
+    { change, unattended: true },
+  ]),
+)(
+  "replaces a running registered task before publishing a changed $change (unattended=$unattended)",
+  async ({ change, unattended }) => {
+    const { args, scriptPath, original, registration } = await fixture(true);
     let running = original;
     native.probe.mockReturnValue({ status: "found", state: 4, enabled: true });
     native.stop.mockImplementation(async (params) => {
@@ -141,6 +146,7 @@ it.each(["runtime", "arguments", "environment"])(
     });
     await installScheduledTask({
       ...args,
+      env: { ...args.env, ...(unattended ? { USERNAME: "operator" } : {}) },
       programArguments:
         change === "runtime"
           ? ["bun", "/prefix-a/openclaw/dist/index.js", "gateway"]
@@ -151,6 +157,15 @@ it.each(["runtime", "arguments", "environment"])(
     });
     expect(running).toEqual(await fs.readFile(scriptPath));
     expect(running).not.toEqual(original);
+    if (unattended) {
+      expect(registration.xml).toContain("<LogonType>S4U</LogonType>");
+      expect(registration.xml).toContain("<BootTrigger><Enabled>true</Enabled></BootTrigger>");
+      expect(registration.xml).toContain("<LogonTrigger>");
+      expect(registration.xml).toContain("<Command>C:\\Windows\\System32\\cmd.exe</Command>");
+      expect(registration.xml).toContain(
+        `<Arguments>/d /s /c &quot;&quot;${scriptPath}&quot;&quot;</Arguments>`,
+      );
+    }
   },
 );
 
@@ -330,6 +345,22 @@ function installWithCustody(
     { updateOwned: false, assertRecoveryCurrent: () => {} },
   );
 }
+
+it("restores Password-task launchers after failed activation without re-registering credentials", async () => {
+  const f = await fixture();
+  const originalTask = f.registration.xml.replace(
+    "<Task>",
+    "<Task><Principals><Principal><UserId>operator</UserId><LogonType>Password</LogonType></Principal></Principals>",
+  );
+  f.registration.xml = originalTask;
+  native.run.mockRejectedValueOnce(new Error("activation rejected"));
+
+  await expect(installScheduledTask(f.args)).rejects.toThrow("activation rejected");
+  expect(f.registration.xml).toBe(originalTask);
+  expect(await fs.readFile(f.scriptPath)).toEqual(f.original);
+  expect(await fs.readFile(f.launcherPath, "utf8")).toBe("original hidden launcher");
+  expect(native.exec.mock.calls.some(([args]) => args[0] === "/Create")).toBe(false);
+});
 
 it("leaves both original launchers intact when staging cannot capture the hidden launcher", async () => {
   const { args, scriptPath, launcherPath, original } = await fixture();

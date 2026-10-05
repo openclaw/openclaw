@@ -1,4 +1,5 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { Frame, Page } from "playwright-core";
 import {
   BROWSER_ACTION_NAVIGATION_GRACE_MS,
@@ -491,9 +492,7 @@ export async function awaitNavigationGuardedInteraction<T>(
           const elapsedMs = Math.max(0, Date.now() - actionSettledAtMs);
           const remainingMs = Math.max(0, BROWSER_ACTION_NAVIGATION_GRACE_MS - elapsedMs);
           if (remainingMs > 0) {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, remainingMs);
-            });
+            await sleepWithAbort(remainingMs);
           }
           // The canonical observer can settle on an earlier safe navigation.
           // Recheck the final committed URL before releasing request routing.

@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { FileChooser, Locator, Page } from "playwright-core";
 import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
@@ -76,23 +78,19 @@ async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFile
 }
 
 async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
-  try {
-    return await awaitActionWithAbort(
-      (async () => {
-        const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
-        if (!resolved.ok) {
-          throw new Error(resolved.error);
-        }
-        return opts.ssrfPolicy && opts.browserFilesystemLocal !== true
-          ? await toPlaywrightFilePayloads(resolved.paths)
-          : resolved.paths;
-      })(),
-      abortPromise,
-    );
-  } finally {
-    cleanup();
-  }
+  return await racePromiseWithAbortSignal(
+    (async () => {
+      const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      return opts.ssrfPolicy && opts.browserFilesystemLocal !== true
+        ? await toPlaywrightFilePayloads(resolved.paths)
+        : resolved.paths;
+    })(),
+    opts.signal,
+    ({ reason }) => toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+  );
 }
 
 type BrowserWaitPredicateState = {

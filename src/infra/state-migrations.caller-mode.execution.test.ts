@@ -153,6 +153,24 @@ describe("legacy state migration caller execution", () => {
       const sidecarBytes = "retired encrypted bytes\n";
       fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
       fs.writeFileSync(sidecarPath, sidecarBytes);
+      const authStorePath = path.join(fixture.stateDir, "agents/main/agent/auth-profiles.json");
+      fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
+      fs.writeFileSync(
+        authStorePath,
+        JSON.stringify({
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              oauthRef: {
+                source: "openclaw-credentials",
+                provider: "openai-codex",
+                id: "b".repeat(32),
+              },
+            },
+          },
+        }),
+      );
       const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
       writeLegacyStateSchemaV1(stateDatabasePath);
       const before = snapshotSqliteArtifacts(stateDatabasePath);
@@ -815,9 +833,16 @@ describe("legacy state migration caller execution", () => {
 
   it("halts direct Doctor execution after an unanticipated state-schema refusal", async () => {
     const fixture = await makeFixture();
-    const voiceWakePath = path.join(fixture.stateDir, "settings", "voicewake.json");
-    fs.mkdirSync(path.dirname(voiceWakePath), { recursive: true });
-    fs.writeFileSync(voiceWakePath, '{"triggers":["wake"]}\n');
+    const configHealthPath = path.join(fixture.stateDir, "logs", "config-health.json");
+    const sourceBytes = `${JSON.stringify({
+      entries: {
+        [path.join(fixture.stateDir, "openclaw.json")]: {
+          lastObservedSuspiciousSignature: "leave-me",
+        },
+      },
+    })}\n`;
+    fs.mkdirSync(path.dirname(configHealthPath), { recursive: true });
+    fs.writeFileSync(configHealthPath, sourceBytes);
     const detected = await detectLegacyStateMigrations({
       cfg: {},
       mode: "doctor",
@@ -848,13 +873,13 @@ describe("legacy state migration caller execution", () => {
     expect(result.stepReceipts.slice(1)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "voice-wake",
+          id: "config-health",
           outcome: "refused",
           refusal: expect.objectContaining({ code: "blocked-by-prior-refusal" }),
         }),
       ]),
     );
     expect(result.warnings.join("\n")).toContain("uses newer schema version 999");
-    expect(fs.existsSync(voiceWakePath)).toBe(true);
+    expect(fs.readFileSync(configHealthPath, "utf8")).toBe(sourceBytes);
   });
 });

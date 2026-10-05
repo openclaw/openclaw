@@ -201,26 +201,15 @@ async function relocateModulesManifest(
   }
 }
 
-/** Relocate one admitted entry without traversing neighboring private files. */
-export async function relocateRuntimeEntry(
-  file: string,
-  sourceFile: string,
-  destinationFile: string,
-  kind: "file" | "symlink",
-  relocations: RuntimeRelocations,
-  assertBeforeMutation?: () => void,
-): Promise<void> {
-  let relocate: typeof relocateRuntimeSymlink | undefined;
-  if (kind === "symlink") {
-    relocate = relocateRuntimeSymlink;
-  } else if (path.basename(file) === ".modules.yaml") {
-    relocate = relocateModulesManifest;
-  } else if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
-    relocate = relocateRuntimeLauncher;
+/** Files rewritten during relocation must never share an inode with the live package. */
+export function resolveRuntimeFileRelocator(file: string) {
+  if (path.basename(file) === ".modules.yaml") {
+    return relocateModulesManifest;
   }
-  if (relocate) {
-    await relocate(file, sourceFile, destinationFile, relocations, assertBeforeMutation);
+  if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
+    return relocateRuntimeLauncher;
   }
+  return undefined;
 }
 
 /** Rebind copied entries only; following a store symlink would mutate external data. */
@@ -237,14 +226,20 @@ export async function relocateRuntimeTree(
   }
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
     const file = path.join(root, entry.name);
-    const sourceFile = path.join(sourceRoot, entry.name);
-    const destinationFile = path.join(destinationRoot, entry.name);
-    if (entry.isDirectory()) {
-      await relocateRuntimeTree(file, sourceFile, destinationFile, prepared);
-    } else if (entry.isSymbolicLink()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "symlink", prepared);
-    } else if (entry.isFile()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "file", prepared);
+    const relocate = entry.isDirectory()
+      ? relocateRuntimeTree
+      : entry.isSymbolicLink()
+        ? relocateRuntimeSymlink
+        : entry.isFile()
+          ? resolveRuntimeFileRelocator(file)
+          : undefined;
+    if (relocate) {
+      await relocate(
+        file,
+        path.join(sourceRoot, entry.name),
+        path.join(destinationRoot, entry.name),
+        prepared,
+      );
     }
   }
 }

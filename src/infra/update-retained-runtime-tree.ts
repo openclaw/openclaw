@@ -17,12 +17,10 @@ import type {
   UpdateCandidatePluginEntry,
   UpdateCandidatePluginTreePlan,
 } from "./update-candidate-plugin-tree-schema.js";
-import { relocateRuntimeEntry } from "./update-runtime-relocation.js";
-
-// Relocation rewrites these members in place; a hard link would edit the live package.
-const isRelocatedFile = (file: string) =>
-  path.basename(file) === ".modules.yaml" ||
-  (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe"));
+import {
+  relocateRuntimeSymlink,
+  resolveRuntimeFileRelocator,
+} from "./update-runtime-relocation.js";
 
 const isLinkUnsupported = (error: unknown) =>
   ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].some((code) =>
@@ -117,14 +115,10 @@ export async function linkUpdateCandidatePluginTrees(
       },
     });
     await assertEntry(entry);
-    await relocateRuntimeEntry(
-      destination,
-      entry.path,
-      destination,
-      "file",
-      relocations,
-      params.assertCurrent,
-    );
+    const relocate = resolveRuntimeFileRelocator(destination);
+    if (relocate) {
+      await relocate(destination, entry.path, destination, relocations, params.assertCurrent);
+    }
     if ((entry.mode & 0o600) !== 0o600) {
       params.assertCurrent();
       await fs.chmod(destination, entry.mode);
@@ -160,11 +154,10 @@ export async function linkUpdateCandidatePluginTrees(
     if (entry.kind === "symlink") {
       params.assertCurrent();
       await fs.symlink(entry.link, destination, entry.linkType);
-      await relocateRuntimeEntry(
+      await relocateRuntimeSymlink(
         destination,
         entry.path,
         destination,
-        "symlink",
         relocations,
         params.assertCurrent,
       );
@@ -178,7 +171,7 @@ export async function linkUpdateCandidatePluginTrees(
     }
     if (
       pluginFiles.has(entry.path) ||
-      isRelocatedFile(destination) ||
+      resolveRuntimeFileRelocator(destination) ||
       (await requiresCopy(entry))
     ) {
       await copyEntry(entry, destination);

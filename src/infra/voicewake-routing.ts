@@ -83,7 +83,7 @@ function normalizeRouteRule(value: unknown): VoiceWakeRouteRule | null {
 }
 
 /** Normalize persisted or user-provided voice wake routing config. */
-export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
+function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
   const rec = asOptionalObjectRecord(input);
   if (!rec) {
     return { ...DEFAULT_ROUTING };

@@ -10,11 +10,114 @@ const post = (id: string): XPost => ({
   entities: { mentions: [{ id: "9", username: "bot" }] },
 });
 
+function streamFixture() {
+  const abort = new AbortController();
+  const admitted: XPostEnvelope[] = [];
+  const statuses: XEventStatus[] = [];
+  const warning = vi.fn();
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const api = createXApiClient({
+    clientId: "client",
+    clientSecret: "secret",
+    refreshToken: "refresh",
+    bearerToken: "bearer",
+    saveRefreshToken: async () => {},
+    fetch: async (input) => {
+      if (input.endsWith("/oauth2/token")) {
+        return Response.json({ access_token: "access" });
+      }
+      if (input.endsWith("/stream")) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start: (value) => {
+              stream = value;
+            },
+          }),
+        );
+      }
+      return Response.json({ data: [] });
+    },
+  });
+  const run = runXEvents({
+    api,
+    userId: "9",
+    signal: abort.signal,
+    bearerConfigured: true,
+    getCursor: async () => undefined,
+    setCursor: async () => {},
+    onPost: async (envelope) => {
+      admitted.push(envelope);
+    },
+    onStatus: (value) => statuses.push(value),
+    onWarning: warning,
+  });
+  return {
+    admitted,
+    statuses,
+    warning,
+    send: (line: string) => stream.enqueue(new TextEncoder().encode(`${line}\n`)),
+    stop: async () => {
+      abort.abort();
+      await run;
+    },
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("X event transport", () => {
+  it("warns once per unparseable streak without event content and clears on a good event", async () => {
+    vi.useFakeTimers();
+    const test = streamFixture();
+    const bad = JSON.stringify({
+      data: { event_type: "post.mention.create", payload: { text: "private content" } },
+      errors: [],
+    });
+    const ignored = JSON.stringify({ data: { event_type: "post.create", payload: post("19") } });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      for (let index = 0; index < 4; index++) {
+        test.send(ignored);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.warning).not.toHaveBeenCalled();
+      expect(test.admitted).toEqual([]);
+      test.send(bad);
+      test.send("");
+      test.send(ignored);
+      test.send(bad);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.warning).not.toHaveBeenCalled();
+      test.send(bad);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.warning).toHaveBeenCalledOnce();
+      test.send(bad);
+      test.send(ignored);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.warning).toHaveBeenCalledOnce();
+      const message = test.warning.mock.calls[0]![0];
+      expect(message).toContain('type="post.mention.create"');
+      expect(message).toContain('keys=["data","errors"]');
+      expect(message).not.toContain("private content");
+      expect(test.statuses.at(-1)?.message).toBe(message);
+      test.send(
+        JSON.stringify({ data: { event_type: "post.mention.create", payload: post("20") } }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.statuses).toContainEqual({ message: "activity stream connected" });
+      test.send(bad);
+      test.send(bad);
+      test.send("invalid JSON");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.admitted).toHaveLength(1);
+      expect(test.warning).toHaveBeenCalledTimes(2);
+    } finally {
+      await test.stop();
+    }
+  });
+
   it("admits every page in order before advancing the cursor and retains it on admission failure", async () => {
     vi.useFakeTimers();
     const abort = new AbortController();
@@ -188,7 +291,7 @@ describe("X event transport", () => {
       await firstAdmitted.promise;
       await vi.advanceTimersByTimeAsync(0);
       expect(admitted).toEqual(["20"]);
-      expect(cursor).toBe("20");
+      expect(cursor).toBe("10");
       expect(lookups).toEqual(["50", "20"]);
       expect(envelopes[0]?.users).toEqual([
         { id: "7", username: "maintainer", name: "Maintainer" },
@@ -201,7 +304,7 @@ describe("X event transport", () => {
       await reconnected.promise;
       await secondAdmitted.promise;
       expect(admitted).toEqual(["20", "21"]);
-      expect(backfills).toEqual(["10", "20"]);
+      expect(backfills).toEqual(["10", "10"]);
       expect(statuses).toContainEqual(expect.objectContaining({ streamBackoffMs: 1000 }));
     } finally {
       abort.abort();
@@ -271,7 +374,7 @@ describe("X event transport", () => {
     try {
       await consumed.promise;
       expect(admitted.map((envelope) => envelope.post.id)).toEqual(["20"]);
-      expect(cursor).toBe("20");
+      expect(cursor).toBeUndefined();
       expect(lookups).toEqual(["20"]);
       expect(admitted[0]?.users).toEqual([{ id: "7", username: "maintainer" }]);
     } finally {

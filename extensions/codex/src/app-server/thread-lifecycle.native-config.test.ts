@@ -1,8 +1,14 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { hasCodexAppServerLiveThread, retainCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  ensureCodexAppServerClientRuntime,
+  hasCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   getCodexInferenceThread,
@@ -29,37 +35,37 @@ import {
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
 
-let sessionFile: string;
-let workspaceDir: string;
-let params: ReturnType<typeof createParams>;
-beforeEach(() => {
-  sessionFile = path.join(tempDir, "session.jsonl");
-  workspaceDir = path.join(tempDir, "workspace");
-  params = createParams(sessionFile, workspaceDir);
-});
-
-function lifecycleParams(client: Parameters<typeof startOrResumeThread>[0]["client"]) {
-  return {
-    client,
-    params,
-    cwd: workspaceDir,
-    dynamicTools: [],
-    appServer: createAppServerOptions(),
-    userMcpServersEnabled: false,
-  };
-}
-
-function readNativeConfig(method: string, config: JsonObject = {}) {
-  if (method === "config/read") {
-    return { config, origins: {}, layers: [] };
-  }
-  if (method === "configRequirements/read") {
-    return { requirements: null };
-  }
-  throw new Error(`unexpected method: ${method}`);
-}
-
 describe("Codex native configuration lifecycle", () => {
+  let sessionFile: string;
+  let workspaceDir: string;
+  let params: ReturnType<typeof createParams>;
+  beforeEach(() => {
+    sessionFile = path.join(tempDir, "session.jsonl");
+    workspaceDir = path.join(tempDir, "workspace");
+    params = createParams(sessionFile, workspaceDir);
+  });
+
+  function lifecycleParams(client: Parameters<typeof startOrResumeThread>[0]["client"]) {
+    return {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+  }
+
+  function readNativeConfig(method: string, config: JsonObject = {}) {
+    if (method === "config/read") {
+      return { config, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  }
+
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {
@@ -280,13 +286,11 @@ describe("Codex native configuration lifecycle", () => {
   });
 
   it.each([
-    { nativeModel: false, changeModel: false, rotateLineage: false },
-    { nativeModel: true, changeModel: true, rotateLineage: false },
-    { nativeModel: true, changeModel: false, rotateLineage: false },
-    { nativeModel: true, changeModel: false, rotateLineage: true },
+    { changeModel: true, rotateLineage: false },
+    { changeModel: false, rotateLineage: true },
   ])(
-    "rebinds before warm reuse (native: $nativeModel, changed model: $changeModel, rotated lineage: $rotateLineage)",
-    async ({ nativeModel, changeModel, rotateLineage }) => {
+    "rebinds before native warm reuse (changed model: $changeModel, rotated lineage: $rotateLineage)",
+    async ({ changeModel, rotateLineage }) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       await writeCodexAppServerBinding(sessionFile, {
         webSearchThreadConfigFingerprint: JSON.stringify({
@@ -295,13 +299,9 @@ describe("Codex native configuration lifecycle", () => {
         }),
         threadId: "thread-reused",
         clientId: "client-before-restart",
-        ...(nativeModel
-          ? {
-              preserveNativeModel: true,
-              model: threadStartResult().model,
-              modelProvider: threadStartResult().modelProvider,
-            }
-          : {}),
+        preserveNativeModel: true,
+        model: threadStartResult().model,
+        modelProvider: threadStartResult().modelProvider,
         cwd: workspaceDir,
         dynamicToolsFingerprint: "[]",
       });
@@ -366,9 +366,9 @@ describe("Codex native configuration lifecycle", () => {
         "thread/inject_items",
         "config/read",
         "configRequirements/read",
-        ...(nativeModel ? ["thread/read"] : []),
+        "thread/read",
       ]);
-      if (nativeModel && !changeModel) {
+      if (rotateLineage) {
         await retainCodexAppServerLiveThread(
           client,
           warm.threadId,
@@ -387,7 +387,7 @@ describe("Codex native configuration lifecycle", () => {
         const nativeRequest = CodexAppServerClient.prototype.request.bind(client);
         request.mockImplementation(async (...args) => {
           const response = await nativeRequest(...args);
-          if (rotateLineage && args[0] === "thread/read") {
+          if (args[0] === "thread/read") {
             // The wire read still completes normally. Change the durable lineage
             // while warm admission awaits it, without changing the native binding.
             await patchSessionEntry({
@@ -409,25 +409,144 @@ describe("Codex native configuration lifecycle", () => {
           ),
         ).toBe(false);
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(retainedBinding);
-        expect(hasCodexAppServerLiveThread(client, warm.threadId)).toBe(!rotateLineage);
+        expect(hasCodexAppServerLiveThread(client, warm.threadId)).toBe(false);
         expect(client.getCloseError()).toBeUndefined();
         expect(
           request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
-        ).toHaveLength(rotateLineage ? 1 : 0);
-        if (rotateLineage) {
-          return;
-        }
-        fixture.seed(native, { loaded: true, subscribed: true });
-        await expect(startOrResumeThread(common)).resolves.toMatchObject({
-          threadId: "thread-reused",
-        });
-        expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
-          resumeCount,
-        );
-        expect(
-          request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
-        ).toHaveLength(0);
+        ).toHaveLength(1);
       }
     },
   );
+});
+
+it("reuses isolated retained threads until native skills change", async () => {
+  vi.stubEnv("HOME", tempDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "isolated-state"));
+  const sessionFile = path.join(tempDir, "warm-isolated-session.jsonl");
+  const workspaceDir = path.join(tempDir, "warm-isolated-workspace");
+  const personalSkill = path.join(tempDir, ".claude", "skills", "personal", "SKILL.md");
+  await fs.mkdir(path.dirname(personalSkill), { recursive: true });
+  await fs.writeFile(personalSkill, "personal");
+  const personalSkillRealPath = await fs.realpath(personalSkill);
+  const nativeSkillPaths = [personalSkillRealPath];
+  let starts = 0;
+  const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "skills/list") {
+      return {
+        data: [
+          {
+            cwd: workspaceDir,
+            errors: [],
+            skills: nativeSkillPaths.map((skillPath) => ({
+              name: path.basename(path.dirname(skillPath)),
+              description: "Personal skill",
+              path: skillPath,
+              scope: "user",
+              enabled: true,
+            })),
+          },
+        ],
+      };
+    }
+    if (method === "thread/start") {
+      starts += 1;
+      return threadStartResult(
+        starts === 1 ? "thread-warm-isolated" : "thread-refreshed-isolation",
+      );
+    }
+    if (method === "thread/unsubscribe") {
+      return {};
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const fixture = createFakeCodexAppServerClient(request);
+  const { client } = fixture;
+  ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+  const params = createParams(sessionFile, workspaceDir);
+  params.disableTools = false;
+  params.config = undefined;
+  registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+  const common: Parameters<typeof startOrResumeThread>[0] = {
+    client,
+    params,
+    cwd: workspaceDir,
+    dynamicTools: [],
+    appServer: {
+      ...createAppServerOptions(),
+      connectionClass: "local-loopback",
+    },
+    userMcpServersEnabled: false,
+  };
+
+  try {
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
+    const warm = await startOrResumeThread(common);
+    expect(warm).toMatchObject({
+      threadId: "thread-warm-isolated",
+      lifecycle: { action: "resumed" },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "skills/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+    ]);
+    const startRequest = request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startRequest).toMatchObject({
+      config: {
+        "skills.include_instructions": false,
+        "skills.config": [{ path: personalSkillRealPath, enabled: false }],
+      },
+    });
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        warm.threadId,
+        warm.liveThreadOwnership?.release,
+        warm.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
+
+    const newPersonalSkill = path.join(tempDir, ".claude", "skills", "updated", "SKILL.md");
+    await fs.mkdir(path.dirname(newPersonalSkill), { recursive: true });
+    await fs.writeFile(newPersonalSkill, "updated");
+    const newPersonalSkillRealPath = await fs.realpath(newPersonalSkill);
+    nativeSkillPaths.push(newPersonalSkillRealPath);
+    await fixture.notify({ method: "skills/changed", params: {} });
+
+    await expect(startOrResumeThread(common)).resolves.toMatchObject({
+      threadId: "thread-refreshed-isolation",
+      lifecycle: { action: "started" },
+    });
+    const startRequests = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(startRequests).toHaveLength(2);
+    expect(startRequests[1]?.[1]).toMatchObject({
+      config: {
+        "skills.include_instructions": false,
+        "skills.config": [
+          { path: personalSkillRealPath, enabled: false },
+          { path: newPersonalSkillRealPath, enabled: false },
+        ],
+      },
+    });
+  } finally {
+    fixture.close();
+  }
 });

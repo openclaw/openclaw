@@ -89,7 +89,7 @@ export function fixture(options: {
       return String(900 + replies.length);
     }),
     ensureActivitySubscriptions: vi.fn(async () => {}),
-    openActivityStream: vi.fn(async () => {
+    openActivityStream: vi.fn(async (): Promise<Response> => {
       throw new Error("Unexpected stream");
     }),
   } satisfies XApiClient;

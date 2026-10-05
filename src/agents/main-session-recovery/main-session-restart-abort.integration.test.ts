@@ -16,7 +16,7 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { clearCommandRecoveryClaim } from "../command/post-run.js";
+import { clearCommandRecoveryClaim } from "../command/cleanup.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";

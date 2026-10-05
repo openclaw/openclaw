@@ -35,6 +35,7 @@ import {
 } from "./session-incognito-lifecycle-contract.js";
 import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
 import {
+  createIncognitoPendingInputHistorySettlement,
   createIncognitoPendingInputSettlement,
   type IncognitoPendingInputOperations,
 } from "./session-incognito-pending-input-contract.js";
@@ -591,7 +592,6 @@ export function createIncognitoSessionFacts(
           admitCustody: (stage: "transaction" | "commit", facts: PendingInputHistoryGrant) => void,
         ) {
           const captured = structuredClone(input);
-          const ids = new Set(captured.ids);
           return perform(
             authority,
             { type: "session.pendingInputs.interruptHistory", input: captured },
@@ -600,44 +600,7 @@ export function createIncognitoSessionFacts(
             undefined,
             undefined,
             false,
-            {
-              authorize(stage, facts) {
-                if (
-                  !isRecord(facts) ||
-                  facts.kind !== "pending-input-history-custody" ||
-                  !Array.isArray(facts.candidates) ||
-                  facts.candidates.some(
-                    (row: unknown) =>
-                      !isRecord(row) ||
-                      typeof row.input_id !== "string" ||
-                      !ids.has(row.input_id) ||
-                      row.session_key !== captured.sessionKey ||
-                      row.session_id !== captured.sessionId,
-                  )
-                ) {
-                  throw new Error("Incognito pending input history omitted its custody facts");
-                }
-                // SAFETY: The paired bounded kernel owns this validated custody envelope.
-                admitCustody(stage, facts as PendingInputHistoryGrant);
-              },
-              decodeReceipt(receipt) {
-                if (
-                  !isRecord(receipt) ||
-                  !Array.isArray(receipt.facts) ||
-                  !isRecord(receipt.value) ||
-                  receipt.value.kind !== "pending-input-history-interrupted" ||
-                  !Array.isArray(receipt.value.ids) ||
-                  receipt.value.ids.some((id: unknown) => typeof id !== "string" || !ids.has(id))
-                ) {
-                  throw new SqliteWorkerError(
-                    "Incognito pending input history omitted its committed receipt",
-                    "outcome-unknown",
-                  );
-                }
-                // SAFETY: Session facts are compared with the exact commit grant before publication.
-                return receipt as IncognitoSessionOperations["session.pendingInputs.interruptHistory"]["output"];
-              },
-            },
+            createIncognitoPendingInputHistorySettlement(captured, admitCustody),
           );
         },
         transcript: <Key extends keyof IncognitoTranscriptOperations>(

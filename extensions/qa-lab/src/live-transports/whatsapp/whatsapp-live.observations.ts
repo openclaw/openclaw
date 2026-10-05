@@ -275,9 +275,7 @@ export async function assertWhatsAppScenarioMessageBatch(params: {
   if (!hasWhatsAppBatchExpectations(params.run)) {
     return undefined;
   }
-  await new Promise((resolve) => {
-    setTimeout(resolve, params.run.settleMs ?? 4_000);
-  });
+  await sleep(params.run.settleMs ?? 4_000);
   const messages = params.context.driver.getObservedMessages().filter((message) =>
     isWhatsAppScenarioSutMessage(message, {
       observedAfter: params.observedAfter,

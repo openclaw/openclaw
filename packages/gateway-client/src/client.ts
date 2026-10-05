@@ -20,7 +20,7 @@ import {
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { raceWithTimeout } from "@openclaw/retry";
+import { createAbortError, raceWithTimeout } from "@openclaw/retry";
 import {
   formatGatewayClientErrorForLog,
   isGatewayClientStoppedError,
@@ -289,7 +289,8 @@ export class GatewayClient {
       createRequestError: (error) => new GatewayClientRequestError(error),
       createRequestTimeoutError: (method, timeoutMs, requestSent) =>
         new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
-      createRequestAbortError: createGatewayRequestAbortError,
+      createRequestAbortError: (method) =>
+        createAbortError(`gateway request aborted for ${method}`),
       buildConnectPlan: ({ nonce, challengeTs, serverCapabilities, generation, ...authority }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
@@ -598,7 +599,9 @@ export class GatewayClient {
     const ws = this.ws;
     this.ws = null;
     if (ws) {
-      const pendingStop = this.createPendingStop(ws);
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const pendingStop: PendingStop = { ws, promise, resolve };
+      this.pendingStop = pendingStop;
       const forceTerminateTimer = setTimeout(() => {
         try {
           ws.terminate();
@@ -618,15 +621,6 @@ export class GatewayClient {
     }
     this.protocol.stop();
     return null;
-  }
-
-  private createPendingStop(ws: WebSocket): PendingStop {
-    let resolve = () => {};
-    const promise = new Promise<void>((done) => {
-      resolve = done;
-    });
-    this.pendingStop = { ws, promise, resolve };
-    return this.pendingStop;
   }
 
   private resolvePendingStop(ws: WebSocket): void {
@@ -1287,9 +1281,4 @@ export class GatewayClient {
   }
 }
 
-function createGatewayRequestAbortError(method: string): Error {
-  const err = new Error(`gateway request aborted for ${method}`);
-  err.name = "AbortError";
-  return err;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

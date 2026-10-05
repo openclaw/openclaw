@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { createCopilotAbortError } from "./prompt-error.js";
@@ -71,29 +72,13 @@ async function awaitWithinCompletionBoundary<T>(params: {
   }
 
   let boundaryError: Error | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  const boundary = new Promise<never>((_resolve, reject) => {
-    const rejectBoundary = (error: Error) => {
-      if (boundaryError) {
-        return;
-      }
+  const rejectBoundary = (error: Error): never => {
+    if (!boundaryError) {
       boundaryError = error;
       params.onBoundary?.();
-      reject(error);
-    };
-    timer = setTimeout(
-      () => rejectBoundary(createTimeoutError(params.boundary.timeoutMs)),
-      remainingMs,
-    );
-    if (signal) {
-      onAbort = () => rejectBoundary(createCopilotAbortError(signal.reason));
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) {
-        onAbort();
-      }
     }
-  });
+    throw boundaryError;
+  };
   const assertCurrent = () => {
     if (boundaryError) {
       throw boundaryError;
@@ -118,17 +103,18 @@ async function awaitWithinCompletionBoundary<T>(params: {
       }
     });
   try {
-    return await Promise.race([operation, boundary]);
+    return await raceWithTimeout(
+      operation,
+      remainingMs,
+      () => rejectBoundary(createTimeoutError(params.boundary.timeoutMs)),
+      {
+        signal,
+        onAbort: (aborted) => rejectBoundary(createCopilotAbortError(aborted.reason)),
+      },
+    );
   } catch (error) {
     params.boundary.assertCurrent?.();
     throw error;
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (signal && onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
   }
 }
 

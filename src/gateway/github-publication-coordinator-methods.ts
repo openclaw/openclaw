@@ -13,10 +13,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import {
-  listUnreportedPersonalGitHubPublications,
-  markPersonalGitHubPublicationReported,
-} from "./github-personal-publication-store.js";
+import { listUnreportedPersonalGitHubPublications } from "./github-personal-publication-store.js";
 import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
@@ -36,6 +33,7 @@ import {
   githubPublicationDatabase as publicationDb,
   hasGitHubPublicationStore as schemaExists,
   listGitHubPublicationsForClaim,
+  markGitHubPublicationReported,
   projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
@@ -202,6 +200,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       assertRequester();
       const loaded = initialAuthority.loaded;
       const lifecycleRevision = loaded.entry?.lifecycleRevision ?? null;
+      const session = {
+        sessionId,
+        sessionKey: loaded.canonicalKey,
+        agentId: input.agentId,
+        lifecycleRevision,
+      };
       const placement = params.placements.get(sessionId);
       const validateLocalExecution = () => {
         const current = params.placements.get(sessionId);
@@ -216,12 +220,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         : null;
       const assertCaptureAuthority = () => {
         assertRequester();
-        resolveGitHubPublicationWorktreeOwner({
-          sessionId,
-          sessionKey: loaded.canonicalKey,
-          agentId: input.agentId,
-          lifecycleRevision,
-        });
+        resolveGitHubPublicationWorktreeOwner(session);
         const current = params.placements.get(sessionId);
         const unchanged = capturePlacement
           ? current?.state === capturePlacement.state &&
@@ -269,9 +268,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       const deferred = placement !== undefined && placement.state !== "local";
       const { worktree } = await readGitHubPublicationWorktreeOwner({
         sessionId,
-        sessionKey: loaded.canonicalKey,
-        agentId: input.agentId,
+        sessionKey: session.sessionKey,
+        agentId: session.agentId,
       });
+      const expectedWorktree = {
+        worktreeId: worktree.id,
+        repositoryFingerprint: worktree.repoFingerprint,
+        branch: worktree.branch,
+      };
       assertRequester();
       const requestDigest = digestRequest({
         sessionId,
@@ -349,15 +353,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
               assertCurrent: () => {
                 assertRequester();
                 resolveGitHubPublicationWorktreeOwner({
-                  sessionId,
-                  sessionKey: loaded.canonicalKey,
-                  agentId: input.agentId,
-                  lifecycleRevision,
-                  expected: {
-                    worktreeId: worktree.id,
-                    repositoryFingerprint: worktree.repoFingerprint,
-                    branch: worktree.branch,
-                  },
+                  ...session,
+                  expected: expectedWorktree,
                 });
               },
               snapshot,
@@ -369,15 +366,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       };
       if (deferred) {
         resolveGitHubPublicationWorktreeOwner({
-          sessionId,
-          sessionKey: loaded.canonicalKey,
-          agentId: input.agentId,
-          lifecycleRevision,
-          expected: {
-            worktreeId: worktree.id,
-            repositoryFingerprint: worktree.repoFingerprint,
-            branch: worktree.branch,
-          },
+          ...session,
+          expected: expectedWorktree,
         });
         return publicationResult(insertSessionRequest());
       }
@@ -401,11 +391,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         sessionId,
         sessionKey: loaded.canonicalKey,
         agentId: input.agentId,
-        expected: {
-          worktreeId: worktree.id,
-          repositoryFingerprint: worktree.repoFingerprint,
-          branch: worktree.branch,
-        },
+        expected: expectedWorktree,
       });
       const row = insertSessionRequest(snapshot);
       return await processRow(row, validateLocalExecution, input.requester.assertInvocationCurrent);
@@ -554,7 +540,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     },
 
     markReported(requestId: string): void {
-      markPersonalGitHubPublicationReported(requestId);
+      markGitHubPublicationReported("personal", requestId);
       ensureSchema();
       runOpenClawStateWriteTransaction(
         ({ db }) => {

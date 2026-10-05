@@ -342,6 +342,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       bearerConfigured: Boolean(account.config.bearerToken),
       signal: ctx.abortSignal,
       onStatus: publish,
+      onWarning: (message) => log.warn(message),
       getCursor: async () => (await cursor.lookup(account.accountId))?.sinceId,
       setCursor: async (sinceId) => {
         await cursor.register(

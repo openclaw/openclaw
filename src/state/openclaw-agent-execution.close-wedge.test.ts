@@ -222,6 +222,49 @@ it.each([
   await retry.release();
 });
 
+it.each(["prepare", "runExisting"] as const)(
+  "%s reopens a native generation lost between operations before dispatch",
+  async (entryPoint) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-preflight-")) };
+    const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
+    await execution.prepare(source);
+    expect(
+      await execution.runExisting(source, (scope) =>
+        scope.execute({ type: "session.entry.read", input: { sessionKey: "healthy" } }),
+      ),
+    ).toBeUndefined();
+    const claim = execution.captureGenerationClaim();
+    expect(() => claim.assertCurrent()).not.toThrow();
+
+    const agentWorker = [...fault.workers].at(-1);
+    expect(agentWorker).toBeDefined();
+    await agentWorker!.terminate();
+    expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+    if (entryPoint === "prepare") {
+      expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+      await execution.prepare(source);
+    }
+    let dispatched = 0;
+    expect(
+      await execution.runExisting(source, (scope) => {
+        dispatched += 1;
+        return scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } });
+      }),
+    ).toBeUndefined();
+    expect(dispatched).toBe(1);
+    const replacement = execution.capturePreparedGenerationClaim();
+    expect(replacement?.identity).toBe(claim.identity);
+    expect(replacement?.incarnation).not.toBe(claim.incarnation);
+    expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
+    expect(
+      await execution.runExisting(source, (scope) =>
+        scope.execute({ type: "session.entry.read", input: { sessionKey: "still-healthy" } }),
+      ),
+    ).toBeUndefined();
+    await execution.release();
+  },
+);
+
 it("surfaces the native cleanup cause while the close still fails, then recovers once it clears", async () => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-scope-")) };
   const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });

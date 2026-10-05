@@ -1,7 +1,7 @@
 import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -26,7 +26,10 @@ import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import * as databaseFiles from "./manager-db.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  readPublishedSessionIndex,
+} from "./manager-index.test-support.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
 import {
   observePublishedReservations,
@@ -816,5 +819,73 @@ describe("memory manager shared agent connection", () => {
       resume.resolve();
       await Promise.allSettled([sync, close]);
     }
+  });
+
+  it("publishes a session while worker admission cannot read the shared connection", async () => {
+    const sessionId = "admission-without-host-reads";
+    const sessionKey = `agent:main:chat:${sessionId}`;
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+        vectorEnabled: false,
+      }),
+      "cli",
+    );
+    await manager.sync({ reason: "index-empty-corpus", force: true });
+    await fixture.seedSessionTranscript({
+      sessionId,
+      sessionKey,
+      messages: [{ role: "user", timestamp: 1, content: "Admitted violet fragment." }],
+    });
+    // Under rollback journaling a spilled publication holds EXCLUSIVE while it waits for
+    // admission, so any host read on the agent database fails with SQLITE_BUSY.
+    const unavailable = () => {
+      throw Object.assign(new Error("database is locked"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 5,
+      });
+    };
+    const withoutHostReads = (assertCurrent: () => void) => {
+      const guards = [
+        vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(unavailable),
+        vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "all").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "get").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "run").mockImplementation(unavailable),
+      ];
+      try {
+        assertCurrent();
+      } finally {
+        for (const guard of guards) {
+          guard.mockRestore();
+        }
+      }
+    };
+    // oxlint-disable-next-line typescript/unbound-method -- Called with the actual database owner.
+    const replaceSource = MemoryIndexDatabase.prototype.replaceSource;
+    vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource").mockImplementation(function (
+      this: MemoryIndexDatabase,
+      replacement,
+      assertCurrent,
+      prepare,
+    ) {
+      return replaceSource.call(this, replacement, () => withoutHostReads(assertCurrent), prepare);
+    });
+
+    await manager.sync({
+      reason: "admission-without-host-reads",
+      sessions: [{ agentId: "main", sessionId, sessionKey }],
+    });
+
+    const published = readPublishedSessionIndex(
+      managerDatabase(manager),
+      `sessions/main/${sessionId}.jsonl`,
+      "violet",
+    );
+    expect(published.chunks).toHaveLength(1);
+    expect(published.search).toHaveLength(1);
   });
 });
