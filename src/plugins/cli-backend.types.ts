@@ -550,6 +550,9 @@ type CliBackendPluginBase = {
    *
    * Tool events report execution already performed by the backend. OpenClaw
    * renders them but does not treat them as host tool execution or delivery evidence.
+   * For claude-stream-json output that ends without a result record, OpenClaw also offers
+   * the partial assistant text as `{"type":"result","result":<text>}`; a result event with
+   * `errorText` rejects it.
    */
   parseJsonlEvent?: CliBackendParseJsonlEvent;
   /**

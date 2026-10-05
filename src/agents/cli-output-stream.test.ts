@@ -240,6 +240,33 @@ describe("createCliJsonlStreamingParser", () => {
 
   it.each([
     {
+      name: "raw tool protocol",
+      text: '<invoke name="Bash">\n<parameter name="command">echo 1</parameter>\n</invoke>',
+      expected: { text: "", sessionId: undefined, usage: undefined, errorText: "raw protocol" },
+    },
+    {
+      name: "plain prose",
+      text: "partial answer",
+      expected: { text: "partial answer", sessionId: undefined, usage: undefined },
+    },
+  ])("applies the backend result rule to interrupted $name", ({ text, expected }) => {
+    const parser = createClaudeParser({
+      parseJsonlEvent: (line) => {
+        const record = JSON.parse(line) as { type?: string; result?: unknown };
+        return record.type === "result" &&
+          typeof record.result === "string" &&
+          record.result.includes("<invoke")
+          ? { kind: "result", errorText: "raw protocol" }
+          : null;
+      },
+    });
+    finishFrames(parser, claudeTextDelta(text));
+    expect(parser.hasTerminalResult()).toBe(false);
+    expect(parser.getOutput()).toEqual(expected);
+  });
+
+  it.each([
+    {
       name: "no result envelope",
       frames: [claudeTextDelta("hello")],
       expectedText: "hello",
