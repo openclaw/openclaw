@@ -111,6 +111,10 @@ export class SwarmRosterHydrator {
   private parentRefreshQueued = false;
   private parentRefreshForced = false;
   private publishingParentRead = false;
+  private childRefresh: Promise<void> | null = null;
+  private childRefreshQueued = false;
+  /** The parent-named children the child query was last asked to bring in. */
+  private requestedChildren = "";
 
   update(params: SwarmHydrationParams): void {
     const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
@@ -178,11 +182,58 @@ export class SwarmRosterHydrator {
     );
     // Parent counts remain independent of the optional child-name page.
     void this.readParent();
-    void this.children.refresh().catch(() => {
-      if (isCurrent()) {
-        this.retry("children");
-      }
-    });
+    this.refreshChildren();
+  }
+
+  private refreshChildren(): void {
+    const children = this.children;
+    if (!children) {
+      return;
+    }
+    if (this.childRefresh) {
+      this.childRefreshQueued = true;
+      return;
+    }
+    const generation = this.generation;
+    const request = children
+      .refresh()
+      .catch(() => {
+        if (generation === this.generation) {
+          this.retry("children");
+        }
+      })
+      .finally(() => {
+        if (generation !== this.generation || this.childRefresh !== request) {
+          return;
+        }
+        this.childRefresh = null;
+        if (this.childRefreshQueued) {
+          this.childRefreshQueued = false;
+          this.refreshChildren();
+        }
+      });
+    this.childRefresh = request;
+  }
+
+  /**
+   * A launch reaches the parent row at once, but the child query only re-reads
+   * on its paced schedule. Read it now, and report the roster incomplete until
+   * that read answers, so nothing counts children it has not seen.
+   */
+  private refreshNewChildren(): void {
+    const named = this.parentRow?.childSessions;
+    if (!named?.length || (!this.hydrated && !this.childRefresh)) {
+      // Nothing new, or the first read is still loading every child.
+      return;
+    }
+    const held = new Set(this.childRows.map((row) => row.key));
+    const missing = named.filter((key) => !held.has(key)).join("\n");
+    if (!missing || missing === this.requestedChildren) {
+      return;
+    }
+    this.requestedChildren = missing;
+    this.hydrated = false;
+    this.refreshChildren();
   }
 
   private applyParent(parent: GatewaySessionRow | null): void {
@@ -213,6 +264,7 @@ export class SwarmRosterHydrator {
         : parent;
     this.parentSummary = summary;
     this.rows = this.parentRow ? mergeSwarmSessionRows(this.childRows, [this.parentRow]) : [];
+    this.refreshNewChildren();
     this.params?.onRows(this.rows);
     if (parent && changed && this.parent && !this.publishingParentRead) {
       void this.readParent();
@@ -239,12 +291,8 @@ export class SwarmRosterHydrator {
       retry.timer = null;
       if (owner === "parent") {
         void this.readParent();
-      } else {
-        void this.children?.refresh().catch(() => {
-          if (generation === this.generation) {
-            this.retry(owner);
-          }
-        });
+      } else if (generation === this.generation) {
+        this.refreshChildren();
       }
     }, delay);
   }
@@ -370,6 +418,8 @@ export class SwarmRosterHydrator {
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
         this.hydrated = true;
         this.recovered("children");
+        // A child launched during this read is still missing from it.
+        this.refreshNewChildren();
         params.onRows(this.rows);
       })
       .catch(() => {
@@ -395,6 +445,9 @@ export class SwarmRosterHydrator {
     this.parentRequest = null;
     this.parentRefreshQueued = false;
     this.parentRefreshForced = false;
+    this.childRefresh = null;
+    this.childRefreshQueued = false;
+    this.requestedChildren = "";
     this.rows = [];
     this.hydrated = false;
     this.key = key;

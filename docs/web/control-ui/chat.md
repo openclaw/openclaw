@@ -32,9 +32,12 @@ subagents**, counting down as they finish. When one is left it shows that
 subagent's name, which opens its session. Elapsed time counts from the handoff.
 If the turn ended without a handoff while subagents are still active, the same
 line follows the finished reply without elapsed time. Until the pane has loaded
-every child session, the line reads **Waiting on subagents**. A successful
-`sessions_yield` leaves no marker in the transcript, and its private
-continuation context stays hidden.
+every child session, the line reads **Waiting on subagents**. Child sessions
+that are not subagents are counted without names once no subagent is left, as
+**Waiting on 2 sessions**. Once everything it waited on has finished, the line
+goes away until the agent resumes. Tool rows you opened stay open through the
+handoff. A successful `sessions_yield` leaves no marker in the transcript, and
+its private continuation context stays hidden.
 
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,

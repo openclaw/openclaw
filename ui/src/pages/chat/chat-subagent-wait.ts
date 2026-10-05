@@ -3,6 +3,7 @@ import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
+  isSubagentSessionKey,
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import { pendingSessionsYield } from "./chat-sessions-yield.ts";
@@ -12,8 +13,10 @@ export type ChatSubagentWait = {
   startedAt: number | null;
   /** The handed-off run, so the wait stays that run's live status. */
   runId?: string;
-  /** Unfinished direct children; 0 until the pane's own child query has answered. */
+  /** Unfinished direct subagents; 0 until the pane's own child query has answered. */
   runningCount: number;
+  /** Unfinished child sessions that are not subagents; the wait names none of them. */
+  sessionCount?: number;
   child?: { key: string; label: string };
 };
 
@@ -32,7 +35,13 @@ export function placedSubagentWait(
 /** Everything the wait line draws, so rows without one keep memoizing across roster patches. */
 export function subagentWaitRenderKey(wait: ChatSubagentWait | null): string {
   return wait
-    ? JSON.stringify([wait.startedAt, wait.runningCount, wait.child?.key, wait.child?.label])
+    ? JSON.stringify([
+        wait.startedAt,
+        wait.runningCount,
+        wait.sessionCount,
+        wait.child?.key,
+        wait.child?.label,
+      ])
     : "";
 }
 
@@ -63,7 +72,7 @@ export function resolveChatSubagentWait(input: {
       : null;
   // A count or a name says which children are left, so it waits for the pane's
   // own child query. Rows seeded from another list can hold only some of them.
-  const children = input.subagentSessionsHydrated
+  const unfinished = input.subagentSessionsHydrated
     ? (input.subagentSessions ?? []).filter((row) => {
         const parent = resolveUiSessionNavigationParentKey(row);
         return (
@@ -77,6 +86,14 @@ export function resolveChatSubagentWait(input: {
         );
       })
     : [];
+  if (input.subagentSessionsHydrated && unfinished.length === 0) {
+    // Every child the pane knows has finished. The resumed run draws the next
+    // status; a wait line here could only say it is waiting on nothing.
+    return null;
+  }
+  // A child session opened in its own right is not a subagent: it is counted
+  // without a name, and only once no subagent is left.
+  const children = unfinished.filter((row) => isSubagentSessionKey(row.key));
   const child = children.length === 1 ? children[0] : undefined;
   return {
     // The yield's transcript row can predate the handoff by its whole wrapping
@@ -87,6 +104,9 @@ export function resolveChatSubagentWait(input: {
         : handoffAt,
     ...(handoffAt !== null && pending?.runId ? { runId: pending.runId } : {}),
     runningCount: children.length,
+    ...(unfinished.length > children.length
+      ? { sessionCount: unfinished.length - children.length }
+      : {}),
     ...(child
       ? {
           child: {

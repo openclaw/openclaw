@@ -35,13 +35,20 @@ export function renderChatWorkingIndicator(
   const waitingApproval = options.waitingApproval === true;
   const waitingSubagents = options.waitingSubagents;
   const child = waitingSubagents?.child;
+  // Child sessions that are not subagents get a count and nothing else.
+  const waitingSessions =
+    waitingSubagents?.runningCount === 0 ? (waitingSubagents.sessionCount ?? 0) : 0;
   const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
   // Without loaded child rows the pane only knows that some are still running.
   const statusLabel = waitingSubagents
     ? waitingSubagents.runningCount > 1
       ? t("chat.waitingOnSubagentsCount", { count: String(waitingSubagents.runningCount) })
-      : t("chat.waitingOnSubagents")
+      : waitingSessions > 1
+        ? t("chat.waitingOnSessionsCount", { count: String(waitingSessions) })
+        : waitingSessions === 1
+          ? t("chat.waitingOnSession")
+          : t("chat.waitingOnSubagents")
     : waitingApproval
       ? t("chat.waitingForApproval")
       : options.startupLabel || t("common.working");

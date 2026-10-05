@@ -33,7 +33,11 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
-import { hasSessionsYieldCall, projectSessionsYieldItems } from "./chat-sessions-yield.ts";
+import {
+  hasSessionsYieldCall,
+  pendingSessionsYield,
+  projectSessionsYieldItems,
+} from "./chat-sessions-yield.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
@@ -137,15 +141,24 @@ export function buildChatItems(
   const queuedSends = props.queue ?? [];
   const segments = props.streamSegments;
   let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
-  const resolveProgress = () =>
-    (progress ??= resolveWorkingProgress(
+  const resolveProgress = () => {
+    if (progress) {
+      return progress;
+    }
+    // A run that handed off has ended, but its live rows stay until the next
+    // run starts. The status that follows must not take that run's identity or
+    // count from its first tool call.
+    const handedOff = props.runId ? undefined : pendingSessionsYield(props.messages)?.runId;
+    progress = resolveWorkingProgress(
       props.sessionKey,
       props.runId ?? null,
       props.streamStartedAt,
       queuedSends,
-      segments,
-      tools,
-    ));
+      handedOff ? segments.filter((segment) => segment.runId !== handedOff) : segments,
+      handedOff ? tools.filter((message) => message.runId !== handedOff) : tools,
+    );
+    return progress;
+  };
   // Retention and live status share the same explicit or inferred run ownership.
   const activeCommentaryRunId =
     props.persistCommentary === false && (props.runWorking || props.runActive)
