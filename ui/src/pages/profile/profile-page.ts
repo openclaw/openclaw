@@ -477,6 +477,14 @@ export class ProfilePage extends OpenClawLightDomElement {
                   })
                 : nothing
           }
+          ${
+            policy?.execution === "foreground-only"
+              ? renderSettingsRow({
+                  title: t("profilePage.access.execution"),
+                  description: t("profilePage.access.foregroundOnly"),
+                })
+              : nothing
+          }
           ${renderSettingsRow({
             title: t("profilePage.access.help"),
             description: t("profilePage.access.nextStep"),

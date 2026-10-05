@@ -309,6 +309,7 @@ type ComposerVoiceButtonProps = {
   connected: boolean;
   sending: boolean;
   submitDisabledReason?: string | null;
+  voiceInputDisabledReason?: string;
   isBusy: boolean;
   dictation?: ComposerDictationController;
   microphonePicker?: TemplateResult | typeof nothing;
@@ -333,14 +334,14 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
   const label = active
     ? t("chat.composer.dictationStopAndKeep")
     : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
-  const tooltip =
-    props.dictation && !startsDictationDirectly && !(active || finalizing)
-      ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
-          .filter(Boolean)
-          .join(" · ")
-      : active
-        ? label
-        : (props.submitDisabledReason ?? label);
+  const tooltip = active
+    ? label
+    : (props.voiceInputDisabledReason ??
+      (props.dictation && !startsDictationDirectly && !finalizing
+        ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
+            .filter(Boolean)
+            .join(" · ")
+        : (props.submitDisabledReason ?? label)));
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return html`
@@ -380,6 +381,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
             (!props.connected ||
               props.sending ||
               props.isBusy ||
+              Boolean(props.voiceInputDisabledReason) ||
               (!props.dictation && Boolean(props.submitDisabledReason)))
           }
           aria-disabled=${String(finalizing)}
@@ -542,6 +544,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             connected: props.connected,
             sending: props.sending,
             isBusy: props.isBusy,
+            voiceInputDisabledReason: props.voiceInputDisabledReason,
             dictation: props.dictation,
             idleLabel: t("chat.composer.dictationCapability"),
           })}
@@ -553,14 +556,14 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       ? html`
           <openclaw-tooltip
             class="chat-mobile-talk-action"
-            .content=${props.submitDisabledReason ?? t("chat.composer.realtimeTalkCapability")}
+            .content=${props.voiceInputDisabledReason ?? props.submitDisabledReason ?? t("chat.composer.realtimeTalkCapability")}
           >
             <button
               class="chat-send-btn chat-send-btn--talk-mode"
               type="button"
               @pointerdown=${props.onPrimaryActionPointerDown}
               @click=${props.onToggleVoice}
-              ?disabled=${!props.connected || props.sending || props.isBusy || Boolean(props.submitDisabledReason)}
+              ?disabled=${!props.connected || props.sending || props.isBusy || Boolean(props.voiceInputDisabledReason || props.submitDisabledReason)}
               aria-label=${t("chat.composer.realtimeTalkCapability")}
             >
               ${icons.audioLines}

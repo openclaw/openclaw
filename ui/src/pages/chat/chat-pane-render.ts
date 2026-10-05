@@ -270,6 +270,11 @@ export class ChatPane extends ChatPaneLayoutRender {
         });
     const composerState = getChatComposerState(this.presentationId);
     const projectCatalog = projectsForGateway(this.context.gateway).snapshot;
+    const voiceInputDisabledReason =
+      selectedSession?.execution === "foreground-only" ||
+      projectCatalog.result?.creationPolicy?.execution === "foreground-only"
+        ? t("chat.composer.foregroundVoiceUnavailable")
+        : undefined;
     const publicationScope = this.captureConnectionScope();
     const readPublicationRow = () => {
       const row = selectedChatSessionRow(state);
@@ -477,6 +482,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
+      voiceInputDisabledReason,
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkInputNotice: state.realtimeTalkInputNotice,
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
@@ -610,7 +616,9 @@ export class ChatPane extends ChatPaneLayoutRender {
                   followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
                   submissionAction,
                 ),
-      onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
+      onUseSystemDefaultMicrophone: voiceInputDisabledReason
+        ? undefined
+        : (state.realtimeTalkUseSystemDefault ?? undefined),
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),

@@ -146,6 +146,13 @@ const enNewSessionSetup = {
     workspaceRequired: "Choose an approved project before starting this session.",
     workspaceThreadRequired: "This role requires a new thread in an approved workspace.",
     workspaceIncognitoUnavailable: "Turn off Incognito to use the required project workspace.",
+    foregroundOnly:
+      "Each turn requires a new message. Unattended jobs and background continuation are disabled.",
+    foregroundRemoteUnavailable:
+      "Use this Gateway; remote execution cannot confirm foreground cleanup.",
+    foregroundTerminalUnavailable:
+      "Start a new chat on this Gateway; terminal sessions cannot confirm foreground cleanup.",
+    useGateway: "Use this Gateway",
     workspacePolicyLoading: "Loading available workspaces…",
     workspacePolicyFailed: "Couldn't load workspace access. Retry before starting the session.",
     workspaceDiscoveryFailed:

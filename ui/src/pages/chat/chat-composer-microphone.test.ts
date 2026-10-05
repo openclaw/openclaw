@@ -2,11 +2,13 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { NewSessionDictationControl } from "../new-session/composer-dictation-control.ts";
 import {
   createComposerProps as props,
   findComposerButton as button,
@@ -30,6 +32,107 @@ afterEach(async () => {
 });
 
 describe("composer microphone picker", () => {
+  it.each(["chat", "draft"] as const)(
+    "retires %s permission discovery when foreground policy hides the open picker",
+    async (surface) => {
+      vi.mocked(realtimeTalkInput.discoverRealtimeTalkInputs).mockRestore();
+      const discovery = vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs");
+      const pending = createDeferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue([]);
+      const getUserMedia = vi.fn();
+      const mediaDevices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
+      vi.stubGlobal("navigator", { mediaDevices });
+      const client = {
+        request: vi.fn().mockResolvedValue({
+          realtime: { ready: true, providers: [] },
+          transcription: { ready: true, providers: [] },
+        }),
+      } as unknown as GatewayBrowserClient;
+      const container = document.createElement("div");
+      document.body.append(container);
+      let reason: string | undefined = undefined;
+      const composerProps = props({ gatewayClient: client, onToggleRealtimeTalk: vi.fn() });
+      const draft = new NewSessionDictationControl({
+        textarea: { captureSelection: vi.fn() } as never,
+        getClient: () => client,
+        isConnected: () => true,
+        canCommit: () => true,
+        onMessage: vi.fn(),
+        onError: vi.fn(),
+        onSubmit: vi.fn(),
+        requestUpdate: () => draw(),
+      });
+      onTestFinished(() => draft.dispose());
+      const draw = () => {
+        composerProps.voiceInputDisabledReason = reason;
+        render(
+          surface === "chat"
+            ? renderChatComposer(composerProps)
+            : draft.render("main", undefined, reason),
+          container,
+        );
+      };
+      composerProps.onRequestUpdate = draw;
+      draw();
+      const dropdown = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+        "wa-dropdown.chat-talk-input-picker",
+      );
+      expect(dropdown).not.toBeNull();
+      await dropdown!.updateComplete;
+      button(container, t("chat.composer.microphoneInput")).click();
+      await dropdown!.updateComplete;
+      await vi.waitFor(() => expect(discovery).toHaveBeenCalledOnce());
+
+      reason = t("chat.composer.foregroundVoiceUnavailable");
+      draw();
+      expect(container.querySelector(".chat-talk-input-picker")).toBeNull();
+      pending.resolve([]);
+      await discovery.mock.results[0]?.value;
+      expect(getUserMedia).not.toHaveBeenCalled();
+      mediaDevices.dispatchEvent(new Event("devicechange"));
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("explains denied voice input across desktop/mobile controls while preserving Send and Stop", () => {
+    const onToggleRealtimeTalk = vi.fn();
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const reason = t("chat.composer.foregroundVoiceUnavailable");
+    const composerProps = props({
+      voiceInputDisabledReason: reason,
+      composerHoldToRecord: true,
+      onToggleRealtimeTalk,
+      onSend,
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    draw();
+
+    const voiceButtons = container.querySelectorAll<HTMLButtonElement>(
+      ".chat-send-btn--voice, .chat-send-btn--talk-mode",
+    );
+    expect(voiceButtons.length).toBeGreaterThanOrEqual(3);
+    for (const voiceButton of voiceButtons) {
+      expect(voiceButton.disabled).toBe(true);
+      voiceButton.click();
+    }
+    expect(container.querySelector(".agent-chat__composer-status")?.textContent).toContain(reason);
+    expect(container.querySelector(".chat-talk-input-picker")).toBeNull();
+    expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+    expect(discoverRealtimeTalkInputsMock).not.toHaveBeenCalled();
+
+    composerProps.draft = "Continue with a new chat message";
+    draw();
+    button(container, t("chat.runControls.sendMessage")).click();
+    expect(onSend).toHaveBeenCalledOnce();
+
+    composerProps.realtimeTalkActive = true;
+    draw();
+    button(container, t("chat.composer.stopVoiceInput")).click();
+    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+  });
+
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
       devices: [

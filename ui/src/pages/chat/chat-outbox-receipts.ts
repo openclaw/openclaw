@@ -49,7 +49,10 @@ export function isInterruptedChatInput(history: ChatHistoryResult, item: ChatQue
   return (
     readChatInputReceipt(history, item) === "pending" &&
     history.pendingInputs?.items.some(
-      (input) => input.runId === item.sendRunId && input.state === "interrupted",
+      (input) =>
+        input.runId === item.sendRunId &&
+        input.state === "interrupted" &&
+        !input.replayBlockedReason,
     ) === true
   );
 }
@@ -85,8 +88,12 @@ function reconcilePendingChatOutboxInput(
   if (inputReceipt === "pending" || inputReceipt === "cancelled") {
     const pending = history.pendingInputs?.items.find((input) => input.runId === item.sendRunId);
     const cancelled = inputReceipt === "cancelled" || pending?.state === "cancelled";
+    const replayBlocked = pending?.replayBlockedReason === "foreground-restart";
     const confirmsLocal = Boolean(
-      !cancelled && historySessionId && (!item.sessionId || item.sendState === "unconfirmed"),
+      !cancelled &&
+      !replayBlocked &&
+      historySessionId &&
+      (!item.sessionId || item.sendState === "unconfirmed"),
     );
     if (confirmsLocal && !confirmQueuedMessageCustody(host, item, historySessionId)) {
       return "blocked";
@@ -98,7 +105,7 @@ function reconcilePendingChatOutboxInput(
     ) {
       applyChatPendingInputs(host, history.pendingInputs, { receipts: history.inputReceipts });
     }
-    if (cancelled) {
+    if (cancelled || replayBlocked) {
       return removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null ||
         !readStoredChatOutbox(host, outbox)?.queue.some((entry) => entry.id === item.id)
         ? "continue"

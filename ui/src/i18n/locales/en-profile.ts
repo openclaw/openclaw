@@ -22,6 +22,9 @@ const enProfile = {
       noWorkspaces: "None available. Ask a maintainer to assign a project.",
       workspaceUnavailable: "Workspace access could not be loaded. Retry to check your policy.",
       workspaceLoading: "Loading approved workspaces…",
+      execution: "Foreground turns only",
+      foregroundOnly:
+        "Each turn requires a new message. Unattended jobs and background continuation are disabled. Stopping a turn keeps your history, drafts, and workspace.",
       admin: "You have permission to manage this server.",
       write: "You have permission to send messages and make changes.",
       read: "You have permission to view server information.",

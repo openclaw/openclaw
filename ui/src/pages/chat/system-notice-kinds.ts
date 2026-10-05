@@ -4,6 +4,7 @@ export type PendingInputStatus =
   | "waitingForWorkerSetup"
   | "waitingForWorkspaceSync"
   | "resuming"
+  | "stoppedForRestart"
   | "cancelled"
   | "interrupted";
 

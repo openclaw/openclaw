@@ -55,6 +55,7 @@ type ComposerDictationFailure = {
 
 type ComposerDictationControllerOptions = {
   client: GatewayBrowserClient | null;
+  sessionKey?: string;
   connected: boolean;
   enabled: boolean;
   dictationAvailable?: boolean;
@@ -132,6 +133,7 @@ class ComposerDictationSession {
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly callbacks: ComposerDictationSessionCallbacks,
+    private readonly sessionKey?: string,
   ) {}
 
   start(): Promise<void> {
@@ -159,7 +161,10 @@ class ComposerDictationSession {
     this.inputPump.start(media, this.context, (samples) => this.appendAudio(samples));
     this.callbacks.onReady();
 
+    // The captured chat target preserves its execution ceiling through async
+    // microphone permission. Draft dictation has no existing session target.
     const result = await this.client.request<DictationSessionResult>("talk.session.create", {
+      ...(this.sessionKey ? { sessionKey: this.sessionKey } : {}),
       mode: "transcription",
       transport: "gateway-relay",
       brain: "none",
@@ -615,25 +620,29 @@ export class ComposerDictationController {
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
     this.setPhase("connecting");
-    const session = new ComposerDictationSession(client, {
-      onError: (message, preservesText) => {
-        if (this.session !== session) {
-          return;
-        }
-        try {
-          this.options.onError(message, { kind: "interrupted", preservesText });
-        } finally {
-          void this.stop({ commit: true });
-        }
+    const session = new ComposerDictationSession(
+      client,
+      {
+        onError: (message, preservesText) => {
+          if (this.session !== session) {
+            return;
+          }
+          try {
+            this.options.onError(message, { kind: "interrupted", preservesText });
+          } finally {
+            void this.stop({ commit: true });
+          }
+        },
+        onLevel: (level) => this.inputLevel.set(level),
+        onTranscriptChange: () => this.options.onStateChange(),
+        onReady: () => {
+          if (this.session === session && this.phase === "connecting") {
+            this.setPhase("recording");
+          }
+        },
       },
-      onLevel: (level) => this.inputLevel.set(level),
-      onTranscriptChange: () => this.options.onStateChange(),
-      onReady: () => {
-        if (this.session === session && this.phase === "connecting") {
-          this.setPhase("recording");
-        }
-      },
-    });
+      this.options.sessionKey,
+    );
     this.retirePendingCommit();
     this.session = session;
     try {

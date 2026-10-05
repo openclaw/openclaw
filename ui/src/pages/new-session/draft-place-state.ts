@@ -165,6 +165,12 @@ export class DraftPlaceState {
     );
   }
 
+  remotePlacementDisabledReason(): string | undefined {
+    return this.browser.creationPolicy?.execution === "foreground-only"
+      ? t("newSession.foregroundRemoteUnavailable")
+      : undefined;
+  }
+
   get checkoutVisible(): boolean {
     return (
       !this.browser.requiredWorkspace?.worktreeRequired &&
@@ -294,7 +300,7 @@ export class DraftPlaceState {
     return projectDevicePlacements(
       this.gateway.environments,
       this.devicePlacementRuntime()?.devicePlacement,
-      this.gateway.deviceCatalogDisabledReason,
+      this.remotePlacementDisabledReason() ?? this.gateway.deviceCatalogDisabledReason,
     );
   }
 
@@ -651,6 +657,7 @@ export class DraftPlaceState {
     if (
       snapshot.submitting ||
       snapshot.pendingPlacementSessionKey ||
+      Boolean(this.remotePlacementDisabledReason()) ||
       !this.isAdmin() ||
       !profile ||
       Boolean(this.modelControl.cloudRuntimeUnsupportedReason(profile))

@@ -80,6 +80,25 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it("shows a stopped foreground input instead of promising a browser retry", () => {
+    const items = buildPendingInputItems(
+      [{ ...input, state: "interrupted", replayBlockedReason: "foreground-restart" }],
+      undefined,
+      [
+        {
+          id: "retained-input",
+          text: "Retained input",
+          createdAt: 1,
+          sendRunId: input.runId,
+          sendState: "waiting-reconnect",
+        },
+      ],
+    );
+    expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+      "Stopped when the Gateway restarted. This session requires a new message to continue; copy this message and send it again.",
+    ]);
+    expect(items.some((item) => item.kind === "message")).toBe(true);
+  });
   it.each(["held", "failed", "waiting-reconnect"] as const)(
     "describes interrupted input with a %s browser owner accurately",
     (sendState) => {

@@ -105,7 +105,9 @@ export function renderNewSessionPlaceControls({
     autoDevice: place.autoDevice,
     devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
     deviceDisabledReason:
-      place.modelControl.devicePlacementUnsupportedReason() ?? gateway.deviceCatalogDisabledReason,
+      place.remotePlacementDisabledReason() ??
+      place.modelControl.devicePlacementUnsupportedReason() ??
+      gateway.deviceCatalogDisabledReason,
   });
   const projectState = resolveProjectChip({
     folder: place.folder,
@@ -149,8 +151,11 @@ export function renderNewSessionPlaceControls({
           deviceId: place.deviceId,
           autoDevice: place.autoDevice,
           autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
-          cloudDisabledReason: place.modelControl.cloudRuntimeUnsupportedReason(),
+          cloudDisabledReason:
+            place.remotePlacementDisabledReason() ??
+            place.modelControl.cloudRuntimeUnsupportedReason(),
           cloudProfileDisabledReason: (profile) =>
+            place.remotePlacementDisabledReason() ??
             place.modelControl.cloudRuntimeUnsupportedReason(profile),
           submitting,
           pendingPlacement,

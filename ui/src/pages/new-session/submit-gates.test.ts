@@ -19,6 +19,69 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it("explains why execution-only foreground policy excludes native terminal startup", async () => {
+    const { place, flow, request } = createDraftFixture({
+      methods: ["sessions.catalog.startTerminal", "projects.list"],
+      scopes: ["operator.admin"],
+      data: {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId: "native",
+        catalogLabel: "Native",
+        startTerminal: true,
+        terminalHosts: [{ hostId: "gateway", label: "Gateway" }],
+      },
+      request: async () => ({ projects: [], creationPolicy: { execution: "foreground-only" } }),
+    });
+    await place.browser.refreshProjects();
+    expect(flow.submitBlock()).toEqual({
+      gate: "execution-policy",
+      reason:
+        "Start a new chat on this Gateway; terminal sessions cannot confirm foreground cleanup.",
+    });
+    await flow.submit();
+    expect(request.mock.calls.some(([method]) => method === "sessions.catalog.startTerminal")).toBe(
+      false,
+    );
+  });
+
+  it("blocks a retained remote startup under foreground-only policy before any retry", async () => {
+    const { place, flow, context, request } = createDraftFixture({
+      methods: ["sessions.create", "sessions.dispatch", "projects.list"],
+      scopes: ["operator.admin"],
+      request: async () => ({ projects: [], creationPolicy: { execution: "foreground-only" } }),
+    });
+    await place.browser.refreshProjects();
+    const retained = flow.pendingPlacement.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "Keep original input",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: { agentId: "main", message: "", worktree: true },
+    });
+    expect(retained).not.toBeNull();
+    expect(flow.submitBlock()).toEqual({
+      gate: "execution-policy",
+      reason: "Use this Gateway; remote execution cannot confirm foreground cleanup.",
+    });
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
+    expect(flow.pendingPlacement.message).toBe("Keep original input");
+  });
+
+  it("does not make a workspace requirement out of foreground-only execution", async () => {
+    const { place, flow } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: async () => ({ projects: [], creationPolicy: { execution: "foreground-only" } }),
+    });
+    await place.browser.refreshProjects();
+    flow.setMessage("Work here");
+    expect(place.browser.requiredWorkspace).toBeUndefined();
+    expect(flow.canSubmit()).toBe(true);
+  });
+
   it.each(["terminal", "incognito"] as const)(
     "explains why required workspaces exclude %s creation",
     async (kind) => {

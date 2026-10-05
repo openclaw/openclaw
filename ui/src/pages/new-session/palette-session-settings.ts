@@ -146,6 +146,7 @@ export class PaletteSessionSettings {
       autoDevice: place.autoDevice,
       devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
       deviceDisabledReason:
+        place.remotePlacementDisabledReason() ??
         place.modelControl.devicePlacementUnsupportedReason() ??
         gateway.deviceCatalogDisabledReason,
     });
@@ -201,7 +202,9 @@ export class PaletteSessionSettings {
         label: t("newSession.cloudWorker", { profile: profile.id }),
         remote: true,
         selected: place.cloudProfileId === profile.id,
-        disabledReason: place.modelControl.cloudRuntimeUnsupportedReason(profile),
+        disabledReason:
+          place.remotePlacementDisabledReason() ??
+          place.modelControl.cloudRuntimeUnsupportedReason(profile),
         select: () => place.selectCloudProfile(profile.id),
       })),
     ];
@@ -391,6 +394,13 @@ export class PaletteSessionSettings {
                         : nothing
                   }
                 `
+          }
+          ${
+            draft.browser.creationPolicy?.execution === "foreground-only"
+              ? html`<div class="palette-session-settings__unavailable" data-execution-policy>
+                  ${t("newSession.foregroundOnly")}
+                </div>`
+              : nothing
           }
           ${
             !this.places || preferences.failed

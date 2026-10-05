@@ -61,7 +61,7 @@ export class NewSessionDictationControl {
     return renderComposerDictationStatus(this.dictation ?? undefined);
   }
 
-  render(ownerKey: string, inputDeviceId?: string) {
+  render(ownerKey: string, inputDeviceId?: string, voiceInputDisabledReason?: string) {
     if (this.owner?.key !== ownerKey) {
       this.owner = { key: ownerKey };
       this.dictation?.dispose();
@@ -72,7 +72,11 @@ export class NewSessionDictationControl {
     const client = this.options.getClient();
     const connected = this.options.isConnected() && client !== null;
     this.devicePicker.syncCatalog(client, connected);
-    const enabled = this.options.canCommit();
+    if (voiceInputDisabledReason) {
+      // Policy can arrive while an open picker is still enumerating devices.
+      this.devicePicker.handleClose();
+    }
+    const enabled = this.options.canCommit() && !voiceInputDisabledReason;
     const dictationOptions = {
       client,
       connected,
@@ -112,25 +116,28 @@ export class NewSessionDictationControl {
         connected,
         sending: false,
         isBusy: !enabled,
+        voiceInputDisabledReason,
         dictation,
         idleLabel: t("newSession.dictate"),
-        microphonePicker: renderMicrophonePicker({
-          devices: this.devicePicker.devices,
-          loading: this.devicePicker.loading,
-          open: this.devicePicker.open,
-          selectedDeviceId: inputDeviceId?.trim() ?? "",
-          voiceActive: false,
-          issue: this.devicePicker.issue,
-          showRealtimeCapability: false,
-          realtimeStatus: this.devicePicker.realtimeStatus,
-          dictationStatus: this.devicePicker.dictationStatus,
-          onOpen: this.devicePicker.handleOpen,
-          onClose: this.devicePicker.handleClose,
-          onSelect: (deviceId: string) => {
-            patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
-            this.devicePicker.handleClose();
-          },
-        }),
+        microphonePicker: voiceInputDisabledReason
+          ? undefined
+          : renderMicrophonePicker({
+              devices: this.devicePicker.devices,
+              loading: this.devicePicker.loading,
+              open: this.devicePicker.open,
+              selectedDeviceId: inputDeviceId?.trim() ?? "",
+              voiceActive: false,
+              issue: this.devicePicker.issue,
+              showRealtimeCapability: false,
+              realtimeStatus: this.devicePicker.realtimeStatus,
+              dictationStatus: this.devicePicker.dictationStatus,
+              onOpen: this.devicePicker.handleOpen,
+              onClose: this.devicePicker.handleClose,
+              onSelect: (deviceId: string) => {
+                patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
+                this.devicePicker.handleClose();
+              },
+            }),
         onDirectDictationStart: () => this.options.textarea.captureSelection(),
       })}
       ${renderComposerDictationSendAction(dictation, () => {

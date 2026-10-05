@@ -290,7 +290,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ? { text: state.dictationError, tone: "danger" as const, icon: icons.alertTriangle }
         : offlineText
           ? { text: offlineText, tone: "info" as const, icon: icons.inbox }
-          : null;
+          : props.voiceInputDisabledReason
+            ? { text: props.voiceInputDisabledReason, tone: "info" as const, icon: icons.mic }
+            : null;
   const composerStatus =
     showComposerInput && primaryComposerStatus
       ? html`<div class="agent-chat__composer-status" data-tone=${primaryComposerStatus.tone}>

@@ -47,8 +47,18 @@ export function renderNewSessionDraftView(options: {
   } = options;
   const capabilities = submission.capabilities;
   const preferences = context?.theme.settings;
-  const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
+  const voiceInputDisabledReason =
+    place.browser.creationPolicy?.execution === "foreground-only"
+      ? t("chat.composer.foregroundVoiceUnavailable")
+      : undefined;
+  const voiceControl = dictation.render(
+    draftOwnerKey,
+    preferences?.realtimeTalkInputDeviceId,
+    voiceInputDisabledReason,
+  );
   const dictationLocked = dictation.active;
+  const submitBlock = submission.submitBlock();
+  const placementReason = submitBlock?.gate === "execution-policy" ? submitBlock.reason : undefined;
   const workspaceMessage =
     place.browser.requiredWorkspace && (isCatalogTarget || submission.visibility === "incognito")
       ? t(
@@ -75,10 +85,25 @@ export function renderNewSessionDraftView(options: {
     >
       ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
       ${
+        placementReason
+          ? html`<div class="callout" role="status" data-execution-placement-policy>
+              <span class="callout__content">${placementReason}</span
+              >${!isCatalogTarget && !submission.pendingPlacement.sessionKey ? html`<button class="btn btn--sm" type="button" @click=${() => place.selectDevice("")}>${t("newSession.useGateway")}</button>` : nothing}
+            </div>`
+          : nothing
+      }
+      ${
         gateway.connected && !submission.pendingPlacement.sessionKey && workspaceMessage
           ? html`<div class="callout" role="status" data-workspace-policy>
               <span class="callout__content">${workspaceMessage}</span>
               ${place.browser.projectsRetryAvailable ? html`<button class="btn btn--sm" type="button" @click=${() => place.browser.refreshProjects(true)}>${t("common.retry")}</button>` : nothing}
+            </div>`
+          : nothing
+      }
+      ${
+        !isCatalogTarget && place.browser.creationPolicy?.execution === "foreground-only"
+          ? html`<div class="new-session-page__menu-note" role="status" data-execution-policy>
+              ${t("newSession.foregroundOnly")} ${voiceInputDisabledReason}
             </div>`
           : nothing
       }

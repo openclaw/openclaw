@@ -85,6 +85,33 @@ describe("NewSessionDictationControl", () => {
     dictationHarness.controllers = [];
   });
 
+  it("disables draft dictation with policy guidance before any capture starts", () => {
+    const captureSelection = vi.fn();
+    const control = new NewSessionDictationControl({
+      textarea: { captureSelection } as never,
+      getClient: () => ({}) as never,
+      isConnected: () => true,
+      canCommit: () => true,
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onSubmit: vi.fn(),
+      requestUpdate: vi.fn(),
+    });
+    const reason = "Send a new chat message on this Gateway.";
+    const container = document.createElement("div");
+    render(control.render("agent-a", undefined, reason), container);
+    const microphone = container.querySelector<HTMLButtonElement>(".chat-send-btn--voice");
+    expect(microphone?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip")?.content,
+    ).toBe(reason);
+    microphone?.click();
+    expect(captureSelection).not.toHaveBeenCalled();
+    expect(dictationHarness.controllers[0]?.startDirect).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-talk-input-picker")).toBeNull();
+    control.dispose();
+  });
+
   it("drops a final transcript when cloud placement claims the draft in flight", () => {
     let canCommit = true;
     const insertTranscript = vi.fn(() => "spoken task");

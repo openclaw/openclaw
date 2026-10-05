@@ -435,7 +435,14 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
   const devicePicker = state.microphonePicker;
   devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
+  if (props.voiceInputDisabledReason) {
+    // Removing the dropdown does not retire pending permission discovery.
+    devicePicker.handleClose();
+  }
   const startRealtimeTalk = () => {
+    if (props.voiceInputDisabledReason) {
+      return;
+    }
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
       devicePicker.handleOpen();
@@ -459,39 +466,41 @@ export function renderChatComposer(props: ChatComposerProps) {
     startRealtimeTalk();
   };
   const selectedMicrophoneId = props.realtimeTalkInputDeviceId?.trim() ?? "";
-  const microphonePicker = props.onToggleRealtimeTalk
-    ? renderMicrophonePicker({
-        devices: devicePicker.devices,
-        loading: devicePicker.loading,
-        open: devicePicker.open,
-        selectedDeviceId: selectedMicrophoneId,
-        voiceActive: Boolean(props.realtimeTalkActive),
-        issue: devicePicker.issue,
-        holdToDictate: props.composerHoldToRecord !== false,
-        realtimeStatus: devicePicker.realtimeStatus,
-        dictationStatus: devicePicker.dictationStatus,
-        onOpen: devicePicker.handleOpen,
-        onClose: devicePicker.handleClose,
-        onSelect: (deviceId: string) => {
-          patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
-          devicePicker.handleClose();
-        },
-        onHoldToDictateChange: (enabled: boolean) => {
-          if (props.onComposerHoldToRecordChange) {
-            props.onComposerHoldToRecordChange(enabled);
-          } else {
-            patchSettings({ composerHoldToRecord: enabled });
-          }
-          requestUpdate();
-        },
-        onOpenTalkSettings: props.onOpenTalkSettings,
-        onOpenDictationSettings: props.onOpenDictationSettings,
-      })
-    : nothing;
+  const microphonePicker =
+    props.onToggleRealtimeTalk && !props.voiceInputDisabledReason
+      ? renderMicrophonePicker({
+          devices: devicePicker.devices,
+          loading: devicePicker.loading,
+          open: devicePicker.open,
+          selectedDeviceId: selectedMicrophoneId,
+          voiceActive: Boolean(props.realtimeTalkActive),
+          issue: devicePicker.issue,
+          holdToDictate: props.composerHoldToRecord !== false,
+          realtimeStatus: devicePicker.realtimeStatus,
+          dictationStatus: devicePicker.dictationStatus,
+          onOpen: devicePicker.handleOpen,
+          onClose: devicePicker.handleClose,
+          onSelect: (deviceId: string) => {
+            patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
+            devicePicker.handleClose();
+          },
+          onHoldToDictateChange: (enabled: boolean) => {
+            if (props.onComposerHoldToRecordChange) {
+              props.onComposerHoldToRecordChange(enabled);
+            } else {
+              patchSettings({ composerHoldToRecord: enabled });
+            }
+            requestUpdate();
+          },
+          onOpenTalkSettings: props.onOpenTalkSettings,
+          onOpenDictationSettings: props.onOpenDictationSettings,
+        })
+      : nothing;
   const dictationOptions = {
     client: props.gatewayClient ?? null,
+    sessionKey: props.sessionKey,
     connected: props.connected,
-    enabled: props.composerHoldToRecord !== false,
+    enabled: props.composerHoldToRecord !== false && !props.voiceInputDisabledReason,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
     onCommit: (transcript: string, late?: true) => {
@@ -589,6 +598,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
     submitDisabledReason: props.submitDisabledReason,
+    voiceInputDisabledReason: props.voiceInputDisabledReason,
     submitPending: props.submitPending,
     connected: props.connected,
     draft: visibleDraft,
