@@ -590,9 +590,11 @@ test("sessions.search real WS run: configured ACP store owner with a non-ACP-sha
   const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
   const stateDir = path.join(rootStateDir, "acp-non-acp-key-real-run");
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {} } };
+    // Config comes from the real config file (no test overrides) so this run
+    // doubles as real-configured-setup behavior evidence.
     const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
-    const configJson = '{"acp":{"defaultAgent":"codex","allowedAgents":["codex"]}}';
+    const configJson =
+      '{"agents":{"entries":{"main":{}}},"acp":{"defaultAgent":"codex","allowedAgents":["codex"]}}';
     await fs.writeFile(configPath, configJson, "utf-8");
     const agentsDir = path.join(stateDir, "agents");
     const agentId = "codex";
