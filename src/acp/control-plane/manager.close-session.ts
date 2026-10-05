@@ -6,7 +6,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
 import { matchesAcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
+import {
+  assertAcpRuntimeOwnerSupport,
+  isAcpOwnerRepairRequired,
+  persistedAcpRuntimeHandle,
+} from "./manager.runtime-owner.js";
 import {
   discardPersistedManagerRuntimeState,
   isRecoverableManagerAcpxExitError,
@@ -32,7 +36,7 @@ export async function runManagerCloseSession(params: {
   input: AcpCloseSessionInput;
   sessionKey: string;
   agentId: string;
-  deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
+  deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend" | "requireRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
   resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
@@ -102,25 +106,37 @@ export async function runManagerCloseSession(params: {
     params.runtimeHandles.clear(params);
   } else {
     try {
-      const { runtime: ensuredRuntime, handle } = await params.ensureRuntimeHandle({
-        assertActive: assertCurrent,
-        expectedControlBinding,
-        cfg: input.cfg,
-        sessionKey,
-        agentId,
-        meta,
-        isCurrentActor: params.isCurrentActor,
-      });
+      // Ensuring an evicted oneshot starts another agent. Close its persisted
+      // physical handle instead, including when the previous close failed.
+      const { runtime: ensuredRuntime, handle } =
+        meta.mode === "oneshot" && !params.runtimeHandles.get(params)
+          ? {
+              runtime: params.deps.requireRuntimeBackend(
+                (meta.backend || input.cfg.acp?.backend || "").trim() || undefined,
+              ).runtime,
+              handle: persistedAcpRuntimeHandle(params, meta),
+            }
+          : await params.ensureRuntimeHandle({
+              assertActive: assertCurrent,
+              expectedControlBinding,
+              cfg: input.cfg,
+              sessionKey,
+              agentId,
+              meta,
+              isCurrentActor: params.isCurrentActor,
+            });
       assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
-      input.assertActive?.();
       if (expectedControlBinding) {
         await refreshControlBinding();
       }
       assertCurrent();
+      assertAcpRuntimeOwnerSupport(ensuredRuntime, params);
       await ensuredRuntime.close({
         handle,
         reason: input.reason,
-        discardPersistentState: input.discardPersistentState,
+        // Oneshots already start fresh. Backend-history discard may reconnect
+        // just to send session/close; retry the same release as finalization.
+        discardPersistentState: meta.mode === "oneshot" ? false : input.discardPersistentState,
       });
       runtimeClosed = true;
       assertCurrent();

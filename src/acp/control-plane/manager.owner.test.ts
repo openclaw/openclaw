@@ -198,72 +198,76 @@ it("keeps legacy runtime implementations assignable and rejects unisolated bare 
   });
 });
 
-it("retains canonical metadata when an unmigrated backend locator blocks status or reset", async () => {
-  await withManagerTestDir("acp-owner-repair-", async (dir) => {
-    const cfg = {
-      agents: { ownership: "explicit" as const, entries: { work: {} } },
-      session: { store: path.join(dir, "{agentId}", "sessions.json") },
-    };
-    const databasePath = path.join(dir, "state", "openclaw.sqlite");
-    const target = { cfg, sessionKey: "global", agentId: "work" };
-    const runtime = {
-      ownerAwareSessions: 1 as const,
-      ensureSession: vi.fn(async () => ({
-        sessionKey: "global",
-        backend: "synthetic",
-        runtimeSessionName: "legacy-global",
-      })),
-      async *runTurn() {
-        yield { type: "done" as const };
-      },
-      prepareFreshSession: vi.fn(async () => {}),
-      async cancel() {},
-      close: vi.fn(async () => {}),
-    } satisfies AcpRuntime;
-    const deps = {
-      ...DEFAULT_DEPS,
-      loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
-        readAcpSessionEntry({ ...input, databasePath }),
-      loadSessionEntryAsync: (input: Parameters<typeof readAcpSessionEntryAsync>[0]) =>
-        readAcpSessionEntryAsync({ ...input, databasePath }),
-      upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
-        upsertAcpSessionMeta({ ...input, databasePath }),
-      requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
-      getRuntimeBackend: () => ({ id: "synthetic", runtime }),
-    };
-    const initial = new AcpSessionManager(deps);
-    try {
-      await initial.initializeSession({ ...target, agent: "fixture", mode: "persistent" });
-    } finally {
-      await disposeAcpSessionManagerInstance(initial, "restart");
-    }
-    const before = readAcpSessionEntry({ ...target, databasePath })?.acp;
-    const repairError = new AcpRuntimeError(
-      "ACP_SESSION_INIT_FAILED",
-      "Run offline Doctor repair",
-      { detailCode: "SESSION_OWNER_MIGRATION_REQUIRED" },
-    );
-    runtime.ensureSession.mockRejectedValue(repairError);
-    runtime.prepareFreshSession.mockRejectedValue(repairError);
-    runtime.close.mockClear();
-    const manager = new AcpSessionManager(deps);
-    try {
-      await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
-      for (const discardPersistentState of [false, true]) {
-        await expect(
-          manager.closeSession({
-            ...target,
-            reason: "reset",
-            clearMeta: true,
-            discardPersistentState,
-            allowBackendUnavailable: true,
-          }),
-        ).rejects.toBe(repairError);
-        expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+it.each(["persistent", "oneshot"] as const)(
+  "retains %s metadata when an unmigrated backend locator blocks status or reset",
+  async (mode) => {
+    await withManagerTestDir("acp-owner-repair-", async (dir) => {
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { work: {} } },
+        session: { store: path.join(dir, "{agentId}", "sessions.json") },
+      };
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const target = { cfg, sessionKey: "global", agentId: "work" };
+      const runtime = {
+        ownerAwareSessions: 1 as const,
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "global",
+          backend: "synthetic",
+          runtimeSessionName: "legacy-global",
+        })),
+        async *runTurn() {
+          yield { type: "done" as const };
+        },
+        prepareFreshSession: vi.fn(async () => {}),
+        async cancel() {},
+        close: vi.fn(async () => {}),
+      } satisfies AcpRuntime;
+      const deps = {
+        ...DEFAULT_DEPS,
+        loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
+          readAcpSessionEntry({ ...input, databasePath }),
+        loadSessionEntryAsync: (input: Parameters<typeof readAcpSessionEntryAsync>[0]) =>
+          readAcpSessionEntryAsync({ ...input, databasePath }),
+        upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
+          upsertAcpSessionMeta({ ...input, databasePath }),
+        requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
+        getRuntimeBackend: () => ({ id: "synthetic", runtime }),
+      };
+      const initial = new AcpSessionManager(deps);
+      try {
+        await initial.initializeSession({ ...target, agent: "fixture", mode });
+      } finally {
+        await disposeAcpSessionManagerInstance(initial, "restart");
       }
-      expect(runtime.close).not.toHaveBeenCalled();
-    } finally {
-      await disposeAcpSessionManagerInstance(manager, "test-complete");
-    }
-  });
-});
+      const before = readAcpSessionEntry({ ...target, databasePath })?.acp;
+      const repairError = new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "Run offline Doctor repair",
+        { detailCode: "SESSION_OWNER_MIGRATION_REQUIRED" },
+      );
+      runtime.ensureSession.mockRejectedValue(repairError);
+      runtime.prepareFreshSession.mockRejectedValue(repairError);
+      runtime.close.mockClear();
+      runtime.close.mockRejectedValue(repairError);
+      const manager = new AcpSessionManager(deps);
+      try {
+        await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
+        for (const discardPersistentState of [false, true]) {
+          await expect(
+            manager.closeSession({
+              ...target,
+              reason: "reset",
+              clearMeta: true,
+              discardPersistentState,
+              allowBackendUnavailable: true,
+            }),
+          ).rejects.toBe(repairError);
+          expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+        }
+        expect(runtime.close).toHaveBeenCalledTimes(mode === "oneshot" ? 1 : 0);
+      } finally {
+        await disposeAcpSessionManagerInstance(manager, "test-complete");
+      }
+    });
+  },
+);
