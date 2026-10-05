@@ -113,7 +113,7 @@ const {
   getOnHandler,
   listSkillCommandsForAgents,
   onSpy,
-  readChannelAllowFromStore,
+  getReadChannelAllowFromStoreMock,
   replySpy,
   resolveExecApprovalSpy,
   sendMessageSpy,
@@ -1149,7 +1149,7 @@ describe("createTelegramBot", () => {
       };
       loadConfig.mockReturnValue(refreshAfterStartup ? startupConfig : config);
       if (emptyPairingStore) {
-        readChannelAllowFromStore.mockResolvedValueOnce([]);
+        getReadChannelAllowFromStoreMock().mockResolvedValueOnce([]);
       }
       const callbackHandler = await createCallbackHandler({ config: startupConfig });
       if (refreshAfterStartup) {

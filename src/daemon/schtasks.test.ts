@@ -151,10 +151,12 @@ describe("readScheduledTaskCommand", () => {
         .spyOn(fs, "readFile")
         .mockImplementation(async (pathname) =>
           Buffer.from(
-            pathname === launcherPath
+            pathname === launcherPath && kind !== "cmd"
               ? kind === "current vbs"
                 ? buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })
-                : `WScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath}""", 0, True)\r\n`
+                : kind === "published vbs"
+                  ? `WScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath}""", 0, True)\r\n`
+                  : `CreateObject("WScript.Shell").Run """${scriptPath}""", 0, False\r\n`
               : pathname === scriptPath
                 ? [
                     "@echo off",
