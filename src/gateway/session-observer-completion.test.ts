@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
 import { createSessionObserverCompletion } from "./session-observer-completion.js";
 import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
+import {
+  createHarness,
+  flushObserver,
+  modelMessage,
+  resetSessionObserverEventSequence,
+  startAndAddToolNotes,
+} from "./session-observer.test-utils.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -9,6 +16,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetSessionObserverEventSequence();
 });
 
 describe("session observer completion", () => {
@@ -67,5 +75,46 @@ describe("session observer completion", () => {
       ),
     );
     expect(completeModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes a digest from a utility model that answers after 15s", async () => {
+    vi.setSystemTime(0);
+    // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
+    const completeModel = vi.fn(
+      (params: { timeoutMs?: number; abortSignal?: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          params.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+          setTimeout(
+            () =>
+              resolve(
+                modelMessage({
+                  headline: "Reviewing the implementation",
+                  assessment: "The work is progressing steadily.",
+                  health: "on-track",
+                }),
+              ),
+            15_000,
+          );
+        }),
+    );
+    const harness = createHarness({ completeModel });
+    startAndAddToolNotes(harness.observer);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(completeModel).toHaveBeenCalledOnce();
+    expect(completeModel.mock.calls[0]?.[0].timeoutMs).toBe(30_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushObserver();
+
+    expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
+    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
+      "session.observer",
+      expect.objectContaining({ headline: "Reviewing the implementation", health: "on-track" }),
+      expect.any(Set),
+      expect.anything(),
+    );
+    harness.observer.dispose();
   });
 });
