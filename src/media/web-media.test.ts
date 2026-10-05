@@ -436,6 +436,23 @@ describe("loadWebMedia", () => {
     await expectAccessError(hostDocument("report.xlsm", "not a workbook"));
   });
 
+  it.each(["book.mobi", "book.azw", "book.azw3"])(
+    "allows buffer-verified host-read Kindle documents for %s",
+    async (fileName) => {
+      const mobi = Buffer.alloc(128);
+      mobi.write("BOOKMOBI", 60, "latin1");
+
+      const result = await hostDocument(fileName, mobi);
+
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe("application/x-mobipocket-ebook");
+    },
+  );
+
+  it("rejects a Kindle-extension file without the BOOKMOBI signature", async () => {
+    await expectAccessError(hostDocument("fake.mobi", Buffer.from("not a mobi file")));
+  });
+
   it("keeps the host-read XLSM root boundary and byte limit", async () => {
     const body = await xlsmFixture();
     const file = await writeFile("bounded.xlsm", body);
