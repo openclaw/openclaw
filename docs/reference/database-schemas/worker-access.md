@@ -1172,6 +1172,16 @@ the 30-day and 50,000-row bounds. Adopted-event/native-binding producers retain 
 existing synchronous recorder, with periodic pruning delegated to the same worker.
 Schemas, stored bytes, retention, and update behavior are unchanged.
 
+Post-ready notice recovery reads pending watches through the shared-state reader
+and captures each watcher's physical source through the session reader.
+The transaction rereads cursor watermarks and store bindings; transaction and
+commit grants recheck the original watcher identities and host authority. Only
+acknowledged rows return to the system-event queue. The existing startup tail joins
+accepted recovery before database teardown, and uncertain writes never replay.
+The sweep retains its pruning policy and requires no update migration. Recovery
+also accepts older stores without the first-use watcher-store column and leaves
+that column absent until a feature write needs it.
+
 Watched-session prompt preparation reads ambient targets through the shared-state
 reader and exact title entries through the session reader. It captures both stores
 before yielding, retains the session reader through disclosure revalidation, and
