@@ -22,6 +22,7 @@ export function createUiIsolatedVitestConfig(
     isolate: true,
     name: "ui-isolated",
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    serverDepsInline: ["@awesome.me/webawesome"],
     useNonIsolatedRunner: false,
   });
   return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };

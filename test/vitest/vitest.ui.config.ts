@@ -33,6 +33,7 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
     isolate: false,
     name: "ui",
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    serverDepsInline: ["@awesome.me/webawesome"],
     useNonIsolatedRunner: true,
   });
   return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };
