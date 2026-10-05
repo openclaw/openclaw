@@ -30,7 +30,7 @@ it("keeps exact-millisecond ties resident and applies real native title notifica
     env: state.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const client = CodexAppServerClient.fromTransportForTests(child);
+  const client = CodexAppServerClient.fromTransport(child);
   try {
     await client.initialize();
     const baseline = await client.request<CodexThreadListResponse>("thread/list", {

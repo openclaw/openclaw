@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
@@ -18,16 +17,22 @@ import {
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
 } from "../infra/node-runner-inventory.js";
-import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ABSOLUTE_DEADLINE_EXPIRED } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
+import { logNodeInvokeDispatchRefusal, type NodeEventSendResult } from "./node-event-send.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
-import type { NodePairingLeaseResolution } from "./node-registry-pairing.js";
+import {
+  resolvePairingLeaseBeforeDispatch,
+  type NodePairingLeaseDispatchResult,
+  type NodePairingLeaseResolution,
+} from "./node-registry-pairing.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
 import {
-  normalizeSystemRunInvokeParams,
+  prepareSystemRunInvokePayload,
   resolvePendingSystemRunEvent,
+  nodeWorkspaceReadinessRequirement,
 } from "./node-registry.system-run.js";
 import {
   createNodeRunnerStatePublisher,
@@ -46,16 +51,18 @@ import {
 } from "./node-runner-inventory-runtime.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 
-export type {
-  NodeRunnerStateChange,
-  NodeWorkerSupervisorNodeProof,
-} from "./node-runner-inventory-runtime.js";
+export type { NodeRunnerStateChange } from "./node-runner-inventory-runtime.js";
+export type { NodeWorkerSupervisorNodeProof } from "./node-runner-inventory-runtime.js";
 
 type PairingBoundNodeSession = NodeRunnerRegistrySession & { pairingIdentity: string };
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
 export type NodeWorkerSupervisorTransport = {
   getCurrentNode(nodeId: string): Promise<NodeWorkerSupervisorNodeProof | undefined>;
+  waitForCurrentNode?(
+    nodeId: string,
+    availability: { signal: AbortSignal; assertCurrent: () => void },
+  ): Promise<NodeWorkerSupervisorNodeProof>;
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
   hasCurrentRunner(nodeId: string): boolean;
   /** Diagnostic connection presence, independent of session-host eligibility. */
@@ -95,7 +102,11 @@ type NodeRegistryPrivateContext = {
   ) => Promise<NodePairingLeaseResolution<PairingBoundNodeSession>>;
   pendingInvokes: Map<string, PendingInvoke>;
   invokeStreams: NodeInvokeStreamController;
-  sendEventToSession: (node: NodeRunnerRegistrySession, event: string, payload: unknown) => boolean;
+  sendEventToSession: (
+    node: NodeRunnerRegistrySession,
+    event: string,
+    payload: unknown,
+  ) => NodeEventSendResult;
   rememberAuthorizedSystemRunEvent: (event: {
     nodeId: string;
     connId: string;
@@ -185,15 +196,15 @@ async function invokeNodeRegistryCore(
   }
   if (expectedPairingGeneration && state.context.hasCurrentPairingStateResolver) {
     const pairingNode = node;
-    let resolution:
-      | NodePairingLeaseResolution<PairingBoundNodeSession>
-      | typeof ABSOLUTE_DEADLINE_EXPIRED;
+    let resolution: NodePairingLeaseDispatchResult<PairingBoundNodeSession>;
     try {
-      resolution = await awaitWithinDeadline(
-        () =>
-          racePromiseWithAbortSignal(state.context.resolvePairingLease(pairingNode), params.signal),
-        deadlineAtMs,
-        () => performance.now(),
+      resolution = await resolvePairingLeaseBeforeDispatch(
+        () => state.context.resolvePairingLease(pairingNode),
+        {
+          deadlineAtMs,
+          signal: params.signal,
+          retryUnavailable: allowPrivateCommand && isPrivateNodeInvokeCommand(params.command),
+        },
       );
     } catch (error) {
       if (params.signal?.aborted) {
@@ -225,10 +236,7 @@ async function invokeNodeRegistryCore(
     }
   }
   const requestId = randomUUID();
-  const invokeParams = normalizeSystemRunInvokeParams({
-    command: params.command,
-    params: params.params,
-  });
+  const invokeParams = prepareSystemRunInvokePayload(params);
   const payload = buildNodeInvokeRequest({
     id: requestId,
     nodeId: params.nodeId,
@@ -325,8 +333,8 @@ async function invokeNodeRegistryCore(
     return await result;
   }
   const dispatchDeadlineAtMs = pendingAtDispatch.deadlineAtMs;
-  const ok = state.context.sendEventToSession(node, "node.invoke.request", payload);
-  if (!ok) {
+  const delivery = state.context.sendEventToSession(node, "node.invoke.request", payload);
+  if (!delivery.sent) {
     const pending = state.context.pendingInvokes.get(requestId);
     if (pending) {
       state.context.invokeStreams.clearTimers(pending);
@@ -336,6 +344,7 @@ async function invokeNodeRegistryCore(
         error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
       });
     }
+    logNodeInvokeDispatchRefusal({ node, invokeId: requestId, command: params.command, delivery });
     return await result;
   }
   if (systemRunEvent) {
@@ -369,6 +378,13 @@ export function registerNodeRegistryPrivateRuntime(
           ? resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn)
           : undefined;
       },
+      waitForCurrentNode: (nodeId, availability) =>
+        waitForNodeRunnerAvailability(
+          state.runnerState,
+          state.workerSupervisorTransport,
+          nodeId,
+          availability,
+        ),
       listCurrentNodes: async () => {
         const current = await context.listCurrentConnected();
         return current.flatMap((node) => {
@@ -464,6 +480,7 @@ export function registerNodeRegistryPrivateRuntime(
                 isRecord(params.params) &&
                 (params.params.quiescence !== undefined ||
                   params.params.nativeProcessOwner === true),
+              ...nodeWorkspaceReadinessRequirement(params.command, params.params),
               statusWait:
                 params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND &&
                 typeof params.params === "object" &&
@@ -510,10 +527,7 @@ export function createNodeRegistryRuntime<TRegistry extends object>(
   nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport;
 } {
   const nodeRegistry = create();
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
-  if (!state) {
-    throw new Error("node registry private runtime was not initialized during creation");
-  }
+  const state = requireNodeRegistryPrivateState(nodeRegistry);
   return {
     nodeRegistry,
     nodeWorkerSupervisorTransport: state.workerSupervisorTransport,
@@ -536,13 +550,13 @@ export function readNodeCatalogRevision(registry: object): number {
   return requireNodeRegistryPrivateState(registry).catalogRevision;
 }
 
-export function waitForNodeWorkerSupervisor(
+export async function waitForNodeWorkerSupervisor(
   nodeRegistry: object,
   nodeId: string,
   options: Parameters<typeof waitForNodeRunnerAvailability>[3],
 ): Promise<void> {
   const state = requireNodeRegistryPrivateState(nodeRegistry);
-  return waitForNodeRunnerAvailability(
+  await waitForNodeRunnerAvailability(
     state.runnerState,
     state.workerSupervisorTransport,
     nodeId,
@@ -559,6 +573,12 @@ export function invokePublicNodeRegistry(
   params: NodeInvokeParams,
 ): Promise<NodeInvokeResult> {
   return invokeNodeRegistryCore(requireNodeRegistryPrivateState(nodeRegistry), params, false);
+}
+
+export function observeNodeProgress(registry: object, ...args: [string, string, unknown]): boolean {
+  return requireNodeRegistryPrivateState(registry).context.invokeStreams.recordProgressDiagnostic(
+    ...args,
+  );
 }
 
 export function invokeLifecycleNodeRegistry(

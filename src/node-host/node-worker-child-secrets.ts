@@ -1,4 +1,5 @@
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import type { NodeWorkerManagedIdentityTransport } from "./node-worker-environment.js";
 import {
   nodeWorkerNativeInferenceSecretsForDescriptor,
   type NodeWorkerNativeInferenceSnapshot,
@@ -8,6 +9,7 @@ import {
 export function nodeWorkerLaunchSecrets(
   descriptor: WorkerLaunchDescriptor,
   nativeInference: NodeWorkerNativeInferenceSnapshot | undefined,
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport,
 ): string[] {
   const endpoint = descriptor.connectionEndpoint;
   const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
@@ -16,5 +18,6 @@ export function nodeWorkerLaunchSecrets(
     ...(access ? [access.clientId, access.clientSecret] : []),
     ...(descriptor.assignment.github ? [descriptor.assignment.github.token] : []),
     ...nodeWorkerNativeInferenceSecretsForDescriptor(nativeInference, descriptor),
+    ...(managedIdentityTransport ? [managedIdentityTransport.header] : []),
   ];
 }

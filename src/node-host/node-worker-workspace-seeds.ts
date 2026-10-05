@@ -9,6 +9,7 @@ import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { tightenPrivateDirChain } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkerWorkspaceSeedInput } from "../worker/node-workspace-protocol.js";
+import { copyWorkspaceSeedGitObjects } from "../worker/workspace-seed-objects.js";
 import {
   selectWorkspaceSeedsToPrune,
   WORKSPACE_SEED_RETENTION,
@@ -49,30 +50,16 @@ export async function copyNodeWorkerProjectSeedObjects(params: {
     ) {
       throw new Error("Prepared project seed has no Git objects");
     }
-    let bytes = 0;
-    let entries = 0;
     // Only objects cross this boundary. Recreate config/index/refs locally and
     // omit info (including alternates), which can reference another repository.
-    await fsp.cp(objectsDir, path.join(params.workspaceDir, ".git", "objects"), {
-      recursive: true,
-      filter: async (source) => {
-        params.signal?.throwIfAborted();
-        if (path.relative(objectsDir, source).split(path.sep)[0] === "info") {
-          return false;
-        }
-        const stat = await fsp.lstat(source);
-        if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
-          throw new Error("Prepared project seed contains an unsafe Git object");
-        }
-        bytes += stat.isFile() ? stat.size : 0;
-        if (
-          ++entries > MAX_WORKSPACE_GIT_CANDIDATES ||
-          bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES
-        ) {
-          throw new Error("Prepared project seed Git objects exceed the transfer limit");
-        }
-        return true;
-      },
+    await copyWorkspaceSeedGitObjects({
+      filesystem: fsp,
+      paths: path,
+      source: objectsDir,
+      destination: path.join(params.workspaceDir, ".git", "objects"),
+      maxEntries: MAX_WORKSPACE_GIT_CANDIDATES,
+      maxBytes: MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
+      assertCurrent: () => params.signal?.throwIfAborted(),
     });
     params.signal?.throwIfAborted();
     return true;

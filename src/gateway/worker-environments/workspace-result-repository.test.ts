@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -35,8 +36,10 @@ import {
   root,
   SESSION_ID,
   sessionTarget,
+  turn,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+import { executeRemoteExecTurn } from "./workspace-result-finalize.js";
 import {
   requireWorkspaceResultGit,
   withWorkspaceResultRefMutation,
@@ -64,6 +67,113 @@ vi.mock("./worker-github-binding.js", async (importOriginal) => ({
 
 describe("repository workspace result ownership", () => {
   const { fixture, readArtifact } = useRepositoryWorkspaceResultFixture();
+
+  it.for([false, true])(
+    "settles a turn admitted before background repository publication (foreign=%s)",
+    async (foreign, { signal }) => {
+      const f = await fixture("remote-exec", false, false, true);
+      const captured = (await f.store.get(f.repository.workspaceId))!;
+      const owned = await f.beginTurn("background-sync-race", false);
+      let modelStarted = false;
+      let syncPublished = false;
+      let sync: Promise<void> | undefined;
+      const modelEntered = createDeferredCore();
+      const resourceRead = createDeferredCore();
+      const execute = f.tunnel.runWorkspaceCommand.bind(f.tunnel);
+      f.tunnel.runWorkspaceCommand = (command) => {
+        resourceRead.resolve();
+        return execute(command);
+      };
+      const resolveWorkspace = vi.fn(f.resolveWorkspace);
+      const operation = executeRemoteExecTurn({
+        ...owned,
+        placement: { ...owned.placement, repositoryPreparation: "pending" },
+        environments: f.environments,
+        placements,
+        workspaceOperations: f.workspaceOperations,
+        workspace: { kind: "repository", repository: captured },
+        resolveWorkspace,
+        turn: turn("background-sync-race"),
+        onHandoff: () => {
+          sync = (async () => {
+            await modelEntered.promise;
+            const synced = await f.syncRepository();
+            await placements.settleRepository(
+              {
+                ...sessionTarget,
+                environmentId: owned.placement.environmentId,
+                ownerEpoch: owned.placement.activeOwnerEpoch,
+                expectedGeneration: owned.placement.generation,
+                status: "ready",
+                manifestRef: synced.manifestRef,
+              },
+              () => {},
+            );
+            await f.tunnel.settleRepositoryWorkspace!(
+              "ready",
+              synced.mode === "repository" ? synced.baseCommit : undefined,
+            );
+            if (foreign) {
+              const ready = (await f.store.get(captured.workspaceId))!;
+              await f.store.acceptCheckpoint({
+                workspaceId: ready.workspaceId,
+                expectedRevision: ready.revision,
+                checkpointRef: ready.checkpointRef!,
+                manifestHash: ready.manifestHash!,
+                branch: "foreign/topic",
+                assertCurrent: () => {},
+              });
+            }
+            syncPublished = true;
+          })();
+          void sync.catch(() => undefined);
+        },
+        runLocal: async () => {
+          modelStarted = true;
+          expect(syncPublished).toBe(false);
+          modelEntered.resolve();
+          expect(resolveWorkspace).not.toHaveBeenCalled();
+          await sync;
+          await fs.writeFile(path.join(f.remote, "turn-result.txt"), "same-session result\n");
+          return { meta: { durationMs: 1 } };
+        },
+      });
+      try {
+        expect(
+          await withinTest(
+            Promise.race([
+              modelEntered.promise.then(() => "model"),
+              resourceRead.promise.then(() => "repository-command"),
+            ]),
+            signal,
+          ),
+        ).toBe("model");
+        if (foreign) {
+          await expect(operation).rejects.toThrow(
+            "Repository workspace changed outside its admitted background preparation",
+          );
+          expect((await f.store.get(captured.workspaceId))!.branch).toBe("foreign/topic");
+        } else {
+          await expect(operation).resolves.toMatchObject({ meta: { durationMs: 1 } });
+          expect((await readArtifact(captured.workspaceId, "turn-result.txt")).preview).toEqual(
+            new Uint8Array(Buffer.from("same-session result\n")),
+          );
+          expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        }
+        expect(modelStarted).toBe(true);
+        await sync;
+        expect(syncPublished).toBe(true);
+        expect(resolveWorkspace).toHaveBeenCalledOnce();
+        expect((await f.store.get(captured.workspaceId))!.sessionKey).toBe(
+          sessionTarget.sessionKey,
+        );
+      } finally {
+        modelEntered.resolve();
+        await sync?.catch(() => {});
+        await operation.catch(() => {});
+      }
+    },
+  );
 
   it.for(
     (["worker-turn", "remote-exec"] as const).flatMap((executionMode) =>

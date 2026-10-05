@@ -295,7 +295,8 @@ export class CodexAppServerClient {
     }
   }
 
-  static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
+  /** Builds a client around an externally owned transport. */
+  static fromTransport(child: CodexAppServerTransport): CodexAppServerClient {
     return new CodexAppServerClient(child);
   }
 

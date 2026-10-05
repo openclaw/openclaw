@@ -412,7 +412,7 @@ export class ModelRegistry {
       // File-only callers retain the authored-endpoint scope captured by loadCustomModels.
       this.storeProviderRequestConfig(providerId, {
         apiKey: normalizeOptionalSecretInput(configured.apiKey),
-        auth: configured.auth,
+        auth: configured.auth === "native-command" ? undefined : configured.auth,
         authHeader: configured.authHeader,
         headers: sanitizeModelHeaders(configured.headers),
       });

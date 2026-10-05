@@ -4,6 +4,7 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  CrabboxSettledCapacityError,
   crabboxCommandError,
   crabboxCommandOutput,
   isFixedLeaseIdUnsupported,
@@ -11,6 +12,7 @@ import {
   leaseRunArgs,
   runCrabboxCommand,
   runCrabboxCommandWithCoordinatorRetry,
+  readCrabboxSettledCapacity,
   type CrabboxCommandRunner,
   type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
@@ -28,6 +30,23 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxReadyPollIntervalMs,
 } from "./crabbox-worker-timeouts.js";
+
+/** Local image obligations must settle before projecting a rejected allocation. */
+export async function failCrabboxAllocation(
+  error: unknown,
+  options: { operationId: string; assertCurrent: () => void; release: () => Promise<void> },
+): Promise<never> {
+  options.assertCurrent();
+  if (!(error instanceof CrabboxSettledCapacityError)) {
+    throw error;
+  }
+  await options.release();
+  options.assertCurrent();
+  throw WorkerProviderError.capacityShortage({
+    operationId: options.operationId,
+    ...error.receipt,
+  });
+}
 
 /** Allocation retains host and project authority independently of cancellation or cleanup. */
 export function createCrabboxProvisionAuthority(
@@ -50,6 +69,7 @@ export function createCrabboxProvisionAuthority(
   return { signal, assertCurrent };
 }
 type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
+  operationId?: string;
   deadline: number;
   inspect: ParsedInspect;
   profile: ReturnType<typeof parseCrabboxProfile>;
@@ -155,6 +175,10 @@ export async function runProvisionWarmup(
   });
   if (result.termination === "exit" && result.code === 0) {
     return;
+  }
+  const shortage = readCrabboxSettledCapacity(result, params);
+  if (shortage) {
+    throw shortage;
   }
   // Crabbox internal/cli/run.go rejects this capability before Warmup/Acquire.
   if (isFixedLeaseIdUnsupported(result, params.provider)) {
@@ -284,6 +308,22 @@ export async function runProvisionSetup(
             params.deadline,
             params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
           ),
+          ...(params.operationId
+            ? {
+                diagnostics: {
+                  operationId: params.operationId,
+                  leaseId: params.inspect.id,
+                  stage:
+                    params.phase === "profile setup"
+                      ? "profile-setup"
+                      : params.phase === "node runtime preparation"
+                        ? "runtime-preparation"
+                        : params.phase === "node enrollment setup"
+                          ? "node-bootstrap"
+                          : "other",
+                },
+              }
+            : {}),
         }),
     );
     crabboxCommandOutput(params.phase, result);

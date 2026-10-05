@@ -27,6 +27,25 @@ export type OpenClawPluginNodeWorkspace = {
   sessionKey: string;
 };
 
+export type OpenClawPluginNodeWorkspaceLease = {
+  workspaceDir: string;
+  /** Stable HOME owned and validated by this exact prepared workspace binding. */
+  homeDir?: string;
+  release: () => void;
+  /** Exact workspace owner; model startup does not wait, filesystem/process effects do. */
+  repositoryReadiness?: {
+    wait(signal: AbortSignal): Promise<void>;
+    assertCurrent(): void;
+  };
+  /** Host-local provider custody, bound to this lease and invocation; never a wire environment override. */
+  processEnvironment?: {
+    prepare: (sanitizedEnv: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+    /** Revalidate synchronously at the final process effect after awaited preparation. */
+    assertCurrent: () => void;
+    redactOutput: (text: string) => string;
+  };
+};
+
 export type OpenClawPluginNodeHostCommandContext = {
   /** Emit one node-owned event through the active Gateway connection. */
   sendNodeEvent(event: string, payload: unknown): Promise<unknown>;
@@ -37,18 +56,13 @@ export type OpenClawPluginNodeHostCommandContext = {
   /** Prepare local exec policy; call the returned guard synchronously immediately before spawn. */
   prepareExecAuthorization?: (source: "human-approved" | "session-full") => () => void;
   /** @deprecated Use acquireManagedWorkspaceAsync; retained for synchronous plugin compatibility. */
-  acquireManagedWorkspace?: (request: OpenClawPluginNodeWorkspace) => {
-    workspaceDir: string;
-    /** Stable HOME owned and validated by this exact prepared workspace binding. */
-    homeDir?: string;
-    release: () => void;
-  };
+  acquireManagedWorkspace?: (
+    request: OpenClawPluginNodeWorkspace,
+  ) => OpenClawPluginNodeWorkspaceLease;
   /** Protect an exact node-owned workspace after durable worker-backed binding validation. */
-  acquireManagedWorkspaceAsync?: (request: OpenClawPluginNodeWorkspace) => Promise<{
-    workspaceDir: string;
-    homeDir?: string;
-    release: () => void;
-  }>;
+  acquireManagedWorkspaceAsync?: (
+    request: OpenClawPluginNodeWorkspace,
+  ) => Promise<OpenClawPluginNodeWorkspaceLease>;
 };
 
 type OpenClawPluginNodeHostCommandBase = {

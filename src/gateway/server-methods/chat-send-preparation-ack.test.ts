@@ -80,6 +80,22 @@ it.for([
         },
       });
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const observations = vi.mocked(fixture.context.logGateway.info);
+      for (const name of ["chat.send.inputCustody", "chat.send.inputTranscript"]) {
+        const phases = observations.mock.calls.filter(
+          ([message, facts]) => message === "run phase" && facts?.name === name,
+        );
+        expect(phases.map(([, facts]) => facts?.status)).toEqual(["entry", "success"]);
+        for (const [, facts] of phases) {
+          expect(facts).toMatchObject({
+            owner: "chat",
+            runId: fixture.params.idempotencyKey,
+            sessionId: fixture.scope.sessionId,
+            lifecycleGeneration: expect.any(String),
+          });
+        }
+      }
+      expect(JSON.stringify(observations.mock.calls)).not.toContain(fixture.params.message);
 
       if (outcome === "cancel") {
         const params = {

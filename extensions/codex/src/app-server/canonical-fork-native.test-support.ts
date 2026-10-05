@@ -406,7 +406,7 @@ export async function createCanonicalForkNativeFixture(
       }
       process.emit("exit", 0, null);
     });
-    const client = CodexAppServerClient.fromTransportForTests(transport);
+    const client = CodexAppServerClient.fromTransport(transport);
     clients.push(client);
     return Promise.resolve(client);
   });

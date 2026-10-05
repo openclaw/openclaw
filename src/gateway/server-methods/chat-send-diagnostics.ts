@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
+import { createStageTimingTracker } from "../../shared/stage-timing.js";
 
 const PHASES = [
   "authority",
@@ -39,7 +40,15 @@ export function readChatSendDiagnostics(request: object): ChatSendDiagnostics | 
 }
 
 /** Request-owned totals; nested and parallel phases can overlap. */
-export function startChatSendDiagnostics(log: { info(message: string): void }) {
+export function startChatSendDiagnostics(log: {
+  info(message: string, details?: Record<string, unknown>): void;
+}) {
+  let identity: { runId: string; sessionId: string; lifecycleGeneration: string } | undefined;
+  const timing = createStageTimingTracker(undefined, (phase) => {
+    if (identity) {
+      log.info("run phase", { owner: "chat", ...identity, ...phase });
+    }
+  });
   const emit = createQueuedDiagnosticPhaseEmitter();
   const totals = new Map<ChatSendPhase, number>();
   const active = new Set<(now: number) => void>();
@@ -93,6 +102,30 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     }
   };
   return {
+    bindRun(admitted: NonNullable<typeof identity>) {
+      identity ??= { ...admitted };
+    },
+    measure<T>(
+      phase:
+        | ChatSendPhase
+        | "sessionCreation"
+        | "issueContext"
+        | "managedMedia"
+        | "inputCustody"
+        | "inputTranscript",
+      run: () => Promise<T> | T,
+    ): Promise<T> {
+      return timing.measure(`chat.send.${phase}`, run);
+    },
+    agentRunStarted(agentRunId: string) {
+      if (identity) {
+        try {
+          log.info("chat agent run started", { ...identity, agentRunId });
+        } catch {
+          // The real backend-start callback retains execution ownership.
+        }
+      }
+    },
     scope(initialPhase: ChatSendPhase): PhaseScope | undefined {
       if (finished) {
         return undefined;

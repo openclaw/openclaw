@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
 import { createAdmittedHostCapabilityTestFixture } from "../../agents/harness/host-capability.test-support.js";
 import { createOriginalIssuerFixture } from "../../agents/main-session-recovery/main-session-recovery-original-issuer.test-support.js";
-import { createSandboxFsBridge } from "../../agents/sandbox/fs-bridge.js";
 import {
   withSessionSkillResources,
   resolveSessionSkillResourceSnapshot,
@@ -35,6 +34,7 @@ it("delivers the selected library alias through the placement sandbox into the h
     const runId = "selected-resource-catalog";
     let resources: Awaited<ReturnType<typeof transferSkillResources>>;
     let host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>> | undefined;
+    let readDelivered: (() => Promise<unknown>) | undefined;
     try {
       const libraryAuthority = {
         profileId: authority.profileId,
@@ -135,7 +135,7 @@ it("delivers the selected library alias through the placement sandbox into the h
           config: issuer.cfg,
           environments: { get: () => environment },
         });
-        sandbox.fsBridge = createSandboxFsBridge({ sandbox });
+        expect(sandbox.fsBridge).toBeUndefined();
         host = await createAdmittedHostCapabilityTestFixture(
           {
             runId,
@@ -156,8 +156,28 @@ it("delivers the selected library alias through the placement sandbox into the h
           config: issuer.cfg,
           workspaceDir: state.workspaceDir,
           sandbox,
+          toolConstructionPlan: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: true,
+            includeOpenClawTools: true,
+            includePluginTools: true,
+          },
         });
-        expect(tools.some((tool) => tool.name === "skills_read")).toBe(true);
+        const read = expectDefined(
+          tools.find((tool) => tool.name === "skills_read"),
+          "actual installed skill reader",
+        );
+        expect((await read.execute("read-delivered", { name: pins[0]!.name })).content).toEqual([
+          { type: "text", text: content },
+        ]);
+        readDelivered = () => read.execute("read-retired", { name: pins[0]!.name });
+        await expect(
+          read.execute("read-cancelled", { name: pins[0]!.name }, AbortSignal.abort()),
+        ).rejects.toThrow();
+        await expect(
+          resources!.skillResources.readInstructions(seeded.skillId + "/SKILL.md", {}),
+        ).rejects.toThrow("not available in this delivered turn");
         expect(resources!.snapshot.prompt).toContain(remoteFile);
         expect(resources!.snapshot.prompt).toContain(`<name>${pins[0]!.name}</name>`);
         expect(resources!.snapshot.prompt).not.toContain(seeded.skillId + "/");
@@ -168,6 +188,12 @@ it("delivers the selected library alias through the placement sandbox into the h
         admittedHost.hostCapabilities.createToolSurface,
         "actual harness tool preparation",
       );
+      await resources.cleanup();
+      resources = undefined;
+      await expect(expectDefined(readDelivered, "retained installed skill read")()).rejects.toThrow(
+        "not available in this delivered turn",
+      );
+      await expect(fs.stat(remoteFile)).rejects.toMatchObject({ code: "ENOENT" });
       admittedHost.closeHost();
       expect(() =>
         createToolSurface({ config: issuer.cfg, workspaceDir: state.workspaceDir }),
@@ -175,9 +201,6 @@ it("delivers the selected library alias through the placement sandbox into the h
       admittedHost.closeAdmission();
       admittedHost.closeGateway();
       host = undefined;
-      await resources.cleanup();
-      resources = undefined;
-      await expect(fs.stat(remoteFile)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       host?.closeHost();
       host?.closeAdmission();

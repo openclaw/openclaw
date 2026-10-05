@@ -83,7 +83,7 @@ export async function startNativeCatalogPerformanceClient(
     env: state.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const client = CodexAppServerClient.fromTransportForTests(child);
+  const client = CodexAppServerClient.fromTransport(child);
   try {
     await client.initialize();
     return client;

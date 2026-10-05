@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
+import {
+  getGatewayRestartDrainSignal,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { NodeWorkerBundleInstallInput } from "../../worker/node-bundle-install-protocol.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
@@ -148,6 +154,68 @@ function observedInstaller() {
 }
 
 describe("Gateway node worker bundle installer", () => {
+  it("refuses a receipt when its install budget expires across the completion await", async () => {
+    let monotonic = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => {
+      monotonic = workerBootstrapOperationTimeoutMs(artifact) + 1;
+      return { ok: true, payload: receipt };
+    });
+    const { ensure, transfer } = installerFixture(invoke, [node]);
+    try {
+      await expect(ensure(installRequest(node))).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(ensure.readInstall(node.nodeId)).toBeUndefined();
+    } finally {
+      clock.mockRestore();
+      transfer.closeAll();
+    }
+  });
+
+  it.each(["deadline", "shutdown"] as const)(
+    "retires an unknown dispatched install on %s without replay or late acceptance",
+    async (cause) => {
+      resetGatewayWorkAdmission();
+      const deadline = new AbortController();
+      const timer = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      const entered = createDeferredCore();
+      const late =
+        createDeferredCore<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => {
+        entered.resolve();
+        return await late.promise;
+      });
+      const { ensure, transfer } = installerFixture(invoke, [node]);
+      const revoke = vi.spyOn(transfer, "revoke");
+      const pending = ensure(installRequest(node));
+      const outcome = pending.catch((error: unknown) => error);
+      try {
+        await entered.promise;
+        const reason = new DOMException("Install outcome unknown", "TimeoutError");
+        if (cause === "shutdown") {
+          markGatewayRestartDraining();
+        } else {
+          deadline.abort(reason);
+        }
+        await expect(pending).rejects.toBe(
+          cause === "shutdown" ? getGatewayRestartDrainSignal().reason : reason,
+        );
+        expect(revoke).toHaveBeenCalledOnce();
+        expect(ensure.readInstall(node.nodeId)).toBeUndefined();
+        late.resolve({ ok: true, payload: receipt });
+        await invoke.mock.results[0]?.value;
+        expect(ensure.readInstall(node.nodeId)).toBeUndefined();
+        expect(invoke).toHaveBeenCalledOnce();
+      } finally {
+        late.resolve({ ok: true, payload: receipt });
+        await outcome;
+        timer.mockRestore();
+        transfer.closeAll();
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
   it("publishes install phases and throttles byte notices and logs with its clock", async () => {
     const h = observedInstaller();
     const call = await h.start();
@@ -322,8 +390,10 @@ describe("Gateway node worker bundle installer", () => {
     const discovered = createDeferredCore<NodeWorkerSupervisorNodeProof[]>();
     const controller = new AbortController();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
-      expect(request.signal).toBe(controller.signal);
+      expect(request.signal?.aborted).toBe(false);
       controller.abort();
+      expect(request.signal?.aborted).toBe(true);
+      expect(request.signal?.reason).toBe(controller.signal.reason);
       return { ok: true, payloadJSON: JSON.stringify(receipt) };
     });
     const listCurrentNodes = vi.fn(() =>
@@ -341,7 +411,7 @@ describe("Gateway node worker bundle installer", () => {
         expect(grant).not.toHaveBeenCalled();
         expect(invoke).not.toHaveBeenCalled();
       } else {
-        await expect(pending).rejects.toThrow("no longer current");
+        expect(await outcome).toBe(controller.signal.reason);
       }
     } finally {
       discovered.resolve([node]);
@@ -441,4 +511,53 @@ describe("Gateway node worker bundle installer", () => {
       }
     },
   );
+
+  it("bounds replacement-node reconciliation and retires the grant without redispatch", async () => {
+    const deadline = new AbortController();
+    const timer = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const entered = createDeferredCore();
+    const discovered = createDeferredCore<NodeWorkerSupervisorNodeProof>();
+    const replacement = { ...node, connId: "replacement" };
+    let current = node;
+    let lookups = 0;
+    const transfer = createNodeWorkerBundleTransferService();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => {
+      current = replacement;
+      return { ok: true, payload: receipt };
+    });
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
+      getCurrentNode: async () => {
+        if (lookups++ === 0) {
+          return node;
+        }
+        entered.resolve();
+        return await discovered.promise;
+      },
+      listCurrentNodes: async () => [current],
+      isCurrent: (candidate) => candidate === current,
+      invoke,
+    };
+    const ensure = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    const pending = ensure(installRequest(node));
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      const reason = new DOMException("Install deadline expired", "TimeoutError");
+      deadline.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      expect(ensure.readInstall(node.nodeId)).toBeUndefined();
+      expect(invoke).toHaveBeenCalledOnce();
+    } finally {
+      discovered.resolve(replacement);
+      await outcome;
+      timer.mockRestore();
+      transfer.closeAll();
+    }
+  });
 });

@@ -17,7 +17,10 @@ import {
   isNodePairingGenerationCurrent,
 } from "./device-pairing-node-state.js";
 import { recordPairedNodeHostStats, renamePairedNode } from "./device-pairing-node.js";
-import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
+import {
+  getPublishedOperatorPairingIdentity,
+  getPublishedPairedDeviceBinding,
+} from "./device-pairing-publication.js";
 import { readDevicePairingNodeSnapshot } from "./device-pairing-store-readonly.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { revokeDeviceToken } from "./device-pairing-tokens.js";
@@ -65,6 +68,57 @@ beforeEach(() => {
     "both",
   );
 });
+
+test.each([false, true])(
+  "node lookup at a foreign enrollment revision preserves current original issuer (revoked=%s)",
+  async (revoked) => {
+    const node = await getPairedDevice("node", baseDir);
+    if (!node) {
+      throw new Error("fixture node missing");
+    }
+    const issuer = {
+      ...structuredClone(node),
+      deviceId: "original-issuer",
+      publicKey: "synthetic-issuer-key",
+      roles: ["operator"],
+      tokens: {
+        operator: {
+          token: "synthetic-issuer-token",
+          role: "operator",
+          scopes: ["operator.write"],
+          createdAtMs: 1,
+        },
+      },
+    };
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { node, "original-issuer": issuer } },
+      baseDir,
+      "both",
+    );
+    await readDevicePairingNodeSnapshot(baseDir);
+    const original = getPublishedOperatorPairingIdentity("original-issuer", baseDir);
+    expect(original).not.toBeNull();
+    // A foreign enrollment/runtime commit advances the pairing snapshot before the
+    // node's targeted readiness read; it is not this process's mutation receipt.
+    const changedNode = { ...node, displayName: "Enrolled Sandbox" };
+    const currentIssuer = revoked
+      ? { ...issuer, tokens: { operator: { ...issuer.tokens.operator, revokedAtMs: 2 } } }
+      : issuer;
+    persistDevicePairingStoreState(
+      {
+        pendingById: {},
+        pairedByDeviceId: { node: changedNode, "original-issuer": currentIssuer },
+      },
+      baseDir,
+      "both",
+    );
+    expect((await getPairedDevice("node", baseDir))?.displayName).toBe("Enrolled Sandbox");
+    expect(getPublishedOperatorPairingIdentity("original-issuer", baseDir)).toBe(
+      revoked ? null : original,
+    );
+    expect(getPublishedPairedDeviceBinding("node", baseDir)).not.toBeNull();
+  },
+);
 
 test("keeps committed node bindings across bootstrap writes and caller-owned row edits", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);

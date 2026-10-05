@@ -6,6 +6,9 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
+import { createWorkerSupervisorNodeClient } from "../server-methods/nodes.runner-inventory.test-support.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 import * as support from "./service.test-support.js";
@@ -88,6 +91,137 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
 
 describe("node provisioning installer ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it.each(["reconnect", "cancelled", "owner changed", "revoked", "incompatible"] as const)(
+    "uses current enrollment and installer ownership after disconnect: %s",
+    async (scenario) => {
+      let pairing: { identity: string; generation: string } | undefined = {
+        identity: "enrolled-device-key",
+        generation: "enrolled-device-generation",
+      };
+      const { nodeRegistry, nodeWorkerSupervisorTransport: transport } = createNodeRegistryRuntime(
+        () =>
+          new NodeRegistry({
+            resolveCurrentPairingState: async () => pairing,
+            isPairingStateCurrent: (_nodeId, expected) =>
+              pairing?.identity === expected.identity &&
+              pairing?.generation === expected.generation,
+          }),
+      );
+      const connect = (connId: string) => {
+        nodeRegistry.register(createWorkerSupervisorNodeClient(connId), {
+          pairingIdentity: "enrolled-device-key",
+          pairingGeneration: "enrolled-device-generation",
+        });
+        updateNodeRunnerInventory({
+          registry: nodeRegistry,
+          nodeId: "node-1",
+          connId,
+          declaration:
+            scenario === "incompatible" && connId === "fresh-connection"
+              ? { protocolFeatures: ["node-worker-supervisor-v5"] }
+              : {
+                  protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+                  workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+                },
+        });
+      };
+      const transfer = createNodeWorkerBundleTransferService();
+      const grants = vi.spyOn(transfer, "prepare");
+      const discovery = createDeferredCore();
+      const read = transport.getCurrentNode.bind(transport);
+      vi.spyOn(transport, "getCurrentNode").mockImplementation((...args) => {
+        discovery.resolve();
+        return read(...args);
+      });
+      const invoke = vi.spyOn(transport, "invoke").mockImplementation(async ({ node, params }) => {
+        expect(node.connId).toBe("fresh-connection");
+        expect(transport.isCurrent(node)).toBe(true);
+        expect(params).toHaveProperty("archive.token");
+        return { ok: true, payload: support.BOOTSTRAP_RECEIPT };
+      });
+      const service = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn"],
+          provisionBeforeInstallation: true,
+          provision: async () => {
+            connect("enrolled-connection");
+            expect(await read("node-1")).toMatchObject({
+              connId: "enrolled-connection",
+            });
+            nodeRegistry.unregister("enrolled-connection");
+            return {
+              leaseId: "enrolled-device-lease",
+              node: { deviceId: "node-1" },
+              sharedHost: false,
+            };
+          },
+        }),
+        {
+          ensureNodeWorkerBundle: createGatewayNodeWorkerBundleInstaller({
+            gatewayNamespace: "enrolled-reconnect-test",
+            getTransport: () => transport,
+            transfer,
+            log: { info: vi.fn(), warn: vi.fn() },
+          }),
+        },
+      );
+      const controller = new AbortController();
+      const creation = service
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: "enrolled-reconnect",
+          executionMode: "worker-turn",
+          signal: controller.signal,
+        })
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+      try {
+        await discovery.promise;
+        expect(grants).not.toHaveBeenCalled();
+        if (scenario === "cancelled") {
+          controller.abort(new Error("Request stopped while reconnecting"));
+        }
+        if (scenario === "owner changed") {
+          const record = support.testState.store.list()[0]!;
+          await support.testState.store.transition({
+            environmentId: record.environmentId,
+            from: record.state,
+            to: "ready",
+            patch: {
+              ...support.readyPatch(record.environmentId),
+              leaseId: "replacement-lease",
+              nodeDeviceId: "node-1",
+              sharedHost: false,
+            },
+          });
+        }
+        if (scenario === "revoked") {
+          pairing = undefined;
+        }
+        connect("fresh-connection");
+        if (scenario === "revoked") {
+          expect(await read("node-1")).toBeUndefined();
+          expect(grants).not.toHaveBeenCalled();
+          controller.abort(new Error("Join the refused revoked-device wait"));
+        }
+        if (scenario === "reconnect") {
+          expect(await creation).toMatchObject({ value: { state: "ready" } });
+          expect(grants).toHaveBeenCalledOnce();
+          expect(invoke).toHaveBeenCalledOnce();
+        } else {
+          expect(await creation).toHaveProperty("error");
+          expect(grants).not.toHaveBeenCalled();
+          expect(invoke).not.toHaveBeenCalled();
+        }
+      } finally {
+        await creation;
+        transfer.closeAll();
+      }
+    },
+  );
 
   it.each([
     { boundary: "discovery", change: "destroy intent" },

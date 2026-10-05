@@ -14,10 +14,12 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import type { RawData, WebSocket } from "ws";
 import { CODEX_NODE_GITHUB_REFRESH_FEATURE } from "../node-github-refresh.js";
+import { CODEX_NODE_RESOURCE_READINESS_FEATURE } from "../node-resource-readiness.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { getCodexNativeProcessClient } from "./native-process-authority.js";
 import type { CodexNativeProcessClient } from "./native-process-authority.js";
+import { bindCodexNodeResourceDelivery } from "./node-resource-delivery.js";
 import { bindCodexNodeGitHubRenewal } from "./sandbox-exec-server-github.js";
 import {
   createCodexNodeExecServerDisconnectError,
@@ -239,10 +241,23 @@ async function acquireOpenClawExecServer(params: {
               cwd: sandbox.containerWorkdir,
               ...nodePlacementIdentity,
               ...(githubGrant ? { github: githubGrant.binding } : {}),
+              ...(sandbox.repositoryPreparationRequired
+                ? { repositoryPreparationRequired: true }
+                : {}),
+              ...(sandbox.resourceReadiness ? { resourcePreparationRequired: true } : {}),
             },
             sessionKey: sandbox.sessionKey,
             timeoutMs: 0,
-            ...(canRenew ? { requiredCommandFeatures: [CODEX_NODE_GITHUB_REFRESH_FEATURE] } : {}),
+            ...(canRenew || sandbox.resourceReadiness || sandbox.repositoryPreparationRequired
+              ? {
+                  requiredCommandFeatures: [
+                    ...(canRenew ? [CODEX_NODE_GITHUB_REFRESH_FEATURE] : []),
+                    ...(sandbox.resourceReadiness || sandbox.repositoryPreparationRequired
+                      ? [CODEX_NODE_RESOURCE_READINESS_FEATURE]
+                      : []),
+                  ],
+                }
+              : {}),
             maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
             maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
             signal: githubGrant?.signal ? AbortSignal.any([signal, githubGrant.signal]) : signal,
@@ -270,6 +285,19 @@ async function acquireOpenClawExecServer(params: {
         }
         if (canRenew && githubGrant) {
           channel = bindCodexNodeGitHubRenewal(channel, githubGrant);
+        }
+        if (sandbox.resourceReadiness) {
+          channel = bindCodexNodeResourceDelivery(
+            channel,
+            sandbox.resourceReadiness,
+            signal,
+            () => {
+              githubGrant?.assertCurrent?.();
+              if (server.closed || sandboxExecServerRegistry.servers.get(key) !== promise) {
+                throw new Error("Codex node execution lease is no longer current.");
+              }
+            },
+          );
         }
         const nodeLease = {
           id: randomUUID(),

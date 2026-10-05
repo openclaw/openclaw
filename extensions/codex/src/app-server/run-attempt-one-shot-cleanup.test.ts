@@ -272,7 +272,7 @@ process.stdin.on("end", () => ${
         stdio: ["pipe", "pipe", "pipe"],
       });
       const exited = once(child, "exit");
-      const client = CodexAppServerClient.fromTransportForTests(child);
+      const client = CodexAppServerClient.fromTransport(child);
       if (shutdown === "unknown") {
         vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockRejectedValue(
           new processSnapshot.ProcessInspectionError("unavailable"),

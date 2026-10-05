@@ -64,6 +64,18 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
+  it("requires a model-hosting node when worker cloud hosting is enabled", () => {
+    vi.stubEnv("FACTORY_WORKER_LLM_CONFIG_VERSION", "a".repeat(64));
+    const worker = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: { workerHostedCloud: true } },
+    });
+    expect(worker.cloudPlacement?.devicePlacement?.requiredNodeCommands).toEqual([
+      `codex.app-server.stdio.v1.${"a".repeat(64)}`,
+    ]);
+    vi.unstubAllEnvs();
+  });
+
   it("keeps computer-control denies out of the native-surface exemption", () => {
     expect(harness.conversationToolPolicySafeDenyTools).toContain("image_generate");
     expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
@@ -151,7 +163,28 @@ describe("Codex agent harness supports()", () => {
     );
   });
 
-  it("delegates V2 isolated completion to the native bounded adapter", async () => {
+  it("refuses a host title completion for a native command provider", async () => {
+    const hostCalls = runHostPreparedIsolatedCompletion.mock.calls.length;
+    const params = {
+      ...isolatedTask,
+      config: {
+        models: {
+          providers: {
+            openai: { auth: "native-command", baseUrl: "https://example.test/v1", models: [] },
+          },
+        },
+      },
+      authorization: {
+        owner: "host",
+        model: { provider: "openai", id: "gpt-test" },
+        auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
+      },
+    } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
+    await expect(harness.runIsolatedCompletionV2?.(params)).rejects.toThrow("harness-owned Codex");
+    expect(runHostPreparedIsolatedCompletion).toHaveBeenCalledTimes(hostCalls);
+  });
+
+  it("routes a native-command session title through the native bounded adapter", async () => {
     const legacyCallCount = runHostPreparedIsolatedCompletion.mock.calls.length;
     const result = {
       assistant: {
@@ -171,6 +204,14 @@ describe("Codex agent harness supports()", () => {
         authProfileStore: { version: 1, profiles: {} },
       },
       ...isolatedTask,
+      config: {
+        models: {
+          providers: {
+            openai: { auth: "native-command", baseUrl: "https://example.test/v1", models: [] },
+          },
+        },
+      },
+      prompt: "Name this session",
     } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
 
     await expect(harness.runIsolatedCompletionV2?.(params)).resolves.toBe(result);

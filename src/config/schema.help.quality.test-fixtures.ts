@@ -41,7 +41,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "skills.workshop.autonomous.mode": ['"off"', '"propose"', '"auto"'],
   "memory.citations": ['"auto"', '"on"', '"off"'],
   "models.mode": ['"merge"', '"replace"'],
-  "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"'],
+  "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"', '"native-command"'],
   "gateway.reload.mode": ['"off"', '"hybrid"'],
   "nodeHost.workerRuns.isolation": ['"none"', '"container"'],
   "approvals.exec.mode": ['"session"', '"targets"', '"both"'],

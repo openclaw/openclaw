@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   prepareSkillBundle,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
@@ -115,9 +116,18 @@ export async function transferSkillResources(params: {
   assertRunCurrent?: () => void;
   signal?: AbortSignal;
   explicitSelections?: readonly import("../../skills/types.js").ExplicitSkillSelection[];
+  deferDelivery?: () => "empty" | "all" | undefined;
 }) {
+  const preparation = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, preparation.signal])
+    : preparation.signal;
+  let active = true;
   const check = () => {
-    params.signal?.throwIfAborted();
+    signal.throwIfAborted();
+    if (!active) {
+      throw new Error("Skill resource delivery is closed.");
+    }
     params.assertRunCurrent?.();
     params.assertCurrent();
   };
@@ -127,6 +137,17 @@ export async function transferSkillResources(params: {
     params.explicitSelections,
     params.workspaceDir,
   );
+  check();
+  const deferred = params.deferDelivery?.();
+  // Native node skills already have their own read owner and need no copied files.
+  // Keep omitted-resource catalog pruning on the normal delivery path. Pending
+  // checkout cleanup can wait for the next ready turn when this catalog needs no staging.
+  const nativeOnly =
+    delivery?.skills.length === 0 &&
+    params.snapshot?.resolvedSkills?.every((skill) => skill.filePath.startsWith("node://"));
+  if ((!delivery || nativeOnly) && deferred) {
+    return undefined;
+  }
   const execute = async (operation: ResourceOperation) => {
     const cleanup = operation.op === "cleanup";
     const assertDispatchCurrent = cleanup ? params.assertCurrent : check;
@@ -136,7 +157,7 @@ export async function transferSkillResources(params: {
       input: JSON.stringify(operation),
       transportRetry: "never",
       assertCurrent: assertDispatchCurrent,
-      signal: cleanup ? undefined : params.signal,
+      signal: cleanup ? undefined : signal,
       timeoutMs: cleanup ? 5000 : 60000,
     });
     // Accept the returned identity before observing cancellation; cleanup still requires
@@ -151,48 +172,39 @@ export async function transferSkillResources(params: {
     }
     return result.stdout;
   };
-  // Recheck the claim after read-only discovery, then delete only that captured identity.
-  // A delayed old request cannot enumerate and delete a newer turn's private inputs.
-  const locationPattern = new RegExp(`^(${WORKER_ATTACHMENT_DIRECTORY_PATTERN}) (\\d+:\\d+)$`);
-  for (;;) {
-    const candidate = await execute({ op: "discover" });
-    if (!candidate) {
-      break;
+  const discover = async () => {
+    // A late old discovery cannot delete a newer turn's private inputs.
+    const pattern = new RegExp(`^(${WORKER_ATTACHMENT_DIRECTORY_PATTERN}) (\\d+:\\d+)$`);
+    for (;;) {
+      const candidate = await execute({ op: "discover" });
+      if (!candidate) {
+        return;
+      }
+      const match = pattern.exec(candidate);
+      if (!match || match[0] !== candidate) {
+        throw new Error("Invalid skill resource location from execution environment.");
+      }
+      check();
+      await execute({ op: "cleanup", directory: match[1]!, identity: match[2]! });
     }
-    const match = locationPattern.exec(candidate);
-    if (!match || match[0] !== candidate) {
-      throw new Error("Invalid skill resource location from execution environment.");
-    }
-    check();
-    await execute({ op: "cleanup", directory: match[1]!, identity: match[2]! });
-  }
+  };
   if (!delivery || !params.snapshot) {
+    await discover();
     return undefined;
   }
   const directory = `${WORKER_ATTACHMENT_DIRECTORY_PREFIX}${randomUUID()}`;
-  const identity = await execute({ op: "init", directory });
-  if (identity.match(/^\d+:\d+$/)?.[0] !== identity) {
-    throw new Error("Invalid skill resource location from execution environment.");
-  }
-  const location = { directory, identity };
+  let identity: string | undefined;
+  const instructions = new Map<string, string>();
+  let staging: Promise<void> | undefined;
   const cleanup = async () => {
-    await execute({ op: "cleanup", ...location });
-  };
-  const pending: Extract<ResourceOperation, { op: "write" }> = {
-    op: "write",
-    ...location,
-    files: [],
-  };
-  const flush = async () => {
-    if (pending.files.length) {
-      await execute(pending);
-      pending.files = [];
+    active = false;
+    preparation.abort(new Error("Skill resource delivery closed"));
+    await staging?.catch(() => {});
+    instructions.clear();
+    if (identity) {
+      await execute({ op: "cleanup", directory, identity });
     }
   };
-  const availableChunkBytes = () =>
-    Math.floor(
-      (NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES - Buffer.byteLength(JSON.stringify(pending))) / 4,
-    ) * 3;
   try {
     check();
     const deliveredSourcePaths = new Set(
@@ -220,39 +232,9 @@ export async function transferSkillResources(params: {
     );
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
     const skillUsagePaths: SkillUsagePath[] = [];
+    const bundles = delivery.skills.map((skill) => prepareSkillBundle(skill.files));
     for (const [index, skill] of delivery.skills.entries()) {
-      const bundle = prepareSkillBundle(skill.files);
-      for (const file of bundle.files) {
-        let offset = 0;
-        do {
-          const chunk: ResourceChunk = {
-            name: `${index}/${file.path}`,
-            offset,
-            size: file.sizeBytes,
-            hash: file.sha256,
-            executable: file.executable,
-            data: "",
-          };
-          pending.files.push(chunk);
-          let chunkBytes = availableChunkBytes();
-          if (chunkBytes <= 0) {
-            pending.files.pop();
-            await flush();
-            pending.files.push(chunk);
-            chunkBytes = availableChunkBytes();
-          }
-          if (chunkBytes <= 0) {
-            throw new Error("Skill resource metadata exceeds the transfer limit.");
-          }
-          const bytes = file.bytes.subarray(offset, offset + chunkBytes);
-          chunk.data = bytes.toString("base64");
-          offset += bytes.length;
-          // Fill the transport budget across files; only a continuing large file needs an early flush.
-          if (offset < file.bytes.length) {
-            await flush();
-          }
-        } while (offset < file.bytes.length);
-      }
+      const bundle = bundles[index]!;
       const selected = resolvedSkills.find((candidate) => candidate.filePath === skill.sourcePath);
       const sourceBase =
         selected?.baseDir ?? (skill.sourcePath ? path.dirname(skill.sourcePath) : undefined);
@@ -277,10 +259,84 @@ export async function transferSkillResources(params: {
         selected.readContent = bundle.files
           .find((file) => file.path === "SKILL.md")!
           .bytes.toString("utf8");
+        instructions.set(selected.filePath, selected.readContent);
         delete selected.locationNote;
       }
     }
-    await flush();
+    let delivered = false;
+    const stage = async () => {
+      await discover();
+      const allocatedIdentity = await execute({ op: "init", directory });
+      if (allocatedIdentity.match(/^\d+:\d+$/)?.[0] !== allocatedIdentity) {
+        throw new Error("Invalid skill resource location from execution environment.");
+      }
+      identity = allocatedIdentity;
+      check();
+      const pending: Extract<ResourceOperation, { op: "write" }> = {
+        op: "write",
+        directory,
+        identity: allocatedIdentity,
+        files: [],
+      };
+      const flush = async () => {
+        if (pending.files.length) {
+          await execute(pending);
+          pending.files = [];
+        }
+      };
+      const availableChunkBytes = () =>
+        Math.floor(
+          (NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES - Buffer.byteLength(JSON.stringify(pending))) / 4,
+        ) * 3;
+      for (const [index, bundle] of bundles.entries()) {
+        for (const file of bundle.files) {
+          let offset = 0;
+          do {
+            const chunk: ResourceChunk = {
+              name: `${index}/${file.path}`,
+              offset,
+              size: file.sizeBytes,
+              hash: file.sha256,
+              executable: file.executable,
+              data: "",
+            };
+            pending.files.push(chunk);
+            let chunkBytes = availableChunkBytes();
+            if (chunkBytes <= 0) {
+              pending.files.pop();
+              await flush();
+              pending.files.push(chunk);
+              chunkBytes = availableChunkBytes();
+            }
+            if (chunkBytes <= 0) {
+              throw new Error("Skill resource metadata exceeds the transfer limit.");
+            }
+            const bytes = file.bytes.subarray(offset, offset + chunkBytes);
+            chunk.data = bytes.toString("base64");
+            offset += bytes.length;
+            // Fill the transport budget across files; only a continuing large file needs an early flush.
+            if (offset < file.bytes.length) {
+              await flush();
+            }
+          } while (offset < file.bytes.length);
+        }
+      }
+      await flush();
+      check();
+      delivered = true;
+    };
+    staging = stage();
+    const deliveryReady = staging;
+    void staging.catch(() => {});
+    const wait = async (requestSignal: AbortSignal = signal) => {
+      check();
+      await racePromiseWithAbortSignal(deliveryReady, requestSignal);
+      check();
+      requestSignal.throwIfAborted();
+    };
+    if (deferred !== "all") {
+      await wait();
+    }
     check();
     return {
       source: params.snapshot,
@@ -292,11 +348,37 @@ export async function transferSkillResources(params: {
       },
       mounts,
       skillUsagePaths,
+      skillResources: {
+        async readInstructions(filePath: string, options: { signal?: AbortSignal }) {
+          options.signal?.throwIfAborted();
+          check();
+          const content = instructions.get(filePath);
+          if (!active || content === undefined) {
+            throw new Error("Skill instructions are not available in this delivered turn.");
+          }
+          await wait(options.signal);
+          return content;
+        },
+      },
+      ...(deferred === "all"
+        ? {
+            resourceReadiness: {
+              wait,
+              assertCurrent: () => {
+                check();
+                if (!delivered) {
+                  throw new Error("Skill resource delivery is pending.");
+                }
+              },
+            },
+          }
+        : {}),
       assertCurrent: check,
       cleanup,
     };
   } catch (error) {
-    await cleanup().catch(() => undefined);
+    preparation.abort(error);
+    await cleanup().catch(() => {});
     throw error;
   }
 }

@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { crabboxState } from "./crabbox-state.test-support.js";
+import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import {
   createCrabboxNodeEnrollmentSetup,
   createCrabboxNodeRuntimeSetup,
@@ -189,7 +190,12 @@ async function enroll(
   desktop?: DesktopFixture,
   runtimeOnly = false,
   workerBundle?: CrabboxWorkerNodeEnrollment["nodeBootstrap"] & { packageRelativePath: string },
-  options?: { credentials?: string; timeoutMs?: number; signal?: AbortSignal },
+  options?: {
+    credentials?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    workerCodex?: NonNullable<CrabboxWorkerNodeEnrollment["workerCodex"]>;
+  },
 ) {
   const bin = path.join(home, "bin");
   const proc = path.join(home, "proc");
@@ -231,6 +237,7 @@ echo 123
           setupId: "bootstrap-test",
           openclawVersion: "2026.8.1",
           nodeBootstrap,
+          workerCodex: options?.workerCodex,
           displayName: "Bootstrap test",
           waitForDeviceId: async () => "device-test",
         },
@@ -239,6 +246,12 @@ echo 123
   expect(setup.command).not.toContain(setupCode);
   const timers = path.join(home, "bootstrap-test-timers.cjs");
   fs.writeFileSync(timers, 'require("node:timers/promises").setTimeout = async () => {};\n');
+  if (options?.workerCodex) {
+    await withCrabboxWorkerEnvProfile(setup.forwardedEnv, async (names, profilePath) => {
+      expect(names).toContain("CRABBOX_WORKER_CODEX_CONFIG_BASE64");
+      expect(profilePath).toBeDefined();
+    });
+  }
   const child = spawn("/bin/sh", [], {
     env: {
       HOME: home,
@@ -291,6 +304,29 @@ echo 123
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it("stages worker Codex settings containing shell metacharacters through safe forwarding", async () => {
+    const { home, stateDir } = testHome();
+    const { nodeBootstrap } = await serveArtifact(await packageFixture("codex-settings"));
+    const workerCodex = {
+      configToml: 'command = "/opt/teamclaw/autodev-token.mjs"\n',
+      helperScript: "const marker = `literal`; const other = '$(literal)';\n",
+      configVersion: "a".repeat(64),
+    };
+    await expectSetupPhases(
+      enroll(home, nodeBootstrap, undefined, false, undefined, { workerCodex }),
+    );
+    const directory = path.join(stateDir, "codex-runtime");
+    expect(fs.readFileSync(path.join(directory, "autodev-token.mjs"), "utf8")).toBe(
+      workerCodex.helperScript,
+    );
+    expect(fs.readFileSync(path.join(directory, "config.toml"), "utf8")).toBe(
+      `command = "${path.join(directory, "autodev-token.mjs")}"\n`,
+    );
+    expect(fs.readFileSync(path.join(directory, "version"), "utf8")).toBe(
+      workerCodex.configVersion,
+    );
+  });
+
   it("reuses a completed runtime upgrade on the next fresh warm child", async () => {
     const root = fs.realpathSync(tempDirs.make("warm-runtime-repeat-proof-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));

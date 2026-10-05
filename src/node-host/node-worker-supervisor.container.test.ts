@@ -127,6 +127,8 @@ describe("node worker supervisor container isolation", () => {
         TMPDIR: "/private/operator-temp",
         NODE_OPTIONS: "--title=forbidden-worker-title",
         SUPPLIED_SECRET: "must-not-enter-container",
+        IDENTITY_ENDPOINT: "http://127.0.0.1:40342/identity",
+        IDENTITY_HEADER: "synthetic-container-provider-header",
       },
     });
     const input = testWorkerLaunchInput(fixture.workspaceDir, "container-success");
@@ -197,6 +199,8 @@ describe("node worker supervisor container isolation", () => {
       });
       expect(create?.container?.env).not.toHaveProperty("NODE_OPTIONS");
       expect(create?.container?.env).not.toHaveProperty("SUPPLIED_SECRET");
+      expect(create?.container?.env).not.toHaveProperty("IDENTITY_ENDPOINT");
+      expect(create?.container?.env).not.toHaveProperty("IDENTITY_HEADER");
       expect(create?.container?.env).not.toHaveProperty("OPENCLAW_STATE_DIR");
       const started = fixture.events().find((event) => event.argv[0] === "start");
       expect(started?.argv).toEqual([

@@ -65,7 +65,7 @@ function createStdioAuthRefreshHarness(): Harness {
     [fileURLToPath(new URL("./test-support/auth-refresh-child.test-support.mjs", import.meta.url))],
     { stdio: "pipe", env: {} },
   );
-  const client = CodexAppServerClient.fromTransportForTests(child);
+  const client = CodexAppServerClient.fromTransport(child);
   const writes: string[] = [];
   const pendingWrites = new Map<number, ReturnType<typeof createDeferred<string>>>();
   client.addNotificationHandler((notification) => {

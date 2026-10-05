@@ -63,6 +63,9 @@ export const loadCodexNativeSubagentMonitorTestFixture = () =>
 export const loadCodexAbortTranscriptTestFixture = () =>
   import("./src/app-server/transcript-abort.test-support.js");
 
+export const loadCodexNodeAppServerTestFixture = () =>
+  import("./src/node-app-server.runtime.test-support.js");
+
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;

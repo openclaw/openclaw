@@ -9,7 +9,15 @@ import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 export function createCodexAttemptPreparationTiming(
   params: Pick<EmbeddedRunAttemptParamsV2, "runId" | "sessionId" | "sessionKey" | "config">,
 ) {
-  const tracker = createStageTimingTracker();
+  const tracker = createStageTimingTracker(undefined, (phase) => {
+    embeddedAgentLog.info("run phase", {
+      owner: "codex",
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ...phase,
+    });
+  });
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
   const totalWarnMs = profilerEnabled ? 1_000 : 10_000;
   const stageWarnMs = profilerEnabled ? 500 : 5_000;
@@ -38,11 +46,10 @@ export function createCodexAttemptPreparationTiming(
     async measure<T>(stage: string, run: () => Promise<T> | T): Promise<T> {
       let outcome: "completed" | "error" = "error";
       try {
-        const result = await run();
+        const result = await tracker.measure(stage, run);
         outcome = "completed";
         return result;
       } finally {
-        tracker.mark(stage);
         // Emit completed slow stages immediately: a later stalled stage must
         // not erase the work already spent before the native turn starts.
         log(stage, outcome);

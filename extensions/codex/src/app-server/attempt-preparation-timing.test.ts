@@ -5,6 +5,53 @@ import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timin
 afterEach(() => vi.restoreAllMocks());
 
 describe("Codex attempt preparation timing", () => {
+  it.each(["success", "error"] as const)(
+    "records a pending native start and its actual %s without profiler or private data",
+    async (outcome) => {
+      let nowMs = 100;
+      vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => {});
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      const preparation = createCodexAttemptPreparationTiming({
+        runId: "run-1",
+        sessionId: "session-1",
+      });
+      const pending = Promise.withResolvers<void>();
+      const failure = new Error("private native error");
+      const measured = preparation.measure("turn-start", () => pending.promise);
+      preparation.ready();
+      expect(info.mock.calls).toEqual([
+        [
+          "run phase",
+          expect.objectContaining({ name: "turn-start", status: "entry", startedAt: 100 }),
+        ],
+      ]);
+      nowMs = 700;
+      if (outcome === "success") {
+        pending.resolve();
+        await measured;
+      } else {
+        pending.reject(failure);
+        await expect(measured).rejects.toBe(failure);
+      }
+      expect(info.mock.calls[1]).toEqual([
+        "run phase",
+        expect.objectContaining({
+          owner: "codex",
+          runId: "run-1",
+          sessionId: "session-1",
+          name: "turn-start",
+          status: outcome,
+          startedAt: 100,
+          endedAt: 700,
+          durationMs: 600,
+        }),
+      ]);
+      expect(info).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(info.mock.calls)).not.toContain(failure.message);
+    },
+  );
+
   it.each([
     { flags: [], stageMs: 5_000, totalMs: 11_000 },
     { flags: ["codex.profiler"], stageMs: 500, totalMs: 1_100 },

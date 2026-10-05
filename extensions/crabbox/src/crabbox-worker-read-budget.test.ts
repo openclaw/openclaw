@@ -23,17 +23,17 @@ it("lets lifecycle inspection finish Crabbox's coordinator retry budget", async 
 });
 
 const provisionTimeoutCases = [
-  { name: "normal without setup", profile: { ...PROFILE }, minutes: 98 },
+  { name: "normal without setup", profile: { ...PROFILE }, minutes: 158 },
   {
     name: "normal with setup",
     profile: { ...PROFILE, setup: "install-node" },
-    minutes: 113,
+    minutes: 173,
   },
-  { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 163 },
+  { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 223 },
   {
     name: "desktop with setup",
     profile: { ...PROFILE, desktop: true, setup: "install-node" },
-    minutes: 178,
+    minutes: 238,
   },
 ] satisfies Array<{ name: string; profile: WorkerProfile; minutes: number }>;
 it.each(provisionTimeoutCases)(

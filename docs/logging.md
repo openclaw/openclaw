@@ -371,6 +371,26 @@ OpenClaw writes the trace fields as top-level JSON keys (`traceId`, `spanId`,
 `parentSpanId`, `traceFlags`) so external log processors can correlate the line
 with OTEL spans and provider `traceparent` propagation.
 
+GitHub API and repository admission logs emit phase entries before identity
+admission, credential revalidation, response headers, and response-body reads,
+then a matching success or error exit after settlement. Join them by `traceId`;
+`requestSpanId` and the numeric phase `spanId` pair each local interval. Transport
+failures distinguish an expired API deadline, caller cancellation, and transport
+errors with fixed diagnostic codes. These logs contain timing and the configured
+API host, but omit repository paths, refs, credentials, bodies, and raw errors.
+They do not change request budgets, retry requests, or prove creation had no effects.
+
+Worker provisioning records the first observed caller, project, or runtime signal
+abort and the controller's fixed owner/cause category. Multiple signals already
+aborted before observation retain an unknown first source. Signal observations
+do not mark a pending stage settled. Crabbox command records distinguish runner
+invocation, trusted worker milestones, returned process/exit facts, and rejection;
+invocation alone leaves remote effects unknown. They omit argv, input, output,
+credentials, and reason text. Worker-hosted Codex also records duplex and
+initialize boundaries plus observed remote process spawn/exit, bound to the node,
+session, environment, and owner epoch. Normal disconnect and process settlement
+continue through their existing lifecycle owners.
+
 Gateway HTTP requests and Gateway WebSocket frames establish an internal request
 trace scope. Logs and diagnostic events emitted inside that async scope inherit
 the request trace when they do not pass an explicit trace context. Agent run and
@@ -955,10 +975,53 @@ checkpoint mode or timeout, or archive-retention behavior.
 
 ### Slow reply preparation
 
+GitHub reads report `github identity rejected` at `info` through the existing
+`agents/github-identity` logger when a read identity guard refuses admission.
+`diagnosticCode=selection_changed` includes the expected and current selection
+source, managed profile ID and credential kind. `credential_changed` includes
+the original verified account ID, selection, credential-presence booleans and
+`credentialChanged=true`. The latter records a credential comparison, not a
+verified account change; the current credential is not additionally probed.
+Neither record includes credentials, their hashes, raw errors or user content.
+Logger failures preserve the refusal. These observations do not authorize
+retries or change the existing identity and caller-authority checks.
+
+Admitted chat runs emit `run phase` records at `info` before each observed
+preparation await and after that operation settles, without profiler flags.
+Structured fields include the full admitted `runId`, available `sessionId`,
+`lifecycleGeneration`, `owner`, fixed phase `name`, local `spanId`, and
+`status` (`entry`, `success`, or `error`). Exits also include `endedAt` and
+`durationMs`; both records carry the same `startedAt`. Pair records by owner,
+run, lifecycle generation, span id, and start time. Nested intervals overlap.
+An entry without an exit identifies an unsettled observation; it does not prove
+failure, absence of effects, or permission to retry. An error exit preserves the
+operation's error without logging its message or payload.
+
+These records cover chat workspace and input preparation, reply source-store
+reads, prepared-runtime loading, admission-ticket and predispatch waits, reply
+resolver preparation, and agent harness setup. `chat agent run started` records
+the actual backend `agentRunId` only when the backend-start callback fires;
+phase records retain the original admitted run identity. Logging does not change
+admission, cancellation, recovery, or execution behavior.
+
+Chat phases `chat.send.inputCustody` and `chat.send.inputTranscript` separate
+durable pending-input admission from pre-ACK transcript persistence. Cloud
+placements retain input custody until their runtime writer is ready, so the
+pre-ACK transcript phase is absent on that path. A history message's timestamp
+is preserved from its source; `recordTimestampMs` comes from transcript-entry
+creation. Their difference does not measure browser send or WebSocket receipt.
+
+Codex preparation emits the same entry/exit records with `owner=codex`, including
+short stages and the `turn-start` await. Pair these by owner, run, session, span
+id, and start time. Native turn-start completion observes the app-server result,
+not the first model output or proof of successful external actions. The records
+contain timing and identity fields, without prompt or error contents, and do not
+require a profiler flag or Debug subscription.
+
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 
 ```bash
-openclaw logs --follow --plain | rg 'timings|agent turn milestone|liveness warning'
+openclaw logs --follow --plain | rg 'run phase|timings|agent turn milestone|liveness warning'
 ```
 
 Reply resolver, dispatch, and agent-turn preparation milestones include stage

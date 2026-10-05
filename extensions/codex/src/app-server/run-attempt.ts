@@ -89,11 +89,8 @@ export async function runCodexAppServerAttempt(
             ),
           );
           preparation.ready();
-          const turnStart = await startCodexAttemptTurn(
-            resources,
-            turnRuntime,
-            notifications,
-            turnRequest,
+          const turnStart = await preparation.measure("turn-start", () =>
+            startCodexAttemptTurn(resources, turnRuntime, notifications, turnRequest),
           );
           if ("result" in turnStart) {
             connection.assertModelExecutionCurrent();

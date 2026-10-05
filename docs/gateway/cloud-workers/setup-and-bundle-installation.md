@@ -82,6 +82,26 @@ The deployment image owns the retained file. Gateway shutdown removes only its t
 
 This avoids repeated archive construction after restart. It does not reuse enrollment credentials, skip worker authorization, or eliminate worker installation and startup. Measure archive validation separately from end-to-end worker readiness when evaluating cold-start savings.
 
+### Provisioning stage telemetry
+
+The Gateway Codex transport emits one `worker_codex_duplex_closed` observation
+when a worker app-server channel closes. It records `nodeId`, `environmentId`,
+`sessionId`, `origin` (`remote_resolved`, `remote_rejected`,
+`local_stdin_final`, `local_response_too_large`, `local_kill`, or `local_abort`),
+and `syntheticExitCode`. Remote rejection also records a stable `errorCode`
+(`node_stderr_limit`, `duplex_not_ready`, or `unclassified`) at warning level.
+The code is derived without logging the rejected error text, stderr, frames,
+credentials, or repository paths. `syntheticExitCode` describes the Gateway
+facade and does not prove the native worker child exit code or signal. Correlate
+this event with the node invocation and worker process evidence before
+attributing a turn failure to the native child.
+
+The Gateway emits `worker provision stage` events under `gateway/worker-provision` at the start and terminal outcome of node artifact preparation, provider provisioning, bundle installation, prepared workspace registration, and ready commit. Fields are `environmentId`, `provisionOperationId`, `leaseId` when known, `sessionId` when attached, `stage`, `elapsedMs`, `outcome` (`started`, `completed`, or `failed`), and a bounded `errorCode` on failure. A prepared reserve has no session ID until a session claims it.
+
+The Crabbox plugin emits `worker_provision_stage` JSON records for allocation, lease inspection, the SSH readiness gate, setup, project preparation, warm image capture, node bootstrap, and device enrollment. These carry `operationId`, `leaseId`, `stage`, `elapsedMs`, `totalElapsedMs`, `outcome`, and a safe error class on failure. The remote bootstrap script emits `CRABBOX_WORKER_STAGE:` JSON milestones with `leaseId`, fixed `stage`, `elapsedMs`, and `outcome`; the plugin forwards only validated milestones for the matching lease. It retains `CRABBOX_PHASE:` markers for Crabbox's own timing report. Stage records are transition events, not poll logs. A start without a terminal event identifies the current wait; a successful ARM VM provision does not by itself establish SSH, node enrollment, bundle installation, or ready commit.
+
+These events do not contain scripts, command output, credentials, repository URLs, response bodies, or arbitrary error messages. Correlate a session to a reserve through its Gateway environment/placement record; never infer a session ID for an unclaimed reserve.
+
 ## Build a complete custom node package
 
 Automatic cloud bootstrap does not require a manually published package. For a separate deployment or package-validation workflow, the canonical package builder can still produce a complete custom distribution and explicitly include source-owned plugins that the ordinary core package excludes:

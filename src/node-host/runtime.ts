@@ -32,6 +32,10 @@ import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
+import {
+  captureNodeWorkerManagedIdentityTransport,
+  captureNodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
 import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -137,7 +141,21 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     !commandAllowlist &&
     (params?.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
-  const workspaceOptions = { env, ephemeral: params?.ephemeral };
+  // Provider transport belongs to this dedicated node, not the Gateway or a paired host.
+  const dedicatedNodeExecution =
+    workerRunsEnabled &&
+    params?.ephemeral === true &&
+    config.nodeHost?.workerRuns?.isolation !== "container";
+  const managedIdentityTransport = dedicatedNodeExecution
+    ? captureNodeWorkerManagedIdentityTransport(env)
+    : undefined;
+  const platformTrust = dedicatedNodeExecution ? captureNodeWorkerPlatformTrust(env) : undefined;
+  const workspaceOptions = {
+    env,
+    ephemeral: params?.ephemeral,
+    managedIdentityTransport,
+    platformTrust,
+  };
   let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
@@ -273,6 +291,8 @@ export async function prepareNodeHostRuntime(params?: {
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
               nativeInferenceSnapshot,
+              managedIdentityTransport,
+              platformTrust,
               onCapacityChanged: onRunnerCapacityChanged,
               workspace: workerWorkspace,
             })
@@ -531,6 +551,7 @@ export async function prepareNodeHostRuntime(params?: {
                     },
                   }
                 : undefined;
+            let handlerReturned = false;
             try {
               await handleInvoke(frame, client, skillBins, manager, {
                 ...(claudePath ? { claudePath } : {}),
@@ -561,9 +582,16 @@ export async function prepareNodeHostRuntime(params?: {
                 ...(workerSupervisor ? { workerSupervisor } : {}),
                 ...(workerWorkspace ? { workerWorkspace } : {}),
               });
+              handlerReturned = true;
             } finally {
               framedIo?.close();
-              progress?.stop();
+              progress?.stop(
+                controller.signal.aborted
+                  ? "owner_aborted"
+                  : handlerReturned
+                    ? "handler_returned"
+                    : "handler_error",
+              );
               await progress?.flush();
               if (activeInvokes.get(frame.id) === active) {
                 activeInvokes.delete(frame.id);

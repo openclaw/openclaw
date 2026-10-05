@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type {
   SessionsProcessesListResult,
@@ -128,6 +129,7 @@ function resolveWorkerConnectionEndpoint(params: {
 export async function invokeNodeWorkerSupervisorCommand(params: {
   command: string;
   paramsJSON?: string | null;
+  timeoutMs?: number | null;
   supervisor?: NodeWorkerSupervisorControl;
   bundleInstaller?: NodeWorkerBundleInstallerControl;
   workspace?: NodeWorkerWorkspaceRuntime;
@@ -152,6 +154,14 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       if (!params.gatewayUrl) {
         throw new Error("node worker gateway connection unavailable");
       }
+      const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
+      const deadline = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+      // The node retains the sent budget even if the Gateway's cancel frame cannot arrive.
+      const installSignal = deadline
+        ? signal
+          ? AbortSignal.any([signal, deadline])
+          : deadline
+        : signal;
       return bundleInstaller.ensure({
         input: parseNodeWorkerBundleInstallInput(paramsJSON),
         gatewayUrl: params.gatewayUrl,
@@ -161,7 +171,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         ...(params.gatewayCloudflareAccess
           ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
           : {}),
-        signal,
+        signal: installSignal,
       });
     },
     [NODE_WORKER_WORKSPACE_EXEC_COMMAND]: () =>

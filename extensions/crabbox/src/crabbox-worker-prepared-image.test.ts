@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
-import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
+import {
+  listCrabboxWarmImages,
+  type WarmProfileRecord,
+} from "./crabbox-worker-warm-image-store.js";
 import {
   BASE_COMMIT,
   CHECKPOINT_ID,
@@ -541,7 +544,7 @@ describe("Crabbox prepared image demand and custody", () => {
     },
   );
 
-  it("offers ready capacity only for immutable Linux warm-image profiles", async () => {
+  it("offers ready capacity only for immutable Linux profiles", async () => {
     const { provider, calls } = createWarmProvider();
     expect(provider.resolvePreparedIdleTimeoutMs?.(PROFILE)).toBe(3_600_000);
     expect(provider.resolvePreparationTarget?.(PROFILE, "fast")).toEqual({
@@ -549,7 +552,6 @@ describe("Crabbox prepared image demand and custody", () => {
       platform: "linux",
     });
     for (const profile of [
-      { ...PROFILE, warmImage: false },
       { ...PROFILE, setup: "setup", setupEnv: ["MUTABLE_INPUT"] },
       { ...CLASSLESS_PROFILE, target: "windows/wsl2" },
     ]) {
@@ -557,10 +559,143 @@ describe("Crabbox prepared image demand and custody", () => {
     }
     const { options } = projectOptions([], new AbortController(), createPreparation("reserve"));
     await expect(
-      provider.provision({ ...PROFILE, warmImage: false }, "disabled", options),
-    ).rejects.toThrow("prepared workers require warm images");
+      provider.provision({ ...PROFILE, warmImage: false, target: "macos" }, "unsupported", options),
+    ).rejects.toThrow("prepared workers require a Linux machine class");
     expect(calls).toEqual([]);
   });
+
+  it("prepares and replays a fixed Azure reserve without consulting snapshots", async () => {
+    const events: string[] = [];
+    const preparation = {
+      key: "c".repeat(64),
+      cacheKey: "d".repeat(64),
+      purpose: "reserve" as const,
+      demandAtMs: Date.now(),
+    };
+    const profile = { ...PROFILE, provider: "azure", warmImage: false };
+    const current = projectOptions(events, new AbortController(), preparation);
+    const { provider, calls } = createWarmProvider(current.observe);
+    const obsolete: WarmProfileRecord = {
+      version: 3,
+      allocations: {},
+      image: {
+        checkpointId: "chk_obsolete_azure",
+        kind: "azure-os-snapshot",
+        state: "pending",
+        createdAtMs: 1,
+        lastDemandAtMs: 1,
+        preparationKey: preparation.key,
+        cacheKey: preparation.cacheKey,
+        purpose: "reserve",
+      },
+    };
+    openWarmImageStore().update("obsolete", () => obsolete);
+    const obsoleteEntries = openWarmImageStore().entries();
+    const store = vi.spyOn(crabboxState, "openKeyedStore");
+    expect(provider.supportsProjectPreparation?.(profile)).toBe(true);
+    expect(provider.resolvePreparedIdleTimeoutMs?.(profile)).toBe(3_600_000);
+    expect(provider.resolvePreparationTarget?.(profile, "fast")).toEqual({
+      machineClass: "fast",
+      platform: "linux",
+    });
+    const enrolled = createDeferred<string>();
+    const enrollmentStarted = createDeferred<void>();
+    const beginEnrollment = current.options.beginNodeEnrollment.getMockImplementation()!;
+    current.options.beginNodeEnrollment.mockImplementationOnce(async () => {
+      const enrollment = await beginEnrollment();
+      enrollmentStarted.resolve();
+      return { ...enrollment, waitForDeviceId: () => enrolled.promise };
+    });
+    let ready = false;
+    const reserve = provider.provision(profile, "azure-reserve", current.options).then((lease) => {
+      ready = true;
+      return lease;
+    });
+    await enrollmentStarted.promise;
+    expect(ready).toBe(false);
+    expect(current.options.project.prepare).toHaveBeenCalledOnce();
+    enrolled.resolve("project-node");
+    const lease = await reserve;
+    expect(lease).toMatchObject({
+      leaseId: operationLeaseId("azure-reserve"),
+      node: { deviceId: "project-node" },
+    });
+    expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
+    current.options.project.prepare.mockResolvedValueOnce({ seedKey: PROJECT_KEY, cacheHit: true });
+    await expect(provider.provision(profile, "azure-reserve", current.options)).resolves.toEqual(
+      lease,
+    );
+    await provider.notePreparedDemand!(
+      { leaseId: lease.leaseId, profile },
+      { preparationKey: preparation.key, demandAtMs: preparation.demandAtMs + 1 },
+    );
+    expect(store).not.toHaveBeenCalled();
+    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+    expect(calls.filter(({ argv }) => argv[1] === "warmup")).toHaveLength(2);
+    expect(calls.filter(({ options }) => options.input === "project-checkout")).toHaveLength(1);
+    // Existing snapshot ownership still settles through confirmed-stop cleanup.
+    await provider.destroy({ leaseId: lease.leaseId, profile });
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+    expect(openWarmImageStore().entries()).toEqual(obsoleteEntries);
+  });
+
+  it.each(["preparation", "enrollment", "cancelled", "owner changed"] as const)(
+    "keeps cold reserve readiness closed after %s failure",
+    async (failure) => {
+      const controller = new AbortController();
+      const current = projectOptions([], controller, {
+        key: "c".repeat(64),
+        cacheKey: "d".repeat(64),
+        purpose: "reserve",
+        demandAtMs: Date.now(),
+      });
+      const profile = { ...PROFILE, provider: "azure", warmImage: false };
+      const { provider, calls } = createWarmProvider();
+      let ownerCurrent = true;
+      current.options.assertCurrent = () => {
+        controller.signal.throwIfAborted();
+        if (!ownerCurrent) {
+          throw new Error("owner changed");
+        }
+      };
+      if (failure === "enrollment") {
+        current.options.beginNodeEnrollment.mockRejectedValueOnce(new Error("enrollment rejected"));
+      } else {
+        current.options.project.prepare.mockImplementationOnce(async () => {
+          if (failure === "cancelled") {
+            controller.abort();
+          } else if (failure === "owner changed") {
+            ownerCurrent = false;
+          } else {
+            throw new Error("prepared workspace identity mismatch");
+          }
+          return { seedKey: PROJECT_KEY, cacheHit: true };
+        });
+      }
+      await expect(
+        provider.provision(profile, "failed-cold-reserve", current.options),
+      ).rejects.toThrow(
+        failure === "preparation"
+          ? "prepared workspace identity mismatch"
+          : failure === "enrollment"
+            ? "enrollment rejected"
+            : failure === "owner changed"
+              ? "owner changed"
+              : "aborted",
+      );
+      if (failure !== "enrollment") {
+        expect(current.options.beginNodeEnrollment).not.toHaveBeenCalled();
+      }
+      const cancelled = failure === "cancelled" || failure === "owner changed";
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(cancelled ? 0 : 1);
+      if (cancelled) {
+        await provider.destroy({ leaseId: operationLeaseId("failed-cold-reserve"), profile });
+        expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+      }
+      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+    },
+  );
 
   it("fully prepares a cold reserve after cache identity changes without claiming a replacement image", async () => {
     const events: string[] = [];

@@ -51,6 +51,13 @@ const prepareGitHubBinding = vi.hoisted(() => vi.fn());
 vi.mock("./worker-github-binding.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./worker-github-binding.js")>()),
   prepareWorkerGitHubBindingGrant: prepareGitHubBinding,
+  prepareWorkerTurnGitHub: async (
+    params: Parameters<typeof import("./worker-github-binding.js").prepareWorkerTurnGitHub>[0],
+  ) => ({
+    grant: await prepareGitHubBinding(params),
+    githubPublicationAvailable: false,
+    githubPullRequestReadAvailable: false,
+  }),
 }));
 
 describe("worker launch capabilities", () => {
@@ -467,6 +474,12 @@ describe("worker launch capabilities", () => {
             source: snapshot,
             snapshot,
             mounts: [],
+            skillUsagePaths: [],
+            skillResources: {
+              readInstructions: async () => {
+                throw new Error("No skill instructions were delivered by this fixture");
+              },
+            },
             assertCurrent: () => {},
             cleanup: async () => {
               resourceCleanup.entered.resolve();

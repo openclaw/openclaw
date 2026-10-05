@@ -106,6 +106,47 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
   }
 });
 
+it("refuses cached instructions when a sandbox has neither filesystem nor delivered resources", async () => {
+  const skill = {
+    ...createCanonicalFixtureSkill({
+      name: "guide",
+      description: "Guide",
+      filePath: "/host/skills/guide/SKILL.md",
+      baseDir: "/host/skills/guide",
+      source: "workspace",
+    }),
+    readContent: "Unowned cached instructions",
+  };
+  const sandbox = createSandboxTestContext({
+    overrides: {
+      fsBridge: undefined,
+      skillUsagePaths: [
+        {
+          skillName: skill.name,
+          skillSource: "workspace",
+          skillFile: skill.filePath,
+          readPath: "/workspace/skills/guide/SKILL.md",
+        },
+      ],
+    },
+  });
+  const catalog = bindHostSkillCatalog({
+    snapshot: {
+      prompt: "",
+      skills: [{ name: skill.name }],
+      resolvedSkills: [skill],
+      discoverySkills: [skill],
+    },
+    workspaceDir: "/host",
+    sandbox,
+    readable: true,
+    assertCurrent: () => {},
+  })();
+  await expect(readInstalledSkill(catalog, skill.name)).rejects.toThrow(
+    "Sandbox filesystem bridge is unavailable for skill reads",
+  );
+});
+
 it("confines cached and retargeted skill instructions to the required root at read time", async () => {
   const parent = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rooted-skills-")),

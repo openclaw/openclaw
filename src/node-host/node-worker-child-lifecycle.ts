@@ -14,6 +14,7 @@ import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { nodeWorkerLaunchSecrets } from "./node-worker-child-secrets.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
+import type { NodeWorkerManagedIdentityTransport } from "./node-worker-environment.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
 import {
   observeNodeWorkerChild,
@@ -95,6 +96,7 @@ export class NodeWorkerChildLifecycle {
     private readonly options: {
       bundleRoot: string;
       nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+      managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
       engineEnv: NodeJS.ProcessEnv;
       store: NodeWorkerLaunchStore;
       turns: NodeWorkerTurnStore;
@@ -183,6 +185,7 @@ export class NodeWorkerChildLifecycle {
     const sensitiveValues = nodeWorkerLaunchSecrets(
       params.descriptor,
       this.options.nativeInferenceSnapshot,
+      this.options.managedIdentityTransport,
     );
     const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
@@ -393,7 +396,11 @@ export class NodeWorkerChildLifecycle {
       await this.stopChild(active, signal.aborted ? "cancelled" : "interrupted");
       return (await this.options.turns.get(claim.launchId)) ?? admitted.receipt;
     }
-    const secrets = nodeWorkerLaunchSecrets(descriptor, this.options.nativeInferenceSnapshot);
+    const secrets = nodeWorkerLaunchSecrets(
+      descriptor,
+      this.options.nativeInferenceSnapshot,
+      this.options.managedIdentityTransport,
+    );
     for (const value of secrets) {
       registerSecretValueForRedaction(value);
     }

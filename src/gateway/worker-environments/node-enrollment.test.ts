@@ -174,6 +174,7 @@ describe("worker node enrollment", () => {
     }
     await Promise.all(artifactProviders.map((provider) => provider.close()));
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -219,6 +220,29 @@ describe("worker node enrollment", () => {
       expect(prepareArtifact).not.toHaveBeenCalled();
     },
   );
+
+  it("delivers private Codex inputs only at lease enrollment, never warm preparation", async () => {
+    const configPath = path.join(root, "codex.toml");
+    const helperPath = path.join(root, "token.mjs");
+    const config = 'model = "codex-test-model"\n';
+    const helper = "process.stdout.write('synthetic-token')\n";
+    await fs.writeFile(configPath, config);
+    await fs.writeFile(helperPath, helper);
+    vi.stubEnv("OPENCLAW_WORKER_CODEX_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_WORKER_CODEX_HELPER_PATH", helperPath);
+    vi.stubEnv("FACTORY_WORKER_LLM_CONFIG_VERSION", "a".repeat(64));
+    const record = await createProvisioning();
+    const manager = createManager();
+    const runtime = await manager.prepareRuntime(record, bundle());
+    expect(runtime).not.toHaveProperty("workerCodex");
+    const enrollment = await manager.begin(record);
+    expect(enrollment.workerCodex).toEqual({
+      configToml: config,
+      helperScript: helper,
+      configVersion: "a".repeat(64),
+    });
+    expect(JSON.stringify(enrollment.nodeBootstrap)).not.toContain("synthetic-token");
+  });
 
   it("releases requested-state preflight artifact custody without aborting its caller", async () => {
     const record = await createRequested();

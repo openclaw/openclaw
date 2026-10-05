@@ -1,6 +1,9 @@
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexNodeExecServerCommand } from "./node-exec-server.js";
+import {
+  createCodexNodeAppServerCommand,
+  createCodexNodeExecServerCommand,
+} from "./node-exec-server.js";
 
 const mock = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock("./node-exec-server.runtime.js", () => ({ runCodexNodeExecServer: mock.run }));
@@ -8,6 +11,49 @@ vi.mock("./node-exec-server.runtime.js", () => ({ runCodexNodeExecServer: mock.r
 beforeEach(() => {
   mock.run.mockReset();
 });
+
+it.each(["context", "session", "authorization", "environment", "placement"])(
+  "refuses a Codex model process with unapproved %s before borrowing workspace custody",
+  async (invalid) => {
+    const acquire = vi.fn();
+    const authorize = vi.fn(() => () => {});
+    const placement = {
+      cwd: "/synthetic/workspace",
+      environmentId: "environment",
+      sessionId: "session",
+      ownerEpoch: 1,
+      sessionKey: "agent:main:managed",
+    };
+    const request = {
+      placement:
+        invalid === "placement" ? { ...placement, IDENTITY_HEADER: "caller-secret" } : placement,
+      authorization: invalid === "authorization" ? "human-approved" : "session-full",
+      ...(invalid === "environment" ? { env: { IDENTITY_HEADER: "caller-secret" } } : {}),
+    };
+    const command = createCodexNodeAppServerCommand();
+    await expect(
+      command.handle(
+        JSON.stringify(request),
+        {
+          signal: new AbortController().signal,
+          emitChunk: async () => {},
+          onInput: () => {},
+          frames: { send: async () => {}, onMessage: () => () => {} },
+        },
+        invalid === "context"
+          ? undefined
+          : {
+              sessionKey: invalid === "session" ? "agent:main:other" : placement.sessionKey,
+              sendNodeEvent: async () => undefined,
+              acquireManagedWorkspaceAsync: acquire,
+              prepareExecAuthorization: authorize,
+            },
+      ),
+    ).rejects.toThrow();
+    expect(acquire).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+  },
+);
 
 function invocation() {
   const frames = new AbortController();

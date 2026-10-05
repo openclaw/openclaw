@@ -19,6 +19,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { NodeWorkerPreparedWorkspaceBinding } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
+import { captureNodeWorkerManagedIdentityTransport } from "./node-worker-environment.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
 import { waitForNodeWorkerTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -403,6 +404,10 @@ describe("prepared node workspace ownership", () => {
       bundleRoot,
       env: f.env,
       workspace: f.runtime,
+      managedIdentityTransport: captureNodeWorkerManagedIdentityTransport({
+        IDENTITY_ENDPOINT: "http://127.0.0.1:40342/identity",
+        IDENTITY_HEADER: "synthetic-prepared-provider-header",
+      }),
     });
     try {
       await expect(supervisor.launch(input, TEST_WORKER_ENDPOINT)).rejects.toThrow("bound session");
@@ -415,11 +420,16 @@ describe("prepared node workspace ownership", () => {
         code: "ENOENT",
       });
       await supervisor.launch({ ...input, sessionKey: binding.sessionKey }, TEST_WORKER_ENDPOINT);
-      expect((await waitForNodeWorkerTerminal(supervisor, input.launchId)).state).toBe("completed");
+      const terminal = await waitForNodeWorkerTerminal(supervisor, input.launchId);
+      expect(terminal.state).toBe("completed");
+      expect(JSON.stringify(terminal)).not.toContain("synthetic-prepared-provider-header");
+      expect(JSON.stringify(input)).not.toContain("synthetic-prepared-provider-header");
       const childEnv = JSON.parse(
         await fsp.readFile(path.join(f.workspaceDir, "prepared-turn.env.json"), "utf8"),
       );
       expect(childEnv.HOME).toBe(f.homeDir);
+      expect(childEnv.IDENTITY_ENDPOINT).toBe("http://127.0.0.1:40342/identity");
+      expect(childEnv.IDENTITY_HEADER).toBe("synthetic-prepared-provider-header");
     } finally {
       await supervisor.close();
     }

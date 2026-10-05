@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import type { OpenClawPluginNodeWorkspaceLease } from "../plugins/types.node-host.js";
 import type {
   NodeWorkerPreparedWorkspaceInput,
   NodeWorkerPreparedWorkspaceResult,
@@ -20,20 +19,29 @@ import type {
   NodeWorkerWorkspaceRetainInput,
   NodeWorkerWorkspaceRetainResult,
 } from "../worker/node-workspace-retain-protocol.js";
-import { isWorkspaceInspectionCommand } from "../worker/workspace-inspection-protocol.js";
-import { inspectSessionWorkspace } from "../worker/workspace-inspection.js";
-import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
+import type {
+  NodeWorkerManagedIdentityTransport,
+  NodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
+import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import { NodeWorkerPreparedWorkspaceRuntime } from "./node-worker-prepared-workspace.js";
+import { NodeWorkerRepositoryReadiness } from "./node-worker-repository-readiness.js";
 import {
   type NodeWorkerTransferGateway,
   runNodeWorkerWorkspaceTransfer,
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
-import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
+import {
+  createNodeWorkerTempWorkspace,
+  createNodeWorkerManagedWorkspaceLease,
+  prepareNodeWorkerWorkspaceCustody,
+  inspectNodeWorkerWorkspace,
+} from "./node-worker-workspace-admission.js";
 import {
   nodeWorkspaceManifestCapture,
   runNodeWorkspaceManifestCapture,
   workspaceCommandEnv,
+  projectWorkspaceOperationResult,
 } from "./node-worker-workspace-commands.js";
 import {
   assertWorkspaceArgv,
@@ -62,30 +70,13 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
 const MANIFEST_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
 
-function projectWorkspaceOperationResult(
-  workspaceDir: string,
-  stdout: string,
-  argv?: readonly string[],
-): NodeWorkerWorkspaceExecResult {
-  return projectNodeWorkerWorkspaceExecResult(
-    workspaceDir,
-    {
-      stdout,
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    },
-    argv,
-  );
-}
-
 /** Runs trusted worker transport commands only from a node-owned session workspace. */
 export class NodeWorkerWorkspaceRuntime {
   private readonly root: string;
   private readonly seedsRoot: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly platformTrust?: NodeWorkerPlatformTrust;
+  private readonly credentialScrubber?: NodeWorkerCredentialScrubber;
   private readonly prepared: NodeWorkerPreparedWorkspaceRuntime;
   private readonly retainQueue = new KeyedAsyncQueue();
   private readonly acceptedSnapshots = new Map<string, NodeWorkerWorkspaceRetainSnapshot>();
@@ -97,15 +88,20 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
   readonly processes = new NodeWorkerWorkspaceProcesses();
   readonly quiescence = new NodeWorkerWorkspaceQuiescence();
+  readonly repositoryReadiness = new NodeWorkerRepositoryReadiness();
 
-  constructor(options: { root?: string; env?: NodeJS.ProcessEnv; ephemeral?: boolean } = {}) {
+  constructor(
+    options: {
+      root?: string;
+      env?: NodeJS.ProcessEnv;
+      ephemeral?: boolean;
+      managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+      platformTrust?: NodeWorkerPlatformTrust;
+    } = {},
+  ) {
     const env = options.env ?? process.env;
-    const configuredRoot = path.resolve(
-      options.root ?? path.join(resolveStateDir(env), "node-host"),
-    );
-    fs.mkdirSync(configuredRoot, { recursive: true, mode: 0o700 });
-    this.root = fs.realpathSync.native(configuredRoot);
-    tightenPrivateDirRootSync(this.root, 0o700);
+    const custody = prepareNodeWorkerWorkspaceCustody(options);
+    this.root = custody.root;
     // Git artifacts are machine caches, outside the per-lease state scrub boundary.
     const home = env.HOME ?? env.USERPROFILE ?? os.homedir();
     this.seedsRoot = path.resolve(home, ".openclaw-worker", "git-seeds");
@@ -115,7 +111,9 @@ export class NodeWorkerWorkspaceRuntime {
       this.workspaceHashMemos,
       options.ephemeral === true,
     );
-    this.env = snapshotNodeWorkerEnv(env);
+    this.platformTrust = custody.platformTrust;
+    this.env = custody.env;
+    this.credentialScrubber = custody.credentialScrubber;
   }
 
   async checkAdmission(): Promise<void> {
@@ -157,7 +155,7 @@ export class NodeWorkerWorkspaceRuntime {
 
   async acquireManagedWorkspaceAsync(
     request: NodeWorkerManagedWorkspaceRequest,
-  ): Promise<{ workspaceDir: string; homeDir?: string; release: () => void }> {
+  ): Promise<OpenClawPluginNodeWorkspaceLease> {
     const captured = { ...request };
     return this.prepared.acquire(captured.environmentId, (row) =>
       this.acquireWorkspaceIdentity(captured, row),
@@ -167,22 +165,28 @@ export class NodeWorkerWorkspaceRuntime {
   private acquireWorkspaceIdentity(
     request: NodeWorkerManagedWorkspaceRequest,
     prepared?: import("./node-worker-prepared-workspace-store.js").NodeWorkerPreparedWorkspaceRow,
-  ) {
+  ): OpenClawPluginNodeWorkspaceLease {
     const identity = prepared
       ? resolveNodePreparedWorkspaceIdentity(this.prepared.root, prepared, request)
       : resolveNodeManagedWorkspaceIdentity(this.root, request);
     if (this.deletingWorkspaceGenerations.has(identity.generationKey)) {
       throw new Error("INVALID_REQUEST: node placement workspace is being removed");
     }
-    const finishOperation = this.beginWorkspaceOperation(
-      identity.gatewayNamespace,
-      identity.generationKey,
-    );
-    return {
-      workspaceDir: identity.workspaceDir,
+    const processOwner = { ...identity, environmentId: request.environmentId };
+    const assertOwner = this.processes.captureAdmission(processOwner, request.ownerEpoch);
+    return createNodeWorkerManagedWorkspaceLease({
+      ...identity,
       ...(prepared ? { homeDir: prepared.home_dir } : {}),
-      release: finishOperation,
-    };
+      env: this.env,
+      platformTrust: this.platformTrust,
+      release: this.beginWorkspaceOperation(identity.gatewayNamespace, identity.generationKey),
+      assertCurrent: assertOwner,
+      repositoryReadiness: this.repositoryReadiness.capture(
+        { ...request, generation: request.ownerEpoch },
+        assertOwner,
+      ),
+      redactOutput: this.credentialScrubber?.scrub,
+    });
   }
 
   private beginWorkspaceOperation(gatewayNamespace: string, generationKey: string): () => void {
@@ -509,7 +513,7 @@ export class NodeWorkerWorkspaceRuntime {
     }
     const finishOperation = this.beginWorkspaceOperation(input.gatewayNamespace, generationKey);
     try {
-      return await serializeNodeWorkerWorkspace(sessionRootCandidate, async () => {
+      const workspaceResult = await serializeNodeWorkerWorkspace(sessionRootCandidate, async () => {
         signal?.throwIfAborted();
         const prepared = await this.prepared.store?.find(input.environmentId);
         signal?.throwIfAborted();
@@ -568,7 +572,12 @@ export class NodeWorkerWorkspaceRuntime {
         }
         if (input.seed) {
           if (input.seed.action === "apply") {
-            await removeNodeWorkerWorkspaceEntry(this.root, workspacePath, "directory");
+            this.repositoryReadiness.reset(
+              input,
+              workspacePath,
+              () => fs.rmSync(workspacePath, { recursive: true, force: true }),
+              assertProcessCurrent,
+            );
             ensureContainedDirectory(sessionRoot, workspaceName);
           }
           const stdout = await runNodeWorkerWorkspaceSeed({
@@ -613,30 +622,43 @@ export class NodeWorkerWorkspaceRuntime {
           }
           return projectWorkspaceOperationResult(workspacePath, `${stdout}\n`);
         }
-        if (isWorkspaceInspectionCommand(input.argv)) {
-          const stat = fs.lstatSync(workspacePath, { throwIfNoEntry: false });
-          if (!stat?.isDirectory() || stat.isSymbolicLink()) {
-            throw new Error("INVALID_REQUEST: workspace inspection root is unavailable");
-          }
-          const workspaceDir = fs.realpathSync.native(workspacePath);
-          if (!isPathInside(sessionRoot, workspaceDir)) {
-            throw new Error("INVALID_REQUEST: workspace inspection root is unavailable");
-          }
-          const stdout = await inspectSessionWorkspace(workspaceDir, input.input, () =>
-            signal?.throwIfAborted(),
+        const inspection = await inspectNodeWorkerWorkspace(
+          input.argv,
+          workspacePath,
+          sessionRoot,
+          input.input,
+          signal,
+        );
+        if (inspection) {
+          return projectWorkspaceOperationResult(
+            inspection.workspaceDir,
+            inspection.stdout,
+            input.argv,
           );
-          return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
         if (input.resetWorkspace) {
           if (input.nativeProcessOwner || input.process) {
             assertProcessCurrent();
           }
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.
-          fs.rmSync(workspacePath, { recursive: true, force: true });
+          this.repositoryReadiness.reset(
+            input,
+            workspacePath,
+            () => fs.rmSync(workspacePath, { recursive: true, force: true }),
+            assertProcessCurrent,
+          );
         }
         const workspaceDir = prepared
           ? workspacePath
           : ensureContainedDirectory(sessionRoot, workspaceName);
+        const repositoryStatus = this.repositoryReadiness.execute(
+          input,
+          assertProcessCurrent,
+          signal,
+        );
+        if (repositoryStatus) {
+          return projectWorkspaceOperationResult(workspaceDir, repositoryStatus);
+        }
         const commandEnv = workspaceCommandEnv(homeDir, this.env);
         if (input.quiescence) {
           if (input.argv[1] !== workspaceDir) {
@@ -689,6 +711,13 @@ export class NodeWorkerWorkspaceRuntime {
         });
         return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
       });
+      return this.credentialScrubber
+        ? {
+            ...workspaceResult,
+            stdout: this.credentialScrubber.scrub(workspaceResult.stdout),
+            stderr: this.credentialScrubber.scrub(workspaceResult.stderr),
+          }
+        : workspaceResult;
     } finally {
       finishOperation();
     }

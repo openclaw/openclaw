@@ -166,6 +166,12 @@ export type WorkerNodeEnrollment = WorkerNodeBootstrapAccess & {
   openclawVersion: string;
   displayName: string;
   waitForDeviceId: () => Promise<string>;
+  /** Private per-lease inference inputs. Never captured in a prepared image. */
+  workerCodex?: {
+    configToml: string;
+    helperScript: string;
+    configVersion: string;
+  };
 } & (
     | { mode: "connect"; setupCode: string; setupId: string }
     | { mode: "resume"; deviceId: string }

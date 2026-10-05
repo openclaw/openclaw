@@ -31,9 +31,7 @@ async function readPairing(
     try {
       reply = await executeExistingOpenClawStateRead(
         selected,
-        command.type === "devicePairing.list" && !snapshot
-          ? { ...command, publishedRevision: publication.completeRevision() }
-          : command,
+        !snapshot ? { ...command, publishedRevision: publication.completeRevision() } : command,
         { current },
       );
     } catch (error) {
@@ -50,7 +48,11 @@ async function readPairing(
       return undefined;
     }
     if (reply?.ok && "bindings" in reply) {
-      publication.publish(reply.revision, reply.bindings, reply.type === "devicePairing.list");
+      publication.publish(
+        reply.revision,
+        reply.bindings,
+        reply.bindingsComplete === true || reply.type === "devicePairing.list",
+      );
     } else if (!reply) {
       publication.publish("missing", [], true);
     }

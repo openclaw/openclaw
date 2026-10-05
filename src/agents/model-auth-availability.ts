@@ -6,6 +6,7 @@ import {
 import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   ProviderModelRouteAuthRequirement,
@@ -46,6 +47,7 @@ import {
   resolveProfileUnusableUntil,
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { codexNativeRouteAvailability } from "./model-auth-availability-native.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
 import type {
   ModelAuthAvailability,
@@ -834,6 +836,7 @@ export function createModelAuthAvailabilityResolver(
       boundProfileId?: string;
       profileIds?: readonly string[];
       preserveProfilePriority?: boolean;
+      ignoreDirectFallback?: boolean;
     } = {},
   ) => {
     const { profileLock, boundProfileId } = options;
@@ -860,7 +863,9 @@ export function createModelAuthAvailabilityResolver(
       preferredProfileId: ref.pinnedProfileId ?? ref.preferredProfileId,
       explicitOrder: order.hasExplicitOrder,
       preserveProfilePriority: options.preserveProfilePriority,
-      ...(policy.hasDirectFallback ? { fallback: policy.direct } : {}),
+      ...(policy.hasDirectFallback && !options.ignoreDirectFallback
+        ? { fallback: policy.direct }
+        : {}),
     });
   };
   const automaticSourceRejection = (
@@ -1002,6 +1007,7 @@ export function createModelAuthAvailabilityResolver(
     const configuredAuthMode = ref.pinnedProfileId
       ? undefined
       : resolveConfiguredOpenAIAuthMode(params.cfg);
+    const nativeCommandAuth = configuredAuthMode === "native-command";
     const awsSdkTerminal = !modelLock && configuredAuthMode === "aws-sdk";
     const baseTarget = prepareAuthTarget(provider, ref);
     const basePolicy = directPolicy(provider, baseTarget);
@@ -1121,8 +1127,14 @@ export function createModelAuthAvailabilityResolver(
       provider,
       targetForMode(selectedConfiguredMode ?? basePolicy.direct.mode),
     );
-    let profileIds = orderResolution.profileIds;
-    if (profileIds.length === 0 && !modelLock && !bindingProfileId && !policy.required) {
+    let profileIds = nativeCommandAuth ? [] : orderResolution.profileIds;
+    if (
+      profileIds.length === 0 &&
+      !nativeCommandAuth &&
+      !modelLock &&
+      !bindingProfileId &&
+      !policy.required
+    ) {
       const evidenceProfileId = firstProfileEvidenceId(provider);
       if (evidenceProfileId) {
         profileIds = [evidenceProfileId];
@@ -1142,6 +1154,7 @@ export function createModelAuthAvailabilityResolver(
         profileLock: modelLock,
         boundProfileId: bindingProfileId,
         profileIds,
+        ignoreDirectFallback: nativeCommandAuth,
         preserveProfilePriority: Boolean(ref.pinnedProfileId),
       },
     );
@@ -1149,11 +1162,12 @@ export function createModelAuthAvailabilityResolver(
       !modelLock &&
       !ref.preferredProfileId &&
       !ref.pinnedProfileId &&
-      !selectedConfiguredMode &&
+      (!selectedConfiguredMode || nativeCommandAuth) &&
+      (!nativeCommandAuth || !basePolicy.hasDirectMaterial) &&
       (policy.binding.kind === "none" ||
         (policy.binding.kind === "marker" && !policy.markerUsable)) &&
       sourcePlan.kind === "automatic" &&
-      !sourcePlan.profiles.explicitOrder &&
+      (nativeCommandAuth || !sourcePlan.profiles.explicitOrder) &&
       (sourcePlan.profiles.kind === "empty" || sourcePlan.profiles.kind === "all-unavailable") &&
       synthetic.has("codex") &&
       routeResolution.routes.every((route) =>
@@ -1167,7 +1181,7 @@ export function createModelAuthAvailabilityResolver(
       configuredAuthMode: automaticRouteAuthMode,
       ...(syntheticCodexOwnsAuth ? { runtimeAuthOwner: { id: "codex" } } : {}),
       ...(syntheticCodexOwnsAuth &&
-      resolveMergedModelProviderConfig(params.cfg, provider) === undefined
+      (resolveMergedModelProviderConfig(params.cfg, provider) === undefined || nativeCommandAuth)
         ? { allowNativeAuthOnSingleRoute: true }
         : {}),
     });
@@ -1210,27 +1224,12 @@ export function createModelAuthAvailabilityResolver(
         agentId: params.agentId,
       })
     ) {
-      const native = params.preparedRuntimeAuthModes?.codex;
-      const mode =
-        typeof native === "object" && native.source === "native" ? native.mode : undefined;
-      const requirement = resolveProviderModelRouteAuthRequirement(mode);
-      const selectedRoute = requirement
-        ? routeResolution.routes.find((route) => route.authRequirement === requirement)
-        : undefined;
-      return {
-        availability: mode
-          ? Boolean(selectedRoute)
-          : params.preparedSyntheticAuthComplete
-            ? false
-            : undefined,
-        availabilityAuthoritative: true,
+      return codexNativeRouteAvailability({
         routeResolution,
-        ...(selectedRoute
-          ? { selectedRoute, selectedAuthMode: mode }
-          : { unavailableReason: "missing-auth" }),
-        evidence: "runtime",
-        runtimeAuth: { id: "codex", source: "native" },
-      };
+        nativeCommandAuth,
+        nativeAuth: params.preparedRuntimeAuthModes?.codex,
+        preparedSyntheticAuthComplete: params.preparedSyntheticAuthComplete,
+      });
     }
     if (routeAuthDecision.kind === "deferred" && syntheticCodexOwnsAuth) {
       return {

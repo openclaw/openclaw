@@ -9,6 +9,7 @@ import {
   encodeCodexNodeGitHubControl,
   parseCodexNodeGitHubControl,
 } from "../node-github-refresh.js";
+import { bindCodexNodeResourceDelivery } from "./node-resource-delivery.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
@@ -196,6 +197,64 @@ afterEach(async () => {
 });
 
 describe("Codex paired-device exec-server relay", () => {
+  it.each([false, true])(
+    "keeps initialize usable during private delivery and fences its receipt (revoked: %s)",
+    async (revoked) => {
+      const transport = createNodeChannel();
+      const delivered = createDeferred<void>();
+      const sent = createDeferred<Uint8Array>();
+      const listener = vi.fn();
+      let current = true;
+      transport.channel.send.mockImplementation(async (message) => {
+        const request = JSON.parse(Buffer.from(message).toString("utf8"));
+        if (request.method === "openclaw/resources/settle") {
+          sent.resolve(message);
+        }
+      });
+      const bound = bindCodexNodeResourceDelivery(
+        transport.channel,
+        {
+          wait: async () => delivered.promise,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("resource owner revoked");
+            }
+          },
+        },
+        new AbortController().signal,
+        () => {
+          if (!current) {
+            throw new Error("connection authority revoked");
+          }
+        },
+      );
+      const unsubscribe = bound.onMessage(listener);
+      await bound.send(Buffer.from(JSON.stringify({ id: 1, method: "initialize", params: {} })));
+      await transport.receive(Buffer.from(JSON.stringify({ id: 1, result: {} })));
+      expect(listener).toHaveBeenCalledOnce();
+      expect(transport.channel.send).toHaveBeenCalledOnce();
+      current = !revoked;
+      delivered.resolve();
+      if (revoked) {
+        await transport.channel.closed;
+        expect(transport.channel.send).toHaveBeenCalledOnce();
+      } else {
+        const control = JSON.parse(Buffer.from(await sent.promise).toString("utf8"));
+        expect(control).toMatchObject({
+          method: "openclaw/resources/settle",
+          params: { status: "ready" },
+        });
+        await transport.receive(Buffer.from(JSON.stringify({ id: control.id, result: {} })));
+        expect(listener).toHaveBeenCalledOnce();
+      }
+      unsubscribe();
+      await expect(bound.send(Buffer.from("{}"))).rejects.toThrow();
+      await transport.receive(Buffer.from(JSON.stringify({ id: 2, result: {} })));
+      expect(listener).toHaveBeenCalledOnce();
+      bound.close();
+    },
+  );
+
   it("joins credential retirement before releasing the leased exec server", async () => {
     const retiring = createDeferred<void>();
     const finish = createDeferred<void>();

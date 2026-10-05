@@ -19,6 +19,7 @@ const PROFILE_KEYS = new Set([
   "ttl",
   "target",
   "warmImage",
+  "azureUserAssignedIdentityResourceId",
 ]);
 const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/u;
 const GO_DURATION_TOKEN_PATTERN = /(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gu;
@@ -50,6 +51,7 @@ type CrabboxProfile = {
   setup?: string;
   setupEnv?: string[];
   warmImage?: boolean;
+  azureUserAssignedIdentityResourceId?: string;
 };
 
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
@@ -200,6 +202,19 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     }
   }
   const desktop = profile.desktop;
+  const azureUserAssignedIdentityResourceId = profile.azureUserAssignedIdentityResourceId;
+  if (
+    azureUserAssignedIdentityResourceId !== undefined &&
+    (provider !== "azure" ||
+      typeof azureUserAssignedIdentityResourceId !== "string" ||
+      !/^\/subscriptions\/[0-9a-f-]{36}\/resourceGroups\/[^/]+\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[^/]+$/iu.test(
+        azureUserAssignedIdentityResourceId,
+      ))
+  ) {
+    throw new WorkerProviderError(
+      "Crabbox Azure identity must be a full user-assigned managed identity resource ID",
+    );
+  }
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
   }
@@ -229,6 +244,7 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     ttl,
     target,
     warmImage,
+    ...(azureUserAssignedIdentityResourceId ? { azureUserAssignedIdentityResourceId } : {}),
   };
 }
 
@@ -286,6 +302,9 @@ export function resolveCrabboxWarmImageProfileKey(
         desktop: profile.desktop ?? false,
         // Exact class is intentionally conservative; cross-class reuse comes later.
         machineClass: profile.class,
+        ...(profile.azureUserAssignedIdentityResourceId
+          ? { azureUserAssignedIdentityResourceId: profile.azureUserAssignedIdentityResourceId }
+          : {}),
         ...(projectKey ? { projectKey } : {}),
       }),
     )
@@ -391,6 +410,9 @@ export function buildCrabboxAllocationArgs(
     "--tailscale=false",
     ...(profile.class ? ["--class", profile.class] : []),
     ...(profile.target === "linux" ? ["--target", "linux"] : []),
+    ...(profile.azureUserAssignedIdentityResourceId
+      ? ["--azure-user-assigned-identity-resource-id", profile.azureUserAssignedIdentityResourceId]
+      : []),
     ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),
     ...(profile.target === "windows/normal"
       ? ["--target", "windows", "--windows-mode", "normal"]

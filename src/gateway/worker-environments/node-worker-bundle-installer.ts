@@ -1,6 +1,6 @@
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import {
   parseNodeWorkerBundleInstallResult,
@@ -13,6 +13,7 @@ import type {
 } from "../node-registry-private.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import type { NodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 
 export type GatewayNodeWorkerBundleInstallObservation = {
@@ -97,11 +98,38 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       if (!transport) {
         throw new Error("Device worker node transport is unavailable");
       }
-      const node = await racePromiseWithAbortSignal(
-        transport.getCurrentNode(params.deviceId),
-        params.signal,
+      // Discovery and dispatch consume one installation budget, including reconnects.
+      const timeoutMs = workerBootstrapOperationTimeoutMs(params.artifact);
+      const deadlineAtMs = performance.now() + timeoutMs;
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const drain = getGatewayRestartDrainSignal();
+      const signal = AbortSignal.any(
+        params.signal ? [params.signal, timeout, drain] : [timeout, drain],
       );
-      params.signal?.throwIfAborted();
+      const assertBudgetCurrent = () => {
+        signal.throwIfAborted();
+        if (performance.now() >= deadlineAtMs) {
+          throw new DOMException("Device worker installation deadline expired", "TimeoutError");
+        }
+        params.assertCurrent?.();
+      };
+      const assertDiscoveryCurrent = () => {
+        assertBudgetCurrent();
+        if (options.getTransport() !== transport) {
+          throw new Error("Device worker node transport changed during installation");
+        }
+      };
+      assertDiscoveryCurrent();
+      const node = await raceNodeWorkerOperation(
+        transport.waitForCurrentNode
+          ? transport.waitForCurrentNode(params.deviceId, {
+              signal,
+              assertCurrent: assertDiscoveryCurrent,
+            })
+          : transport.getCurrentNode(params.deviceId),
+        signal,
+      );
+      assertDiscoveryCurrent();
       if (!node) {
         throw new Error("Device worker node is not connected with the installer dialect");
       }
@@ -109,7 +137,8 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       const isAuthorized = () => {
         params.assertCurrent?.();
         return (
-          !params.signal?.aborted &&
+          !signal.aborted &&
+          performance.now() < deadlineAtMs &&
           options.getTransport() === transport &&
           transport.isCurrent(node)
         );
@@ -176,7 +205,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           artifact,
           ...(bundlePrewarm ? { bundlePrewarm } : {}),
           isAuthorized,
-          signal: params.signal,
+          signal,
           onProgress: (servedBytes) => {
             const updatedAtMs = now();
             if (serve?.interrupted) {
@@ -241,29 +270,34 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
             );
           },
         });
-        const result = await transport.invoke({
-          node,
-          command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
-          params: prepared.input,
-          timeoutMs: workerBootstrapOperationTimeoutMs(artifact),
-          idempotencyKey: `${options.gatewayNamespace}:${artifact.bundleHash}`,
-          isDispatchAuthorized: isAuthorized,
-          ...(params.signal ? { signal: params.signal } : {}),
-        });
+        const result = await raceNodeWorkerOperation(
+          transport.invoke({
+            node,
+            command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+            params: prepared.input,
+            timeoutMs: Math.ceil(deadlineAtMs - performance.now()),
+            idempotencyKey: `${options.gatewayNamespace}:${artifact.bundleHash}`,
+            isDispatchAuthorized: isAuthorized,
+            signal,
+            onDispatchReady: (invokeId) => {
+              try {
+                options.log.info(
+                  `${prefix} invoke dispatched: environment=${params.environmentId} conn=${node.connId} invoke=${invokeId} remoteEffects=unknown`,
+                );
+              } catch {
+                // Logging is not installation authority or a node acknowledgement.
+              }
+            },
+          }),
+          signal,
+        );
+        assertBudgetCurrent();
         if (!isAuthorized()) {
-          if (params.signal?.aborted) {
-            throw new Error("Device worker installation connection is no longer current");
-          }
-          params.assertCurrent?.();
           const replacement =
             options.getTransport() === transport
-              ? await racePromiseWithAbortSignal(
-                  transport.getCurrentNode(params.deviceId),
-                  params.signal,
-                )
+              ? await raceNodeWorkerOperation(transport.getCurrentNode(params.deviceId), signal)
               : undefined;
-          params.signal?.throwIfAborted();
-          params.assertCurrent?.();
+          assertBudgetCurrent();
           if (
             options.getTransport() !== transport ||
             replacement === undefined ||

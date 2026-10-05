@@ -42,7 +42,6 @@ import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-r
 import { clearCodexBindingForClient } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
-  createIsolatedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type {
@@ -201,7 +200,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
   };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
-    if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
+    if (connection.callerOwnedAttemptClient) {
       // Close the authorized node lease first; losing its socket first is a real disconnect.
       await releaseSandboxExecEnvironment();
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;

@@ -22,6 +22,7 @@ import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
+import { scheduleWorkerRuntimeArtifactPreparation } from "./server-worker-artifact-preparation.js";
 import { createWorkerRuntimeInstallProgressPublisher } from "./server-worker-runtime-install-progress.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
@@ -63,6 +64,7 @@ export type GatewayWorkerEnvironmentStartupState = Awaited<
 
 export type GatewayWorkerEnvironmentRuntime = {
   workerEnvironmentService?: WorkerEnvironmentService;
+  prepareRuntimeArtifacts?: () => void;
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
@@ -182,6 +184,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     rejectExistingWorkerClaims: true,
   });
   const workerEnvironmentLog = params.log.child("worker-environments");
+  const artifactPreparation = params.scheduler.scope();
   const listRetainedBundleHashes = () =>
     listRetainedWorkerBundleHashes({
       environments: params.startup.store.list(),
@@ -308,6 +311,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     return artifact;
   };
   const prepareNodeArtifact = async (profileSnapshot: WorkerProfile, signal?: AbortSignal) => {
+    artifactPreparation.signal.throwIfAborted();
     const mode = profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn";
     let registry = params.getPluginRegistry();
     let metadata = getGatewayPluginMetadataSnapshot();
@@ -319,6 +323,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
           import("./worker-environments/node-bootstrap-plugins.js"),
         ]);
       signal?.throwIfAborted();
+      artifactPreparation.signal.throwIfAborted();
       registry = params.getPluginRegistry();
       metadata = getGatewayPluginMetadataSnapshot();
       generation = bootstrapProducers.get(mode);
@@ -352,9 +357,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       }
     }
     const artifact = await generation.producer.prepare(signal);
+    artifactPreparation.signal.throwIfAborted();
     return {
       artifact,
       assertCurrent: () => {
+        artifactPreparation.signal.throwIfAborted();
         if (
           bootstrapProducers.get(mode) !== generation ||
           params.getPluginRegistry() !== generation.registry ||
@@ -513,8 +520,12 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     closeNodeRuntime: nodeEnrollment.closeRuntime,
     closeNodeEnrollment: nodeEnrollment.close,
     retireNodeEnrollment: nodeEnrollment.retire,
-    stopNodeEnrollmentWaits: nodeEnrollment.stop,
+    stopNodeEnrollmentWaits: () => {
+      artifactPreparation.beginClose();
+      nodeEnrollment.stop();
+    },
     closeNodeBootstrapArtifacts: async () => {
+      await artifactPreparation.stop();
       await Promise.all([
         ...[...bootstrapProducers.values()].map(({ producer }) => producer.close()),
         ...retiringBootstrapProducers,
@@ -610,6 +621,16 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     }
     throw error;
   }
+  const prepareRuntimeArtifacts = () =>
+    scheduleWorkerRuntimeArtifactPreparation({
+      scope: artifactPreparation,
+      getConfig: getRuntimeConfig,
+      resolveProvider: (id) => resolveWorkerProvider(params.getPluginRegistry(), id),
+      hasMetadata: () => getGatewayPluginMetadataSnapshot() !== undefined,
+      prepareBundle: (signal) => prepareInstallation("bundle", signal),
+      prepareBootstrap: prepareNodeArtifact,
+      log: workerEnvironmentLog,
+    });
   bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.resolveAvailability);
   bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
     const environmentIds = params.startup.store
@@ -663,6 +684,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       : undefined;
   return {
     workerEnvironmentService,
+    prepareRuntimeArtifacts,
     workerLiveEvents,
     workerTunnelManager,
     nodeWorkerGatewayNamespace,

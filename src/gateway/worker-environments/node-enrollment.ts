@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isLinkLocalIpAddress, isUnspecifiedIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -41,6 +43,41 @@ type NodeEnrollmentBinding = {
   setupCredential?: { setupId: string; token: string; digest: string };
   close: () => void;
 };
+
+async function readWorkerCodexConfiguration() {
+  const names = [
+    "OPENCLAW_WORKER_CODEX_CONFIG_PATH",
+    "OPENCLAW_WORKER_CODEX_HELPER_PATH",
+    "FACTORY_WORKER_LLM_CONFIG_VERSION",
+  ] as const;
+  const [configPath, helperPath, configVersion] = names.map((name) => process.env[name]?.trim());
+  if (!configPath && !helperPath && !configVersion) {
+    return undefined;
+  }
+  if (!configPath || !helperPath || !configVersion) {
+    throw new Error("Worker Codex configuration is incomplete");
+  }
+  if (
+    !/^[a-f0-9]{64}$/.test(configVersion) ||
+    !path.isAbsolute(configPath) ||
+    !path.isAbsolute(helperPath)
+  ) {
+    throw new Error("Worker Codex configuration version or source paths are invalid");
+  }
+  const readSource = async (file: string) => {
+    const stat = await fs.stat(file);
+    if (!stat.isFile() || stat.size < 1 || stat.size > 16 * 1024) {
+      throw new Error("Worker Codex configuration source is unavailable or exceeds its size limit");
+    }
+    return await fs.readFile(file);
+  };
+  const [config, helper] = await Promise.all([readSource(configPath), readSource(helperPath)]);
+  return {
+    configToml: config.toString("utf8"),
+    helperScript: helper.toString("utf8"),
+    configVersion,
+  };
+}
 
 type WorkerNodeEnrollmentManagerOptions = {
   store: WorkerEnvironmentStore;
@@ -318,6 +355,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           live.nodeDeviceId === owner.nodeDeviceId
         );
       };
+      const workerCodex = await readWorkerCodexConfiguration();
+      requireCurrent();
       const enrollment: WorkerNodeEnrollment = {
         ...mode,
         ...grantRuntime(
@@ -327,6 +366,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         ),
         openclawVersion: prepared.artifact.openclawVersion,
         displayName: truncateUtf16Safe(`Cloud worker ${owner.profileId}`, 64),
+        ...(workerCodex ? { workerCodex } : {}),
         signal: enrollmentSignal,
         waitForDeviceId: async () => {
           const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;

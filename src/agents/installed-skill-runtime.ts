@@ -43,7 +43,16 @@ export function prepareInstalledSkillCatalog(params: {
     .map((skill) => {
       let reader: CodeModeSkillReader | undefined;
       let readSearchContent: InstalledSkill["readSearchContent"];
-      if (sandbox?.enabled) {
+      if (sandbox?.enabled && !sandbox.fsBridge && sandbox.skillResources) {
+        const resources = sandbox.skillResources;
+        reader = async ({ signal }) => {
+          params.assertCurrent?.();
+          const content = await resources.readInstructions(skill.filePath, { signal });
+          params.assertCurrent?.();
+          return content;
+        };
+        // Delivered resources support whole instructions, not bounded filesystem search.
+      } else if (sandbox?.enabled) {
         const readInstructions = async (maxBytes: number | undefined, signal?: AbortSignal) => {
           params.assertCurrent?.();
           if (!sandbox.fsBridge) {

@@ -10,6 +10,13 @@ sidebarTitle: "Remote placement"
 
 How Codex sessions place native execution off the Gateway while the app-server, model connection, and transcript stay Gateway-owned. Part of the [Codex harness](/plugins/codex-harness) guide; [Where each section moved](/plugins/codex-harness#where-each-section-moved) lists every section.
 
+For background repository preparation, selected skills with copied resources
+keep their turn-owned delivery fence. Conversational inference can begin before
+checkout and resource delivery finish; native file and process operations wait
+at use. Both worker-hosted app-server and Gateway-hosted exec-server connections
+require the node's `private-resource-readiness` command feature when delivery is
+pending. Update and reconnect an older node instead of bypassing this fence.
+
 ## Run Codex on a paired device
 
 Codex sessions can place native command, filesystem, capability-discovery, and

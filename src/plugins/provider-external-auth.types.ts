@@ -22,7 +22,7 @@ export type ProviderResolveSyntheticAuthContext = {
 export type ProviderSyntheticAuthResult = {
   apiKey: string;
   source: string;
-  mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
+  mode: Exclude<ModelProviderAuthMode, "aws-sdk" | "native-command">;
   expiresAt?: number;
   /** Native presence authorizes only this runtime, never a provider bearer request. */
   nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };

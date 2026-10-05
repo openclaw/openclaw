@@ -159,7 +159,7 @@ it.each([
         ? "TEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded\nTEAMCLAW_SETUP_V1 stage=credential_acquisition outcome=started elapsedMs=0\nTEAMCLAW_SETUP_V1 stage=credential_transport outcome=succeeded elapsedMs=7\n" +
           (succeeded
             ? "TEAMCLAW_SETUP_V1 stage=credential_acquisition outcome=succeeded elapsedMs=2147483647\n"
-            : "TEAMCLAW_SETUP_V1 stage=credential_acquisition outcome=failed exit=255 elapsedMs=9\n")
+            : 'TEAMCLAW_SETUP_V1 stage=credential_acquisition outcome=failed exit=255 elapsedMs=9\n{"event":"worker_feed_managed_identity","code":"http_rejected","httpStatus":400,"imdsErrorCode":"invalid_request","imdsErrorCategory":"identity_not_found","extra":"PRIVATE_CANARY"}\n')
         : outcome === "sequence-bound"
           ? "TEAMCLAW_SETUP_V1 stage=env_load outcome=started elapsedMs=0\n".repeat(30) +
             "TEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded\n"
@@ -174,7 +174,10 @@ it.each([
                       `TEAMCLAW_SETUP_V1 stage=credential_transport outcome=succeeded elapsedMs=${value}\n`,
                   )
                   .join("") +
-                "TEAMCLAW_SETUP_V1 stage=env_load outcome=failed elapsedMs=1 exit=1\nTEAMCLAW_SETUP_V1 stage=env_load outcome=failed exit=01\nTEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded elapsedMs=1 extra=private\n";
+                "TEAMCLAW_SETUP_V1 stage=env_load outcome=failed elapsedMs=1 exit=1\nTEAMCLAW_SETUP_V1 stage=env_load outcome=failed exit=01\nTEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded elapsedMs=1 extra=private\n" +
+                '{"event":"worker_feed_managed_identity","code":"PRIVATE_CANARY","httpStatus":400}\n' +
+                '{"event":"worker_feed_managed_identity","code":"http_rejected","httpStatus":"PRIVATE_CANARY"}\n' +
+                '{"event":"worker_feed_managed_identity","code":"http_rejected","httpStatus":600}\n';
     const service = createNodeWorkspaceTransferService({
       temporaryRoot: tempDirs.make("node-setup-diagnostics-"),
       getOwner: () => ({
@@ -194,9 +197,22 @@ it.each([
           workspaceDir: "/node/workspace",
           stdout: setup
             ? "private setup stdout"
-            : command.argv.includes("rev-parse")
-              ? baseCommit
-              : baseManifestRef,
+            : command.argv.at(-1) === "memo-v1"
+              ? JSON.stringify({
+                  version: 1,
+                  manifestRef: baseManifestRef,
+                  memo: [],
+                  metrics: {
+                    contentHashCount: 0,
+                    contentHashDurationMs: 0,
+                    memoHitCount: 0,
+                    memoTruncatedCount: 0,
+                    totalDurationMs: 0,
+                  },
+                })
+              : command.argv.includes("rev-parse")
+                ? baseCommit
+                : baseManifestRef,
           stderr: setup
             ? outcome === "partial"
               ? "private setup stderr\nTEAMCLAW_SETUP_V1 stage=provenance outcome=started"
@@ -279,6 +295,12 @@ it.each([
             helperExitCode: 255,
             helperElapsedMs: 9,
             helperMarkerCount: 4,
+            workerFeedManagedIdentity: {
+              diagnosticCode: "http_rejected",
+              httpStatus: 400,
+              imdsErrorCode: "invalid_request",
+              imdsErrorCategory: "identity_not_found",
+            },
           });
           expect(details.helperMarkers).toEqual([
             expect.objectContaining({ helperStage: "env_load", helperOutcome: "succeeded" }),
@@ -297,6 +319,7 @@ it.each([
         } else {
           expect(details.helperStage).toBeUndefined();
           expect(details.signal).toBeUndefined();
+          expect(details.workerFeedManagedIdentity).toBeUndefined();
         }
         const serialized = JSON.stringify(details);
         for (const value of [
@@ -574,7 +597,11 @@ it.each([
           >[0]
         | undefined;
       let revision = 0;
-      const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
+      const capture = async (
+        active = actions,
+        directory = first.remoteWorkspaceDir,
+        beforeVerify?: () => Promise<void>,
+      ) => {
         const firstCapture = manifestCaptures.length;
         const result = await active.reconcileWorkspace({
           remoteWorkspaceDir: directory,
@@ -622,6 +649,7 @@ it.each([
             },
           },
         });
+        await beforeVerify?.();
         await verifyReconciledWorkspaceFinal(result, {
           assertActive: async () => {},
           resume: async () => {},
@@ -640,9 +668,18 @@ it.each([
       }
       // Startup must accept setup output even when GitHub normalization is unavailable.
       const initialCaptures = await capture();
-      expect(initialCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      expect(initialCaptures[0]!.metrics.contentHashCount).toBe(0);
+      expect(initialCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
+      const initialCheckpoint = checkpoint;
+      await expect(
+        capture(actions, first.remoteWorkspaceDir, () =>
+          fs.writeFile(path.join(first.remoteWorkspaceDir, "tracked.txt"), "late mutation\n"),
+        ),
+      ).rejects.toThrow("Repository workspace changed during checkpoint capture");
+      expect(checkpoint).toBe(initialCheckpoint);
+      await fs.writeFile(path.join(first.remoteWorkspaceDir, "tracked.txt"), "base\n");
       await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
       await fs.writeFile(
         path.join(first.remoteWorkspaceDir, "published[1].ignored"),

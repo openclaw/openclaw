@@ -9,6 +9,7 @@ const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
 // Tolerate brief network pauses while resuming stalls well before the command deadline.
 const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
+const CLOUD_WORKER_CODEX_ENV = "CRABBOX_WORKER_CODEX_CONFIG_BASE64";
 
 export type CrabboxWorkerNodeEnrollment = Awaited<
   ReturnType<
@@ -23,7 +24,11 @@ export function createCrabboxNodeEnrollmentSetup(params: {
   leaseId: string;
   target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
-  return createCrabboxNodeSetup({ ...params, nodeBootstrap: params.enrollment.nodeBootstrap });
+  return createCrabboxNodeSetup({
+    ...params,
+    nodeBootstrap: params.enrollment.nodeBootstrap,
+    workerCodex: params.enrollment.workerCodex,
+  });
 }
 
 export type CrabboxWorkerNodeRuntimePreparation = Awaited<
@@ -46,6 +51,7 @@ function createCrabboxNodeSetup(params: {
   leaseId: string;
   enrollment?: CrabboxWorkerNodeEnrollment;
   workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
+  workerCodex?: CrabboxWorkerNodeEnrollment["workerCodex"];
   desktop?: boolean;
   desktopSetup?: string;
   target?: CrabboxOperatingSystem;
@@ -112,6 +118,33 @@ setPhase("preparation");
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const stageWorkerCodex = () => {
+    if (!workerCodexBase64) return;
+    let settings;
+    try { settings = JSON.parse(Buffer.from(workerCodexBase64, "base64").toString("utf8")); }
+    catch { throw new Error("Cloud worker Codex settings are invalid"); }
+    const { configToml, helperScript, configVersion } = settings;
+    if (![configToml, helperScript, configVersion].every((value) => typeof value === "string" && value.length > 0) || !/^[a-f0-9]{64}$/.test(configVersion)) throw new Error("Cloud worker Codex settings are incomplete");
+    const originalHelper = "/opt/teamclaw/autodev-token.mjs";
+    if (configToml.split(originalHelper).length !== 2) throw new Error("Cloud worker Codex helper path is missing or ambiguous");
+    const directory = path.join(stateDir, "codex-runtime");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (!fs.lstatSync(directory).isDirectory() || fs.realpathSync(directory) !== directory) throw new Error("Cloud worker Codex settings directory is unsafe");
+    if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+    const versionFile = path.join(directory, "version");
+    if (fs.existsSync(versionFile) && fs.readFileSync(versionFile, "utf8") !== configVersion) throw new Error("Cloud worker Codex version changed on an existing lease; reprovision the worker");
+    const writePrivate = (name, content) => {
+      const destination = path.join(directory, name);
+      const temporary = destination + "." + crypto.randomUUID();
+      try {
+        fs.writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, destination);
+      } finally { fs.rmSync(temporary, { force: true }); }
+    };
+    writePrivate("autodev-token.mjs", helperScript);
+    writePrivate("config.toml", configToml.replace(originalHelper, path.join(directory, "autodev-token.mjs")));
+    writePrivate("version", configVersion);
+  };
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
@@ -168,6 +201,7 @@ setPhase("preparation");
   if (mode) {
     fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
     if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
+    stageWorkerCodex();
   }
   ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
   if (desktopTarget === "macos") finishDesktopSetup();
@@ -490,6 +524,14 @@ setPhase("preparation");
         workerBundle: params.workerBundle?.token,
       }),
       ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
+      ...(params.workerCodex
+        ? {
+            [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
+              JSON.stringify(params.workerCodex),
+              "utf8",
+            ).toString("base64"),
+          }
+        : {}),
     },
   };
 }

@@ -402,6 +402,22 @@ The sandbox exec-server option does not bypass those tool restrictions. Node-bac
 `remote-exec` on a paired device or cloud worker instead uses its
 placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection. Ending the connection removes that Codex state and preserves the prepared project home.
 
+For a cloud worker that must host model inference, set
+`plugins.entries.codex.config.appServer.workerHostedCloud: true` and configure
+the selected Responses provider with `auth: "native-command"` and an explicit
+`codex` agent runtime. A custom provider is admitted only when it is unowned,
+uses an HTTPS Responses endpoint, has no authored request transport overrides,
+and the selected model declares Codex as its runtime. The built-in provider ID
+defaults remain `codex` and `openai`. The Gateway and worker must each have a
+private Codex home whose selected Responses provider declares `auth.command`.
+The worker enrollment carries its helper and configuration through a private per-lease
+channel, and its node advertises `codex.app-server.stdio.v1.<config-version>`
+only after the pinned binary and private settings pass readiness. Placement
+requires that exact versioned command. Model calls and native repository tools
+then run in the worker's Codex process; disconnect or failed placement reports
+an error without starting a Gateway app-server. Isolated completions, including
+session titles, use the native Codex harness for this provider.
+
 Some placements require native execution. Node-backed `remote-exec` turns reject
 a limited profile when they cannot run without native tools. A native-owned
 attached Codex thread can also reject a restricted turn when applying the policy
@@ -488,6 +504,10 @@ broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes): `openai/gpt-6-astra` is the model
 ref, `codex` is the runtime, and Telegram, Discord, Slack, or another
 channel is the communication surface.
+
+Subscription retention checks the initiating source's concrete processes. Another turn's background process cannot grant warm reuse to a foreground source whose authority has closed. Cleanup keeps the exact physical claim until the final protected process settles, then unsubscribes once; it cannot release a successor. A retired connection is replaced through normal client acquisition.
+
+When native ingress definitively rejects steering before enqueue, cancellation during overload backoff leaves that input unaccepted. A lost response still retains the existing accepted-but-unconfirmed outcome.
 
 ## Saved-account usage
 

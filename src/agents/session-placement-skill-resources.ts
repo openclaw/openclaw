@@ -1,12 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
+import type { SkillResourceSourceReader, SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 
 type ResourceContext = {
   source: SkillSnapshot;
   snapshot: SkillSnapshot;
   mounts: Array<{ hostPath: string; containerPath: string }>;
   skillUsagePaths: SkillUsagePath[];
+  skillResources?: Pick<SkillResourceSourceReader, "readInstructions">;
+  resourceReadiness?: {
+    wait: (signal: AbortSignal) => Promise<void>;
+    assertCurrent: () => void;
+  };
   assertCurrent: () => void;
 };
 const resources = resolveGlobalSingleton(
@@ -40,6 +45,8 @@ export function resolveSessionSkillResourceSandboxInputs() {
     context && {
       readOnlyResourceMounts: context.mounts,
       skillUsagePaths: context.skillUsagePaths,
+      skillResources: context.skillResources,
+      ...(context.resourceReadiness ? { resourceReadiness: context.resourceReadiness } : {}),
     }
   );
 }

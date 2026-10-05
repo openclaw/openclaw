@@ -26,7 +26,7 @@ import type { NodeWorkerProcessInput } from "../worker/worker-process-observatio
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerChildLifecycle } from "./node-worker-child-lifecycle.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
-import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
+import { nodeWorkerHomeEnv } from "./node-worker-environment.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
@@ -41,6 +41,7 @@ import {
   nodeWorkerEnvironmentBinding,
   nodeWorkerEnvironmentKey,
   nodeWorkerEnvironmentMatches,
+  prepareNodeWorkerSupervisorEnvironment,
   type NodeWorkerPendingAdmission,
   type NodeWorkerRunningChild,
   type NodeWorkerSupervisorOptions,
@@ -75,11 +76,7 @@ class NodeWorkerSupervisor {
 
   constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
-    const startup = {
-      nativeInferenceSnapshot: options.nativeInferenceSnapshot,
-      workerEnv: snapshotNodeWorkerEnv(env),
-      engineEnv: { ...process.env, ...env },
-    };
+    const startup = prepareNodeWorkerSupervisorEnvironment(options);
     const bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
     );
@@ -91,10 +88,14 @@ class NodeWorkerSupervisor {
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
       : undefined;
-    const containerImage = options.containerImage;
+    const workspaceOptions = {
+      env: this.workerEnv,
+      managedIdentityTransport: startup.managedIdentityTransport,
+      platformTrust: startup.platformTrust,
+    };
     this.workspace =
       options.workspace ??
-      new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env: this.workerEnv });
+      new NodeWorkerWorkspaceRuntime({ root: bundleRoot, ...workspaceOptions });
     this.capacity = new NodeWorkerCapacity(this.store, options);
     this.recoverRunning = createNodeWorkerLaunchRecovery({
       store: this.store,
@@ -111,7 +112,7 @@ class NodeWorkerSupervisor {
       capacity: this.capacity,
       containerEngine,
       containerLifecycle: this.containerLifecycle,
-      containerImage,
+      containerImage: options.containerImage,
       starting: this.starting,
       initialize: () => this.initialize(),
       isClosed: () => this.closed,
@@ -353,7 +354,7 @@ class NodeWorkerSupervisor {
     };
     signal?.addEventListener("abort", cancelClaimed, { once: true });
     const startup = this.children.startChild({
-      workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
+      workerEnv: homeDir ? nodeWorkerHomeEnv(this.workerEnv, homeDir) : this.workerEnv,
       input,
       descriptor,
       supervisor,
@@ -501,6 +502,7 @@ class NodeWorkerSupervisor {
   async stopEnvironment(expected: NodeWorkerEnvironmentStopInput): Promise<void> {
     const key = nodeWorkerEnvironmentKey(expected);
     const errors: unknown[] = [];
+    this.workspace.repositoryReadiness.retire(expected.environmentId, expected.ownerEpoch);
     const admission = this.admissions.get(key);
     const matchingAdmission =
       admission && nodeWorkerEnvironmentMatches(admission.binding, expected)
@@ -685,7 +687,7 @@ class NodeWorkerSupervisor {
     const initialization = this.initializationPromise;
     const errors: unknown[] = [];
     await this.workspace.quiescence.close().catch((error: unknown) => errors.push(error));
-    await this.workspace.processes.close().catch((error: unknown) => errors.push(error));
+    await this.workspace.repositoryReadiness.settleProcessCleanup(this.workspace.processes, errors);
     await initialization?.catch((error: unknown) => errors.push(error));
     await Promise.allSettled([...this.admissions.values()].map((admission) => admission.done));
     await Promise.allSettled(this.starting.values());

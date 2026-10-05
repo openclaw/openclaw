@@ -379,40 +379,43 @@ describe("Codex app-server steering queue", () => {
     },
   );
 
-  it("does not accept a rejected steering batch when cancelled before overload retry", async () => {
-    const rejected = createDeferred<void>();
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line);
-        send({ id: request.id, error: { code: -32001, message: "overloaded" } });
-        rejected.resolve();
-      },
-    });
-    const controller = new AbortController();
-    const queue = createQueue(harness.client, {
-      signal: controller.signal,
-      withCurrent: async (write) => write(),
-    });
-    const result = queue.queue("not enqueued", { debounceMs: 0 }).then(
-      () => "accepted",
-      (error: unknown) => error,
-    );
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      await rejected.promise;
-      queue.cancel();
-      controller.abort(new Error("fixture cancelled during backoff"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(await result).toBeInstanceOf(Error);
-      expect(await result).not.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
-      expect(queue.getAcceptedMessages()).toEqual([]);
-      expect(harness.writes).toHaveLength(1);
-    } finally {
-      queue.cancel();
-      harness.client.close();
-      await result;
-    }
-  });
+  it.each([true, false])(
+    "does not accept a rejected steering batch before overload retry (commit guard: %s)",
+    async (guarded) => {
+      const rejected = createDeferred<void>();
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line);
+          send({ id: request.id, error: { code: -32001, message: "overloaded" } });
+          rejected.resolve();
+        },
+      });
+      const controller = new AbortController();
+      const queue = createQueue(harness.client, {
+        signal: controller.signal,
+        ...(guarded ? { withCurrent: async (write: () => void) => write() } : {}),
+      });
+      const result = queue.queue("not enqueued", { debounceMs: 0 }).then(
+        () => "accepted",
+        (error: unknown) => error,
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        await rejected.promise;
+        queue.cancel();
+        controller.abort(new Error("fixture cancelled during backoff"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(await result).toBeInstanceOf(Error);
+        expect(await result).not.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+        expect(queue.getAcceptedMessages()).toEqual([]);
+        expect(harness.writes).toHaveLength(1);
+      } finally {
+        queue.cancel();
+        harness.client.close();
+        await result;
+      }
+    },
+  );
 
   it("resolves only after the matching Codex user message completes", async () => {
     const request = vi.fn(async (_method: string, _params: unknown) => ({ turnId: "turn-1" }));

@@ -360,6 +360,7 @@
             "type": "string",
             "enum": ["agent", "user"]
           },
+          "workerHostedCloud": { "type": "boolean" },
           "command": { "type": "string" },
           "args": {
             "oneOf": [
@@ -673,6 +674,11 @@
     "appServer.homeScope": {
       "label": "Codex Home Scope",
       "help": "Use agent for isolated Codex state, or user to share native Codex threads, config, and authentication with Codex Desktop and the CLI.",
+      "advanced": true
+    },
+    "appServer.workerHostedCloud": {
+      "label": "Worker Hosted Cloud",
+      "help": "Use the worker's hosted Codex route for TeamClaw cloud turns.",
       "advanced": true
     },
     "appServer.command": {

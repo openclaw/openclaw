@@ -2,10 +2,17 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
+import { bindHostSkillCatalog } from "../../agents/harness/host-skills.js";
+import { readInstalledSkill } from "../../agents/installed-skill-catalog.js";
+import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
+import {
+  resolveSessionSkillResourceSandboxInputs,
+  withSessionSkillResources,
+} from "../../agents/session-placement-skill-resources.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { formatSkillsCompactForPrompt } from "../../skills/loading/skill-contract.js";
@@ -135,6 +142,8 @@ describe("remote-exec skill resources", () => {
       const hostRoot = temps.make("skill-resource-host-");
       await fs.cp(source.workspace, hostRoot, { recursive: true });
       const script = "#!/bin/sh\nprintf host-script\n";
+      const instructions = "---\ndescription: Host instructions\n---\n# Host-owned instructions\n";
+      await fs.writeFile(path.join(hostRoot, "skills/source/SKILL.md"), instructions);
       await fs.writeFile(path.join(hostRoot, "skills/source/scripts/check.sh"), script);
       const release = registerAgentWorkspaceAccess(source.workspace, {
         bridge: {
@@ -186,6 +195,23 @@ describe("remote-exec skill resources", () => {
             "utf8",
           ),
         ).toBe(script);
+        await withSessionSkillResources(resources!, async () => {
+          const sandbox = createSandboxTestContext({
+            overrides: {
+              containerWorkdir: carrier.workspace,
+              ...resolveSessionSkillResourceSandboxInputs(),
+              fsBridge: undefined,
+            },
+          });
+          const catalog = bindHostSkillCatalog({
+            snapshot: resources!.snapshot,
+            workspaceDir: source.workspace,
+            sandbox,
+            readable: true,
+            assertCurrent: () => {},
+          })();
+          await expect(readInstalledSkill(catalog, "source")).resolves.toBe(instructions);
+        });
       } finally {
         await resources?.cleanup();
         release();
@@ -426,6 +452,25 @@ describe("remote-exec skill resources", () => {
       tunnel: carrier,
       assertCurrent: () => {},
     };
+    const blockedCommand = vi.fn(() => {
+      throw new Error("repository still preparing");
+    });
+    await expect(
+      transferSkillResources({
+        ...nextTurn,
+        tunnel: { runWorkspaceCommand: blockedCommand },
+        deferDelivery: () => "empty",
+      }),
+    ).resolves.toBeUndefined();
+    expect(blockedCommand).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
+    const resourceRequest = transferSkillResources({
+      ...nextTurn,
+      snapshot,
+      tunnel: { runWorkspaceCommand: blockedCommand },
+      deferDelivery: () => "empty",
+    });
+    await expect(resourceRequest).rejects.toThrow("repository still preparing");
     await expect(
       transferSkillResources({
         ...nextTurn,

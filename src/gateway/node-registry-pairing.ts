@@ -1,4 +1,7 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { sleep } from "../utils/sleep.js";
 import type { NodeSession } from "./node-session.types.js";
 
 export type NodePairingLease = {
@@ -12,6 +15,40 @@ export type NodePairingLeaseResolution<TSession = NodePairingLease["session"]> =
   | { status: "current"; session: TSession }
   | { status: "stale"; presenceInvalidated: boolean }
   | { status: "unavailable" };
+export type NodePairingLeaseDispatchResult<TSession> =
+  | NodePairingLeaseResolution<TSession>
+  | typeof ABSOLUTE_DEADLINE_EXPIRED;
+
+/** A private worker command may reread transiently unavailable authority once, before dispatch. */
+export async function resolvePairingLeaseBeforeDispatch<TSession>(
+  resolve: () => Promise<NodePairingLeaseResolution<TSession>>,
+  options: { deadlineAtMs?: number; signal?: AbortSignal; retryUnavailable: boolean },
+): Promise<NodePairingLeaseDispatchResult<TSession>> {
+  for (let attempt = 0; ; attempt++) {
+    const resolution = await awaitWithinDeadline(
+      () => racePromiseWithAbortSignal(resolve(), options.signal),
+      options.deadlineAtMs,
+      () => performance.now(),
+    );
+    if (
+      resolution !== ABSOLUTE_DEADLINE_EXPIRED &&
+      resolution.status === "unavailable" &&
+      options.retryUnavailable &&
+      attempt === 0
+    ) {
+      const wait = await awaitWithinDeadline(
+        () => sleep(250, options.signal),
+        options.deadlineAtMs,
+        () => performance.now(),
+      );
+      if (wait !== ABSOLUTE_DEADLINE_EXPIRED) {
+        continue;
+      }
+      return ABSOLUTE_DEADLINE_EXPIRED;
+    }
+    return resolution;
+  }
+}
 
 export function pairingBindingForSession(node: {
   pairingIdentity: string;

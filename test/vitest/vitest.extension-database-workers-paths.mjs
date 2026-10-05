@@ -202,6 +202,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/transport-stdio.config.test.ts",
   "extensions/codex/src/app-server/transport-stdio.sandbox.test.ts",
   "extensions/codex/src/app-server/run-attempt-connection.test.ts",
+  "extensions/codex/src/app-server/run-attempt-worker-hosted.test.ts",
   "extensions/codex/src/app-server/remote-workspace-media.test.ts",
   "extensions/codex/src/app-server/native-provenance.test.ts",
   "extensions/codex/src/app-server/native-subagent-completion-delivery.contention.test.ts",

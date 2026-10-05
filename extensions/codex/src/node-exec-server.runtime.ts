@@ -26,6 +26,7 @@ import {
   parseCodexNodeGitHubControl,
   encodeCodexNodeGitHubControl,
 } from "./node-github-refresh.js";
+import { createCodexNodeResourceReadiness } from "./node-resource-readiness.js";
 
 const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_EXEC_SERVER_STDERR_BYTES = 4 * 1024;
@@ -37,6 +38,23 @@ const CODEX_EXEC_SERVER_TERMINATION_GRACE_MS = 1_000;
 const CODEX_EXEC_SERVER_REAP_TIMEOUT_MS = 5_000;
 const NODE_EXEC_SERVER_PLATFORM_ENVIRONMENT =
   /^(?:SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|TMPDIR)$/iu;
+
+/** Decode only valid UTF-8 runs; binary bytes outside credential text stay exact. */
+function redactNodeExecOutput(chunk: Buffer, redact: (text: string) => string): Buffer {
+  const utf8 =
+    // eslint-disable-next-line no-control-regex -- Classify all UTF-8 bytes, including binary output controls.
+    /(?:[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})+/g;
+  const parts: Buffer[] = [];
+  let offset = 0;
+  for (const match of chunk.toString("latin1").matchAll(utf8)) {
+    parts.push(chunk.subarray(offset, match.index));
+    const end = match.index + match[0].length;
+    parts.push(Buffer.from(redact(chunk.subarray(match.index, end).toString("utf8"))));
+    offset = end;
+  }
+  parts.push(chunk.subarray(offset));
+  return Buffer.concat(parts);
+}
 
 function validateNodeExecServerMessage(message: Uint8Array): Buffer {
   if (message.byteLength === 0 || message.byteLength > MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES) {
@@ -178,22 +196,44 @@ function createNodeExecServerProcessOwner(
 /** Runs the one-connection paired-node exec-server after lightweight command admission. */
 export async function runCodexNodeExecServer(params: {
   assertExecAuthorized: () => void;
-  workspace: { workspaceDir: string; homeDir?: string; release: () => void };
+  workspace: Awaited<
+    ReturnType<
+      NonNullable<
+        NonNullable<
+          Parameters<
+            import("openclaw/plugin-sdk/plugin-entry").OpenClawPluginNodeHostCommand["handle"]
+          >[2]
+        >["acquireManagedWorkspaceAsync"]
+      >
+    >
+  >;
   io: OpenClawPluginNodeHostCommandIo;
   activeProcesses: Set<() => Promise<void>>;
   github?: import("openclaw/plugin-sdk/github-worker-runtime").WorkerGitHubLaunchBinding;
+  resourcePreparationRequired?: boolean;
 }): Promise<string> {
-  const { io, workspace } = params;
+  const { io } = params;
+  const resources = createCodexNodeResourceReadiness({
+    required: params.resourcePreparationRequired,
+    repository: params.workspace.repositoryReadiness,
+    signal: io.signal,
+    assertCurrent: () => {
+      params.assertExecAuthorized();
+      params.workspace.processEnvironment?.assertCurrent();
+    },
+  });
+  const workspace = { ...params.workspace, repositoryReadiness: resources.readiness };
   const frames = io.frames;
   const cwd = workspace.workspaceDir;
   let writes: Promise<void> | undefined;
+  const repositoryWaits = new Set<Promise<void>>();
   let githubControlWork = Promise.resolve();
   let output: Promise<void> | undefined;
   let temporaryHome: TempWorkspace | undefined;
   let unsubscribe: (() => void) | undefined;
   const releaseResources = async () => {
     try {
-      await Promise.allSettled([output, writes, githubControlWork]);
+      await Promise.allSettled([output, writes, githubControlWork, ...repositoryWaits]);
       await temporaryHome?.cleanup();
     } finally {
       workspace.release();
@@ -285,8 +325,8 @@ export async function runCodexNodeExecServer(params: {
     if (!native || isManagedCodexDesktopCommand(resolved.command)) {
       throw new Error("Codex node exec-server requires the pinned managed package binary.");
     }
-    // The exec-server needs platform/locale basics, never provider, forge,
-    // cloud, SSH-agent, XDG, or runtime-injection state from its node host.
+    // Generic host inheritance stays minimal; the exact workspace lease alone
+    // supplies admitted provider transport and platform trust after sanitization.
     const baseEnv = sanitizeEnvVars(process.env, {
       strictMode: true,
       customAllowedPatterns: [NODE_EXEC_SERVER_PLATFORM_ENVIRONMENT],
@@ -296,6 +336,8 @@ export async function runCodexNodeExecServer(params: {
     }
     // Awaited setup is complete; policy and invocation closure win at spawn.
     params.assertExecAuthorized();
+    workspace.processEnvironment?.assertCurrent();
+    const processEnv = workspace.processEnvironment?.prepare(baseEnv) ?? baseEnv;
     const nativeReady = createDeferred<void>();
     const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
     let stderr = Buffer.alloc(0);
@@ -320,12 +362,13 @@ export async function runCodexNodeExecServer(params: {
         },
         clearEnv: ["NODE_OPTIONS"],
       },
-      baseEnv,
+      processEnv,
       () => {
         if (io.signal.aborted) {
           throw nodeExecServerAbortError(io.signal);
         }
         params.assertExecAuthorized();
+        workspace.processEnvironment?.assertCurrent();
       },
       (spawned) => {
         // Observe before process registration yields: a fast child can emit
@@ -337,7 +380,28 @@ export async function runCodexNodeExecServer(params: {
           releaseResources,
           params.activeProcesses,
         );
-        output = relayNodeExecServerOutput(spawned, frames.send.bind(frames));
+        output = relayNodeExecServerOutput(spawned, async (message) => {
+          if (!workspace.processEnvironment) {
+            return frames.send(message);
+          }
+          const decoded: unknown = JSON.parse(Buffer.from(message).toString("utf8"));
+          if (
+            isRecord(decoded) &&
+            decoded.method === "process/output" &&
+            isRecord(decoded.params) &&
+            typeof decoded.params.chunk === "string"
+          ) {
+            decoded.params.chunk = redactNodeExecOutput(
+              Buffer.from(decoded.params.chunk, "base64"),
+              workspace.processEnvironment.redactOutput,
+            ).toString("base64");
+          }
+          return frames.send(
+            validateNodeExecServerMessage(
+              Buffer.from(workspace.processEnvironment.redactOutput(JSON.stringify(decoded))),
+            ),
+          );
+        });
         void output.catch((error: unknown) => {
           rejectDisconnected(error instanceof Error ? error : new Error(String(error)));
         });
@@ -376,7 +440,8 @@ export async function runCodexNodeExecServer(params: {
     );
     const closed = exit.promise;
     const stopped = closed.then((outcome) => {
-      const diagnostic = stderr.toString("utf8").trim();
+      const rawDiagnostic = stderr.toString("utf8").trim();
+      const diagnostic = workspace.processEnvironment?.redactOutput(rawDiagnostic) ?? rawDiagnostic;
       throw new Error(
         `Codex node exec-server exited (code ${outcome.code ?? "none"}, signal ${outcome.signal ?? "none"})${diagnostic ? `: ${diagnostic}` : "."}`,
       );
@@ -392,6 +457,12 @@ export async function runCodexNodeExecServer(params: {
     // Framed readiness starts Codex's initialize budget. Native startup
     // belongs to this cancellable launch, before that handshake begins.
     unsubscribe = frames.onMessage((message) => {
+      if (params.resourcePreparationRequired && message[0] !== 0) {
+        const resourceControl = resources.settle(JSON.parse(Buffer.from(message).toString("utf8")));
+        if (resourceControl) {
+          return frames.send(Buffer.from(JSON.stringify(resourceControl)));
+        }
+      }
       const control = parseCodexNodeGitHubControl(message);
       if (control) {
         const operation = githubControlWork.then(async () => {
@@ -430,7 +501,7 @@ export async function runCodexNodeExecServer(params: {
         return operation;
       }
       let encoded = validateNodeExecServerMessage(message);
-      if (params.github) {
+      if (params.github || workspace.processEnvironment) {
         const request: unknown = JSON.parse(encoded.toString("utf8"));
         if (isRecord(request) && request.method === "process/start") {
           if (!isRecord(request.params) || !isRecord(request.params.env)) {
@@ -438,16 +509,74 @@ export async function runCodexNodeExecServer(params: {
           }
           // Native Codex applies envPolicy before this overlay. The admitted
           // profile must survive inherit:none and narrower caller filters.
-          request.params.env = { ...request.params.env, ...githubEnv };
+          const environment: NodeJS.ProcessEnv = {};
+          for (const [key, value] of Object.entries(request.params.env)) {
+            if (typeof value !== "string") {
+              throw new Error("Codex process/start environment values must be strings.");
+            }
+            environment[key] = value;
+          }
+          request.params.env = {
+            ...(workspace.processEnvironment?.prepare(environment) ?? environment),
+            ...githubEnv,
+          };
           encoded = validateNodeExecServerMessage(Buffer.from(JSON.stringify(request)));
         }
       }
-      const operation = writes
-        ? writes.then(() => writeNodeExecServerMessage(child, encoded, io.signal))
-        : writeNodeExecServerMessage(child, encoded, io.signal);
-      if (!operation) {
-        return undefined;
+      const request: unknown = JSON.parse(encoded.toString("utf8"));
+      const dependent =
+        isRecord(request) &&
+        typeof request.method === "string" &&
+        (request.method === "process/start" || request.method.startsWith("fs/"));
+      const forward = async () => {
+        params.assertExecAuthorized();
+        workspace.processEnvironment?.assertCurrent();
+        io.signal.throwIfAborted();
+        if (dependent && workspace.repositoryReadiness) {
+          try {
+            // Native startup discovers instructions through metadata. Report pending
+            // synchronously; waiting here would block the first conversational turn.
+            if (
+              isRecord(request) &&
+              (request.method === "fs/getMetadata" || request.method === "fs/canonicalize")
+            ) {
+              workspace.repositoryReadiness.assertCurrent();
+            }
+            await workspace.repositoryReadiness.wait(io.signal);
+            params.assertExecAuthorized();
+            io.signal.throwIfAborted();
+            workspace.repositoryReadiness.assertCurrent();
+          } catch {
+            await frames.send(
+              Buffer.from(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: isRecord(request) ? request.id : null,
+                  error: {
+                    code: -32001,
+                    message:
+                      "Repository preparation failed, was cancelled, or its worker is no longer current; this operation did not run.",
+                  },
+                }),
+              ),
+            );
+            return;
+          }
+        }
+        workspace.processEnvironment?.assertCurrent();
+        return await writeNodeExecServerMessage(child, encoded, io.signal);
+      };
+      // Repository admission must not stall initialize, cancellation, or process control.
+      if (dependent && workspace.repositoryReadiness) {
+        if (repositoryWaits.size >= 64) {
+          throw new Error("Too many pending repository operations");
+        }
+        const operation = forward();
+        repositoryWaits.add(operation);
+        void operation.finally(() => repositoryWaits.delete(operation)).catch(() => undefined);
+        return operation;
       }
+      const operation = writes ? writes.then(forward) : forward();
       const observed = operation.catch(() => {});
       writes = observed;
       void observed.then(() => {

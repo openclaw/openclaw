@@ -864,6 +864,30 @@ describe("Codex app-server client runtime", () => {
     },
   );
 
+  it("defers exact active unsubscribe until final native protection settles", async () => {
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line);
+        send({ id: request.id, result: {} });
+      },
+    });
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    const owner = await claimCodexAppServerLiveThread(harness.client, "protected-active");
+    if (!owner) {
+      throw new Error("Fixture did not claim its thread");
+    }
+    const first = protectCodexAppServerLiveThread(harness.client, "protected-active");
+    const last = protectCodexAppServerLiveThread(harness.client, "protected-active");
+    await owner.release("protected-active");
+    expect(harness.writes).toEqual([]);
+    first();
+    expect(harness.writes).toEqual([]);
+    last();
+    await harness.waitForWrite(0);
+    expect(harness.writes).toHaveLength(1);
+  });
+
   it("protects native-child parents and renews their idle clock after the final child", async () => {
     vi.useFakeTimers();
     const harness = createRuntimeHarness();

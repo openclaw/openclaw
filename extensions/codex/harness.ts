@@ -11,12 +11,15 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
+import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import { codexBuildSymbol } from "./src/build-state.js";
+import { resolveCodexWorkerAppServerCommand } from "./src/node-app-server-command.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
@@ -134,7 +137,12 @@ export function createCodexAppServerAgentHarness(
     cloudPlacement: {
       mode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: [
+          readCodexPluginConfig(resolveAttemptPluginConfig(undefined)).appServer
+            ?.workerHostedCloud === true
+            ? resolveCodexWorkerAppServerCommand(process.env, true)
+            : "codex.exec-server.stdio.v1",
+        ],
         consumesWorkerSlot: false,
       },
     },
@@ -465,6 +473,12 @@ export function createCodexAppServerAgentHarness(
         resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
         "openclaw"
       ) {
+        if (
+          resolveMergedModelProviderConfig(params.config, params.provider)?.auth ===
+          "native-command"
+        ) {
+          throw new Error("Native command auth requires harness-owned Codex isolated completion");
+        }
         const { runHostPreparedIsolatedCompletion } =
           await import("openclaw/plugin-sdk/simple-completion-runtime");
         return runHostPreparedIsolatedCompletion(params);
@@ -476,6 +490,11 @@ export function createCodexAppServerAgentHarness(
       });
     },
     runIsolatedCompletion: async (params) => {
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error("Native command auth requires harness-owned Codex isolated completion");
+      }
       const { runHostPreparedIsolatedCompletion } =
         await import("openclaw/plugin-sdk/simple-completion-runtime");
       // Keep the deprecated V1 contract on its exact host-prepared transport.

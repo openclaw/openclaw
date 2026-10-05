@@ -3,6 +3,38 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 
 const log = createSubsystemLogger("gateway/worker-provision");
 
+/** Observe the controller's actual producer before aborting; never publish its reason text. */
+export function reportWorkerProvisionAbort(
+  record: Pick<WorkerEnvironmentRecord, "environmentId" | "provisionOperationId" | "ownerEpoch">,
+  owner: "runtime-operation" | "node-enrollment",
+  cause:
+    | "caller-signal"
+    | "operation-closed"
+    | "host-stopping"
+    | "owner-changed"
+    | "destroy-requested"
+    | "preparation-expired"
+    | "binding-replaced"
+    | "binding-closed"
+    | "environment-retired",
+  controllerSignal: AbortSignal,
+) {
+  if (controllerSignal.aborted) {
+    return;
+  }
+  try {
+    log.info("worker provision abort owner", {
+      environmentId: record.environmentId,
+      provisionOperationId: record.provisionOperationId,
+      ownerEpoch: record.ownerEpoch,
+      owner,
+      cause,
+    });
+  } catch {
+    // This receipt cannot change the abort or the original failure.
+  }
+}
+
 /** Emit one start and one terminal event per owned stage; error text is never telemetry. */
 export async function withWorkerProvisionStage<T>(
   record: Pick<

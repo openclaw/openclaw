@@ -336,6 +336,7 @@ async function dispatchInvoke(
   const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
     command,
     paramsJSON: frame.paramsJSON,
+    timeoutMs: frame.timeoutMs,
     bundleInstaller: runtime.workerBundleInstaller,
     supervisor: runtime.workerSupervisor,
     workspace: runtime.workerWorkspace,

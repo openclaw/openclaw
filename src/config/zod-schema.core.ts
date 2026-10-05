@@ -324,7 +324,13 @@ const ModelProviderSchema = z.strictObject({
   apiKey: SecretInputSchema.optional().register(sensitive),
   /** Authentication mode used when resolving credentials for this provider. */
   auth: z
-    .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+    .union([
+      z.literal("api-key"),
+      z.literal("aws-sdk"),
+      z.literal("oauth"),
+      z.literal("token"),
+      z.literal("native-command"),
+    ])
     .optional(),
   /** Default API adapter for models under this provider. */
   api: ModelApiSchema.optional(),

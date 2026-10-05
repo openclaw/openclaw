@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as metadataState from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -8,7 +10,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import * as version from "../version.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import * as bundles from "./worker-environments/bundle.js";
@@ -32,6 +37,12 @@ const mocks = vi.hoisted(() => {
     prepareNodeArtifacts: undefined as Parameters<
       typeof createWorkerEnvironmentService
     >[0]["prepareNodeArtifacts"],
+    closeArtifacts: undefined as Parameters<
+      typeof createWorkerEnvironmentService
+    >[0]["closeNodeBootstrapArtifacts"],
+    stopEnrollment: undefined as Parameters<
+      typeof createWorkerEnvironmentService
+    >[0]["stopNodeEnrollmentWaits"],
     service: {
       setHumanPresence: vi.fn(async () => {}),
       get: vi.fn<WorkerEnvironmentService["get"]>(),
@@ -46,6 +57,8 @@ vi.mock("./worker-environments/service.js", () => ({
     (options: Parameters<typeof createWorkerEnvironmentService>[0]) => {
       mocks.createGatewayTools = options.createGatewayTools;
       mocks.prepareNodeArtifacts = options.prepareNodeArtifacts;
+      mocks.closeArtifacts = options.closeNodeBootstrapArtifacts;
+      mocks.stopEnrollment = options.stopNodeEnrollmentWaits;
       return mocks.service;
     },
   ),
@@ -67,19 +80,34 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawStateDatabaseForTest();
     mocks.createGatewayTools = undefined;
     mocks.prepareNodeArtifacts = undefined;
+    mocks.closeArtifacts = undefined;
+    mocks.stopEnrollment = undefined;
+    resetConfigRuntimeState();
     vi.restoreAllMocks();
     vi.clearAllMocks();
     cleanup();
   }),
 );
 
-async function withWorkerRuntime(run: () => Promise<void>) {
+async function withWorkerRuntime(
+  run: (
+    runtime: Awaited<ReturnType<typeof createGatewayWorkerEnvironmentRuntime>>,
+  ) => Promise<void>,
+  options: {
+    config?: OpenClawConfig;
+    registry?: ReturnType<typeof createEmptyPluginRegistry>;
+    clock?: ReturnType<typeof createGatewaySchedulerClock>;
+  } = {},
+) {
   const stateDir = tempDirs.make("openclaw-worker-session-tool-lazy-");
   await withGatewayWorkerEnvironmentStartupState(stateDir, async () => {
     const startup = await loadGatewayWorkerEnvironmentStartupState();
-    const registry = createEmptyPluginRegistry();
-    await createGatewayWorkerEnvironmentRuntime({
-      scheduler: createTestGatewayScheduler(),
+    const registry = options.registry ?? createEmptyPluginRegistry();
+    if (options.config) {
+      setRuntimeConfigSnapshot(options.config);
+    }
+    const runtime = await createGatewayWorkerEnvironmentRuntime({
+      scheduler: createTestGatewayScheduler(options.clock?.clock),
       getPluginRegistry: () => registry,
       getPortalRuntime: () => undefined,
       resolveGatewayContext: () => undefined,
@@ -88,7 +116,7 @@ async function withWorkerRuntime(run: () => Promise<void>) {
       log: { child: () => ({ info: () => {}, warn: () => {} }) },
     });
 
-    await run();
+    await run(runtime);
   });
 }
 
@@ -126,6 +154,116 @@ describe("gateway worker tool-surface startup", () => {
     });
   });
 });
+
+it.each(["ready", "shutdown", "generation changed", "late registry"] as const)(
+  "prepares immutable node artifacts before a turn without allocation: %s",
+  async (outcome) => {
+    const nodeArtifact = {
+      tarballPath: "/synthetic/node.tgz",
+      tarballSha256: "a".repeat(64),
+      tarballBytes: 1,
+      openclawVersion: "1.2.3",
+      buildId: "fixture",
+      enabledPluginIds: [],
+    };
+    const bundleArtifact = {
+      install: "bundle" as const,
+      tarballPath: "/synthetic/worker.tgz",
+      tarballSha256: "b".repeat(64),
+      tarballBytes: 1,
+      bundleHash: "c".repeat(64),
+      openclawVersion: "1.2.3",
+      protocolFeatures: [],
+    };
+    const node = createDeferredCore<typeof nodeArtifact>();
+    const bundle = createDeferredCore<typeof bundleArtifact>();
+    const prepareNode = vi.fn((_signal?: AbortSignal) => node.promise);
+    const prepareBundle = vi.fn(() => bundle.promise);
+    const close = vi.fn(async () => {});
+    const factory = vi
+      .spyOn(bootstrapArtifacts, "createNodeBootstrapArtifactProvider")
+      .mockImplementation(() => ({ prepare: prepareNode, close }));
+    vi.spyOn(bundles, "createWorkerBundleProducer").mockReturnValue({
+      prepare: prepareBundle,
+      prune: async () => {},
+    });
+    const metadata = vi
+      .spyOn(metadataState, "getGatewayPluginMetadataSnapshot")
+      .mockReturnValue(createPluginMetadataSnapshotFixture());
+    vi.spyOn(version, "resolveRuntimeServiceBuildId").mockReturnValue("fixture");
+    const clock = createGatewaySchedulerClock();
+    const registry = createEmptyPluginRegistry();
+    const provision = vi.fn();
+    registry.workerProviders.set("fixture", {
+      pluginId: "fixture",
+      source: "fixture",
+      provider: {
+        id: "fixture",
+        requiresNodeEnrollment: true,
+        supportedExecutionModes: ["remote-exec"],
+        resolveAllocation: vi.fn(),
+        provision,
+        inspect: vi.fn(),
+        destroy: vi.fn(),
+      },
+    });
+    const config: OpenClawConfig = {
+      cloudWorkers: { profiles: { test: { provider: "fixture" } } },
+    };
+    const provider = registry.workerProviders.get("fixture")!;
+    if (outcome === "late registry") {
+      registry.workerProviders.clear();
+    }
+    await withWorkerRuntime(
+      async (runtime) => {
+        expect(mocks.service.ready).toHaveBeenCalledOnce();
+        expect(prepareNode).not.toHaveBeenCalled();
+        if (outcome === "late registry") {
+          await clock.wake();
+          expect(prepareNode).not.toHaveBeenCalled();
+          registry.workerProviders.set("fixture", provider);
+          runtime.prepareRuntimeArtifacts?.();
+        }
+        if (outcome !== "late registry") {
+          runtime.prepareRuntimeArtifacts?.();
+        }
+        const wake = clock.wake();
+        await vi.dynamicImportSettled();
+        expect(prepareNode).toHaveBeenCalledOnce();
+        expect(prepareBundle).toHaveBeenCalledOnce();
+        expect(provision).not.toHaveBeenCalled();
+        const request = mocks.prepareNodeArtifacts!({ executionMode: "remote-exec" });
+        if (outcome === "generation changed") {
+          metadata.mockReturnValue(createPluginMetadataSnapshotFixture());
+        }
+        let closing: Promise<void> | undefined;
+        if (outcome === "shutdown") {
+          mocks.stopEnrollment!();
+          closing = mocks.closeArtifacts!();
+        }
+        node.resolve(nodeArtifact);
+        bundle.resolve(bundleArtifact);
+        await wake;
+        expect(prepareNode.mock.calls[0]?.[0]?.aborted).toBe(true);
+        if (outcome === "generation changed") {
+          await expect(request).rejects.toThrow("generation changed");
+        } else if (outcome === "ready" || outcome === "late registry") {
+          const result = await request;
+          result.assertCurrent();
+          expect(result.artifacts.workerArchiveSha256).toBe(bundleArtifact.tarballSha256);
+          expect(factory).toHaveBeenCalledOnce();
+        } else {
+          await expect(request).rejects.toMatchObject({ name: "AbortError" });
+          await closing;
+          expect(close).toHaveBeenCalledOnce();
+        }
+        mocks.stopEnrollment!();
+        await mocks.closeArtifacts!();
+      },
+      { config, registry, clock },
+    );
+  },
+);
 
 it.each(["success", "failure", "abort"] as const)(
   "cold artifact preparation overlaps without late publication (outcome=%s)",

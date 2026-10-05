@@ -41,12 +41,14 @@ export async function advancePlacementFixtureToActive(
     remoteWorkspaceDir = "/workspace/placement-claim-close",
     workspaceBaseManifestRef = `sha256:${"b".repeat(64)}`,
     seedEnvironment = "before-activation",
+    repositoryPreparation,
   }: {
     environmentId?: string;
     ownerEpoch?: number;
     workerBundleHash?: string;
     remoteWorkspaceDir?: string;
-    workspaceBaseManifestRef?: string;
+    workspaceBaseManifestRef?: string | null;
+    repositoryPreparation?: "pending";
     seedEnvironment?: "before-dispatch" | "before-activation" | false;
   } = {},
 ) {
@@ -74,7 +76,11 @@ export async function advancePlacementFixtureToActive(
     from: "syncing",
     to: "starting",
     expectedGeneration: placement.generation,
-    patch: { workspaceBaseManifestRef, remoteWorkspaceDir },
+    patch: {
+      workspaceBaseManifestRef,
+      remoteWorkspaceDir,
+      ...(repositoryPreparation ? { repositoryPreparation } : {}),
+    },
   });
   if (seedEnvironment === "before-activation") {
     seedAttachedPlacementEnvironment(database, environment);
@@ -89,7 +95,7 @@ export async function advancePlacementFixtureToActive(
   if (active.state !== "active") {
     throw new Error("expected active worker placement");
   }
-  return active;
+  return { ...active, workspaceBaseManifestRef };
 }
 
 type PlacementEnvironmentFixture = Pick<

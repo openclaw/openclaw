@@ -6,6 +6,11 @@ import type {
   NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
+import {
+  snapshotNodeWorkerExecutionEnv,
+  type NodeWorkerManagedIdentityTransport,
+  type NodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
 import type { NodeWorkerTerminalOutcome } from "./node-worker-launch-observation.js";
 import type {
   NodeWorkerContainerIdentity,
@@ -158,7 +163,26 @@ export type NodeWorkerSupervisorOptions = {
   containerImage?: string;
   /** Node-local canonical models captured before the runtime yields. */
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+  /** Captured only by the dedicated node runtime; absent on ordinary paired hosts. */
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+  platformTrust?: NodeWorkerPlatformTrust;
 };
+
+/** Container execution never borrows the dedicated node's platform/provider custody. */
+export function prepareNodeWorkerSupervisorEnvironment(options: NodeWorkerSupervisorOptions) {
+  const env = options.env ?? process.env;
+  const managedIdentityTransport = options.containerEngine
+    ? undefined
+    : options.managedIdentityTransport;
+  const platformTrust = options.containerEngine ? undefined : options.platformTrust;
+  return {
+    nativeInferenceSnapshot: options.nativeInferenceSnapshot,
+    managedIdentityTransport,
+    platformTrust,
+    workerEnv: snapshotNodeWorkerExecutionEnv(env, managedIdentityTransport, platformTrust),
+    engineEnv: { ...process.env, ...env },
+  };
+}
 
 /** Match both process bookkeeping and exact authoritative container identity. */
 export function nodeWorkerReceiptMatchesOwner(

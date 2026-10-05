@@ -551,17 +551,7 @@ function filterCodexMemoryFlushDynamicTools<T extends { name: string }>(tools: T
     CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW.has(normalizeCodexDynamicToolName(tool.name)),
   );
 }
-/** Requires a Codex sandbox environment only when native tools must run inside OpenClaw sandboxing. */
-export function shouldRequireCodexSandboxExecServerEnvironment(params: {
-  sandbox?: OpenClawSandboxContext;
-  nativeToolSurfaceEnabled: boolean;
-  sandboxExecServerEnabled: boolean;
-}): boolean {
-  return Boolean(
-    isCodexRemoteExecPlacementSandbox(params.sandbox) ||
-    (params.sandbox?.enabled && params.nativeToolSurfaceEnabled && params.sandboxExecServerEnabled),
-  );
-}
+export { shouldRequireCodexSandboxExecServerEnvironment } from "./sandbox-exec-server-selection.js";
 export function resolveCodexSandboxEnvironmentSelection(
   environment: CodexSandboxExecEnvironment | undefined,
   nativeToolSurfaceEnabled: boolean,

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -8,6 +9,7 @@ import {
   NODE_WORKER_STATUS_WAIT_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
+  NODE_WORKER_REPOSITORY_READINESS_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
@@ -26,6 +28,10 @@ export function isNodeWorkerHostClientId(
   clientId: string | undefined,
 ): clientId is NodeWorkerHostClientId {
   return clientId === GATEWAY_CLIENT_IDS.NODE_HOST || clientId === GATEWAY_CLIENT_IDS.MACOS_APP;
+}
+
+export function requiresNodeRepositoryReadiness(params: unknown): boolean {
+  return isRecord(params) && params.repositoryPreparation !== undefined;
 }
 
 export type NodeWorkerBundleStatusObservation = {
@@ -132,7 +138,7 @@ export async function waitForNodeRunnerAvailability(
   },
   nodeId: string,
   options: { signal: AbortSignal; assertCurrent: () => void },
-): Promise<void> {
+): Promise<NodeWorkerSupervisorNodeProof> {
   let changed = createDeferredCore();
   const unsubscribe = publisher.subscribe(nodeId, () => changed.resolve());
   const assertCurrent = () => {
@@ -148,13 +154,32 @@ export async function waitForNodeRunnerAvailability(
       );
       assertCurrent();
       if (node && transport.isCurrent(node)) {
-        return;
+        return node;
       }
       const issue = transport.getIssue?.(nodeId);
       if (issue) {
         throw createNodeRunnerInventoryIssueError(nodeId, issue);
       }
-      await racePromiseWithAbortSignal(changed.promise, options.signal);
+      // A declared runner can be withheld by a transient pairing reader without
+      // any inventory edge when that reader recovers. Recheck only this active
+      // admission; absent runners remain event-driven and cancellation owns cleanup.
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const wake = publisher.hasCurrent(nodeId)
+          ? Promise.race([
+              changed.promise,
+              new Promise<void>((resolve) => {
+                retry = setTimeout(resolve, 250);
+                retry.unref?.();
+              }),
+            ])
+          : changed.promise;
+        await racePromiseWithAbortSignal(wake, options.signal);
+      } finally {
+        if (retry !== undefined) {
+          clearTimeout(retry);
+        }
+      }
       changed = createDeferredCore();
     }
   } finally {
@@ -296,6 +321,7 @@ export function isNodeWorkerSupervisorProofCurrent(
     preparedWorkspace?: boolean;
     capturedExecPolicy?: boolean;
     workspaceQuiescence?: boolean;
+    repositoryReadiness?: boolean;
   } = {},
 ): boolean {
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -318,6 +344,8 @@ export function isNodeWorkerSupervisorProofCurrent(
     (!requirements.capturedExecPolicy || !resolveNodeWorkerExecutionIssue(current.workerHost)) &&
     (!requirements.workspaceQuiescence ||
       current.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION) &&
+    (!requirements.repositoryReadiness ||
+      current.workerHost.repositoryReadiness === NODE_WORKER_REPOSITORY_READINESS_VERSION) &&
     (requirements.commands ?? []).every((command) => current.commands.includes(command))
   );
 }
