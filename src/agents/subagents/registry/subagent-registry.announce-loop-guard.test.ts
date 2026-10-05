@@ -212,8 +212,15 @@ describe("announce loop guard (#18264)", () => {
       name: "pending requester turns preserve the failure budget and schedule another observation",
       outcome: "requester_turn_pending",
       attemptCount: 3,
+      restoreDelayMs: 0,
     },
-  ])("$name", async ({ outcome, attemptCount }) => {
+    {
+      name: "restores one timer for a saved delivery backoff",
+      outcome: "requester_turn_pending",
+      attemptCount: 3,
+      restoreDelayMs: 1_000,
+    },
+  ])("$name", async ({ outcome, attemptCount, restoreDelayMs }) => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(outcome);
 
     const now = Date.now();
@@ -232,11 +239,21 @@ describe("announce loop guard (#18264)", () => {
       },
       expectsCompletionMessage: true,
       completion: { required: true },
-      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 30_000 },
+      delivery: {
+        status: "pending",
+        attemptCount: 3,
+        lastAttemptAt: now - 30_000,
+        ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
+      },
     };
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
     await hydrateAndActivateRegistry();
+    if (restoreDelayMs) {
+      await registry.initSubagentRegistry();
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(restoreDelayMs);
+    }
     const resumed = await waitForRun(
       entry.runId,
       (run) =>

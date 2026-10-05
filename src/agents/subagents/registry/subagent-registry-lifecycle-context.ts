@@ -71,7 +71,7 @@ export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCom
 }
 
 export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommonContext {
-  readonly scheduledResumeTimers: Set<ReturnType<typeof setTimeout>>;
+  readonly scheduledResumeTimers: Map<object, ReturnType<typeof setTimeout>>;
   readonly cleanupFailureCounts: WeakMap<object, number>;
   readonly cleanupReservations: Set<object>;
   readonly activeCleanupAttempts: Map<object, number>;
