@@ -2287,11 +2287,29 @@ Retention keeps the 14-day age rule, whole-run eviction, current-session exempti
 encoding semantics. Per-session trimming still measures UTF-8 bytes. Appends
 serialize events before writer admission and commit independently of global
 cleanup. First-use and hourly cleanup uses one lifecycle-owned reader and deletion
-transactions bounded to 100 runs and 10 MiB, allowing one oversized complete run.
-Each deletion rechecks the captured native revision; concurrent changes defer
-remaining cleanup until a later append. Cadence advances only after the sweep
-completes. Nested synchronous appends defer cleanup until a later independent
-append. Permissions and durability are unchanged.
+transactions bounded to 16 runs and 10 MiB, allowing one oversized complete run.
+Deletion revalidates only the selected batch under writer admission: run identity,
+newest timestamp, bytes, event count, and the protected session. The read worker
+aggregates run summaries once per sweep. A native-owner cursor drains that snapshot
+in bounded batches; selection and sorting run before the deletion transaction.
+
+The retention owner holds mutation receipts only for the active sweep. Committed
+appends publish their retained session's run summaries, including per-session trims.
+The owner replaces affected snapshot sessions with these receipts, so writes that
+overlap snapshot creation are neither lost nor counted twice. Its byte and expiry
+facts settle each batch without waiting for a write-free read. No receipts are
+published after a rollback. A connection-local mutation count and fresh
+`PRAGMA data_version` probes fence changes outside those receipts, including foreign
+commits. Such a change requires a new read-worker snapshot, never a writer-held
+scan. One refresh is allowed per sweep; another leaves cleanup due on the next
+append. Committed deletions survive refreshes. A shared lease fence invalidates
+receipts on cancellation or owner release; native connection replacement cannot
+reuse them. Nested synchronous appends defer cleanup until an independent append.
+
+This in-memory receipt and conservative-refresh design was accepted by the
+maintainer on 2026-10-05. Permissions, durability, schemas, retained-row policy,
+and update behavior are unchanged. WAL checkpoint scheduling remains with the
+existing maintenance owner.
 
 A synthetic 241,697-event fixture measured the aggregate at 31–40 ms versus
 407–453 ms with the staged query, with all 3,836 groups equal. The replacement
