@@ -26,7 +26,10 @@ import {
   withSandboxContainerLifecycle,
   type ContainerSourceLease,
 } from "./container-lifecycle.js";
-import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import {
+  assertChangedSandboxConfigAllowed,
+  handleHotSandboxConfigMismatch,
+} from "./current-config.js";
 import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   prepareSandboxMountPlan,
@@ -54,7 +57,10 @@ import {
 } from "./sanitize-env-vars.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
-import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import {
+  type SandboxCreateSecurityParams,
+  validateSandboxCreateSecurity,
+} from "./validate-sandbox-security.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 export {
@@ -190,21 +196,15 @@ function formatUlimitValue(
   return limits.length ? `${name}=${limits.join(":")}` : null;
 }
 
-export function buildSandboxCreateArgs(params: {
-  name: string;
-  cfg: SandboxDockerConfig;
-  scopeKey: string;
-  labels?: Record<string, string>;
-  configHash?: string;
-  bindSourceRoots?: string[];
-}) {
-  // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
-  validateSandboxSecurity({
-    ...params.cfg,
-    allowedSourceRoots: params.bindSourceRoots,
-    allowSourcesOutsideAllowedRoots: params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets: params.cfg.dangerouslyAllowReservedContainerTargets === true,
-  });
+export function buildSandboxCreateArgs(
+  params: SandboxCreateSecurityParams & {
+    name: string;
+    scopeKey: string;
+    labels?: Record<string, string>;
+    configHash?: string;
+  },
+) {
+  validateSandboxCreateSecurity(params);
 
   const createdAtMs = Date.now();
   const args = ["create", "--name", params.name];
@@ -305,6 +305,7 @@ async function createSandboxContainer(params: {
   workspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   agentWorkspaceDir: string;
+  bindSourceRoots: string[];
   scopeKey: string;
   configHash?: string;
   mountPlan: SandboxMountPlan;
@@ -334,7 +335,7 @@ async function createSandboxContainer(params: {
     cfg: createCfg,
     scopeKey,
     configHash: params.configHash,
-    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    bindSourceRoots: params.bindSourceRoots,
   });
   if (podmanPolicy) {
     args.push(...podmanPolicy.extraCreateArgs);
@@ -490,6 +491,8 @@ async function ensureSandboxContainerLifecycle(
           dockerTmpfsSource: params.cfg.dockerTmpfsSource,
         })
       : genericConfigHash;
+  // Creation and changed-config reuse judge binds against the same roots.
+  const bindSourceRoots = [params.workspaceDir, params.agentWorkspaceDir];
   const now = Date.now();
   const needsSetupReservation =
     Boolean(params.cfg.docker.setupCommand?.trim()) ||
@@ -526,6 +529,13 @@ async function ensureSandboxContainerLifecycle(
     }
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
+      assertChangedSandboxConfigAllowed({
+        containerName,
+        cfg: params.cfg.docker,
+        bindSourceRoots,
+        scope: params.cfg.scope,
+        sessionKey: params.scopeKey,
+      });
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
         running &&
@@ -592,6 +602,7 @@ async function ensureSandboxContainerLifecycle(
         workspaceDir: params.workspaceDir,
         workspaceAccess: params.cfg.workspaceAccess,
         agentWorkspaceDir: params.agentWorkspaceDir,
+        bindSourceRoots,
         scopeKey: params.scopeKey,
         configHash: expectedHash,
         mountPlan,

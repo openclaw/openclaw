@@ -1,10 +1,14 @@
 // Verifies Docker create arguments for sandbox hardening and configured passthrough.
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./sandbox/constants.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
 
 const OPENCLAW_CLI_ENV_VALUE = "1";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("buildSandboxCreateArgs", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -273,6 +277,71 @@ describe("buildSandboxCreateArgs", () => {
         bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
       }),
     ).not.toThrow();
+  });
+
+  describe("allowedBindSources", () => {
+    const ownRoots = ["/tmp/workspace", "/tmp/agent"];
+    function buildWithOwnRoots(name: string, cfg: SandboxDockerConfig) {
+      return buildSandboxCreateArgs({
+        name,
+        cfg,
+        scopeKey: "main",
+        bindSourceRoots: ownRoots,
+      });
+    }
+
+    it("admits a bind under a configured root with no dangerous override", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
+        "/srv/shared/team:/team:rw",
+      ]);
+      expect(cfg.dangerouslyAllowExternalBindSources).toBeUndefined();
+      expect(() => buildWithOwnRoots("openclaw-sbx-allowlisted", cfg)).not.toThrow();
+    });
+
+    it("keeps every non-allowlisted source blocked while an allowlist is in force", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
+        "/opt/external:/data:rw",
+      ]);
+      expect(() => buildWithOwnRoots("openclaw-sbx-allowlist-other", cfg)).toThrow(
+        /outside allowed roots.*allowedBindSources/,
+      );
+    });
+
+    it("leaves the gate off when the caller supplies no roots at all", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
+        "/opt/external:/data:rw",
+      ]);
+      expect(() =>
+        buildSandboxCreateArgs({
+          name: "openclaw-sbx-gate-off",
+          cfg,
+          scopeKey: "main",
+        }),
+      ).not.toThrow();
+    });
+
+    it("rejects a configured filesystem root at the runtime boundary", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/.."] }, [
+        "/srv/shared/team:/team:rw",
+      ]);
+      expect(() => buildWithOwnRoots("openclaw-sbx-root-allowlist", cfg)).toThrow(
+        /names a filesystem root/,
+      );
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "rejects a configured root whose canonical path is the filesystem root",
+      () => {
+        const rootAlias = path.join(tempDirs.make("bind-root-alias-"), "root");
+        fs.symlinkSync("/", rootAlias, "dir");
+        const cfg = createSandboxConfig({ allowedBindSources: [rootAlias] }, [
+          "/srv/shared/team:/team:rw",
+        ]);
+        expect(() => buildWithOwnRoots("openclaw-sbx-root-alias", cfg)).toThrow(
+          /resolves to filesystem root/,
+        );
+      },
+    );
   });
 
   it("blocks reserved /workspace target bind mounts by default", () => {

@@ -7,12 +7,29 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   getSandboxHostPathPolicyKey,
+  isSandboxHostFilesystemRoot,
   isSandboxHostPathAbsolute,
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("isSandboxHostFilesystemRoot", () => {
+  it.each(["/", "//", "/srv/..", "C:/", "c:\\", "c:\\shared\\..", "\\\\?\\C:\\"])(
+    "recognizes filesystem root %s",
+    (root) => {
+      expect(isSandboxHostFilesystemRoot(root)).toBe(true);
+    },
+  );
+
+  it.each(["/srv/shared", "C:/shared", "C:\\shared", "//server/share"])(
+    "keeps scoped root %s",
+    (root) => {
+      expect(isSandboxHostFilesystemRoot(root)).toBe(false);
+    },
+  );
+});
 
 describe("normalizeSandboxHostPath", () => {
   it("normalizes dot segments and strips trailing slash", () => {

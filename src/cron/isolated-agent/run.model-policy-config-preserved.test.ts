@@ -260,6 +260,7 @@ const defaultSandbox = {
     network: "none",
     dangerouslyAllowContainerNamespaceJoin: true,
     dangerouslyAllowExternalBindSources: true,
+    allowedBindSources: ["/srv/shared"],
   },
   browser: {
     enabled: true,
@@ -311,6 +312,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     expect(resolvedSandbox.docker.network).toBe("none");
     expect(resolvedSandbox.docker.dangerouslyAllowContainerNamespaceJoin).toBe(true);
     expect(resolvedSandbox.docker.dangerouslyAllowExternalBindSources).toBe(true);
+    expect(resolvedSandbox.docker.allowedBindSources).toEqual(["/srv/shared"]);
     expect(resolvedSandbox.browser.enabled).toBe(true);
     expect(resolvedSandbox.browser.image).toBe("ghcr.io/openclaw/browser:custom");
     expect(resolvedSandbox.browser.autoStart).toBe(false);

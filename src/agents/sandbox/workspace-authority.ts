@@ -3,7 +3,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeExecTarget } from "../../infra/exec-approvals.js";
 import { resolveEffectiveSessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   resolveEffectiveToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -18,7 +18,8 @@ import {
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveSandboxBrowserDockerCreateConfig, resolveSandboxConfigForAgent } from "./config.js";
+import { findWritableSandboxBindSourceOutsideRoot } from "./fs-paths.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import type { SandboxToolPolicy } from "./types.js";
 
@@ -141,7 +142,13 @@ export function resolveSandboxWorkspaceAuthority(params: {
   sessionKey: string;
   sessionEntry?: Pick<
     SessionEntry,
-    "execHost" | "execNode" | "model" | "modelProvider" | "modelOverride" | "providerOverride"
+    | "execHost"
+    | "execNode"
+    | "model"
+    | "modelProvider"
+    | "modelOverride"
+    | "providerOverride"
+    | "worktree"
   >;
   confinedToolNames?: readonly string[];
   requiredToolNames?: readonly string[];
@@ -170,9 +177,31 @@ export function resolveSandboxWorkspaceAuthority(params: {
   ) {
     confinementError = "target sandbox enables dangerous Docker isolation overrides.";
   } else {
+    // The rw agent workspace is the only host-writable surface a confined worker may have;
+    // with ro/none the agent workspace is never mounted writable, so any writable bind is external.
+    // A session bound to a managed worktree mounts that checkout's projection instead, so a bind
+    // under the agent workspace would write the checkout the projection isolates.
+    // An enabled browser container mounts its own bind set, so its writes count too.
+    const writableRoot =
+      sandbox.workspaceAccess === "rw" && !params.sessionEntry?.worktree
+        ? resolveAgentWorkspaceDir(params.config, runtime.agentId)
+        : undefined;
+    const browserBinds = sandbox.browser.enabled
+      ? resolveSandboxBrowserDockerCreateConfig(sandbox).binds
+      : undefined;
+    const externalWritableBind =
+      findWritableSandboxBindSourceOutsideRoot(sandbox.docker.binds, writableRoot) ??
+      findWritableSandboxBindSourceOutsideRoot(browserBinds, writableRoot);
+    if (externalWritableBind) {
+      confinementError = `target sandbox has writable bind source outside its writable workspace: ${externalWritableBind}.`;
+    }
     const agentConfig = resolveAgentConfig(params.config, runtime.agentId);
     const elevated = agentConfig?.tools?.elevated;
-    if (params.config.tools?.elevated?.enabled === true && elevated?.enabled !== false) {
+    if (
+      !confinementError &&
+      params.config.tools?.elevated?.enabled === true &&
+      elevated?.enabled !== false
+    ) {
       confinementError = "target agent can request host-level elevated execution.";
     }
     const rawSessionExecHost = params.sessionEntry?.execHost?.trim();
