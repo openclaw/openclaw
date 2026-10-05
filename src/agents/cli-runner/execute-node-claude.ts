@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
-import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../../infra/exec-approvals.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type {
