@@ -199,7 +199,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
     success: string | ((result: SessionsPatchResult) => string),
     failure: string,
-    after?: (result: SessionsPatchResult) => void | Promise<void>,
+    after: () => void | Promise<void> = refreshSessionInfo,
   ) => {
     if (!admitSessionAction()) {
       return;
@@ -216,11 +216,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       chatLog.addSystem(typeof success === "function" ? success(result) : success);
       applySessionInfoFromPatch(result);
-      if (after) {
-        await after(result);
-      } else {
-        await refreshSessionInfo();
-      }
+      await after();
     } catch (err) {
       if (isCurrent()) {
         chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);

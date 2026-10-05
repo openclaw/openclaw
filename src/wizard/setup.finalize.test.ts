@@ -34,7 +34,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
-const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
+const setupCleanupExitTimer = vi.hoisted(() => ({}));
 const scheduleProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn(() => setupCleanupExitTimer));
 const resolveTuiShutdownHardExitMs = vi.hoisted(() => vi.fn(() => 122_000));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
@@ -388,7 +388,6 @@ describe("finalizeSetupWizard", () => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runExec.mockReset().mockResolvedValue(createRuntimeProbeResult());
     runTui.mockClear();
-    setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset().mockReturnValue(setupCleanupExitTimer);
     resolveTuiShutdownHardExitMs.mockClear();
     restoreTerminalState.mockClear();

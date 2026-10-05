@@ -1,8 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { makeTuiState } from "./tui-event-test-support.js";
+import {
+  createMockBtwPresenter,
+  createMockChatLog,
+  makeTuiState,
+} from "./tui-event-test-support.js";
 import {
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
@@ -19,33 +23,6 @@ import type {
 } from "./tui-types.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
-type HandlerContext = Parameters<typeof createEventHandlers>[0];
-type HandlerChatLog = HandlerContext["chatLog"];
-type HandlerBtwPresenter = HandlerContext["btw"];
-type MockChatLog = { [Key in keyof HandlerChatLog]: Mock<HandlerChatLog[Key]> };
-type MockBtwPresenter = { [Key in keyof HandlerBtwPresenter]: Mock<HandlerBtwPresenter[Key]> };
-
-function createMockChatLog(): MockChatLog {
-  return {
-    addLiveUser: vi.fn<HandlerChatLog["addLiveUser"]>(),
-    startTool: vi.fn<HandlerChatLog["startTool"]>(),
-    updateToolResult: vi.fn<HandlerChatLog["updateToolResult"]>(),
-    addSystem: vi.fn<HandlerChatLog["addSystem"]>(),
-    addPendingSystem: vi.fn<HandlerChatLog["addPendingSystem"]>(),
-    dismissPendingSystem: vi.fn<HandlerChatLog["dismissPendingSystem"]>(),
-    updateAssistant: vi.fn<HandlerChatLog["updateAssistant"]>(),
-    finalizeAssistant: vi.fn<HandlerChatLog["finalizeAssistant"]>(),
-    dropAssistant: vi.fn<HandlerChatLog["dropAssistant"]>(),
-  };
-}
-
-function createMockBtwPresenter(): MockBtwPresenter {
-  return {
-    showResult: vi.fn<HandlerBtwPresenter["showResult"]>(),
-    clear: vi.fn<HandlerBtwPresenter["clear"]>(),
-  };
-}
-
 function sendingSubmit(runId: string, draftText = "pending"): TuiPendingSubmit {
   return { phase: "sending", runId, draftText };
 }
