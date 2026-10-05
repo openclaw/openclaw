@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { PluginGatewayAccessAuthority, PluginLogger, PluginStateKeyedStore } from "../api.js";
+import type {
+  PluginGatewayAccessAuthority,
+  PluginLogger,
+  PluginRuntime,
+  PluginStateKeyedStore,
+} from "../api.js";
 import type { ReadVisitorGatewayAccess } from "./access.js";
 import { visitorTargetKey, type VisitorTarget, type VisitorPolicyClient } from "./cloudflare.js";
 import type { VisitorAccessConfig } from "./config.js";
@@ -33,7 +38,7 @@ const identityFields = {
   github: z
     .string()
     .trim()
-    .regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/)
+    .min(1)
     .transform((login) => login.toLowerCase())
     .optional(),
   email: emailSchema.optional(),
@@ -50,10 +55,6 @@ const inviteSchema = z
     forever: z.boolean().optional(),
   })
   .refine((input) => (input.email !== undefined) !== (input.github !== undefined));
-const githubSchema = z.object({
-  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  login: identityFields.github.unwrap(),
-});
 const grantIdSchema = z.uuid();
 const DAY_MS = 86_400_000;
 const LIST_MAX_CHARS = 12_000;
@@ -93,7 +94,7 @@ export class VisitorAccessService {
     private readonly policy: VisitorPolicyClient,
     private readonly logger: PluginLogger,
     private readonly readAccess: ReadVisitorGatewayAccess,
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly resolveGitHubAccount: PluginRuntime["gateway"]["resolveGitHubAccount"],
     private readonly signal?: AbortSignal,
   ) {}
 
@@ -315,36 +316,35 @@ export class VisitorAccessService {
     if (!input.github) {
       throw new VisitorAccessError("Provide an email or GitHub login.");
     }
-    let response: Response;
-    let body: unknown;
-    try {
-      response = await this.fetcher(
-        `https://api.github.com/users/${encodeURIComponent(input.github)}`,
-        {
-          headers: {
-            Accept: "application/vnd.github+json",
-            "User-Agent": "OpenClaw-visitor-access",
-          },
-          redirect: "error",
-          signal: this.signal
-            ? AbortSignal.any([this.signal, AbortSignal.timeout(15_000)])
-            : AbortSignal.timeout(15_000),
-        },
-      );
-      if (!response.ok) {
-        throw new Error("GitHub lookup failed");
-      }
-      body = await response.json();
-    } catch {
-      throw new VisitorAccessError("GitHub account lookup failed. Check the login and retry.");
-    }
-    const result = githubSchema.safeParse(body);
-    if (!result.success) {
+    if (!this.resolveGitHubAccount) {
       throw new VisitorAccessError(
-        "GitHub returned an invalid account identity. Check the login and retry.",
+        "This Gateway cannot resolve GitHub accounts. Update OpenClaw before managing GitHub visitors.",
       );
     }
-    return { target: result.data.id, githubLogin: result.data.login };
+    const result = await this.resolveGitHubAccount({ login: input.github, signal: this.signal });
+    this.assertOpen();
+    if (result.error) {
+      const { statusCode, retryAtMs, credentialConfigured, message } = result.error;
+      if (statusCode === 404) {
+        throw new VisitorAccessError(
+          `GitHub login ${input.github} was not found. Check the login and retry.`,
+        );
+      }
+      if (statusCode === 429) {
+        const retry =
+          retryAtMs === undefined
+            ? "retry later"
+            : `retry after ${new Date(retryAtMs).toISOString()}`;
+        const hint = credentialConfigured
+          ? ""
+          : " Configure gateway.controlUi.github.token to increase the GitHub API quota.";
+        throw new VisitorAccessError(
+          `GitHub rate limit reached while resolving ${input.github}; ${retry}.${hint}`,
+        );
+      }
+      throw new VisitorAccessError(`GitHub account lookup failed (${message}). Retry later.`);
+    }
+    return { target: result.accountId, githubLogin: result.login };
   }
 
   invite(
