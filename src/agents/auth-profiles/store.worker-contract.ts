@@ -1,6 +1,10 @@
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
-import type { AuthStoreUpdateOperations } from "./store-update-kernel.js";
-import type { AuthProfileCredential, AuthProfileStore, UserModelAuthProfile } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  AuthProfileStoreOwner,
+  UserModelAuthProfile,
+} from "./types.js";
 import type {
   PersonalAuthProfileUsageReduction,
   PersonalAuthProfileUsageResult,
@@ -45,6 +49,20 @@ export function createAuthProfileUsageReceipt(store: AuthProfileStore): AuthProf
 export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
+
+export type AuthStoreUpdateInput = {
+  owner: AuthProfileStoreOwner;
+  agentDir?: string;
+  envOnly: boolean;
+};
+
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"] & {
+  oauthRefreshClaimIds: ReadonlyMap<string, string | undefined>;
+};
+
+export type AuthStoreUpdateOperations = {
+  "authProfiles.update": { input: AuthStoreUpdateInput; output: void };
+};
 
 export type AuthProfileWorkerOperations = AuthStoreUpdateOperations & {
   "authProfiles.personalAccept": {

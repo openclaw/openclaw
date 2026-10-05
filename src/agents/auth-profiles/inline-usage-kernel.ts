@@ -6,8 +6,11 @@ import { mergePersistedAuthProfileState } from "./persisted.js";
 import { inspectAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
-import type { AuthStoreUpdateOperations } from "./store-update-kernel.js";
-import type { AuthProfileUsageInput, AuthProfileUsageResult } from "./store.worker-contract.js";
+import type {
+  AuthProfileUsageInput,
+  AuthProfileUsageResult,
+  AuthStoreUpdateOperations,
+} from "./store.worker-contract.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { computeNextProfileUsageStats } from "./usage-failure-state.js";
 import { resolveInlineProviderApiKeyUsageId } from "./usage-state.js";

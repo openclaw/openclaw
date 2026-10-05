@@ -26,11 +26,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-  type SharedAuthStoreOwnership,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { prepareFreshSharedAuthStoreWrite } from "./shared-store-bootstrap.js";
 import {
   inspectAuthProfileJsonCell,
@@ -44,20 +40,15 @@ import {
   closeAuthProfileReadPool,
   isMissingDatabasePath,
 } from "./sqlite-read-pool.js";
-import type { PersistedAuthProfileStoreInspection } from "./types.js";
+import type {
+  AuthProfileStoreOwner,
+  PersistedAuthProfileStoreInspection,
+  PreparedAuthProfileStoreOwner,
+} from "./types.js";
 
 export { closeAuthProfileReadPool };
 
 export type AuthProfileDatabase = OpenClawAgentDatabase | OpenClawStateDatabase;
-
-/** Internal prepared ownership, carried through commit publication and compensation. */
-export type AuthProfileStoreOwner = {
-  databasePath: string;
-  sharedDatabasePath: string;
-  location: SharedAuthStoreOwnership["location"];
-};
-
-export type PreparedAuthProfileStoreOwner = AuthProfileStoreOwner & { env: NodeJS.ProcessEnv };
 
 export function resolveAuthProfileStoreOwner(
   database: AuthProfileDatabase,
@@ -377,6 +368,7 @@ type AuthProfileWriteOptions = {
   env?: NodeJS.ProcessEnv;
   sharedStoreWrite?: boolean;
   stateDir?: string;
+  assertEnvironment?: (env: NodeJS.ProcessEnv) => void;
 };
 
 export function prepareAuthProfileWriteTransaction(
@@ -389,6 +381,7 @@ export function prepareAuthProfileWriteTransaction(
     env.OPENCLAW_AGENT_DIR = undefined;
   }
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  options.assertEnvironment?.(env);
   const sharedStoreWrite = prepareFreshSharedAuthStoreWrite({
     agentDir,
     allowExplicitMain: options.sharedStoreWrite === true,

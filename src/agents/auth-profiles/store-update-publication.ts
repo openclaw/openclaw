@@ -32,14 +32,14 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId, type PreparedAuthProfileStoreOwner } from "./sqlite.js";
+import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
-import type { AuthStoreUpdateCommitted, AuthStoreUpdateReceipt } from "./store-update-kernel.js";
+import type { AuthStoreUpdateCommitted } from "./store-update-kernel.js";
+import type { PreparedAuthProfileStoreOwner } from "./types.js";
 
 /** Publish affected owners from committed facts, rereading only an overtaken result. */
 export async function publishAuthProfileStoreUpdate(
   owner: PreparedAuthProfileStoreOwner,
-  receipt: NonNullable<AuthStoreUpdateReceipt>,
   committed: AuthStoreUpdateCommitted,
   assertCurrent: () => void,
   nativeCommits: ReturnType<typeof watchAuthProfileNativeCommits>,
@@ -48,9 +48,9 @@ export async function publishAuthProfileStoreUpdate(
   assertCurrent();
   const shared = owner.databasePath === owner.sharedDatabasePath;
   let currentStore = committed.store;
-  let mutation = receipt.publication;
+  let mutation = committed.publication;
   let isCommittedCurrent = committedIsCurrent;
-  // A later native save may publish only its own delta. Keep this receipt's
+  // A later native save may publish only its own delta. Keep this commit's
   // affected profiles, but reconcile them from rows that include both commits.
   while (!isCommittedCurrent()) {
     const current = nativeCommits.capture();
@@ -77,10 +77,10 @@ export async function publishAuthProfileStoreUpdate(
       loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath) ??
       createEmptyAuthProfileStore();
     mutation = {
-      ...receipt.publication,
+      ...committed.publication,
       oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
         currentStore.profiles,
-        receipt.publication.profileIds,
+        committed.publication.profileIds,
       ),
     };
     isCommittedCurrent =

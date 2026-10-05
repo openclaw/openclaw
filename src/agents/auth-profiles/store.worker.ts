@@ -19,12 +19,13 @@ import {
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { readAuthProfileRows, SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
-import {
-  updateAuthProfileStoreInDatabase,
-  type AuthStoreUpdateInput,
-} from "./store-update-kernel.js";
+import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
 import { sendAuthProfileUpdateValue } from "./store-update-transfer.js";
-import type { AuthProfileUsageInput, AuthProfileUsageResult } from "./store.worker-contract.js";
+import type {
+  AuthProfileUsageInput,
+  AuthProfileUsageResult,
+  AuthStoreUpdateInput,
+} from "./store.worker-contract.js";
 import type { AuthProfileCredential, AuthProfileRowRead, UserModelAuthProfile } from "./types.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 import type {
@@ -94,9 +95,8 @@ export const authProfileOperations = {
   "authProfiles.update": (input: AuthStoreUpdateInput, { stateOptions }) =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const receipt = updateAuthProfileStoreInDatabase(db, "shared-state", input);
+        updateAuthProfileStoreInDatabase(db, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return receipt;
       },
       stateOptions(),
       { operationLabel: "auth-profiles.update" },

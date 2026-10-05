@@ -107,6 +107,12 @@ unaffected local snapshots and their revisions intact. Resolved secrets remain
 with their existing runtime owner.
 Doctor auth repairs retain the native transaction owned by their schema-maintenance
 lease; they do not borrow ordinary worker authority.
+Model-catalog workers use their request's native auth-write scope, pinned to the
+captured state root. The request waits for claimed OAuth refreshes to settle before
+closing that scope; retained callbacks cannot write after it closes.
+Temporary probe stores wait for their database work and shared-registry removal
+before deleting credential files. If disposal fails, cleanup retains the directory
+and reports its location.
 Stored formats, schema versions, and update or rollback behavior are unchanged.
 
 Inline API-key failure bookkeeping reads and updates the selected agent's auth

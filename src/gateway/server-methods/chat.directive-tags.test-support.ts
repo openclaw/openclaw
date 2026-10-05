@@ -21,11 +21,9 @@ import {
   type GatewayPluginMetadataOwner,
 } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";

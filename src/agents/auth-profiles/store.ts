@@ -99,8 +99,6 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
   type AuthProfileDatabase,
-  type AuthProfileStoreOwner,
-  type PreparedAuthProfileStoreOwner,
 } from "./sqlite.js";
 import { loadPersistedAuthProfileState } from "./state.js";
 import { prepareAuthProfileStoreMutation } from "./store-mutation.js";
@@ -113,6 +111,8 @@ import { createAuthProfileStoreUpdater } from "./store-update.js";
 import type {
   AuthProfileCredentialSource,
   AuthProfileStore,
+  AuthProfileStoreOwner,
+  PreparedAuthProfileStoreOwner,
   RuntimeAuthProfileStore,
 } from "./types.js";
 
@@ -895,6 +895,7 @@ export function createAuthProfileStoreRuntime(
       getScopedAuthProfileEnv,
       getScopedSharedAuthStore,
       resolveRuntimeAuthProfileAgentDir,
+      isEnvOnlyAuthProfileRuntime,
       load: loadAuthProfileStoreForAgent,
       save(store, agentDir, options, database, owner) {
         const publication = saveAuthProfileStoreInTransaction(

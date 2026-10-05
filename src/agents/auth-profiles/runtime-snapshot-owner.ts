@@ -28,8 +28,13 @@ import {
   getRuntimeExternalCliProfileIds,
   setRuntimeExternalCliProfileIds,
 } from "./runtime-external-profile-references.js";
-import { resolveAuthProfileDatabasePath, type AuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileCredential, AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  AuthProfileStoreOwner,
+  RuntimeAuthProfileStore,
+} from "./types.js";
 
 export function createEmptyAuthProfileStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };

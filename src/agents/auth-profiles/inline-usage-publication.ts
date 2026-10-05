@@ -30,10 +30,14 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId, type PreparedAuthProfileStoreOwner } from "./sqlite.js";
+import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import { buildPersistedAuthProfileState } from "./state.js";
 import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
-import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
+import type {
+  AuthProfileRowRead,
+  AuthProfileStore,
+  PreparedAuthProfileStoreOwner,
+} from "./types.js";
 
 /** Reconcile committed facts through the existing snapshot owner, without native host rereads. */
 export async function publishInlineAuthFailure(

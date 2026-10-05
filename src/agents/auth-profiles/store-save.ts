@@ -20,8 +20,7 @@ import {
 } from "./runtime-external-profile-references.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
-import type { AuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
 
 export type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;

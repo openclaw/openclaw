@@ -17,8 +17,7 @@ import {
   type RuntimeAuthProfileLegacyCandidates,
   type RuntimeAuthSharedOwner,
 } from "./runtime-snapshot-owner.js";
-import type { AuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
+import type { AuthProfileStore, AuthProfileStoreOwner, RuntimeAuthProfileStore } from "./types.js";
 
 export type OwnedRuntimeSnapshot = {
   store: RuntimeAuthProfileStore;

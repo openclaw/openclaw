@@ -5,10 +5,10 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../c
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
+import { closeOpenClawAgentDatabases } from "../../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabases,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";

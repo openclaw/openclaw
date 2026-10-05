@@ -240,6 +240,7 @@ src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
+src/agents/auth-profiles/store-update-commit.ts
 src/agents/auth-profiles/sqlite-read-pool.ts
 src/agents/configured-provider-fallback.ts
 src/agents/configured-provider-model.ts
@@ -892,6 +893,7 @@ src/infra/http-response-body-timeout.ts
 src/infra/http-response-body.ts
 src/infra/inline-option-token.ts
 src/infra/install-safe-path.ts
+src/infra/json-field-transfer.ts
 src/infra/json-files.ts
 src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
@@ -1598,6 +1600,7 @@ src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
 src/state/openclaw-agent-db-contract.ts
+src/state/openclaw-agent-db-disposal.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-lease-provenance.ts
@@ -1616,6 +1619,7 @@ src/state/openclaw-agent-db-readonly.ts
 src/state/openclaw-agent-db-registry-listing.ts
 src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts
+src/state/openclaw-agent-db-registry.worker.ts
 src/state/openclaw-agent-db-resources.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts

@@ -7,13 +7,15 @@ import {
   loadPersistedAuthProfileStoreAtDatabasePath,
   mergePersistedAuthProfileState,
 } from "./persisted.js";
-import { markRuntimePersistedProfiles } from "./runtime-snapshot-owner.js";
+import {
+  createEmptyAuthProfileStore,
+  markRuntimePersistedProfiles,
+} from "./runtime-snapshot-owner.js";
 import {
   readAuthProfileJsonCellText,
   writeAuthProfileJsonCell,
   deleteAuthProfileJsonCell,
 } from "./sqlite-json.js";
-import type { AuthProfileStoreOwner } from "./sqlite.js";
 import { coerceAuthProfileState } from "./state.js";
 import { prepareAuthProfileStoreMutation } from "./store-mutation.js";
 import {
@@ -25,17 +27,23 @@ import {
   sendAuthProfileUpdateValue,
   receiveAuthProfileUpdateValue,
 } from "./store-update-transfer.js";
+import type { AuthStoreUpdateInput, AuthStoreUpdatePublication } from "./store.worker-contract.js";
 import type { AuthProfileStore } from "./types.js";
 
-export type AuthStoreUpdateInput = {
-  owner: AuthProfileStoreOwner;
-  agentDir?: string;
-};
 export type AuthStoreUpdatePrepared = {
   store: AuthProfileStore;
   mainStore: AuthProfileStore | null;
 };
-export type AuthStoreUpdateCommitted = { store: AuthProfileStore };
+export type AuthStoreUpdateCommitted = {
+  store: AuthProfileStore;
+  publication: AuthStoreUpdatePublication;
+};
+export type AuthStoreUpdateCommittedWire = {
+  store: AuthProfileStore;
+  publication: Omit<AuthStoreUpdatePublication, "oauthRefreshClaimIds"> & {
+    oauthRefreshClaimIds: Array<[string, string | null]>;
+  };
+};
 export type AuthStoreUpdateResponse =
   | { save: false }
   | {
@@ -53,19 +61,13 @@ export type AuthStoreUpdateResponse =
         pruneOrderProfileIds?: string[];
       };
     };
-export type AuthStoreUpdateReceipt = {
-  publication: ReturnType<typeof prepareAuthProfileStoreMutation>["publication"];
-} | null;
-export type AuthStoreUpdateOperations = {
-  "authProfiles.update": { input: AuthStoreUpdateInput; output: AuthStoreUpdateReceipt };
-};
 
 /** Run under the owning transaction: callbacks see its current rows exactly once. */
 export function updateAuthProfileStoreInDatabase(
   database: DatabaseSync,
   kind: "agent" | "shared-state",
   input: AuthStoreUpdateInput,
-): AuthStoreUpdateReceipt {
+): void {
   const read = (target: "store" | "state"): unknown => {
     const text = readAuthProfileJsonCellText(database, target, kind);
     try {
@@ -77,29 +79,36 @@ export function updateAuthProfileStoreInDatabase(
       throw new AuthProfileStoreUnreadableError(input.owner.databasePath);
     }
   };
-  const existingRaw = read("store");
-  const existingState = read("state") ?? null;
-  const loaded = mergePersistedAuthProfileState(existingRaw, () => existingState);
-  if (existingRaw !== undefined && !loaded) {
-    throw new AuthProfileStoreUnreadableError(input.owner.databasePath);
-  }
-  const localStore = loaded ?? {
-    version: AUTH_STORE_VERSION,
-    profiles: {},
-    ...coerceAuthProfileState(existingState),
-  };
   const isMainStore = input.owner.databasePath === input.owner.sharedDatabasePath;
-  const mainStore = isMainStore
-    ? localStore
-    : loadPersistedAuthProfileStoreAtDatabasePath(
-        input.owner.sharedDatabasePath,
-        input.owner.location === "state-db" ? "shared-state" : "agent",
-      );
+  const prepareStores = () => {
+    const existingRaw = read("store");
+    const existingState = read("state") ?? null;
+    const loaded = mergePersistedAuthProfileState(existingRaw, () => existingState);
+    if (existingRaw !== undefined && !loaded) {
+      throw new AuthProfileStoreUnreadableError(input.owner.databasePath);
+    }
+    const localStore = loaded ?? {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+      ...coerceAuthProfileState(existingState),
+    };
+    const mainStore = isMainStore
+      ? localStore
+      : loadPersistedAuthProfileStoreAtDatabasePath(
+          input.owner.sharedDatabasePath,
+          input.owner.location === "state-db" ? "shared-state" : "agent",
+        );
+    return { existingRaw, existingState, loaded, localStore, mainStore };
+  };
+  // Env-only callbacks receive no stored facts. An explicit save still uses canonical rows.
+  const prepared = input.envOnly ? undefined : prepareStores();
   const { port1, port2 } = new MessageChannel();
   try {
     sendAuthProfileUpdateValue(port1, {
-      store: markRuntimePersistedProfiles(loaded ?? { version: AUTH_STORE_VERSION, profiles: {} }),
-      mainStore: isMainStore ? null : mainStore,
+      store: prepared
+        ? markRuntimePersistedProfiles(prepared.loaded ?? createEmptyAuthProfileStore())
+        : createEmptyAuthProfileStore(),
+      mainStore: prepared && !isMainStore ? prepared.mainStore : null,
     });
     requestSqliteWorkerOperationAdmission(
       {
@@ -114,8 +123,9 @@ export function updateAuthProfileStoreInDatabase(
       throw new Error("Auth profile updater produced no response");
     }
     if (!response.save) {
-      return null;
+      return;
     }
+    const { existingRaw, existingState, localStore, mainStore } = prepared ?? prepareStores();
     const next = buildLocalAuthProfileStoreForSave({
       owner: input.owner,
       store: response.store,
@@ -144,8 +154,14 @@ export function updateAuthProfileStoreInDatabase(
     }
     sendAuthProfileUpdateValue(port1, {
       store: markRuntimePersistedProfiles(next),
-    });
-    return { publication };
+      publication: {
+        ...publication,
+        oauthRefreshClaimIds: Array.from(
+          publication.oauthRefreshClaimIds,
+          ([profileId, claimId]): [string, string | null] => [profileId, claimId ?? null],
+        ),
+      },
+    } satisfies AuthStoreUpdateCommittedWire);
   } finally {
     port1.close();
     port2.close();

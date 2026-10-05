@@ -36,7 +36,7 @@ import {
 } from "./persisted.js";
 import { updatePersonalAuthProfileStore } from "./personal-profiles.js";
 import type { LoadAuthProfileStoreOptions } from "./runtime-read.js";
-import { assertPersonalAuthProfileRuntime } from "./runtime-scope.js";
+import { assertPersonalAuthProfileRuntime, getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import {
   getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   invalidateRuntimeAuthProfileStoreSnapshotsForOwner,
@@ -45,22 +45,21 @@ import {
   prepareAuthProfileWriteTransaction,
   runAuthProfileWriteTransaction,
   type AuthProfileDatabase,
-  type PreparedAuthProfileStoreOwner,
 } from "./sqlite.js";
 import type { SaveAuthProfileStoreOptions } from "./store-save.js";
 import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import type {
   AuthStoreUpdatePrepared,
   AuthStoreUpdateCommitted,
+  AuthStoreUpdateCommittedWire,
   AuthStoreUpdateResponse,
-  AuthStoreUpdateReceipt,
 } from "./store-update-kernel.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
 import {
   sendAuthProfileUpdateValue,
   receiveAuthProfileUpdateValue,
 } from "./store-update-transfer.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, PreparedAuthProfileStoreOwner } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
 class AuthProfileSharedSourceChangedError extends Error {}
@@ -68,6 +67,7 @@ class AuthProfileSharedSourceChangedError extends Error {}
 /** The existing SQLite worker owns BEGIN/read/save/COMMIT; host callbacks keep their scope. */
 async function runAuthProfileStoreUpdate(params: {
   agentDir?: string;
+  envOnly: boolean;
   options: Parameters<typeof prepareAuthProfileWriteTransaction>[1];
   assertCurrent?: () => void;
   update: (
@@ -75,7 +75,6 @@ async function runAuthProfileStoreUpdate(params: {
     owner: PreparedAuthProfileStoreOwner,
   ) => AuthStoreUpdateResponse;
   publish: (
-    receipt: AuthStoreUpdateReceipt,
     committed: AuthStoreUpdateCommitted | undefined,
     owner: PreparedAuthProfileStoreOwner,
     assertCurrent: () => void,
@@ -116,6 +115,20 @@ async function runAuthProfileStoreUpdate(params: {
   };
   return runAuthProfileUsage(async () => {
     let committed: AuthStoreUpdateCommitted | undefined;
+    const captureSharedSource = () => {
+      if (sharedSource || owner.databasePath === owner.sharedDatabasePath) {
+        return;
+      }
+      // Fence native commits and published mutations before the worker reads inherited rows.
+      const commits = watchAuthProfileNativeCommits(owner.sharedDatabasePath);
+      sharedSource = {
+        commits,
+        unchanged: commits.capture(),
+        revision: getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(
+          owner.sharedDatabasePath,
+        ),
+      };
+    };
     const assertOwner = () => {
       if (
         resolveSharedAuthStorePath(owner.env) !== owner.sharedDatabasePath ||
@@ -123,7 +136,9 @@ async function runAuthProfileStoreUpdate(params: {
       ) {
         throw new Error("Auth profile shared owner changed before write admission");
       }
-      assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath);
+      if (!params.envOnly) {
+        assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath);
+      }
     };
     let assertAuthority = assertOwner;
     const assertRequest = () => {
@@ -155,7 +170,11 @@ async function runAuthProfileStoreUpdate(params: {
       exchangePort = facts.port;
       // SAFETY: The paired worker queues all prepared fields before requesting the callback grant.
       const prepared = receiveAuthProfileUpdateValue(exchangePort) as AuthStoreUpdatePrepared;
-      sendAuthProfileUpdateValue(exchangePort, params.update(prepared, owner));
+      const response = params.update(prepared, owner);
+      if (params.envOnly && response.save) {
+        captureSharedSource();
+      }
+      sendAuthProfileUpdateValue(exchangePort, response);
       return true;
     };
     const collectCommitted = () => {
@@ -163,9 +182,21 @@ async function runAuthProfileStoreUpdate(params: {
       committedIsCurrent = nativeCommits.capture();
       if (exchangePort) {
         // SAFETY: The paired worker queues canonical fields before requesting its commit grant.
-        committed = receiveAuthProfileUpdateValue(exchangePort) as
-          | AuthStoreUpdateCommitted
+        const received = receiveAuthProfileUpdateValue(exchangePort) as
+          | AuthStoreUpdateCommittedWire
           | undefined;
+        committed = received && {
+          ...received,
+          publication: {
+            ...received.publication,
+            oauthRefreshClaimIds: new Map(
+              received.publication.oauthRefreshClaimIds.map(([profileId, claimId]) => [
+                profileId,
+                claimId ?? undefined,
+              ]),
+            ),
+          },
+        };
       }
     };
     const input = {
@@ -175,17 +206,11 @@ async function runAuthProfileStoreUpdate(params: {
         location: owner.location,
       },
       agentDir: params.agentDir,
+      envOnly: params.envOnly,
     };
-    const publish = (receipt: AuthStoreUpdateReceipt) => {
+    const publish = () => {
       acknowledged = true;
-      return params.publish(
-        receipt,
-        committed,
-        owner,
-        assertAuthority,
-        nativeCommits!,
-        committedIsCurrent,
-      );
+      return params.publish(committed, owner, assertAuthority, nativeCommits!, committedIsCurrent);
     };
     if (databaseTarget.kind === "shared-state") {
       const context = captureOpenClawStateWorkerContext({ env: owner.env });
@@ -199,7 +224,10 @@ async function runAuthProfileStoreUpdate(params: {
       };
       return runOpenClawStateWorkerOperation(
         context,
-        async (scope) => publish(await scope.execute({ type: "authProfiles.update", input })),
+        async (scope) => {
+          await scope.execute({ type: "authProfiles.update", input });
+          return publish();
+        },
         {
           assertCurrent: assertOwner,
           createAdmission: () => {
@@ -245,17 +273,8 @@ async function runAuthProfileStoreUpdate(params: {
               assertRequest();
               if (request.stage === "transaction") {
                 transactionFacts = request.facts;
-                if (!sharedSource && owner.databasePath !== owner.sharedDatabasePath) {
-                  // This grant precedes the inherited read. Fence native commits and published
-                  // mutations through the final grant, not a transaction across both databases.
-                  const commits = watchAuthProfileNativeCommits(owner.sharedDatabasePath);
-                  sharedSource = {
-                    commits,
-                    unchanged: commits.capture(),
-                    revision: getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(
-                      owner.sharedDatabasePath,
-                    ),
-                  };
+                if (!params.envOnly) {
+                  captureSharedSource();
                 }
               }
               if (
@@ -290,20 +309,19 @@ async function runAuthProfileStoreUpdate(params: {
         databaseTarget,
         async () => {
           await execution.prepare(source);
-          const result = await execution.runExisting(source, async (scope) => ({
-            value: await publish(
-              await executeOpenClawAgentWorkerPublication<
-                InlineAuthFailureOperations,
-                "authProfiles.update"
-              >(scope, {
-                id: randomUUID(),
-                moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.authProfileInlineUsage)
-                  .href,
-                input: {},
-                command: { type: "authProfiles.update", input },
-              }),
-            ),
-          }));
+          const result = await execution.runExisting(source, async (scope) => {
+            await executeOpenClawAgentWorkerPublication<
+              InlineAuthFailureOperations,
+              "authProfiles.update"
+            >(scope, {
+              id: randomUUID(),
+              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.authProfileInlineUsage)
+                .href,
+              input: {},
+              command: { type: "authProfiles.update", input },
+            });
+            return { value: await publish() };
+          });
           if (!result) {
             throw new Error("Auth profile database disappeared before mutation");
           }
@@ -356,6 +374,7 @@ export function createAuthProfileStoreUpdater(
     getScopedAuthProfileEnv: () => NodeJS.ProcessEnv | undefined;
     getScopedSharedAuthStore: () => AuthProfileStore | undefined;
     resolveRuntimeAuthProfileAgentDir: (agentDir?: string) => string | undefined;
+    isEnvOnlyAuthProfileRuntime: () => boolean;
     load: (
       agentDir: string | undefined,
       options: LoadAuthProfileStoreOptions,
@@ -391,6 +410,7 @@ export function createAuthProfileStoreUpdater(
     ) => boolean;
   }): Promise<AuthProfileStore | null> {
     const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
+    const envOnly = host.isEnvOnlyAuthProfileRuntime();
     try {
       if (params.profileId && isUserModelAuthProfileId(params.profileId)) {
         assertPersonalAuthProfileRuntime();
@@ -406,17 +426,20 @@ export function createAuthProfileStoreUpdater(
           stateDir: params.stateDir,
         });
       }
+      const workerWrites = getWorkerAuthProfileWrites();
       const writeOptions = {
         sharedStoreWrite: params.sharedStoreWrite,
         stateDir: params.stateDir,
-        env: params.stateDir ? undefined : getScopedAuthProfileEnv(),
+        env: params.stateDir ? undefined : (getScopedAuthProfileEnv() ?? workerWrites?.env),
+        assertEnvironment: workerWrites?.assertOwner,
       };
-      // Doctor auth repairs own native schema-maintenance custody, which cannot be lent to the worker.
-      if (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
-        return await runAuthProfileUsage(async () =>
+      // Doctor keeps maintenance custody; catalog writes stay in their admitted worker request.
+      if (workerWrites || getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+        const updateNative = () =>
           runAuthProfileWriteTransaction(
             agentDir,
             (database, owner) => {
+              workerWrites?.assertOwner(owner.env);
               params.assertCurrent?.();
               const store = host.load(
                 agentDir,
@@ -424,13 +447,14 @@ export function createAuthProfileStoreUpdater(
                 owner.env,
               );
               const sharedStore =
-                owner.databasePath === owner.sharedDatabasePath
+                envOnly || owner.databasePath === owner.sharedDatabasePath
                   ? null
                   : loadPersistedAuthProfileStoreAtDatabasePath(
                       owner.sharedDatabasePath,
                       owner.location === "state-db" ? "shared-state" : "agent",
                     );
               const changed = params.updater(store, owner, sharedStore);
+              workerWrites?.assertOwner(owner.env);
               params.assertCurrent?.();
               if (changed) {
                 host.save(store, agentDir, params.saveOptions, database, owner);
@@ -438,21 +462,26 @@ export function createAuthProfileStoreUpdater(
               return store;
             },
             writeOptions,
-          ),
+          );
+        return await runAuthProfileUsage(async () =>
+          workerWrites ? workerWrites.run(updateNative) : updateNative(),
         );
       }
       let loadedStore: AuthProfileStore;
       return await runAuthProfileStoreUpdate({
         agentDir,
+        envOnly,
         assertCurrent: params.assertCurrent,
         options: writeOptions,
         update(prepared, owner) {
-          assertAuthProfileMigrationCandidates({
-            databasePath: owner.databasePath,
-            candidates: resolveLegacyAuthProfileSourceCandidates({ agentDir, env: owner.env }),
-            hasCredentials: () => Object.keys(prepared.store.profiles).length > 0,
-          });
-          observeCanonicalAuthProfileCredentials(owner.databasePath, prepared.store.profiles);
+          if (!envOnly) {
+            assertAuthProfileMigrationCandidates({
+              databasePath: owner.databasePath,
+              candidates: resolveLegacyAuthProfileSourceCandidates({ agentDir, env: owner.env }),
+              hasCredentials: () => Object.keys(prepared.store.profiles).length > 0,
+            });
+            observeCanonicalAuthProfileCredentials(owner.databasePath, prepared.store.profiles);
+          }
           loadedStore = applyScopedAuthReadThrough(prepared.store);
           const save = params.updater(loadedStore, owner, prepared.mainStore);
           if (!save) {
@@ -490,12 +519,11 @@ export function createAuthProfileStoreUpdater(
             },
           };
         },
-        async publish(receipt, committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-          if (receipt && committed) {
+        async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
+          if (committed) {
             try {
               await publishAuthProfileStoreUpdate(
                 owner,
-                receipt,
                 committed,
                 assertCurrent,
                 nativeCommits,

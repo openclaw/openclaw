@@ -46,12 +46,13 @@ import {
   type SharedAuthProfileStoreMutation,
 } from "./runtime-snapshot-selection.js";
 import { registerFreshSharedAuthStoreHandoff } from "./shared-store-bootstrap.js";
-import {
-  closeAuthProfileReadPool,
-  type AuthProfileStoreOwner,
-  type PreparedAuthProfileStoreOwner,
-} from "./sqlite.js";
-import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
+import { closeAuthProfileReadPool } from "./sqlite.js";
+import type {
+  AuthProfileStore,
+  AuthProfileStoreOwner,
+  PreparedAuthProfileStoreOwner,
+  RuntimeAuthProfileStore,
+} from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, OwnedRuntimeSnapshot>();
 

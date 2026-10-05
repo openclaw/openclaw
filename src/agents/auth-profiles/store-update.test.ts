@@ -1,5 +1,11 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
+import { deserialize, serialize } from "node:v8";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { JSON_FIELD_TRANSFER_BYTES } from "../../infra/json-field-transfer.js";
+import * as sqliteReplies from "../../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as executions from "../../state/openclaw-agent-execution.js";
 import * as workerPublications from "../../state/openclaw-agent-worker-store.js";
@@ -28,6 +34,7 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import * as publication from "./store-update-publication.js";
+import { withEnvOnlyAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
@@ -36,6 +43,99 @@ const credential = (key: string) => ({ type: "api_key" as const, provider: "fixt
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
+});
+
+it.each([
+  { target: "agent", save: false },
+  { target: "shared", save: false },
+  { target: "agent", save: true },
+] as const)("keeps env-only $target callbacks isolated (save=$save)", async ({ target, save }) => {
+  await withOpenClawTestState(
+    { label: "auth-env-only-update", scenario: "minimal" },
+    async (state) => {
+      const localDir = state.agentDir("child");
+      const shared = { version: 1, profiles: { shared: credential("synthetic-hidden-shared") } };
+      const local = { version: 1, profiles: { local: credential("synthetic-hidden-local") } };
+      const empty = { version: 1, profiles: {} };
+      const explicit = { version: 1, profiles: { added: credential("synthetic-explicit") } };
+      saveAuthProfileStore(shared, undefined, saveOptions);
+      saveAuthProfileStore(local, localDir, saveOptions);
+      const updater = vi.fn<Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"]>(
+        (store, _owner, inherited) => {
+          expect(store).toEqual(empty);
+          expect(inherited).toBeNull();
+          if (save) {
+            store.profiles.added = explicit.profiles.added;
+          }
+          return save;
+        },
+      );
+
+      const result = await withEnvOnlyAuthProfileStore(() =>
+        updateAuthProfileStoreWithLock({
+          agentDir: target === "agent" ? localDir : undefined,
+          saveOptions,
+          updater,
+        }),
+      );
+      expect(updater).toHaveBeenCalledOnce();
+      expect(result).toEqual(save ? explicit : empty);
+      expect(loadPersistedAuthProfileStore()).toEqual(shared);
+      expect(loadPersistedAuthProfileStore(localDir)).toEqual(save ? explicit : local);
+    },
+  );
+});
+
+it("does not decode a malformed persisted cell for an env-only no-op callback", async () => {
+  await withOpenClawTestState(
+    { label: "auth-env-only-malformed", scenario: "minimal" },
+    async (state) => {
+      const agentDir = state.agentDir("child");
+      saveAuthProfileStore(
+        { version: 1, profiles: { local: credential("synthetic-hidden-local") } },
+        agentDir,
+        saveOptions,
+      );
+      const malformed = "{synthetic-invalid-json";
+      runAuthProfileWriteTransaction(agentDir, ({ db }) => {
+        db.prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = ?").run(
+          malformed,
+          "primary",
+        );
+      });
+      const updater = vi.fn(() => false);
+      const result = await withEnvOnlyAuthProfileStore(() =>
+        updateAuthProfileStoreWithLock({ agentDir, updater }),
+      );
+      expect(updater).toHaveBeenCalledOnce();
+      expect(result).toEqual({ version: 1, profiles: {} });
+      expect(
+        runAuthProfileWriteTransaction(agentDir, ({ db }) =>
+          sqliteJson.readAuthProfileJsonCellText(db, "store", "agent"),
+        ),
+      ).toBe(malformed);
+    },
+  );
+});
+
+it("rejects a native auth owner before initializing its state directory", async () => {
+  await withOpenClawTestState(
+    { label: "auth-native-owner", scenario: "minimal" },
+    async (state) => {
+      const refusedRoot = path.join(state.stateDir, "refused");
+      expect(() =>
+        runAuthProfileWriteTransaction(undefined, () => undefined, {
+          stateDir: refusedRoot,
+          sharedStoreWrite: true,
+          assertEnvironment(env) {
+            expect(env.OPENCLAW_STATE_DIR).toBe(refusedRoot);
+            throw new Error("synthetic native owner revoked");
+          },
+        }),
+      ).toThrow("synthetic native owner revoked");
+      expect(existsSync(refusedRoot)).toBe(false);
+    },
+  );
 });
 
 it.each(["stale", "newer-write", "rebound-owner"])(
@@ -324,7 +424,7 @@ it("keeps a shared rotation that commits while a local save awaits publication",
       const publish = publication.publishAuthProfileStoreUpdate;
       let rotated = false;
       vi.spyOn(publication, "publishAuthProfileStoreUpdate").mockImplementation(
-        async (owner, receipt, committed, assertCurrent, nativeCommits, committedIsCurrent) => {
+        async (owner, committed, assertCurrent, nativeCommits, committedIsCurrent) => {
           if (!rotated && owner.databasePath !== owner.sharedDatabasePath) {
             rotated = true;
             await updateAuthProfileStoreWithLock({
@@ -336,14 +436,7 @@ it("keeps a shared rotation that commits while a local save awaits publication",
               },
             });
           }
-          return publish(
-            owner,
-            receipt,
-            committed,
-            assertCurrent,
-            nativeCommits,
-            committedIsCurrent,
-          );
+          return publish(owner, committed, assertCurrent, nativeCommits, committedIsCurrent);
         },
       );
       await updateAuthProfileStoreWithLock({
@@ -407,14 +500,37 @@ it.each(["shared", "agent"] as const)(
       async (state) => {
         const agentDir = target === "agent" ? state.agentDir("child") : undefined;
         const large = "synthetic-\u{1f99e}".repeat(10_000);
+        const selectedId = `selected:${"p".repeat(65_536)}`;
         const metadata = { ["m".repeat(65_536)]: "synthetic-metadata" };
         const largeCredential = { ...credential(large), metadata };
         const initial: AuthProfileStore = {
           version: 1,
-          profiles: { large: largeCredential, selected: credential("synthetic-old") },
+          profiles: { large: largeCredential, [selectedId]: credential("synthetic-old") },
         };
         saveAuthProfileStore(initial, agentDir, saveOptions);
         setRuntimeAuthProfileStoreSnapshot(initial, agentDir);
+        const replyBytes: number[] = [];
+        const receiveReply = sqliteReplies.receiveSqliteWorkerReply;
+        const replies = vi
+          .spyOn(sqliteReplies, "receiveSqliteWorkerReply")
+          .mockImplementation((slot, reply, owner) => {
+            const request = slot.current?.request;
+            if (reply.ok && request?.type === "execute") {
+              const command: unknown = deserialize(request.input);
+              if (
+                isRecord(command) &&
+                (command.type === "authProfiles.update" ||
+                  (command.type === "database.domain.publish" &&
+                    isRecord(command.input) &&
+                    isRecord(command.input.command) &&
+                    command.input.command.type === "authProfiles.update"))
+              ) {
+                replyBytes.push(reply.value.byteLength);
+              }
+            }
+            return receiveReply(slot, reply, owner);
+          });
+        const frames = vi.spyOn(MessagePort.prototype, "postMessage");
         const nativeWrite = vi
           .spyOn(sqliteJson, "writeAuthProfileJsonCell")
           .mockImplementation(() => {
@@ -422,24 +538,33 @@ it.each(["shared", "agent"] as const)(
           });
         const updater = vi.fn((store: AuthProfileStore) => {
           expect(store.profiles.large).toEqual(largeCredential);
-          store.profiles.selected = credential("synthetic-new");
-          store.order = { fixture: ["selected", "large"] };
+          store.profiles[selectedId] = credential("synthetic-new");
+          store.order = { fixture: [selectedId, "large"] };
           return true;
         });
         await updateAuthProfileStoreWithLock({ agentDir, updater, saveOptions });
         expect(updater).toHaveBeenCalledOnce();
         expect(nativeWrite).not.toHaveBeenCalled();
         nativeWrite.mockRestore();
+        replies.mockRestore();
+        const frameBytes = frames.mock.calls
+          .filter(([value]) => Array.isArray(value))
+          .map(([value]) => serialize(value).byteLength);
+        frames.mockRestore();
+        expect(replyBytes.length).toBeGreaterThan(0);
+        expect(Math.max(...replyBytes)).toBeLessThanOrEqual(JSON_FIELD_TRANSFER_BYTES);
+        expect(frameBytes.length).toBeGreaterThan(1);
+        expect(Math.max(...frameBytes)).toBeLessThanOrEqual(JSON_FIELD_TRANSFER_BYTES);
         const expected = {
           ...initial,
-          profiles: { ...initial.profiles, selected: credential("synthetic-new") },
-          order: { fixture: ["selected", "large"] },
+          profiles: { ...initial.profiles, [selectedId]: credential("synthetic-new") },
+          order: { fixture: [selectedId, "large"] },
         };
         expect(loadPersistedAuthProfileStore(agentDir)).toEqual(expected);
         expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toMatchObject(expected);
 
         const rejected = vi.fn((store: AuthProfileStore) => {
-          store.profiles.selected = credential("synthetic-refused");
+          store.profiles[selectedId] = credential("synthetic-refused");
           throw new Error("synthetic updater refusal");
         });
         await expect(
@@ -450,7 +575,7 @@ it.each(["shared", "agent"] as const)(
 
         let revoked = false;
         const guarded = vi.fn((store: AuthProfileStore) => {
-          store.profiles.selected = credential("synthetic-revoked");
+          store.profiles[selectedId] = credential("synthetic-revoked");
           revoked = true;
           return true;
         });

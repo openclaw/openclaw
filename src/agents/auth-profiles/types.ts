@@ -15,6 +15,17 @@ import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 type InlineAuthProfileCredential = z.infer<typeof inlineAuthProfileCredentialSchema>;
 
+export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
+
+/** Internal prepared ownership, carried through commit publication and compensation. */
+export type AuthProfileStoreOwner = {
+  databasePath: string;
+  sharedDatabasePath: string;
+  location: SharedAuthStoreOwnership["location"];
+};
+
+export type PreparedAuthProfileStoreOwner = AuthProfileStoreOwner & { env: NodeJS.ProcessEnv };
+
 /** Provider identifier recorded on auth profile credentials. */
 export type OAuthProvider = string;
 
