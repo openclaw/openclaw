@@ -25,6 +25,8 @@ export function projectThreadBindingRecord(
     metadata?: (lifecycleMetadata: Record<string, unknown>) => Record<string, unknown>;
   },
 ): SessionBindingRecord {
+  // Keep persisted projection bytes aligned with the worker's conversation capture.
+  const { channel, ...conversation } = params.conversation;
   const metadata = {
     agentId: record.agentId,
     label: record.label,
@@ -37,7 +39,7 @@ export function projectThreadBindingRecord(
     bindingId: params.bindingId ?? `${record.accountId}:${params.conversation.conversationId}`,
     targetSessionKey: record.targetSessionKey,
     targetKind: params.targetKind,
-    conversation: { accountId: record.accountId, ...params.conversation },
+    conversation: { channel, accountId: record.accountId, ...conversation },
     status: "active",
     boundAt: record.boundAt,
     expiresAt: params.lifecycle.expiresAt,

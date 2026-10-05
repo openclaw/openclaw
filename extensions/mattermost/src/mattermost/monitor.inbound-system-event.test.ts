@@ -132,7 +132,8 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./draft-stream.js", () => ({
+vi.mock("./draft-stream.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./draft-stream.js")>()),
   createMattermostDraftStream: mockState.createMattermostDraftStream,
 }));
 
