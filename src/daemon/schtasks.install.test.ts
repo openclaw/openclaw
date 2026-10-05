@@ -482,7 +482,7 @@ describe("installScheduledTask", () => {
       programArguments: ["node", "gateway.js"],
       environment: { OPENCLAW_SERVICE_KIND: "gateway" },
     });
-    expect(schtasksCalls.map((call) => call[0])).toEqual(["/Query", "/Run"]);
+    expect(schtasksCalls.map((call) => call[0])).toEqual(["/Query", "/Query", "/Query", "/Run"]);
     expect(xmlPayloadCaptures).toEqual([]);
     expect(decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) })).toContain(
       "node gateway.js --task-supervisor < NUL",
