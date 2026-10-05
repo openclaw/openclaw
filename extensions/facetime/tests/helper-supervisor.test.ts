@@ -131,7 +131,7 @@ describe("FaceTime helper supervisor", () => {
         staleProcessId: 1234,
       }),
     );
-    vi.mocked(process.kill).mockImplementation(() => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("process exited"), { code: "ESRCH" });
     });
     await vi.advanceTimersByTimeAsync(2_001);
@@ -174,7 +174,7 @@ describe("FaceTime helper supervisor", () => {
     vi.mocked(existsSync).mockImplementation(
       (path) => path === "/System/Applications/FaceTime.app",
     );
-    vi.mocked(process.kill).mockImplementation(() => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("process exited"), { code: "ESRCH" });
     });
     const { supervisor, run } = createSupervisor();

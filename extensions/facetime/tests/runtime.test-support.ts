@@ -79,7 +79,8 @@ vi.mock("../src/plugin-paths.js", () => ({
   ensureHelperArtifacts: vi.fn(async () => ({ buildId: "build", ipcKey: "key" })),
 }));
 
-vi.mock("../src/driver-setup.js", () => ({
+vi.mock("../src/driver-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/driver-setup.js")>()),
   installFaceTimeDriver: mocks.installDriver,
 }));
 

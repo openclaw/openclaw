@@ -32,7 +32,8 @@ const accessMocks = vi.hoisted(() => ({
 
 const runtimeMocks = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
 
-vi.mock("./runtime.js", () => ({
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
   getGoogleChatRuntime: () => ({ state: runtimeMocks }),
 }));
 

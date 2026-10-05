@@ -17,7 +17,8 @@ type GoogleChatIngressQueue = ReturnType<
 type GoogleChatIngressDispatch = Parameters<typeof createGoogleChatIngressMonitor>[0]["dispatch"];
 
 const { openChannelIngressQueue } = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
-vi.mock("./runtime.js", () => ({
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
   getGoogleChatRuntime: () => ({ state: { openChannelIngressQueue } }),
 }));
 

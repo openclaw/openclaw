@@ -25,9 +25,18 @@ vi.mock("openclaw/plugin-sdk/setup", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/setup")>()),
   runSingleChannelSecretStep: vi.fn(),
 }));
-vi.mock("./room-access-wait.js", () => ({ waitForBuzzRoomAccess: vi.fn() }));
-vi.mock("./room-discovery.js", () => ({ discoverBuzzRooms: vi.fn() }));
-vi.mock("./setup-verify.js", () => ({ verifyBuzzAfterSetup: vi.fn() }));
+vi.mock("./room-access-wait.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./room-access-wait.js")>()),
+  waitForBuzzRoomAccess: vi.fn(),
+}));
+vi.mock("./room-discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./room-discovery.js")>()),
+  discoverBuzzRooms: vi.fn(),
+}));
+vi.mock("./setup-verify.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-verify.js")>()),
+  verifyBuzzAfterSetup: vi.fn(),
+}));
 
 function createBuzzSetupWizard(
   dependencies: {
@@ -38,16 +47,21 @@ function createBuzzSetupWizard(
     verifyAfterWrite?: typeof verifyBuzzAfterSetup;
   } = {},
 ) {
-  if (dependencies.discoverRooms)
+  if (dependencies.discoverRooms) {
     vi.mocked(discoverBuzzRooms).mockImplementation(dependencies.discoverRooms);
-  if (dependencies.generateSecretKey)
+  }
+  if (dependencies.generateSecretKey) {
     vi.mocked(generateSecretKey).mockImplementation(dependencies.generateSecretKey);
-  if (dependencies.runSecretStep)
+  }
+  if (dependencies.runSecretStep) {
     vi.mocked(runSingleChannelSecretStep).mockImplementation(dependencies.runSecretStep);
-  if (dependencies.waitForRoomAccess)
+  }
+  if (dependencies.waitForRoomAccess) {
     vi.mocked(waitForBuzzRoomAccess).mockImplementation(dependencies.waitForRoomAccess);
-  if (dependencies.verifyAfterWrite)
+  }
+  if (dependencies.verifyAfterWrite) {
     vi.mocked(verifyBuzzAfterSetup).mockImplementation(dependencies.verifyAfterWrite);
+  }
   return buzzSetupWizard;
 }
 

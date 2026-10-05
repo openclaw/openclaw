@@ -31,7 +31,10 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
   withTempWorkspace: async (_options: unknown, run: (workspace: { dir: string }) => unknown) =>
     await run({ dir: "/tmp" }),
 }));
-vi.mock("./executables.js", () => ({ resolveExecutable: boundary.resolveExecutable }));
+vi.mock("./executables.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./executables.js")>()),
+  resolveExecutable: boundary.resolveExecutable,
+}));
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 

@@ -27,7 +27,10 @@ const remote = vi.hoisted(() => ({
   createSession: vi.fn(),
   commands: [] as RemoteShellCommandSpec[],
 }));
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandWithTimeout: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: vi.fn(),
+}));
 vi.mock("openclaw/plugin-sdk/sandbox", () => ({
   createRemoteShellSandboxBackend: remote.createBackend,
   createRemoteShellSandboxSession: remote.createSession,

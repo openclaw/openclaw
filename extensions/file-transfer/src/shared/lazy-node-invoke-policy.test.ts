@@ -7,7 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createLazyFileTransferNodeInvokePolicy } from "./lazy-node-invoke-policy.js";
 
 const createPolicy = vi.hoisted(() => vi.fn<() => OpenClawPluginNodeInvokePolicy>());
-vi.mock("./node-invoke-policy.js", () => ({ createFileTransferNodeInvokePolicy: createPolicy }));
+vi.mock("./node-invoke-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./node-invoke-policy.js")>()),
+  createFileTransferNodeInvokePolicy: createPolicy,
+}));
 beforeEach(() => createPolicy.mockReset());
 
 function createPolicyContext(

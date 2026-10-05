@@ -9,17 +9,30 @@ import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { registerOnePasswordSecretRefCommands } from "./secret-ref-cli.js";
 
-vi.mock("../onepassword-op-path.js", () => ({ resolveTrustedOnePasswordCli: vi.fn() }));
+const readTokenFileMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      filePath: string | undefined,
+      label: string,
+      options?: Parameters<typeof tryReadSecretFileSync>[2],
+    ) => string | undefined
+  >(),
+);
+
+vi.mock("../onepassword-op-path.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../onepassword-op-path.js")>()),
+  resolveTrustedOnePasswordCli: vi.fn(),
+}));
 vi.mock("openclaw/plugin-sdk/secret-file-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-file-runtime")>()),
-  tryReadSecretFileSync: vi.fn(),
+  tryReadSecretFileSync: readTokenFileMock,
 }));
 
 beforeEach(() => {
   vi.stubEnv("PATH", "");
   vi.stubEnv("CLAW_1PASSWORD_OP", undefined);
   vi.mocked(resolveTrustedOnePasswordCli).mockReset();
-  vi.mocked(tryReadSecretFileSync).mockReset();
+  readTokenFileMock.mockReset();
 });
 
 type OnePasswordPlan = {
@@ -200,7 +213,7 @@ describe("1Password readiness", () => {
     vi.stubEnv("CLAW_1PASSWORD_OP", "/trusted/op");
     vi.stubEnv("PATH", "/bin");
     vi.mocked(resolveTrustedOnePasswordCli).mockResolvedValue("/trusted/op");
-    vi.mocked(tryReadSecretFileSync).mockReturnValue("not-a-real-service-account-token");
+    readTokenFileMock.mockReturnValue("not-a-real-service-account-token");
     const result = await runStatus({});
     expect(result).toMatchObject({
       opCommand: "/trusted/op",
@@ -225,7 +238,7 @@ describe("1Password readiness", () => {
   it("reports untrusted op and unsafe token prerequisites", async () => {
     vi.stubEnv("CLAW_1PASSWORD_OP", "op");
     vi.mocked(resolveTrustedOnePasswordCli).mockRejectedValue(new Error("unsafe path detail"));
-    vi.mocked(tryReadSecretFileSync).mockImplementation(() => {
+    readTokenFileMock.mockImplementation(() => {
       throw new Error("unsafe token detail");
     });
     await expect(runStatus({})).resolves.toMatchObject({

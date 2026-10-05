@@ -184,7 +184,7 @@ describe("fetchParentMessageCached", () => {
 
   it("evicts oldest entries when exceeding the 100-entry cap", async () => {
     const fetcher = fetchChannelMessage.mockImplementation(async (_tok, _g, _c, parentId) => ({
-      id: String(parentId),
+      id: parentId,
       body: { content: `v-${parentId}`, contentType: "text" },
     }));
 

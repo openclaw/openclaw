@@ -45,11 +45,12 @@ describe("diffs tool", () => {
   beforeEach(async () => {
     vi.resetModules();
     browserRuntime.screenshotter = undefined;
-    vi.doMock("./browser.runtime.js", () => {
+    vi.doMock("./browser.runtime.js", async (importOriginal) => {
       if (!browserRuntime.screenshotter) {
         throw new Error("viewer-only rendering must not load the Playwright renderer");
       }
       return {
+        ...(await importOriginal<typeof import("./browser.runtime.js")>()),
         PlaywrightDiffScreenshotter: vi.fn(function () {
           return browserRuntime.screenshotter;
         }),

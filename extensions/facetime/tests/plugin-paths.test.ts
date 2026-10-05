@@ -25,7 +25,7 @@ describe("plugin paths", () => {
     vi.mocked(readFile)
       .mockReset()
       .mockImplementation(async (path) =>
-        String(path).endsWith("native-protocol.env")
+        typeof path === "string" && path.endsWith("native-protocol.env")
           ? "NATIVE_PROTOCOL_VERSION=1\n"
           : `${"b".repeat(64)}\n`,
       );
@@ -39,7 +39,7 @@ describe("plugin paths", () => {
 
   it("rejects an incompatible native protocol", async () => {
     vi.mocked(readFile).mockImplementation(async (path) =>
-      String(path).endsWith("native-protocol.env")
+      typeof path === "string" && path.endsWith("native-protocol.env")
         ? "NATIVE_PROTOCOL_VERSION=2\n"
         : `${"b".repeat(64)}\n`,
     );

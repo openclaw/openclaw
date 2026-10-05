@@ -7,7 +7,10 @@ import { OnePasswordError } from "./errors.js";
 import { OpClient } from "./op-client.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runExec: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runExec: vi.fn(),
+}));
 const runner = vi.mocked(runExec);
 
 const tempDirs: string[] = [];

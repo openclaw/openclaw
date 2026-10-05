@@ -92,7 +92,7 @@ function stringifyJsonForOtelAttribute(value: unknown): string | undefined {
 }
 
 function truncateJsonValueForOtelAttribute(
-  value: unknown,
+  input: unknown,
   maxArrayItems: number,
   maxStringChars: number,
 ): unknown {
@@ -140,7 +140,7 @@ function truncateJsonValueForOtelAttribute(
     seen.delete(value);
     return result;
   }
-  return visit(value, JSON_TRUNCATION_MAX_DEPTH);
+  return visit(input, JSON_TRUNCATION_MAX_DEPTH);
 }
 
 function truncateJsonTextForOtelAttribute(value: string, maxChars: number): string {

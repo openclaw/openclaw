@@ -14,7 +14,8 @@ import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
-vi.mock("./webhook-spool.js", () => ({
+vi.mock("./webhook-spool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./webhook-spool.js")>()),
   createNextcloudTalkWebhookSpool: vi.fn(),
 }));
 

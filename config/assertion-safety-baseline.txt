@@ -200,7 +200,6 @@ extensions/deepinfra/provider-models.ts	1
 extensions/deepseek/provider-policy-api.ts	2
 extensions/device-pair/index.ts	6
 extensions/device-pair/notify.ts	1
-extensions/diagnostics-otel/src/service-content-normalization.ts	1
 extensions/diagnostics-otel/src/service-exporter.ts	1
 extensions/diagnostics-otel/src/service-logs.ts	8
 extensions/diagnostics-otel/src/service-propagation.ts	2
@@ -436,7 +435,7 @@ extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	4
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/flex-templates/basic-cards.ts	12
-extensions/line/src/flex-templates/media-control-cards.ts	15
+extensions/line/src/flex-templates/media-control-cards.ts	12
 extensions/line/src/flex-templates/schedule-cards.ts	27
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor-durable.ts	1
@@ -635,7 +634,6 @@ extensions/nextcloud-talk/src/gateway.ts	2
 extensions/nextcloud-talk/src/inbound.ts	9
 extensions/nextcloud-talk/src/message-actions.ts	3
 extensions/nextcloud-talk/src/message-adapter.ts	1
-extensions/nextcloud-talk/src/monitor-runtime.ts	1
 extensions/nextcloud-talk/src/policy.ts	2
 extensions/nextcloud-talk/src/send.ts	1
 extensions/nextcloud-talk/src/setup-core.ts	8

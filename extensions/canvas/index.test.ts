@@ -31,7 +31,8 @@ vi.mock("./src/host/a2ui.js", () => {
   return { handleA2uiHttpRequest: mocks.httpHandler.handleHttpRequest };
 });
 
-vi.mock("./src/cli.js", () => ({
+vi.mock("./src/cli.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/cli.js")>()),
   registerNodesCanvasCommands: mocks.registerNodesCanvasCommands,
 }));
 
