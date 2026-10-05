@@ -41,6 +41,7 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-polic
 import { startNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
@@ -436,23 +437,27 @@ export async function prepareGatewayLifecycle(params: {
     (configReloaderStopPromise ??= runtimeState.configReloader.stop());
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     fenceSessionSuspensionWritesForGatewayShutdown();
-    await markClosePreludeStarted(options);
+    const step = <T>(name: string, run: () => T | Promise<T>) =>
+      measureGatewayCloseStep(`restart.close.${name}`, run);
+    await step("prelude-fence", () => markClosePreludeStarted(options));
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([
-      closeAuthProfileUsage(params.sdkResourceHost),
-      requestEntryLifetime.waitForPendingEntries(),
-      stopModelAccountsForClose(),
-      stopDeliveryRecoveryForClose(),
-      stopMediaCleanupForClose(),
-      runtimeState.stopGatewayUpdateCheck(),
-      stopConfigReloaderForClose().catch(() => {}),
-      runtimeState.maintenance?.stopPeriodicTasks().catch(() => {}),
-      runtimeState.controlUiSessionPullRequests?.stop(),
-      healthWork.drain(),
-      mentionInbox.dispose(),
-      worktreeRunEnd.drain(),
-      sandboxRegistry.drain(),
+      step("auth-profile-usage", () => closeAuthProfileUsage(params.sdkResourceHost)),
+      step("pending-request-entries", () => requestEntryLifetime.waitForPendingEntries()),
+      step("model-accounts", stopModelAccountsForClose),
+      step("delivery-recovery", stopDeliveryRecoveryForClose),
+      step("media-cleanup", stopMediaCleanupForClose),
+      step("update-check", () => runtimeState.stopGatewayUpdateCheck()),
+      step("config-reloader", () => stopConfigReloaderForClose().catch(() => {})),
+      step("periodic-maintenance", () =>
+        runtimeState.maintenance?.stopPeriodicTasks().catch(() => {}),
+      ),
+      step("session-pull-requests", () => runtimeState.controlUiSessionPullRequests?.stop()),
+      step("health-work", () => healthWork.drain()),
+      step("mention-inbox", () => mentionInbox.dispose()),
+      step("worktree-run-end", () => worktreeRunEnd.drain()),
+      step("sandbox-registry", () => sandboxRegistry.drain()),
     ]);
   };
   const runClosePrelude = async () => {
@@ -562,7 +567,9 @@ export async function prepareGatewayLifecycle(params: {
       const transport = transportBridge.current();
       const contextLifetime = getGatewayContextLifetime(runtime.resolvePluginGatewayContext);
       try {
-        await transport?.portalService.closeAll();
+        await measureGatewayCloseStep("restart.close.portal-service", () =>
+          transport?.portalService.closeAll(),
+        );
       } finally {
         await withPluginRuntimeRegistryScope(pluginRuntime.registry, () =>
           shutdownRuntime.completeGatewayClose(

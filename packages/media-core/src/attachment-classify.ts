@@ -134,7 +134,17 @@ export async function classifyAttachmentBytes(params: {
     mime?.startsWith("application/vnd.") ||
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
-    const charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
+    let charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
+    if (
+      detectedClass === "text" &&
+      !charset &&
+      ![params.declaredMime, ...(params.additionalMimeHints ?? [])].some(normalizeMimeType) &&
+      sniffTextCharset(params.buffer) === "windows-1252"
+    ) {
+      // A text filename identifies the MIME, not its encoding. Preserve the same
+      // byte-inferred decoder as unnamed text without overriding declared charsets.
+      charset = "windows-1252";
+    }
     // Text resolved by extension can still be BOM-less UTF-16; dropping the
     // detected charset here would decode it downstream as UTF-8 mojibake.
     return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };

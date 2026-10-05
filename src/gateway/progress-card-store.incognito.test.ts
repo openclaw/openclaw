@@ -30,6 +30,12 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { createIncognitoProgressCardStore } from "./progress-card-store.js";
 import { createIncognitoSessionComputeReader } from "./session-history-snapshot.js";
 
+// The retained suite actor, shared state, and closing actor require three broker slots.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 24,
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;

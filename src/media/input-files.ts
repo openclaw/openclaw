@@ -378,7 +378,8 @@ export async function extractFileContentFromBuffer(params: {
     (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
   params.signal?.throwIfAborted();
   const mimeType = classification.mime;
-  const charset = classification.charset ?? params.charset;
+  const charset =
+    classification.charset ?? params.charset ?? parseContentType(params.mimeType).charset;
 
   if (!mimeType) {
     throw new Error("input_file missing media type");

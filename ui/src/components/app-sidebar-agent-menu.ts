@@ -109,7 +109,10 @@ export function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
     ...items,
     ...(footer?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []),
   ];
-  const current = event.target instanceof HTMLElement ? event.target : null;
+  const current =
+    event.target instanceof HTMLElement
+      ? (event.target.closest<HTMLElement>("wa-dropdown-item") ?? event.target)
+      : null;
   const index = current ? controls.indexOf(current) : -1;
   if (footer && index < 0) {
     return false;
@@ -285,6 +288,28 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       }}
       @wa-after-show=${params.onAfterShow}
       @keydown=${(event: KeyboardEvent) => {
+        const target = event.target;
+        const row =
+          target instanceof HTMLElement
+            ? target.closest<HTMLElement>(".sidebar-agent-menu__agent-switch")
+            : null;
+        const pin = row?.querySelector<HTMLButtonElement>(".sidebar-agent-menu__pin");
+        if (pin && target === pin && (event.key === "Enter" || event.key === " ")) {
+          // Let the native button click without selecting its enclosing agent.
+          event.stopPropagation();
+          return;
+        }
+        if (
+          event.key === "Tab" &&
+          row &&
+          pin &&
+          ((target === row && !event.shiftKey) || (target === pin && event.shiftKey))
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          (event.shiftKey ? row : pin).focus();
+          return;
+        }
         if (
           event.target instanceof HTMLInputElement &&
           (event.isComposing || !["ArrowDown", "ArrowUp", "Escape", "Tab"].includes(event.key))

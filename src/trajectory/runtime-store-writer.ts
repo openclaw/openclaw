@@ -46,7 +46,6 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
 import { scheduleSqliteTrajectoryRuntimeRetention } from "./runtime-retention.js";
-import type { TrajectoryRuntimeRetentionRevision } from "./runtime-retention.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeAppend,
@@ -395,13 +394,12 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       };
     },
   };
-  let retentionRevision: TrajectoryRuntimeRetentionRevision | undefined;
   try {
     await runOpenClawAgentWorkerWrite(options, async () => {
       const written = await execution.runExisting(source, async (worker) => {
         let completed = false;
         try {
-          retentionRevision = await worker.execute({ type: "trajectory.events.append", input });
+          await worker.execute({ type: "trajectory.events.append", input });
           completed = true;
         } finally {
           if (transaction) {
@@ -421,15 +419,12 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
         throw new Error("Trajectory database disappeared before append");
       }
     });
-    if (retentionRevision) {
-      void scheduleSqliteTrajectoryRuntimeRetention({
-        database,
-        options,
-        input,
-        revision: retentionRevision,
-        assertCurrent: assertDatabaseCurrent,
-      });
-    }
+    void scheduleSqliteTrajectoryRuntimeRetention({
+      database,
+      options,
+      input,
+      assertCurrent: assertDatabaseCurrent,
+    });
   } finally {
     await execution.release();
   }

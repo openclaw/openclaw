@@ -120,7 +120,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("commits another append while one coalesced retention read is still pending", async () => {
+it("settles retention despite another append while its coalesced read is pending", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
       agentId: "main",
@@ -168,14 +168,17 @@ it("commits another append while one coalesced retention read is still pending",
     }
     expect(
       await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" }),
-    ).toEqual([{ type: "old" }]);
-    recorder.recordEvent("retry-retention");
+    ).toEqual([]);
+    const completedReads = retention.reads;
+    recorder.recordEvent("same-window");
     await recorder.flush();
     await retention.accepted;
-    expect(retention.reads).toBe(2);
-    expect(
-      await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" }),
-    ).toEqual([]);
+    expect(retention.reads).toBe(completedReads);
+    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
+      "first",
+      "while-retention-reads",
+      "same-window",
+    ]);
   });
 });
 
