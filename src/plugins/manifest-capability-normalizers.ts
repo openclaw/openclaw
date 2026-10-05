@@ -6,7 +6,6 @@ import {
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
-import { omitUndefinedManifestFields, optionalManifestFields } from "./manifest-fields.js";
 import type {
   DecisionProviderCapabilities,
   PluginManifest,
@@ -481,4 +480,19 @@ export function normalizeManifestConfigContracts(
     ...(secretInputs ? { secretInputs } : {}),
   } satisfies PluginManifestConfigContracts;
   return Object.keys(configContracts).length > 0 ? configContracts : undefined;
+}
+
+/** Only fresh field projections belong here; never mutate the authored manifest. */
+export function omitUndefinedManifestFields<T extends object>(fields: T): T {
+  for (const key in fields) {
+    if (fields[key] === undefined) {
+      delete fields[key];
+    }
+  }
+  return fields;
+}
+
+export function optionalManifestFields<T extends object>(fields: T): T | undefined {
+  omitUndefinedManifestFields(fields);
+  return Object.keys(fields).length > 0 ? fields : undefined;
 }

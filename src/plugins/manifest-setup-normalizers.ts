@@ -17,8 +17,8 @@ import { isRecord } from "../utils.js";
 import {
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
+  omitUndefinedManifestFields,
 } from "./manifest-capability-normalizers.js";
-import { omitUndefinedManifestFields } from "./manifest-fields.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import type {
   PluginManifestActivation,

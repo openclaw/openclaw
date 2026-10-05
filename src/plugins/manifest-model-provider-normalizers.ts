@@ -11,8 +11,9 @@ import {
   normalizeManifestObjectList,
   normalizeManifestStringRecord,
   normalizeNamedMetadataRecord,
+  omitUndefinedManifestFields,
+  optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
-import { omitUndefinedManifestFields, optionalManifestFields } from "./manifest-fields.js";
 import type {
   PluginManifestModelIdNormalization,
   PluginManifestModelIdNormalizationProvider,
