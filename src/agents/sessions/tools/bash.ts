@@ -51,18 +51,8 @@ type BashRenderState = {
   interval: NodeJS.Timeout | undefined;
 };
 
-type BashResultRenderState = {
-  cachedWidth: number | undefined;
-  cachedLines: string[] | undefined;
-  cachedSkipped: number | undefined;
-};
-
 class BashResultRenderComponent extends Container {
-  state: BashResultRenderState = {
-    cachedWidth: undefined,
-    cachedLines: undefined,
-    cachedSkipped: undefined,
-  };
+  cache?: ReturnType<typeof truncateToVisualLines> & { width: number };
 }
 
 function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
@@ -82,7 +72,6 @@ function rebuildBashResultRenderComponent(
   startedAt: number | undefined,
   endedAt: number | undefined,
 ): void {
-  const state = component.state;
   component.clear();
 
   let output = getTextOutput(result, showImages).trim();
@@ -106,24 +95,23 @@ function rebuildBashResultRenderComponent(
     } else {
       component.addChild({
         render: (width: number) => {
-          if (state.cachedLines === undefined || state.cachedWidth !== width) {
-            const preview = truncateToVisualLines(styledOutput, BASH_PREVIEW_LINES, width);
-            state.cachedLines = preview.visualLines;
-            state.cachedSkipped = preview.skippedCount;
-            state.cachedWidth = width;
+          if (!component.cache || component.cache.width !== width) {
+            component.cache = {
+              ...truncateToVisualLines(styledOutput, BASH_PREVIEW_LINES, width),
+              width,
+            };
           }
-          if (state.cachedSkipped && state.cachedSkipped > 0) {
+          const { visualLines, skippedCount } = component.cache;
+          if (skippedCount > 0) {
             const hint =
-              theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
+              theme.fg("muted", `... (${skippedCount} earlier lines,`) +
               ` ${keyHint("app.tools.expand", "to expand")})`;
-            return ["", truncateToWidth(hint, width, "..."), ...(state.cachedLines ?? [])];
+            return ["", truncateToWidth(hint, width, "..."), ...visualLines];
           }
-          return ["", ...(state.cachedLines ?? [])];
+          return ["", ...visualLines];
         },
         invalidate: () => {
-          state.cachedWidth = undefined;
-          state.cachedLines = undefined;
-          state.cachedSkipped = undefined;
+          component.cache = undefined;
         },
       });
     }

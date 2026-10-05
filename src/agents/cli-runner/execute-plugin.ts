@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { raceWithTimeout } from "@openclaw/retry";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -368,30 +368,6 @@ function createPluginUserInputHandler(params: {
   };
 }
 
-function waitForIteratorValue<T>(
-  iterator: AsyncIterator<T>,
-  signal: AbortSignal,
-): Promise<IteratorResult<T>> {
-  if (signal.aborted) {
-    return Promise.reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-  }
-  return new Promise((resolve, reject) => {
-    const rejectAborted = () =>
-      reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-    signal.addEventListener("abort", rejectAborted, { once: true });
-    void iterator.next().then(
-      (value) => {
-        signal.removeEventListener("abort", rejectAborted);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", rejectAborted);
-        reject(toErrorObject(error, "CLI plugin execution stream failed."));
-      },
-    );
-  });
-}
-
 async function closePluginIterator(
   iterator: AsyncIterator<Record<string, unknown>> | undefined,
 ): Promise<void> {
@@ -606,10 +582,18 @@ export async function executePluginOwnedProcess(params: {
         onPendingInput: updatePendingApproval,
       }),
     });
-    iterator = execution[Symbol.asyncIterator]();
+    const streamIterator = execution[Symbol.asyncIterator]();
+    iterator = streamIterator;
 
     for (;;) {
-      const next = await waitForIteratorValue(iterator, signal);
+      const next = await racePromiseWithAbortSignal(
+        () =>
+          streamIterator.next().catch((error: unknown) => {
+            throw toErrorObject(error, "CLI plugin execution stream failed.");
+          }),
+        signal,
+        (abortedSignal) => toErrorObject(abortedSignal.reason, "CLI plugin execution was aborted."),
+      );
       if (next.done) {
         break;
       }

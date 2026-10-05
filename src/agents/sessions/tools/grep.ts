@@ -134,15 +134,12 @@ export function createGrepToolDefinition(
           | undefined;
         let childClosed = false;
         let killedDueToLimit = false;
-        const cleanup = () => {
-          signal?.removeEventListener("abort", onAbort);
-        };
         const settle = (fn: () => void): boolean => {
           if (settled) {
             return false;
           }
           settled = true;
-          cleanup();
+          signal?.removeEventListener("abort", onAbort);
           fn();
           return true;
         };
@@ -214,9 +211,6 @@ export function createGrepToolDefinition(
             }
             args.push("--", pattern, searchPath);
 
-            if (settled) {
-              return;
-            }
             const spawnedChild = spawnCommand([rgPath, ...args], {
               buffer: false,
               reject: false,
@@ -250,9 +244,6 @@ export function createGrepToolDefinition(
               stderrDroppedBytes += appended.droppedBytes;
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
-              if (settled) {
-                return;
-              }
               if (settle(() => reject(new Error(`ripgrep ${stream} error: ${error.message}`)))) {
                 stopChild();
               }

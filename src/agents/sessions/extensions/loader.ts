@@ -84,11 +84,7 @@ async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
   if (createJitiLoaderFactory) {
     return createJitiLoaderFactory;
   }
-  const loaded = (await import("jiti/static")) as { createJiti?: typeof createJiti };
-  if (typeof loaded.createJiti !== "function") {
-    throw new Error("jiti/static module did not export createJiti");
-  }
-  createJitiLoaderFactory = loaded.createJiti;
+  ({ createJiti: createJitiLoaderFactory } = await import("jiti/static"));
   return createJitiLoaderFactory;
 }
 
@@ -121,7 +117,7 @@ type ExtensionCacheScope = {
 };
 
 type ExtensionLoadContext = {
-  cacheScope?: ExtensionCacheScope;
+  cacheScope: ExtensionCacheScope;
   sourceTransformLoader?: ReturnType<typeof createJiti>;
 };
 
@@ -140,12 +136,8 @@ function useExtensionCacheCwd(cwd: string): ExtensionCacheScope {
   return { cwd: resolvedCwd, generation: extensionCacheGeneration };
 }
 
-function isCurrentCacheScope(scope: ExtensionCacheScope | undefined): scope is ExtensionCacheScope {
-  return (
-    scope !== undefined &&
-    extensionCacheCwd === scope.cwd &&
-    extensionCacheGeneration === scope.generation
-  );
+function isCurrentCacheScope(scope: ExtensionCacheScope): boolean {
+  return extensionCacheCwd === scope.cwd && extensionCacheGeneration === scope.generation;
 }
 
 /**

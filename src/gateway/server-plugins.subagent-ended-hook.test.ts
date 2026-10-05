@@ -392,9 +392,8 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       },
     },
     {
-      name: "legacy completed status",
-      result: { status: "completed" },
-      expected: { status: "ok" },
+      name: "successful completion",
+      result: { status: "ok" },
     },
     {
       name: "legacy completed error",

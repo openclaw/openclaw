@@ -275,9 +275,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (bin.failedStep) {
         return await packageUpdateFailure(bin.failedStep);
       }
-      globalBinDir = bin.result
-        ? readPackageManagerProbeValue(bin.result.stdout) || undefined
-        : undefined;
+      globalBinDir = readPackageManagerProbeValue(bin.result.stdout) || undefined;
     }
     const nativeOptions = stageNative
       ? { env: effectiveInstallEnv ?? process.env, globalBinDir, installSpec: params.installSpec }

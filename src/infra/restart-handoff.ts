@@ -1,4 +1,3 @@
-// Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
@@ -154,13 +153,7 @@ function normalizeRestartTraceHandoff(
   };
 }
 
-function normalizeSource(
-  source: GatewayRestartHandoffSource | undefined,
-  reason: string | undefined,
-): GatewayRestartHandoffSource {
-  if (source) {
-    return source;
-  }
+function normalizeSource(reason: string | undefined): GatewayRestartHandoffSource {
   if (!reason) {
     return "unknown";
   }
@@ -295,7 +288,6 @@ export function writeGatewayRestartHandoffSync(opts: {
   pid?: number;
   processInstanceId?: string;
   reason?: string;
-  source?: GatewayRestartHandoffSource;
   restartKind: GatewayRestartHandoffRestartKind;
   supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
   restartTrace?: GatewayRestartHandoff["restartTrace"];
@@ -303,16 +295,10 @@ export function writeGatewayRestartHandoffSync(opts: {
   createdAt?: number;
 }): GatewayRestartHandoff | null {
   const pid = asPositiveSafeInteger(opts.pid ?? process.pid) ?? null;
-  if (pid === null || !isRestartKind(opts.restartKind)) {
-    return null;
-  }
-  if (opts.source !== undefined && !isSource(opts.source)) {
+  if (pid === null) {
     return null;
   }
   const supervisorMode = opts.supervisorMode ?? "external";
-  if (!isSupervisorMode(supervisorMode)) {
-    return null;
-  }
 
   const env = opts.env ?? process.env;
   const createdAt = normalizeCreatedAt(opts.createdAt);
@@ -329,7 +315,7 @@ export function writeGatewayRestartHandoffSync(opts: {
     createdAt,
     expiresAt: createdAt + ttlMs,
     ...(reason ? { reason } : {}),
-    source: normalizeSource(opts.source, reason),
+    source: normalizeSource(reason),
     restartKind: opts.restartKind,
     supervisorMode,
     ...(restartTrace ? { restartTrace } : {}),

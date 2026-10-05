@@ -244,9 +244,6 @@ export function watchClientDisconnect(
       ),
     ),
   );
-  if (sockets.length === 0) {
-    return () => {};
-  }
   const stopWatchingDisconnect = () => {
     for (const socket of sockets) {
       socket.off("close", handleClose);
