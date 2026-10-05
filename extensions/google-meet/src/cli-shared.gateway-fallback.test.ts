@@ -35,6 +35,22 @@ describe("callGoogleMeetGateway local fallback", () => {
     ).resolves.toEqual({ ok: false, error });
   });
 
+  it("propagates an uncoded close when a remote Gateway is configured", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "ws://gateway.example:18789");
+    const error = gatewayTransportError();
+
+    try {
+      await expect(
+        callGoogleMeetGateway({
+          callGateway: rejectingGateway(error),
+          method: "googlemeet.status",
+        }),
+      ).rejects.toBe(error);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("propagates a coded transport close", async () => {
     const error = gatewayTransportError(1006);
 
