@@ -357,16 +357,24 @@ extension OpenClawChatViewModel {
                 errorText = "Connect to the gateway to run this command."
                 return false
             }
-            if input == draft.input { input = "" }
-            switch command {
-            case "/new": await performStartNewSession(worktree: false)
+            let ran = switch command {
+            case "/new": await startNewSessionOutcome(worktree: false) != .failed
             case "/compact": await performCompact()
             default: await performReset()
             }
-            self.recordSuccessfulInput(
-                draft.trimmed,
-                submittedRevision: draft.composerRevision,
-                sessionKey: draft.composerSessionKey)
+            // A command that failed keeps its draft; one that ran clears only the draft it consumed.
+            if ran {
+                self.recordSuccessfulInput(
+                    draft.trimmed,
+                    submittedRevision: draft.composerRevision,
+                    sessionKey: draft.composerSessionKey)
+                if self.composerSessionKey(for: self.sessionKey) == draft.composerSessionKey,
+                   self.composerRevision(for: self.sessionKey) == draft.composerRevision,
+                   self.input == draft.input
+                {
+                    self.input = ""
+                }
+            }
             return false
         }
         return await self.validateSlashCommandDraftForSend(
