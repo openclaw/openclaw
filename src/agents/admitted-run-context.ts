@@ -21,6 +21,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -225,8 +226,8 @@ export type PreparedAgentRunAdmission = Readonly<{
   assertSourceCurrent: () => void;
   /** Host-only source restriction available before the runtime prepares its tools. */
   readOperatorAuthority?: () => AdmittedRunOperatorAuthority | undefined;
-  /** Idempotently closes the exact delegated approval lease, if admission occurred. */
-  close: () => void;
+  /** Closes admission immediately; await in-flight preparation before releasing the source. */
+  close: () => Promise<void>;
 }>;
 
 type DelegatedAuthorityLease = {
@@ -334,15 +335,14 @@ export function resolveAdmittedRunActiveAssertion(
   };
 }
 
-/** Idempotently compare-releases the authority captured by this admission. */
-export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): boolean {
+/** Only the prepared owner closes admission and then joins its in-flight preparation. */
+function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): void {
   const lease = delegatedAuthorityLeases.get(context);
   if (!lease || lease.foregroundClosed) {
-    return false;
+    return;
   }
   lease.foregroundClosed = true;
   releaseAgentRunDelegatedAuthority(lease.authority);
-  return true;
 }
 
 type AdmittedRunBeforeToolCallRecovery = Readonly<{
@@ -503,6 +503,7 @@ export function prepareAgentRunAdmission(params: {
   let admitted: Promise<AdmittedRunContext> | undefined;
   let admittedContext: AdmittedRunContext | undefined;
   let closed = false;
+  let settlement: Promise<void> | undefined;
   return Object.freeze({
     operationalRunInstance,
     assertSourceCurrent: () => assertSourceCurrent?.(),
@@ -517,15 +518,26 @@ export function prepareAgentRunAdmission(params: {
     },
     close: () => {
       if (closed) {
-        return;
+        return settlement ?? Promise.resolve();
       }
+      const completion = createDeferredCore();
+      settlement = completion.promise;
       closed = true;
+      // Revoke synchronously, including while the admission callback is still
+      // acquiring resources. That callback must settle before its source can retire.
       if (admittedContext) {
         closeAdmittedRunDelegatedAuthority(admittedContext);
-      } else {
-        void admitted?.then(closeAdmittedRunDelegatedAuthority).catch(() => undefined);
       }
-      releaseOperatorAuthority?.();
+      void (async () => {
+        try {
+          // The admission caller observes its error; close owns joining that
+          // producer before its original authority can be released.
+          await admitted?.catch(() => undefined);
+        } finally {
+          releaseOperatorAuthority?.();
+        }
+      })().then(completion.resolve, completion.reject);
+      return settlement;
     },
     admit: (runtimeKind, runtimeInstanceId) => {
       if (closed) {
@@ -535,7 +547,11 @@ export function prepareAgentRunAdmission(params: {
       // Later fallback paths reuse this exact admission instead of recapturing identity.
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
-      admitted ??= (async () => {
+      // Publish the pending owner before a callback can synchronously close it.
+      admitted ??= Promise.resolve().then(async () => {
+        if (closed) {
+          throw new Error("prepared execution context is already closed");
+        }
         assertSourceCurrent?.();
         const facts = executionIdentitySpawnAdmission({
           operation: "attach",
@@ -562,7 +578,7 @@ export function prepareAgentRunAdmission(params: {
           closeAdmittedRunDelegatedAuthority(context);
           throw error;
         }
-      })();
+      });
       return admitted;
     },
   });

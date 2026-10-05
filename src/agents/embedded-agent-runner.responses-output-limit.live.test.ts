@@ -280,7 +280,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
           ),
         ).toHaveLength(0);
       } finally {
-        admission.close();
+        await admission.close();
         configureAiTransportHost(host);
         await contextEngineLogicalTurnLease?.dispose();
       }

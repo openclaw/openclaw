@@ -274,7 +274,7 @@ describe("original caller through Cron creator transports", () => {
           if (admittedRun) {
             clearGatewayContextResolver(admittedRun);
           }
-          runAdmission.close();
+          await runAdmission.close();
           caller.release();
         }
       }

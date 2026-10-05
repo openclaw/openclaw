@@ -127,7 +127,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
         .replace(/^-+|-+$/g, "");
       return slug || null;
     } finally {
-      preparedRunAdmission.close();
+      await preparedRunAdmission.close();
     }
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);

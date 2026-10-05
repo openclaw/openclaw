@@ -125,7 +125,7 @@ export function registerGuestSpawnCases(options: {
             ],
           }),
         ).toBe(true);
-        bound.admission.close();
+        await bound.admission.close();
         bound.parent.cleanup();
         source.closeRequest();
         modelResult.resolve({

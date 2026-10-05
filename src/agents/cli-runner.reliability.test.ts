@@ -351,14 +351,14 @@ async function warmedPluginContext(
   );
   const close = () => {
     liveHandle?.close("restart");
-    admission.close();
+    return admission.close();
   };
   try {
     await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
     context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
     return { context, close, attempts: () => attempts };
   } catch (error) {
-    close();
+    await close();
     throw error;
   }
 }
@@ -2188,7 +2188,7 @@ describe("runCliAgent reliability", () => {
       expect(hookRunner.runLlmOutput).toHaveBeenCalledOnce();
       expect(hookRunner.runAgentEnd).toHaveBeenCalledOnce();
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 
@@ -2218,7 +2218,7 @@ describe("runCliAgent reliability", () => {
         );
         expect(fixture.attempts()).toBe(2);
       } finally {
-        fixture.close();
+        await fixture.close();
       }
     },
   );
@@ -2253,7 +2253,7 @@ describe("runCliAgent reliability", () => {
       expect(fixture.attempts()).toBe(3);
       expect(clearBeforeRetry).toHaveBeenCalledOnce();
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 
@@ -2326,7 +2326,7 @@ describe("runCliAgent reliability", () => {
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPluginArgs).toEqual([]);
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 });

@@ -245,7 +245,7 @@ describe("attempt control authority", () => {
         createAttemptControls({ initialTimeoutMs: RUNTIME_TIMEOUT_MS });
         break;
       case "revoked":
-        admission.close();
+        await admission.close();
         break;
       case "replaced admission": {
         const replacement = prepareSystemAgentRunAdmission({}, runId, "main", "replacement-test");

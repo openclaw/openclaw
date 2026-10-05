@@ -105,7 +105,7 @@ async function runCopilotHarnessTurn(params: {
       ...params.policy,
     } as EmbeddedRunAttemptParams);
   } finally {
-    admission.close();
+    await admission.close();
   }
 }
 

@@ -143,7 +143,7 @@ describe("recoverEmbeddedRunOverflow transcript ownership", () => {
       expect(afterHook).not.toHaveBeenCalled();
       expect(prepareCurrentTranscriptRetry).not.toHaveBeenCalled();
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 });

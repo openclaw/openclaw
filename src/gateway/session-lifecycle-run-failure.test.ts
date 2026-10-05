@@ -581,7 +581,7 @@ async function createCliHistoryFixture() {
         rawTranscriptReseedReason: nextWriter ? "missing-transcript" : "auth-unknown",
       });
     } finally {
-      next.close();
+      await next.close();
     }
   };
   return { cliTarget, admission, captured, persist, laterContext };
@@ -597,7 +597,7 @@ describe("CLI history through Gateway terminal persistence", () => {
           await f.persist(phase);
           await f.persist(phase === "end" ? "error" : "end");
         } finally {
-          f.admission.close();
+          await f.admission.close();
         }
         const context = await f.laterContext("account-a");
         expect(JSON.stringify(context.reseedMessages)).toContain("Prior account-owned request");
@@ -622,10 +622,14 @@ describe("CLI history through Gateway terminal persistence", () => {
       const pending = release.promise.then(() => f.persist("end"));
       f.captured.track(pending);
       let completed = false;
-      const finish = drainAgentRunTerminalWrites(f.admission.operationalRunInstance).finally(() => {
-        f.admission.close();
-        completed = true;
-      });
+      const finish = (async () => {
+        try {
+          return await drainAgentRunTerminalWrites(f.admission.operationalRunInstance);
+        } finally {
+          await f.admission.close();
+          completed = true;
+        }
+      })();
       await Promise.resolve();
       expect(completed).toBe(false);
       release.resolve();
@@ -642,7 +646,7 @@ describe("CLI history through Gateway terminal persistence", () => {
         const before = await loadTranscriptEvents(f.cliTarget);
         const pending = f.persist("end");
         if (revoke === "close") {
-          f.admission.close();
+          await f.admission.close();
         } else {
           clearAgentRunTerminalWriteContext(f.admission.operationalRunInstance);
         }
@@ -650,7 +654,7 @@ describe("CLI history through Gateway terminal persistence", () => {
           await expect(pending).rejects.toThrow("Terminal write owner changed");
           expect(await loadTranscriptEvents(f.cliTarget)).toEqual(before);
         } finally {
-          f.admission.close();
+          await f.admission.close();
         }
       });
     },

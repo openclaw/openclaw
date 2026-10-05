@@ -35,12 +35,13 @@ type Producer = "normal" | "side-question";
 
 function createInterleavedAdmission(params: { kind: AuthorityLoss; runId: string }): {
   admission: PreparedAgentRunAdmission;
-  close: () => void;
+  close: () => Promise<void>;
 } {
   let replacement: PreparedAgentRunAdmission | undefined;
+  let closing: Promise<void> | undefined;
   const loseAuthority = () => {
     if (params.kind === "close") {
-      admission.close();
+      closing = admission.close();
       return;
     }
     replacement = prepareAgentRunAdmission({
@@ -70,9 +71,12 @@ function createInterleavedAdmission(params: { kind: AuthorityLoss; runId: string
   });
   return {
     admission,
-    close: () => {
-      admission.close();
-      replacement?.close();
+    close: async () => {
+      const settlements = [closing ?? admission.close()];
+      if (replacement) {
+        settlements.push(replacement.close());
+      }
+      await Promise.all(settlements);
     },
   };
 }
@@ -175,7 +179,7 @@ describe("CLI model-routing receipt authority", () => {
       });
       expect(context.params.assertCurrent).toThrow("operator role cannot use this model");
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 
@@ -209,7 +213,7 @@ describe("CLI model-routing receipt authority", () => {
           preparationError = error;
         });
     } finally {
-      authority.close();
+      await authority.close();
     }
 
     // History preparation now admits before the final routing producer. Reusing

@@ -112,8 +112,8 @@ describe("settled-turn finalization after an earlier tool failure", () => {
     admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "finalization-test");
     admittedRunContext = await admission.admit("embedded");
   });
-  afterEach(() => {
-    admission.close();
+  afterEach(async () => {
+    await admission.close();
   });
 
   it("preserves the original tool failure after progress when finalization fails (#132762)", async () => {

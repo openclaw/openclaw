@@ -609,7 +609,7 @@ describe("worker launch capabilities", () => {
         await operation.catch(() => undefined);
         transfer?.mockRestore();
         uninstall();
-        inputTurn.preparedRunAdmission.close();
+        await inputTurn.preparedRunAdmission.close();
       }
       expect(inputTurn.prompt).toBe(originalPrompt);
       expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");

@@ -109,12 +109,14 @@ describe("worker session tool topology", () => {
         },
       });
       await entered.promise;
+      let closing: Promise<void> | undefined;
       if (authorityState === "run-ended") {
-        getFixture().closeSourceRun();
+        closing = getFixture().closeSourceRun();
       } else if (authorityState === "operator-revoked") {
         getFixture().revokeOperatorAuthority();
       }
       release.resolve();
+      await closing;
       if (authorityState === "run-ended") {
         await expect(pending).rejects.toThrow("source worker run ended");
       } else if (authorityState === "operator-revoked") {
@@ -234,7 +236,7 @@ describe("worker session tool topology", () => {
       await tool.execute(`call-${index}`, { action: "list" });
     }
     await expect(tool.execute("call-64", { action: "list" })).rejects.toThrow("operation limit");
-    getFixture().closeSourceRun();
+    await getFixture().closeSourceRun();
     await expect(tool.execute("call-0", { action: "list" })).rejects.toThrow();
     expect(executeWorkshop).toHaveBeenCalledTimes(64);
   });
@@ -784,7 +786,7 @@ describe.each([
       expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
       expect(gatewayRequest).toHaveBeenCalledOnce();
       if (source.admissionSource === "operator-schedule") {
-        getFixture().closeSourceRun();
+        await getFixture().closeSourceRun();
         await expect(
           execute({ identity, toolName: "presence", request: { toolCallId: "closed-schedule" } }),
         ).rejects.toThrow("worker turn authority changed");
@@ -870,10 +872,9 @@ describe("worker spawn startup composition", () => {
                 throw new Error("worker spawn completed before provisioning");
               }),
             ]);
-            if (closed) {
-              closeSourceRun();
-            }
+            const closing = closed ? closeSourceRun() : undefined;
             finishProvisioning.resolve();
+            await closing;
             if (closed) {
               await expect(pending).rejects.toThrow();
             } else {
@@ -921,14 +922,15 @@ describe.each([false, true])(
         const pending = spawn("parent-closes-during-provisioning");
         await provisioning.promise;
         let drained: Promise<void> | undefined;
+        const closing = closed ? closeSourceRun() : undefined;
         if (closed) {
-          closeSourceRun();
           drained = placements.closeWorkerTurnToolState(sourceClaim);
           // Parent teardown retains this claim until the admitted spawn settles.
           expect(placements.validateTurnClaim(sourceClaim)).toBe(true);
         }
         finishProvisioning.resolve();
         const result = await pending;
+        await closing;
         await drained;
 
         expect(gatewayRequest).toHaveBeenCalledTimes(closed ? 0 : 1);

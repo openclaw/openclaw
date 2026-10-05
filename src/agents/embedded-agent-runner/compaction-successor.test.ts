@@ -89,6 +89,7 @@ async function withAcceptanceFixture(
       const runId = randomUUID();
       const admission = prepareSystemAgentRunAdmission({}, runId, target.agentId, "successor-test");
       const admissions: PreparedAgentRunAdmission[] = [admission];
+      let closing: Promise<void> | undefined;
       const unsubscriptions: Array<() => void> = [];
       const facts: AcceptedCompactionSuccessor[] = [];
       const controller = new AbortController();
@@ -121,7 +122,7 @@ async function withAcceptanceFixture(
           live();
         };
         const stop = () => {
-          admission.close();
+          closing = admission.close();
           controller.abort(callerError);
         };
         const successorId = randomUUID();
@@ -215,8 +216,9 @@ async function withAcceptanceFixture(
         for (const unsubscribe of unsubscriptions) {
           unsubscribe();
         }
+        await closing;
         for (const owned of admissions) {
-          owned.close();
+          await owned.close();
         }
         await waitForSessionTranscriptIndexReconcile({
           agentId: target.agentId,

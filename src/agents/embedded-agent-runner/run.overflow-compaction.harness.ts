@@ -1045,7 +1045,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
           agentId,
         });
       } finally {
-        preparedRunAdmission.close();
+        await preparedRunAdmission.close();
       }
     },
     registerPreparedAgentHarness: preparedRegistry.registerAgentHarness,

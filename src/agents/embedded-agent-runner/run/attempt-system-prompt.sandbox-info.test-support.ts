@@ -154,7 +154,7 @@ export async function withPromptFixture(
         approvalRead,
       });
     } finally {
-      admission.close();
+      await admission.close();
       policyRead.mockRestore();
       approvalRead.mockRestore();
     }

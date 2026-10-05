@@ -137,7 +137,7 @@ async function withSurface(
     await check(tools);
   } finally {
     host?.close();
-    admission.close();
+    await admission.close();
   }
 }
 

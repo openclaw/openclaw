@@ -355,7 +355,7 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(readAdmittedRunOperatorAuthority(replacement.admitted)).toBe(replacementAuthority);
       } finally {
         for (const admission of admissions) {
-          admission.close();
+          await admission.close();
         }
         originalGrant.abort();
         replacementGrant.abort();

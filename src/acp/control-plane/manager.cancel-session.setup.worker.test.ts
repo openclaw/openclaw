@@ -171,7 +171,7 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
       await Promise.allSettled([turnResult, cancelResult]);
       reader.mockRestore();
       close.mockRestore();
-      admission.close();
+      await admission.close();
     }
   });
 });

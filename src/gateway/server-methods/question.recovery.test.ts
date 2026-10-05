@@ -122,7 +122,7 @@ afterEach(async () => {
   manager.close();
   await manager.drain();
   resetDiagnosticStateForTest();
-  admission.close();
+  await admission.close();
   releaseAgentRunDelegatedAuthority(authority);
   unregister();
   clearAgentRunContext(ref.runId);

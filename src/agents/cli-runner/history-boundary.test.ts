@@ -79,7 +79,7 @@ async function fixture(withHeader = true) {
         ...overrides,
       });
     } finally {
-      admission.close();
+      await admission.close();
     }
   };
   const run = async <T>(
@@ -446,7 +446,7 @@ describe("CLI transcript account boundary", () => {
       });
       expect(loadSessionEntryReadOnly(f.target)).toEqual(before);
     } finally {
-      replacement.close();
+      await replacement.close();
     }
   });
 

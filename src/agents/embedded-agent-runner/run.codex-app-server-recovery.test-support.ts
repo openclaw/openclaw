@@ -277,7 +277,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         .mockImplementationOnce(async () => {
           expect(freezeAbort).not.toHaveBeenCalled();
           if (owner === "closed") {
-            admission.close();
+            await admission.close();
           }
           if (owner === "replaced") {
             await replacement.admit("embedded");
@@ -308,8 +308,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(owner === "active" ? 2 : 1);
         expect(freezeAbort).not.toHaveBeenCalled();
       } finally {
-        admission.close();
-        replacement.close();
+        await admission.close();
+        await replacement.close();
         replyOperation.complete();
         freezeAbort.mockRestore();
       }

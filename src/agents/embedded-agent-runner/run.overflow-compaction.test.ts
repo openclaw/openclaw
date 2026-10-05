@@ -32,9 +32,9 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const admissions: PreparedAgentRunAdmission[] = [];
-afterEach(() => {
+afterEach(async () => {
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
 });
 const completionMocks = vi.hoisted(() => ({

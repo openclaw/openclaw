@@ -225,10 +225,11 @@ describe("spawn input ownership transfer", () => {
           signal,
         );
         participants.close();
-        admission.close();
+        const closing = admission.close();
         operator.release();
         expect(() => participants.resolve()).toThrow("This turn has ended");
         unblock();
+        await closing;
         await withinTest(replyFinished.promise, signal);
         expect(replyError).toBeUndefined();
         expect(parentMessages).toHaveLength(1);
@@ -237,7 +238,7 @@ describe("spawn input ownership transfer", () => {
         unblock();
         await Promise.allSettled(executions);
         participants.close();
-        admission.close();
+        await admission.close();
         operator.release();
         replyObserver.mockRestore();
         executionSpy.mockRestore();
@@ -372,7 +373,7 @@ describe("spawn input ownership transfer", () => {
         await sending?.catch(() => {});
         held.mockRestore();
         stage.mockRestore();
-        admission.close();
+        await admission.close();
         operator.release();
       }
     },
@@ -418,13 +419,14 @@ describe("spawn input ownership transfer", () => {
     if (boundary === "before reset" || boundary === "live reset") {
       const before = loadSessionEntry(childKey, { agentId: "main" }).entry;
       let hookCalls = 0;
+      const closing: { promise?: Promise<void> } = {};
       const onReset = (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
         if (event.sessionKey !== childKey) {
           return;
         }
         hookCalls++;
         if (boundary === "before reset") {
-          admission.close();
+          closing.promise = admission.close();
         }
       };
       registerInternalHook("command:new", onReset);
@@ -451,7 +453,7 @@ describe("spawn input ownership transfer", () => {
         expect(hookCalls).toBe(1);
       } finally {
         unregisterInternalHook("command:new", onReset);
-        admission.close();
+        await (closing.promise ?? admission.close());
       }
       return;
     }
@@ -524,8 +526,9 @@ describe("spawn input ownership transfer", () => {
         }),
       ]);
       if (boundary === "before staging") {
-        admission.close();
+        const closing = admission.close();
         releaseWriter.resolve();
+        await closing;
         expect(await outcome).toHaveProperty(
           "error.message",
           "tool invocation authority is no longer active",
@@ -544,7 +547,7 @@ describe("spawn input ownership transfer", () => {
         await executionEntered.promise;
         const recorder = prepared!.userTurn.recorder!;
         expect(recorder.getPendingInputMessage?.()).toBeDefined();
-        admission.close();
+        await admission.close();
         expect(() => guard()).toThrow("tool invocation authority is no longer active");
         if (boundary === "child abort") {
           prepared!.activeRunAbort.controller.abort(new Error("child stopped"));
@@ -566,7 +569,7 @@ describe("spawn input ownership transfer", () => {
     } finally {
       release();
       await Promise.allSettled([writer, dispatch, execution]);
-      admission.close();
+      await admission.close();
       stageSpy.mockRestore();
       executionSpy.mockRestore();
       signal.removeEventListener("abort", release);
@@ -734,7 +737,7 @@ describe("accepted input Gateway instance retirement", () => {
       await Promise.allSettled([dispatch, execution]);
       restoreRuntimeRelease?.();
       restoreExecution?.();
-      admission.close();
+      await admission.close();
       signal.removeEventListener("abort", release);
     }
   });

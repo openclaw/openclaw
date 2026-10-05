@@ -233,8 +233,12 @@ export async function runSetupInferenceTurn(params: {
     const described = describeSetupInferenceError(error, route);
     return failed(described.status, described.error);
   } finally {
-    preparedRunAdmission.close();
-    clearAgentRunContext(runId);
+    try {
+      await preparedRunAdmission.close();
+    } finally {
+      clearAgentRunContext(runId);
+    }
+    // Unconfirmed runtime cleanup retains its files for the owning recovery path.
     try {
       await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
         workspaceDir,

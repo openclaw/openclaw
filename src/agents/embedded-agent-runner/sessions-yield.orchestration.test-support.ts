@@ -159,13 +159,12 @@ describe("sessions_yield orchestration", () => {
           requesterTurnYielded: true,
         });
         persisted.mockClear();
-        if (owner === "revoked") {
-          admission.close();
-        }
+        const closing = owner === "revoked" ? admission.close() : undefined;
         if (owner === "replaced") {
           await replacement.admit("embedded");
         }
         releaseCleanup.resolve();
+        await closing;
         if (owner === "active") {
           expect((await run).requesterContinuationSettled).toBe(true);
           await settlementEntered.promise;
@@ -206,8 +205,8 @@ describe("sessions_yield orchestration", () => {
         } finally {
           unsubscribe();
           factorySpy.mockRestore();
-          admission.close();
-          replacement.close();
+          await admission.close();
+          await replacement.close();
           await registry.resetSubagentRegistryForTests({ persist: false });
           settlementSpy.mockRestore();
           gatewaySpy.mockRestore();

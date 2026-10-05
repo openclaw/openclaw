@@ -523,7 +523,7 @@ beforeEach(() => {
 afterEach(async () => {
   await closeMcpLoopbackServer();
   for (const admission of activeAdmissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
 });
 
@@ -1188,8 +1188,9 @@ describe("mcp loopback server", () => {
     });
     const responsePromise = sendLoopbackToolCall({ ...grant.scope, name: "exec" });
     await preparationStarted;
-    activeAdmissions.at(-1)?.close();
+    const closing = activeAdmissions.at(-1)?.close();
     releasePreparation();
+    await closing;
 
     const response = await responsePromise;
     const payload = await readMcpPayload(response);

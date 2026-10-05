@@ -337,7 +337,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       } finally {
         decision.resolve();
         workerSpy.mockRestore();
-        admission.close();
+        await admission.close();
       }
       expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeUndefined();
     },

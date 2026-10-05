@@ -287,7 +287,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
               "Personal instructions require a live authenticated Gateway user turn",
             );
           } finally {
-            nextAdmission.close();
+            await nextAdmission.close();
           }
           const before = loadSessionEntry(scope)?.owner;
           const denied = await request(attach.token, true, "tools/call", next.id);
@@ -326,7 +326,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         } finally {
           revokeAttachGrant(attach.token);
           revokeMcpLoopbackClientGrant(grant.token);
-          admission.close();
+          await admission.close();
           await closeMcpLoopbackServer();
         }
       },

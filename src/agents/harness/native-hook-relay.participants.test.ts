@@ -161,6 +161,6 @@ it("denies native spawn at final admission when another person steers the parent
     );
   } finally {
     host.close();
-    admission.close();
+    await admission.close();
   }
 });

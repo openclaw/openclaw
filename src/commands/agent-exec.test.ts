@@ -262,7 +262,7 @@ describe("agent exec command composition", () => {
             host.close();
           }
         } finally {
-          admission.close();
+          await admission.close();
         }
       },
     });

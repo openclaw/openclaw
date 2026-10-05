@@ -490,7 +490,7 @@ describe("requester settle wake product flow", () => {
             acceptedSessionSpawns: [child],
           });
         } finally {
-          admission.close();
+          await admission.close();
         }
         await vi.advanceTimersByTimeAsync(10);
       }
@@ -721,7 +721,7 @@ describe("requester settle wake product flow", () => {
             return terminal.result;
           } finally {
             harnessAttempt.mockRestore();
-            admission.close();
+            await admission.close();
           }
         }
         return await withLocalSessionPlacementTurnSettlement(

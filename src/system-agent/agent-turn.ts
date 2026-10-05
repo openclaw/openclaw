@@ -440,7 +440,7 @@ async function runSystemAgentTurnWithDeps(
       error instanceof SystemAgentInferenceUnavailableError ? [...error.failures] : [error];
     return throwSystemAgentInferenceUnavailable({ session: params.session, failures });
   } finally {
-    preparedRunAdmission.close();
+    await preparedRunAdmission.close();
   }
 }
 

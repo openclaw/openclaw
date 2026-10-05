@@ -54,9 +54,9 @@ beforeAll(async () => {
   ({ prepareEmbeddedAttemptSystemPrompt } = await import("./attempt-system-prompt-prepare.js"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
   vi.restoreAllMocks();
   providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();

@@ -15,9 +15,9 @@ import {
   toAcpRuntimeError,
 } from "../../acp/runtime/errors.js";
 import {
-  closeAdmittedRunDelegatedAuthority,
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agents/agent-run-terminal-outcome.js";
 import {
@@ -543,6 +543,7 @@ export async function tryDispatchAcpReplyCore(
     });
   };
   let admittedRunContext: AdmittedRunContext | undefined;
+  let admission: PreparedAgentRunAdmission | undefined;
   let nativeActionEvidenceRecorded = false;
   const recordUnsupportedNativeActionEvidence = () => {
     if (nativeActionEvidenceRecorded) {
@@ -700,7 +701,7 @@ export async function tryDispatchAcpReplyCore(
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
-    admittedRunContext = await prepareChannelRunAdmission({
+    admission = prepareChannelRunAdmission({
       cfg: params.cfg,
       runId: requestId,
       agentId: acpAgentId,
@@ -708,7 +709,8 @@ export async function tryDispatchAcpReplyCore(
       boundary: "auto-reply.acp",
       evidence: readChannelContextAdmissionEvidence(params.ctx),
       gatewayLocalUserIngress: getGatewayLocalUserIngress(params.ctx),
-    }).admit("acp");
+    });
+    admittedRunContext = await admission.admit("acp");
     recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;
     const elicitationParams = {
@@ -850,9 +852,7 @@ export async function tryDispatchAcpReplyCore(
       outcome: { kind: "error", error: acpError },
     });
   } finally {
-    if (admittedRunContext) {
-      closeAdmittedRunDelegatedAuthority(admittedRunContext);
-    }
+    await admission?.close();
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -155,7 +155,7 @@ async function withInitialWriter(
         expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
       } finally {
         for (const owner of admissions) {
-          owner.close();
+          await owner.close();
         }
       }
     }
@@ -346,7 +346,7 @@ describe("admitted lazy session writer", () => {
             controller.abort(callerError);
           }
           if (loss === "closed") {
-            admission.close();
+            await admission.close();
           }
           if (loss === "replaced") {
             await replaceAdmission();
@@ -467,7 +467,7 @@ describe("admitted lazy session writer", () => {
         const entryId = manager.appendMessage(userMessage);
         const before = loadTranscriptEventsSync(target);
         if (state === "closed") {
-          admission.close();
+          await admission.close();
         } else if (state === "replaced") {
           await replaceAdmission();
         }
@@ -500,7 +500,7 @@ describe("admitted lazy session writer", () => {
       await withInitialWriter(async ({ admission, manager, target }) => {
         const first = manager.appendMessage(userMessage);
         const before = loadTranscriptEventsSync(target);
-        admission.close();
+        await admission.close();
         if (operation === "branch") {
           await expect(
             runWithoutOwnedSessionTranscriptWrites(() => manager.createBranchedSession(first)),
@@ -522,7 +522,7 @@ describe("admitted lazy session writer", () => {
 
   it("retains its initial admission even before the first append", async () => {
     await withInitialWriter(async ({ admission, manager, target }) => {
-      admission.close();
+      await admission.close();
       expect(() =>
         runWithoutOwnedSessionTranscriptWrites(() => manager.appendMessage(userMessage)),
       ).toThrow("admitted run authority is no longer active");

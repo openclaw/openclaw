@@ -163,6 +163,7 @@ it.each([
   const dedupe = new Map<string, { ts: number; ok: boolean; payload: Record<string, unknown> }>();
   const abortContext = createChatAbortContext({ dedupe, getRuntimeConfig });
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
+  const closing: { promise?: Promise<void> } = {};
   type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
   const completion = { dispatch: dispatchGatewayMethodInProcess };
   vi.spyOn(completion, "dispatch").mockResolvedValue({
@@ -219,7 +220,7 @@ it.each([
       started.push(runId);
       return await completion.dispatch<T>(...args);
     } finally {
-      owner.close();
+      await owner.close();
     }
   };
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
@@ -265,7 +266,7 @@ it.each([
             return false;
           }
           if (phase !== "unrelated turn") {
-            admission?.close();
+            closing.promise = admission?.close();
           }
           return true;
         },
@@ -299,8 +300,9 @@ it.each([
       expect(current?.completion?.resultText).toBe("The retained child result.");
     }
   } finally {
-    admission?.close();
+    closing.promise ??= admission?.close();
     execute.resolve();
+    await closing.promise;
     vi.useRealTimers();
     await fixture.settle();
   }

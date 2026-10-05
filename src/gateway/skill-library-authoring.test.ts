@@ -123,7 +123,7 @@ describe("human personal namespace authority", () => {
         }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     } finally {
-      run.close();
+      await run.close();
     }
   });
   it("authors for the real requester inside another person's session and rejects a retained tool after close", async () => {
@@ -140,12 +140,12 @@ describe("human personal namespace authority", () => {
         sessionActivation: "new-sessions",
       });
       expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(1);
-      run.close();
+      await run.close();
       await expect(
         run.invoke({ action: "create", slug: "after-close", content }),
       ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
     } finally {
-      run.close();
+      await run.close();
     }
   });
   it("preserves supporting bytes on ordinary updates and permits an explicit authorized transfer", async () => {
@@ -190,7 +190,7 @@ describe("human personal namespace authority", () => {
         entry: { ownerProfileId: null, authorProfileId: alice.id },
       });
     } finally {
-      run.close();
+      await run.close();
     }
   });
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
@@ -220,7 +220,7 @@ describe("human personal namespace authority", () => {
       );
       expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(0);
     } finally {
-      run.close();
+      await run.close();
     }
   });
   it("enforces current roles at publication after asynchronous staging", async () => {
@@ -244,7 +244,7 @@ describe("human personal namespace authority", () => {
       await expect(saving).rejects.toMatchObject({ code: "FORBIDDEN" });
       expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(0);
     } finally {
-      run.close();
+      await run.close();
     }
   });
   it("returns a whole bounded instruction or visible omission without embedding binary bundle data", async () => {
@@ -296,7 +296,7 @@ describe("human personal namespace authority", () => {
           .length,
       ).toBeGreaterThan(500000);
     } finally {
-      run.close();
+      await run.close();
     }
   });
 });
@@ -520,6 +520,6 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
     ).rejects.toThrow("claim lost");
   } finally {
     await runtime.close();
-    run.close();
+    await run.close();
   }
 });

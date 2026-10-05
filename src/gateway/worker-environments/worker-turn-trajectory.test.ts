@@ -155,7 +155,7 @@ describe("worker turn trajectory authority", () => {
           expect(events).toEqual([]);
         }
       } finally {
-        input.preparedRunAdmission.close();
+        await input.preparedRunAdmission.close();
       }
     },
   );

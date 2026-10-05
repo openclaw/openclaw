@@ -178,7 +178,7 @@ export async function inRun<T>(
     admitted.bindRunScope?.(capability);
     return await runWithCronCreatorAuthorityCapability(capability, () => execute(capability));
   } finally {
-    runAdmission.close();
+    await runAdmission.close();
     clearAgentRunContext(runId);
   }
 }

@@ -153,8 +153,8 @@ async function fixture(
     forceToolNames: ["message", "denied"],
   });
   const admission = prepareSystemAgentRunAdmission(cfg, runId, agentId, "prefilter-test");
-  onTestFinished(() => {
-    admission.close();
+  onTestFinished(async () => {
+    await admission.close();
     forgetPromptBuildDrainCacheForRun(runId);
     clearEmbeddedSessionPromptStates([runId]);
   });
@@ -329,14 +329,16 @@ describe("prompt assembly with registered Decision runtime", () => {
       const f = await fixture(cfg);
       const pending = f.assemble();
       await entered.promise;
+      let closing: Promise<void> | undefined;
       if (change === "opt-out") {
         setRuntimeConfigSnapshot(config(false));
       } else if (change === "owner-close") {
-        f.admission.close();
+        closing = f.admission.close();
       } else {
         f.controller.abort(new Error("cancelled"));
       }
       release.resolve();
+      await closing;
       if (change === "opt-out") {
         await pending;
         expect(f.policy.current.tools.map((tool) => tool.name)).toEqual(["message"]);

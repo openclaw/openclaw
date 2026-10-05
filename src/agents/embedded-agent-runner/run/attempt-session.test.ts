@@ -353,12 +353,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
                   throw new Error("Registered consumer finished before memory preparation");
                 }),
               ]);
-              if (lifetime === "closed") {
-                promptFixture.admission.close();
-              }
+              const closing = lifetime === "closed" ? promptFixture.admission.close() : undefined;
               expect(promptFixture.abort.signal.aborted).toBe(false);
               expect(nextTurnSignal.signal.aborted).toBe(false);
               releaseMemory.resolve();
+              await closing;
               const [outcome] = await nextTurnSettled;
               await Promise.allSettled(refresh ? [refresh] : []);
               expect(preparePermission).toHaveBeenCalledTimes(1);

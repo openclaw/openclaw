@@ -270,7 +270,7 @@ describe("pre-mirror recovery input custody", () => {
             expect(effect).toThrow();
           }
         } finally {
-          admission.close();
+          await admission.close();
         }
       });
     },

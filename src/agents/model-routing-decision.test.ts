@@ -54,7 +54,7 @@ describe("admitted model routing decisions", () => {
         occurredAt: 1_001,
       }),
     ).toBe(true);
-    admission.close();
+    await admission.close();
     clear();
 
     expect(captured).toHaveLength(1);
@@ -103,7 +103,7 @@ describe("admitted model routing decisions", () => {
         selectionMode: "automatic",
       }),
     ).toBe(true);
-    admission.close();
+    await admission.close();
     clear();
 
     expect(captured).toHaveLength(1);
@@ -124,7 +124,7 @@ describe("admitted model routing decisions", () => {
       if (replacement) {
         await replacement.admit("embedded");
       } else {
-        admission.close();
+        await admission.close();
       }
       const captured: ExecutionDecisionWork[] = [];
       const clear = configureExecutionDecisionWorkSink((work) => {
@@ -143,8 +143,8 @@ describe("admitted model routing decisions", () => {
         }),
       ).toThrow("admitted run authority is no longer active");
       clear();
-      admission.close();
-      replacement?.close();
+      await admission.close();
+      await replacement?.close();
 
       expect(captured).toEqual([]);
     },

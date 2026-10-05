@@ -264,7 +264,7 @@ describe("recovery cancellation through the public run owner", () => {
         }
         expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       } finally {
-        replacement?.close();
+        await replacement?.close();
       }
     },
   );

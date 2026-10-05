@@ -682,7 +682,7 @@ describe("dedicated worker websocket protocol", () => {
       suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension?.drain()).toBe(true);
       if (fence === "run") {
-        preparedRunAdmission.close();
+        await preparedRunAdmission.close();
       } else if (fence === "placement") {
         await placements.releaseTurn(claim);
       } else if (fence === "restart") {
@@ -713,7 +713,7 @@ describe("dedicated worker websocket protocol", () => {
       if (placements.validateTurnClaim(claim)) {
         await placements.releaseTurn(claim);
       }
-      preparedRunAdmission.close();
+      await preparedRunAdmission.close();
       rootAdmission.release();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();

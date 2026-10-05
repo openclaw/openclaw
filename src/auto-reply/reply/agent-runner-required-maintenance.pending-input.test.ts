@@ -424,7 +424,7 @@ describe("required maintenance with restart-safe admitted input", () => {
         } finally {
           await waitForSessionMaintenance(sessionKey);
           recorder?.finishPendingInput?.("interrupted");
-          admissionOwner.close();
+          await admissionOwner.close();
           const mcpManager = getSessionMcpRuntimeManagerForTesting();
           for (const runtimeSessionId of mcpManager.listSessionIds()) {
             if (

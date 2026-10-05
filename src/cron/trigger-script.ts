@@ -625,18 +625,21 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
             : "internal_error",
       );
     } finally {
-      admission?.close();
-      clearToolSearchCatalog({ catalogRef });
-      evaluationScope.cleanup();
-      if (mcp) {
-        await runAgentCleanupStep({
-          runId,
-          sessionId: runId,
-          step: "cron-script-mcp-retire",
-          timeoutMs: CRON_SCRIPT_MCP_CLEANUP_GRACE_MS,
-          log: { warn: logWarn },
-          cleanup: mcp.dispose,
-        });
+      try {
+        await admission?.close();
+      } finally {
+        clearToolSearchCatalog({ catalogRef });
+        evaluationScope.cleanup();
+        if (mcp) {
+          await runAgentCleanupStep({
+            runId,
+            sessionId: runId,
+            step: "cron-script-mcp-retire",
+            timeoutMs: CRON_SCRIPT_MCP_CLEANUP_GRACE_MS,
+            log: { warn: logWarn },
+            cleanup: mcp.dispose,
+          });
+        }
       }
     }
   };

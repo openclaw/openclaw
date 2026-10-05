@@ -13,7 +13,6 @@ import {
 } from "../../../acp/policy.js";
 import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
-import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
@@ -361,7 +360,7 @@ async function runAcpSteer(params: {
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
-  const admittedRunContext = await prepareChannelRunAdmission({
+  const admission = prepareChannelRunAdmission({
     assertSourceCurrent: params.assertOwnerCurrent,
     cfg: params.cfg,
     runId: params.requestId,
@@ -370,9 +369,10 @@ async function runAcpSteer(params: {
     boundary: "acp.command.steer",
     evidence: params.channelAdmissionEvidence,
     gatewayLocalUserIngress: params.gatewayLocalUserIngress,
-  }).admit("acp");
+  });
 
   try {
+    const admittedRunContext = await admission.admit("acp");
     await acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
@@ -398,7 +398,7 @@ async function runAcpSteer(params: {
       },
     });
   } finally {
-    closeAdmittedRunDelegatedAuthority(admittedRunContext);
+    await admission.close();
   }
   return output.trim();
 }

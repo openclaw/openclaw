@@ -59,7 +59,7 @@ function fixture(locationHandler?: GatewayRequestHandler) {
 
   async function run<T>(
     operatorAuthority: AdmittedRunOperatorAuthority | undefined,
-    callback: (close: () => void) => Promise<T>,
+    callback: (close: () => Promise<void>) => Promise<T>,
     admissionSource?: AdmittedRunContext["admissionSource"],
   ): Promise<T> {
     const operationalRunInstance = createOperationalRunInstanceRef("presence-channel-run");
@@ -91,7 +91,7 @@ function fixture(locationHandler?: GatewayRequestHandler) {
         () => callback(prepared.close),
       );
     } finally {
-      prepared.close();
+      await prepared.close();
     }
   }
   return { snapshot, run };
@@ -144,7 +144,7 @@ describe("presence tool source authority", () => {
           const pending = tool.execute("scheduled", {});
           if (source === "operator-schedule") {
             expect((await pending).details).toMatchObject({ people: [{ name: "Ada" }] });
-            close();
+            await close();
             await expect(tool.execute("expired-schedule", {})).rejects.toThrow(/authority|source/i);
             expect(snapshot).toHaveBeenCalledOnce();
           } else {

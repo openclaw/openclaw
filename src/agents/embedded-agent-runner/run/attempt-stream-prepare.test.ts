@@ -323,8 +323,9 @@ describe("prepareEmbeddedAttemptStream", () => {
             );
             try {
               await started.promise;
+              let closing: Promise<void> | undefined;
               if (transition === "claim") {
-                admission.close();
+                closing = admission.close();
               } else if (transition === "replacement") {
                 mocks.setActiveRun(
                   "session-output-schema",
@@ -342,6 +343,7 @@ describe("prepareEmbeddedAttemptStream", () => {
                 expect(createMessageInjectionAuthority(() => sourceCurrent)).not.toThrow();
               }
               release.resolve();
+              await closing;
               const accepted = transition === "source-open";
               expect(await outcome).toBe(accepted ? "accepted" : "rejected");
               expect(queued).toHaveBeenCalledTimes(accepted && route === "steering" ? 1 : 0);
@@ -369,7 +371,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           },
         );
       } finally {
-        admission.close();
+        await admission.close();
       }
     },
   );

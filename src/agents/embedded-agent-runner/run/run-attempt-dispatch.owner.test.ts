@@ -469,7 +469,7 @@ it.each(dispatchCases)(
       const resolvePlacementSandbox = vi.fn(async () => {
         if (retirePlacement) {
           sourceExistedAtRetirement = existsSync(workspaceDir);
-          admission.close();
+          await admission.close();
         }
         return remoteSandbox;
       });
@@ -634,7 +634,7 @@ it.each(dispatchCases)(
         preparation?.mockRestore();
         remoteImageRead?.mockRestore();
         restorePlacement();
-        admission.close();
+        await admission.close();
         restoreSandbox();
       }
     });

@@ -106,7 +106,7 @@ describe.each(
         };
       } finally {
         revokeCronCreatorAuthorityRunScope(creatorScope);
-        admission.close();
+        await admission.close();
       }
     };
     const cron = new CronService({

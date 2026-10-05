@@ -2375,7 +2375,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       agentId: "ops",
       sessionKey: "agent:ops:telegram:direct:alice",
     });
-    identityLease.close();
+    await identityLease.close();
   });
 
   it("rejects agent runtime identity tokens from remote clients", async () => {
@@ -2414,7 +2414,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       );
     });
     expect(harness.client).toBeNull();
-    identityLease.close();
+    await identityLease.close();
   });
 
   it("rejects invalid local agent runtime identity tokens", async () => {

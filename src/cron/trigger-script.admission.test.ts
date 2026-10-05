@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  closeAdmittedRunDelegatedAuthority,
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
@@ -13,6 +13,7 @@ import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-con
 import { createExecutionStartedOwnerBinding } from "../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import * as cronRunAdmission from "./run-admission.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type HeadlessParams = Parameters<
@@ -117,6 +118,15 @@ describe("cron script admission", () => {
       const release = createDeferred();
       const config: OpenClawConfig = {};
       let admitted: AdmittedRunContext | undefined;
+      let prepared: PreparedAgentRunAdmission | undefined;
+      const prepareAdmission = cronRunAdmission.prepareCronRunAdmission;
+      const preparation = vi
+        .spyOn(cronRunAdmission, "prepareCronRunAdmission")
+        .mockImplementation((params) => {
+          const owner = prepareAdmission(params);
+          prepared = owner.preparedRunAdmission;
+          return owner;
+        });
       const controller = new AbortController();
       let gateway = {} as GatewayRequestContext;
       const execute = vi.fn(async () => jsonResult({ changed: true }));
@@ -146,22 +156,27 @@ describe("cron script admission", () => {
           },
         },
       });
+      let closing: ReturnType<PreparedAgentRunAdmission["close"]> | undefined;
       try {
         await entered.promise;
         expect(admitted).toBeDefined();
         if (revocation === "admission") {
-          closeAdmittedRunDelegatedAuthority(admitted!);
+          expect(prepared).toBeDefined();
+          closing = prepared!.close();
         } else if (revocation === "gateway") {
           gateway = {} as GatewayRequestContext;
         } else {
           controller.abort();
         }
         release.resolve();
+        await closing;
         await expect(result).resolves.toMatchObject({ kind: "error" });
         expect(execute).not.toHaveBeenCalled();
       } finally {
+        preparation.mockRestore();
         release.resolve();
         await result;
+        await prepared?.close();
       }
     },
   );

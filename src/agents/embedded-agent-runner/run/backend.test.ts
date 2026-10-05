@@ -208,7 +208,7 @@ describe("workspace inputs at harness dispatch", () => {
       release,
       cleanup: () => {
         release();
-        admission.close();
+        return admission.close();
       },
     };
   }
@@ -240,7 +240,7 @@ describe("workspace inputs at harness dispatch", () => {
         expect(f.params.prompt).toBe("Inspect attachment");
         expect(prepare.mock.calls[0]?.[0].media).toBe(f.params.media);
       } finally {
-        f.cleanup();
+        await f.cleanup();
       }
     },
   );
@@ -271,7 +271,7 @@ describe("workspace inputs at harness dispatch", () => {
         media,
       });
     } finally {
-      f.cleanup();
+      await f.cleanup();
     }
   });
 
@@ -283,7 +283,7 @@ describe("workspace inputs at harness dispatch", () => {
       await runEmbeddedAttemptWithBackend(params as never);
       expect(harnessMocks.runAttempt).toHaveBeenCalledWith(params, undefined);
     } finally {
-      f.cleanup();
+      await f.cleanup();
     }
   });
 
@@ -298,7 +298,7 @@ describe("workspace inputs at harness dispatch", () => {
         if (failure === "revoked") {
           f.release();
         } else if (failure === "run-closed") {
-          f.admission.close();
+          await f.admission.close();
         } else {
           controller.abort(new Error("cancelled"));
         }
@@ -314,7 +314,7 @@ describe("workspace inputs at harness dispatch", () => {
         ).rejects.toThrow();
         expect(harnessMocks.runAttempt).not.toHaveBeenCalled();
       } finally {
-        f.cleanup();
+        await f.cleanup();
       }
     },
   );

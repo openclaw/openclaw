@@ -74,18 +74,21 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     },
   });
   let closed = false;
+  let closing: Promise<void> | undefined;
   let legacyReplyCustodyIndex = -1;
   let minimumReplyMessageIndex = 0;
   const close = () => {
-    if (!closed) {
-      closed = true;
-      legacyReplyCustodyIndex = -1;
-      preparedRunAdmission.close();
-    }
+    closed = true;
+    legacyReplyCustodyIndex = -1;
+    return (closing ??= Promise.resolve(preparedRunAdmission.close()));
+  };
+  const onAbort = () => {
+    // The finalizer joins the same settlement and reports cleanup failures.
+    void close().catch(() => {});
   };
   // Abort owns authority revocation independently of core completion; the
   // post-registration check closes the prepare-to-listener race.
-  params.abortSignal?.addEventListener("abort", close, { once: true });
+  params.abortSignal?.addEventListener("abort", onAbort, { once: true });
   try {
     params.abortSignal?.throwIfAborted();
     const { githubPublicationAvailable: _, ...runParams } = params;
@@ -133,7 +136,7 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     }
     return result;
   } finally {
-    params.abortSignal?.removeEventListener("abort", close);
-    close();
+    params.abortSignal?.removeEventListener("abort", onAbort);
+    await close();
   }
 };

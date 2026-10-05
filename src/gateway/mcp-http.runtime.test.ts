@@ -225,7 +225,7 @@ describe("McpLoopbackToolCache", () => {
       );
       expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 

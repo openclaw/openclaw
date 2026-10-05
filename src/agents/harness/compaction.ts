@@ -479,12 +479,12 @@ async function maybeCompactAgentHarnessSessionInGeneration(
       releaseUnqualifiedModelSource?: () => void;
     } = {};
     onAcquired({
-      release: () => {
+      release: async () => {
         try {
           resources.releaseUnqualifiedModelSource?.();
           resources.host?.close();
         } finally {
-          admission.close();
+          await admission.close();
         }
       },
       releaseBeforeResultWhenIdle: true,

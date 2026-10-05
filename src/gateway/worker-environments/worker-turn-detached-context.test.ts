@@ -174,7 +174,7 @@ async function launchProbe(
     outcome = await pending;
   } finally {
     hasUnjoinedOwner = false;
-    input.preparedRunAdmission?.close();
+    await input.preparedRunAdmission?.close();
   }
   expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   expect(placements.listPendingWorkspaceResults()).toHaveLength(0);

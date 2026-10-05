@@ -615,8 +615,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       });
       const pending = runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
       await entered.promise;
-      admission.close();
+      const closing = admission.close();
       lookup.resolve(context);
+      await closing;
       await pending;
       expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
       expect(mocks.submitPrompt).not.toHaveBeenCalled();
@@ -626,7 +627,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         }),
       );
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 

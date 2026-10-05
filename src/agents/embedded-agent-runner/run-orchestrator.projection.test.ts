@@ -74,7 +74,7 @@ beforeAll(async () => {
     try {
       return await run({ ...params, preparedRunAdmission: admission });
     } finally {
-      admission.close();
+      await admission.close();
     }
   };
   // Preserve the embedded project's cold-import budget after moving to host-process tests.

@@ -39,7 +39,7 @@ export async function withTestRunAdmission<T>(
   try {
     return await run(await admission.admit("embedded"));
   } finally {
-    admission.close();
+    await admission.close();
   }
 }
 
@@ -50,7 +50,7 @@ export function createTestPreparedRunAdmission(runId: string): PreparedAgentRunA
     operationalRunInstance: admitted.operationalRunInstance,
     admit: async () => admitted,
     assertSourceCurrent: () => {},
-    close: () => {},
+    close: async () => {},
   });
 }
 
@@ -80,7 +80,7 @@ export function wrapRunWithTestPreparedAdmission<P extends { runId: string; agen
     try {
       return await run({ ...params, preparedRunAdmission: admission } as unknown as P);
     } finally {
-      admission.close();
+      await admission.close();
     }
   };
 }

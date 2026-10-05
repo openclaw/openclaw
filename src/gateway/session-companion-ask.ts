@@ -281,7 +281,8 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     );
   } finally {
     try {
-      preparedRunAdmission?.close();
+      await preparedRunAdmission?.close();
+      // Failed runtime cleanup must retain the internal session it may still use.
       await removeInternalSessionEffectsSession(
         target,
         executionStarted ? undefined : expectedSeedOwner,

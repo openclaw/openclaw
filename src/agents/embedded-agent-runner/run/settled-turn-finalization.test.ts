@@ -155,8 +155,8 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "finalization-test");
     admittedRunContext = await admission.admit("embedded");
   });
-  afterEach(() => {
-    admission.close();
+  afterEach(async () => {
+    await admission.close();
     vi.useRealTimers();
   });
 

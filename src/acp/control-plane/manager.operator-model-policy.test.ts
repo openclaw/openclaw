@@ -102,7 +102,7 @@ describe("ACP operator model ceiling", () => {
         );
       return { outcome, runtimeState };
     } finally {
-      admission.close();
+      await admission.close();
     }
   }
 

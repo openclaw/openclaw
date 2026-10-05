@@ -61,7 +61,7 @@ afterAll(async () => {
     revokeMcpLoopbackClientGrant(token);
   }
   for (const admission of admissions) {
-    admission.close();
+    await admission.close();
   }
   await closeMcpLoopbackServer();
   if (proxy) {
@@ -149,7 +149,7 @@ it("executes egress-enabled commands through cached CLI grants and rejects a ret
       content: [expect.objectContaining({ text: expect.stringContaining("mcp-egress-ok") })],
     },
   });
-  first.admission.close();
+  await first.admission.close();
   const retired = await first.request("tools/call");
   expect(retired.status).toBe(401);
   await retired.body?.cancel();

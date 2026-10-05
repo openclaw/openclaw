@@ -113,6 +113,7 @@ describe("SQLite post-commit history maintenance", () => {
         "pruneAllSessionTranscriptArchivesToHighWater",
       );
       const admission = prepareSystemAgentRunAdmission({}, "maintenance-lifetime", "main", "setup");
+      const closing: { promise?: Promise<void> } = {};
       const assertActive = resolveAdmittedRunActiveAssertion(await admission.admit("embedded"))!;
       const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
       if (phase === "rollback") {
@@ -144,7 +145,7 @@ describe("SQLite post-commit history maintenance", () => {
       reader.prepare("SELECT count(*) FROM session_windows").get();
       try {
         if (phase === "closed") {
-          admission.close();
+          await (closing.promise ?? admission.close());
         }
         const attempt =
           operation === "delete"
@@ -156,7 +157,7 @@ describe("SQLite post-commit history maintenance", () => {
                   if (phase === "partial" && !sessionExists("target-old")) {
                     expect(readArchiveNames("target-old")).toHaveLength(1);
                     expect(checkpoint).not.toHaveBeenCalled();
-                    admission.close();
+                    closing.promise = admission.close();
                   }
                   assertActive();
                 },
@@ -171,7 +172,7 @@ describe("SQLite post-commit history maintenance", () => {
                 },
                 afterEntryMutation: () => {
                   expect(checkpoint).not.toHaveBeenCalled();
-                  admission.close();
+                  closing.promise = admission.close();
                   assertActive();
                 },
               });
@@ -262,7 +263,7 @@ describe("SQLite post-commit history maintenance", () => {
         }
       } finally {
         reader.close();
-        admission.close();
+        await (closing.promise ?? admission.close());
       }
     },
   );

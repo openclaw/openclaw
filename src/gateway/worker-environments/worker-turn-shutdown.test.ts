@@ -130,7 +130,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
           unexpected,
         );
     } finally {
-      turn.preparedRunAdmission.close();
+      await turn.preparedRunAdmission.close();
     }
   };
   const attempt = runWithGatewayIndependentRootWorkAdmission(() =>

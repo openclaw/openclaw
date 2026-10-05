@@ -210,7 +210,8 @@ async function runConfiguredSystemAgentText(params: {
     }
     text = undefined;
   } finally {
-    preparedRunAdmission?.close();
+    await preparedRunAdmission?.close();
+    // Keep the workspace when owned execution could not be confirmed stopped.
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
   if (!text) {

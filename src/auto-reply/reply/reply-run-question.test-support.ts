@@ -52,6 +52,6 @@ export async function withQuestionCreator(
     );
   } finally {
     operation.complete();
-    admission.close();
+    await admission.close();
   }
 }

@@ -269,9 +269,9 @@ async function withHostedCreation(
       });
     } finally {
       if (scheduled) {
-        scheduled.close();
+        await scheduled.close();
       } else {
-        parent.close();
+        await parent.close();
       }
       captured?.release();
     }

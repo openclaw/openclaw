@@ -453,7 +453,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     source.abort();
     release.resolve();
     await pending?.catch(() => undefined);
-    promptAdmission?.close();
+    await promptAdmission?.close();
     clearCronJobActive(jobId, marker);
     restoreActivePluginRegistrySnapshot(registry);
     await state.cleanup();

@@ -262,7 +262,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await closeStateDatabaseForTest();
   trajectoryTempDirs.cleanup();
-  selectionAdmission.close();
+  await selectionAdmission.close();
   resetAgentRunRegistryForTest();
   clearAgentHarnesses();
   resetModelGenerationFixtureState();

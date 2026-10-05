@@ -82,7 +82,7 @@ describe("channel run admission", () => {
           expect.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
         );
       } finally {
-        prepared.close();
+        await prepared.close();
         clearIdentitySink();
       }
     },
@@ -124,7 +124,7 @@ describe("channel run admission", () => {
       });
     } finally {
       host.close();
-      prepared.close();
+      await prepared.close();
       resetAgentRunRegistryForTest();
     }
   });
@@ -157,7 +157,7 @@ describe("channel run admission", () => {
       expect(() => host.capabilities.preparedEnvironment?.()).not.toThrow();
     } finally {
       host.close();
-      prepared.close();
+      await prepared.close();
       resetAgentRunRegistryForTest();
     }
   });
@@ -227,7 +227,7 @@ describe("channel run admission", () => {
         ingressState: "unknown",
       });
 
-      prepared.close();
+      await prepared.close();
       expect(() => prepared.assertSourceCurrent()).not.toThrow();
       await expect(prepared.admit("embedded")).rejects.toThrow(
         "prepared execution context is already closed",
@@ -317,7 +317,7 @@ describe("channel run admission", () => {
         boundary: "test.channel",
         evidence,
       });
-      cancelled.close();
+      await cancelled.close();
       await expect(cancelled.admit("embedded")).rejects.toThrow(
         "prepared execution context is already closed",
       );
@@ -335,7 +335,7 @@ describe("channel run admission", () => {
         },
       });
       await internalAcp.admit("acp");
-      internalAcp.close();
+      await internalAcp.close();
 
       expect(identityWork).toHaveLength(1);
       expect(identityWork).toMatchObject([{ kind: "capture", envelope: {} }]);

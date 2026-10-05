@@ -136,9 +136,9 @@ export function prepareChannelRunAdmission(params: {
       }
       return prepared.admit(runtimeKind, runtimeInstanceId);
     },
-    close: () => {
+    close: async () => {
       closed = true;
-      prepared?.close();
+      await prepared?.close();
     },
   });
 }

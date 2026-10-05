@@ -397,7 +397,7 @@ describe("cron run receipt store", () => {
           });
         }
       } finally {
-        admission.close();
+        await admission.close();
         if (state.timer) {
           state.timer.cancel();
         }
@@ -485,7 +485,7 @@ describe("cron run receipt store", () => {
             ? () => guard()
             : guard,
       );
-      admission.close();
+      await admission.close();
       if (scenario === "cancelled") {
         requestActiveCronJobCancellation(job.id, "cancelled after removal");
       } else if (scenario === "replaced marker") {
@@ -515,7 +515,7 @@ describe("cron run receipt store", () => {
         await expect(assertCurrent()).rejects.toBeInstanceOf(CronRunReceiptRevisionError);
       }
     } finally {
-      admission.close();
+      await admission.close();
       await finishCronRunReceiptAsync({
         handle: liveReceipt,
         status: "ok",

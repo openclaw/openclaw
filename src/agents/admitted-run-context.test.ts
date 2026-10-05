@@ -15,7 +15,6 @@ import {
   getGatewayContextResolver,
 } from "../plugins/runtime/gateway-context-binding.js";
 import {
-  closeAdmittedRunDelegatedAuthority,
   createExecutionIdentityRecoveryAdmission,
   createOperationalRunInstanceRef,
   createAdmittedRunOperatorAuthority,
@@ -122,7 +121,7 @@ describe("prepared run admission", () => {
         expect(clearGatewayContextResolver(admitted)).toBe(true);
         expect(getGatewayContextResolver(admitted)).toBeUndefined();
       } finally {
-        prepared.close();
+        await prepared.close();
       }
     },
   );
@@ -312,11 +311,12 @@ describe("prepared run admission", () => {
       }),
     ).resolves.toBe(admitted);
     expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(first);
-    prepared.close();
+    await prepared.close();
     expect(() => prepared.assertSourceCurrent()).not.toThrow();
     expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
     expect(getAdmittedRunSource(first)).toBeUndefined();
-    expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
+    await prepared.close();
+    expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
   });
 
@@ -342,8 +342,8 @@ describe("prepared run admission", () => {
         );
         expect(getAdmittedRunSource(authority)).toBe(admissionSource);
       } finally {
-        replacement.close();
-        original.close();
+        await replacement.close();
+        await original.close();
       }
     },
   );
@@ -374,8 +374,8 @@ describe("prepared run admission", () => {
         }
         expect(getAdmittedRunSource(authority)).toBeUndefined();
       } finally {
-        replacement.close();
-        original.close();
+        await replacement.close();
+        await original.close();
       }
     },
   );
@@ -395,7 +395,7 @@ describe("prepared run admission", () => {
     expect(() => assertActive?.()).not.toThrow();
     abort.abort();
     expect(() => assertActive?.()).toThrow("no longer active");
-    prepared.close();
+    await prepared.close();
     expect(() => assertActive?.()).toThrow("no longer active");
   });
 
@@ -434,7 +434,7 @@ describe("prepared run admission", () => {
         }),
       );
     } finally {
-      prepared.close();
+      await prepared.close();
     }
   });
 
@@ -451,7 +451,7 @@ describe("prepared run admission", () => {
 
     expect(authority).toBeDefined();
     expect(recovery).toBeDefined();
-    expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
+    await prepared.close();
     expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
     expect(validateAgentRunDelegatedAuthority(authority!)).toBe(false);
     expect(() => recovery?.assertActive()).not.toThrow();
@@ -507,11 +507,11 @@ describe("prepared run admission", () => {
           try {
             await expect(refused.admit(runtime.kind)).rejects.toThrow("already bound");
           } finally {
-            refused.close();
+            await refused.close();
           }
           expect(() => recovery!.assertActive()).not.toThrow();
         }
-        prepared.close();
+        await prepared.close();
         expect(sourceHolds).toBe(1);
         expect(() => readAdmittedRunOperatorAuthority(admitted)).toThrow("no longer active");
         expect(() => readPreparedRunOperatorAuthority(prepared)).toThrow("no longer active");
@@ -528,7 +528,7 @@ describe("prepared run admission", () => {
         );
       } finally {
         recovery?.release();
-        prepared.close();
+        await prepared.close();
         expect(sourceHolds).toBe(0);
       }
     },
@@ -556,6 +556,7 @@ describe("prepared run admission", () => {
     const { runtime, ...admissionFacts } = facts;
     let releaseHook: (() => void) | undefined;
     let authority: ReturnType<typeof getAdmittedRunDelegatedAuthority>;
+    const releaseSource = vi.fn();
     const hookPending = new Promise<void>((resolve) => {
       releaseHook = resolve;
     });
@@ -563,6 +564,12 @@ describe("prepared run admission", () => {
       cfg: {},
       facts: { ...admissionFacts, runId: "run-close-during-binding" },
       operationalRunInstance: createOperationalRunInstanceRef("run-close-during-binding"),
+      operatorAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "source-owner",
+        scopes: [],
+        assertCurrent() {},
+        retain: () => releaseSource,
+      }),
       onAdmitted: async (context) => {
         authority = getAdmittedRunDelegatedAuthority(context);
         await hookPending;
@@ -571,10 +578,18 @@ describe("prepared run admission", () => {
     const admission = prepared.admit(runtime.kind);
     await vi.waitFor(() => expect(authority).toBeDefined());
 
-    prepared.close();
+    const closing = prepared.close();
+    expect(prepared.close()).toBe(closing);
+    const settled = vi.fn();
+    void Promise.resolve(closing).then(settled);
 
     expect(validateAgentRunDelegatedAuthority(authority!)).toBe(false);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(releaseSource).not.toHaveBeenCalled();
     releaseHook?.();
     await expect(admission).rejects.toThrow("closed during admission");
+    await closing;
+    expect(releaseSource).toHaveBeenCalledOnce();
   });
 });

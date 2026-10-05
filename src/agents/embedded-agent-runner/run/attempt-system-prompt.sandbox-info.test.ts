@@ -83,7 +83,7 @@ it.each(["abort", "close"] as const)(
       if (action === "abort") {
         abort.abort(reason);
       } else {
-        admission.close();
+        await admission.close();
       }
       const refresh = prepared.prepareToolPrompt(tools, { permissionChanged: true });
       if (action === "abort") {

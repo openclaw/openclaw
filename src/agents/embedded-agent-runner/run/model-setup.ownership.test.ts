@@ -179,7 +179,7 @@ async function createFixture(
       await use(runtime, admission);
     } finally {
       runtime?.stopRuntimeAuthRefreshTimer();
-      admission.close();
+      await admission.close();
     }
   };
   return { state, generation, harness, target, entry, runParams, resolve, withRuntime };

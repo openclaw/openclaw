@@ -734,6 +734,61 @@ async function probeTarget(params: {
       ...(error ? { error } : {}),
       latencyMs: Date.now() - start,
     });
+  const settleOwners = async () => {
+    const admissionClosed = Promise.resolve(preparedRunAdmission?.close());
+    const settlements = await Promise.allSettled([
+      admissionClosed,
+      work.settle(async () => {
+        // The work owner still drains on admission failure; its files remain until
+        // execution cleanup is confirmed so a late producer cannot lose its state.
+        await admissionClosed;
+        const cleanups: Array<() => void | Promise<void>> = [
+          () => removeInternalSessionEffectsSession(sessionTarget),
+        ];
+        if (isolatedAgentDir) {
+          const ownedDir = isolatedAgentDir;
+          cleanups.push(
+            () => {
+              clearRuntimeAuthProfileStoreSnapshot(ownedDir);
+            },
+            () => {
+              disposeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(ownedDir));
+            },
+            () => fs.rm(ownedDir, { recursive: true, force: true }),
+          );
+        }
+        const errors: unknown[] = [];
+        for (const cleanup of cleanups) {
+          try {
+            await cleanup();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length === 1) {
+          throw errors[0];
+        }
+        if (errors.length > 1) {
+          throw new AggregateError(errors, "Auth probe resources could not all be released", {
+            cause: errors[0],
+          });
+        }
+      }),
+    ]);
+    const errors = [
+      ...new Set(
+        settlements.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      ),
+    ];
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Auth probe owners could not all be released", {
+        cause: errors[0],
+      });
+    }
+  };
   try {
     sessionTarget = await prepareInternalSessionEffectsSession({
       agentId,
@@ -843,40 +898,7 @@ async function probeTarget(params: {
       redactAuthProbeError(described.message),
     );
   } finally {
-    preparedRunAdmission?.close();
-    await work.settle(async () => {
-      const cleanups: Array<() => void | Promise<void>> = [
-        () => removeInternalSessionEffectsSession(sessionTarget),
-      ];
-      if (isolatedAgentDir) {
-        const ownedDir = isolatedAgentDir;
-        cleanups.push(
-          () => {
-            clearRuntimeAuthProfileStoreSnapshot(ownedDir);
-          },
-          () => {
-            disposeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(ownedDir));
-          },
-          () => fs.rm(ownedDir, { recursive: true, force: true }),
-        );
-      }
-      const errors: unknown[] = [];
-      for (const cleanup of cleanups) {
-        try {
-          await cleanup();
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Auth probe resources could not all be released", {
-          cause: errors[0],
-        });
-      }
-    });
+    await settleOwners();
   }
 }
 

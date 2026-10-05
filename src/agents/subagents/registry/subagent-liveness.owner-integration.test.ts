@@ -167,7 +167,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     try {
       await finish.promise;
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
   try {
@@ -556,7 +556,7 @@ it("does not keep a recent orphan executor-live after its admitted owner closes"
     try {
       expect(isSubagentRunLive(entry)).toBe(true);
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
   // The executor closed before the registry observed a terminal lifecycle event.
@@ -666,7 +666,7 @@ it("makes an admitted child inactive when termination is recorded", async () => 
       ).toBe(1);
       expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 });

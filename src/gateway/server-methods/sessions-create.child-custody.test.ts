@@ -303,7 +303,7 @@ async function createHostedChildFixture(
         dispatch(childKey, nestedKey, 2),
       );
     } finally {
-      nested.close();
+      await nested.close();
     }
   };
   const scope = (sessionKey = childKey) => ({
@@ -357,7 +357,7 @@ async function createHostedChildFixture(
       try {
         await finish();
       } finally {
-        parent.close();
+        await parent.close();
         captured?.release();
         releaseProfileCatalog?.();
         dispatchInboundMessageMock.mockReset();
@@ -505,8 +505,9 @@ describe("hosted creation transfers accepted child input", () => {
       expect(userMessages(scope)).toEqual([]);
       // Returning from send has already aborted the real invocation envelope's signal.
       fixture.closeInvocation();
-      fixture.closeParent();
+      const closing = fixture.closeParent();
       await fixture.finish();
+      await closing;
       expect(fixture.provider).toHaveBeenCalledOnce();
       expect(userMessages(scope)).toHaveLength(1);
       expect(listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
@@ -554,7 +555,7 @@ describe("hosted creation transfers accepted child input", () => {
       const scope = fixture.scope();
       const pending = listSessionPendingInputs(scope);
       expect(pending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
-      fixture.closeParent();
+      const closing = fixture.closeParent();
       if (change === "source") {
         fixture.revokeSource();
       } else if (change === "host") {
@@ -573,6 +574,7 @@ describe("hosted creation transfers accepted child input", () => {
         replaceSessionEntrySync(scope, { sessionId: "successor-child", updatedAt: Date.now() });
       }
       await fixture.finish();
+      await closing;
       expect(fixture.provider).not.toHaveBeenCalled();
       expect(userMessages(scope)).toEqual([]);
       expect(listSessionPendingInputs(scope)).toMatchObject({
@@ -591,12 +593,16 @@ describe("hosted creation transfers accepted child input", () => {
     "keeps the parent receipt through child input COMMIT (system=%s)",
     async (system) => {
       await using fixture = await createHostedChildFixture(system);
-      fixture.beforeInputCommit.mockImplementation(() => fixture.closeParent());
+      const closing: { promise?: Promise<void> } = {};
+      fixture.beforeInputCommit.mockImplementation(() => {
+        closing.promise = fixture.closeParent();
+      });
       await expect(fixture.send()).rejects.toThrow(
         system
           ? "agent tool caller authority is no longer active"
           : "operator execution authority is no longer active",
       );
+      await closing.promise;
       expect(fixture.beforeInputCommit).toHaveBeenCalledOnce();
       expect(listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });
       expect(userMessages(fixture.scope())).toEqual([]);

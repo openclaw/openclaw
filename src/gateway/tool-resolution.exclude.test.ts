@@ -249,7 +249,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         const admittedRunContext =
           authority === "missing" ? undefined : await admission.admit("gateway");
         if (authority === "retired") {
-          admission.close();
+          await admission.close();
         }
         createTools.mockReturnValueOnce([makeTool("sessions")]);
         const result = resolveTools({
@@ -265,7 +265,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         expect(result.tools.some((tool) => tool.name === "sessions")).toBe(available);
         expect(readCreateToolsArgs().senderIsOwner).toBe(senderIsOwner);
       } finally {
-        admission.close();
+        await admission.close();
       }
     },
   );

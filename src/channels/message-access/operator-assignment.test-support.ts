@@ -213,7 +213,7 @@ export function registerOperatorAssignmentTests() {
               });
             }
           } finally {
-            assignment.prepared.close();
+            await assignment.prepared.close();
           }
         },
         "role",
@@ -247,7 +247,7 @@ export function registerOperatorAssignmentTests() {
             await expect(assignment.assign()).rejects.toThrow(revokedMessage);
             expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner).toBeUndefined();
           } finally {
-            assignment.prepared.close();
+            await assignment.prepared.close();
           }
         },
         "role",
@@ -296,7 +296,7 @@ export function registerOperatorAssignmentTests() {
             for (const model of models) {
               model?.release();
             }
-            prepared.close();
+            await prepared.close();
           }
         },
         "role",
@@ -350,7 +350,7 @@ export function registerOperatorAssignmentTests() {
           ).rejects.toThrow(/was not found/);
           expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner).toBeUndefined();
         } finally {
-          assignment.prepared.close();
+          await assignment.prepared.close();
         }
       },
       "role",

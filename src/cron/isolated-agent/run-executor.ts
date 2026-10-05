@@ -250,7 +250,7 @@ function createCronPromptExecutor(
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
-    const fallbackResult = await runEmbeddedAgentEntry({
+    const pending = runEmbeddedAgentEntry({
       preparedRunAdmission,
       selection: {
         cfg: params.cfgWithAgentDefaults,
@@ -643,15 +643,17 @@ function createCronPromptExecutor(
         );
         return result;
       },
-    })
-      .catch((error: unknown) => {
-        params.lifecycle.capture("error", error);
-        throw error;
-      })
-      .finally(() => {
-        unregisterCronRunExecSource();
-        closePromptAdmission();
-      });
+    }).catch((error: unknown) => {
+      params.lifecycle.capture("error", error);
+      throw error;
+    });
+    let fallbackResult: Awaited<typeof pending>;
+    try {
+      fallbackResult = await pending;
+    } finally {
+      unregisterCronRunExecSource();
+      await closePromptAdmission();
+    }
     const executionError =
       params.lifecycle.getDeferredError() ??
       (fallbackResult.result.meta.error || fallbackResult.outcome === "exhausted"

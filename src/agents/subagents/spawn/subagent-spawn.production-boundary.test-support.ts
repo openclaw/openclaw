@@ -446,13 +446,14 @@ export function registerYieldedRequesterBatchCase(options: {
           rearmGeneration: 1,
           batchRunIds: [childRunId],
         });
-        bound.admission.close();
+        const closing = bound.admission.close();
         bound.parent.cleanup();
         guest?.source.closeRequest();
         childResult.resolve({
           payloads: [{ text: "Nested child result." }],
           meta: { durationMs: 1, finalAssistantVisibleText: "Nested child result." },
         });
+        await closing;
         const deliveryResult = await withinTest(delivered.promise, signal);
         expect(deliveryResult, JSON.stringify(deliveryResult)).toMatchObject({ delivered: true });
         await options.waitForEmbeddedRun(bound, bound.parentRunId, parentStarted.promise, 2);

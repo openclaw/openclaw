@@ -278,6 +278,7 @@ describe("onboarding authored config persistence", () => {
           agentId: "main",
           path: legacyDatabasePath,
         });
+        const closing: { promise?: Promise<void> } = {};
         const admission = prepareSystemAgentRunAdmission({}, "onboard-migration", "main", "setup");
         const beforePersistentApply = resolveAdmittedRunActiveAssertion(
           await admission.admit("embedded"),
@@ -299,7 +300,7 @@ describe("onboarding authored config persistence", () => {
           );
           migrationWindow.afterPublication = () => {
             beforePersistentApply();
-            admission.close();
+            closing.promise = admission.close();
           };
         }
         let result: Awaited<ReturnType<typeof ensureOnboardingAgent>> | undefined;
@@ -317,7 +318,7 @@ describe("onboarding authored config persistence", () => {
           if (boundary === "locked") {
             sourceDatabase.db.exec("ROLLBACK");
           }
-          admission.close();
+          await (closing.promise ?? admission.close());
         }
 
         expect(failure).toBeUndefined();

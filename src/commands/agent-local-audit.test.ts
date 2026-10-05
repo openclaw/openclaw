@@ -151,7 +151,7 @@ describe("agent local audit writer", () => {
         database.close();
       }
     } finally {
-      modelAdmission?.close();
+      await modelAdmission?.close();
       clearRuntimeConfigSnapshot();
     }
   });

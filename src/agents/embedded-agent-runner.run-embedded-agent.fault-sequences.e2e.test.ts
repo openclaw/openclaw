@@ -360,7 +360,7 @@ async function runScenario(params: {
     }
     return { kind: "error", error };
   } finally {
-    preparedRunAdmission.close();
+    await preparedRunAdmission.close();
   }
 }
 
@@ -451,7 +451,7 @@ async function expectPreparationInvalidationToDropRoutingWork(
           }),
         ]);
         if (mode === "close") {
-          preparedAdmission.close();
+          await preparedAdmission.close();
         } else {
           replacementAdmission = createModelRoutingTestAdmission({
             cfg: auditConfig,
@@ -468,8 +468,8 @@ async function expectPreparationInvalidationToDropRoutingWork(
       expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
     } finally {
       releasePreparation.resolve();
-      replacementAdmission?.close();
-      preparedAdmission.close();
+      await replacementAdmission?.close();
+      await preparedAdmission.close();
       // The rejection is observed above; join all run work before restoring its checkpoint.
       await Promise.allSettled(run ? [run] : []);
       mkdirSpy.mockRestore();

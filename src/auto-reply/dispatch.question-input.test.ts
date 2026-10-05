@@ -131,7 +131,7 @@ async function withQuestion(
     clearEmbeddedQuestionBroker(broker);
     setEmbeddedMode(previousEmbeddedMode);
     operation.complete();
-    admission.close();
+    await admission.close();
   }
 }
 

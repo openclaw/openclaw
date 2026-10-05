@@ -430,7 +430,7 @@ it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
           resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
         ).toBe(false);
         expect(() => assertCurrent?.()).toThrow();
-        prepared.close();
+        await prepared.close();
       },
       change === "grant" ? "identity-grant" : "role",
     );

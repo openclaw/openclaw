@@ -181,7 +181,7 @@ describe("embedded Tool Search prompt parity", () => {
           expect(submittedPrompt).not.toContain("Call a unique deferred tool name directly");
         }
       } finally {
-        admission.close();
+        await admission.close();
         runtime.cleanup();
       }
     },

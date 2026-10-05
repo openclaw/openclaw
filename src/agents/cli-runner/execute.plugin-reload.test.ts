@@ -134,7 +134,7 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
       // A failed assertion must not strand the iterator or its retained owner.
       finish.resolve();
       consumer?.release();
-      admission.close();
+      await admission.close();
       await Promise.allSettled([run, disposal ?? owner.dispose(), settlement]);
     }
   });

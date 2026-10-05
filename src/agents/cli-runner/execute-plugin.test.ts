@@ -205,7 +205,7 @@ describe("plugin-owned CLI execution host boundary", () => {
           throw new Error("caller revoked");
         };
       } else {
-        admission.close();
+        await admission.close();
       }
       const execute = vi.fn(async function* () {
         yield SUCCESS_RESULT;
@@ -621,7 +621,7 @@ describe("plugin-owned CLI execution host boundary", () => {
         if (authority === "caller") {
           callerCurrent = false;
         } else {
-          admission.close();
+          await admission.close();
         }
         return { id: "approval-closed", decision: "allow-once" };
       });

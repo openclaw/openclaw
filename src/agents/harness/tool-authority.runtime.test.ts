@@ -70,7 +70,7 @@ const attempt = {
 async function admitted<T>(
   run: (context: {
     admittedRunContext: Awaited<ReturnType<ReturnType<typeof prepareAgentRunAdmission>["admit"]>>;
-    close: () => void;
+    close: ReturnType<typeof prepareAgentRunAdmission>["close"];
   }) => Promise<T>,
   operatorAuthority?: Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"],
 ) {
@@ -90,7 +90,7 @@ async function admitted<T>(
       close: admission.close,
     });
   } finally {
-    admission.close();
+    await admission.close();
   }
 }
 
@@ -111,7 +111,7 @@ async function published<T>(
   run: (owner: {
     handle: ReturnType<typeof createEmbeddedRunHandle>;
     queue: ReturnType<typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>>;
-    close: () => void;
+    close: ReturnType<typeof prepareAgentRunAdmission>["close"];
   }) => Promise<T>,
   params: Partial<typeof attempt> &
     Pick<
@@ -342,14 +342,16 @@ describe("host-prepared embedded tool authority", () => {
           assertCurrent: () => {},
         });
         await entered.promise;
+        let closing: Promise<void> | undefined;
         if (transition === "closed-admission") {
-          close();
+          closing = close();
         } else if (transition === "lifecycle-rotation") {
           rotateAgentEventLifecycleGeneration();
         } else {
           setActiveEmbeddedRun(sessionId, { ...handle }, sessionKey, attempt.sessionFile);
         }
         release.resolve();
+        await closing;
         await expect(pending.outcome).resolves.toMatchObject({ status: "failed" });
         expect(queue).not.toHaveBeenCalled();
       });
@@ -400,7 +402,7 @@ describe("host-prepared embedded tool authority", () => {
       expect(state("main")).toBeUndefined();
     } finally {
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-      admission.close();
+      await admission.close();
     }
   });
 
@@ -416,7 +418,7 @@ describe("host-prepared embedded tool authority", () => {
             text: "Continue",
             persist: async () => {
               if (closure === "persistence") {
-                close();
+                await close();
               }
             },
           });
@@ -439,7 +441,7 @@ describe("host-prepared embedded tool authority", () => {
                 return;
               }
               if (closure === "claim") {
-                close();
+                await close();
               } else if (closure === "lifecycle") {
                 rotateAgentEventLifecycleGeneration();
               }
@@ -826,7 +828,7 @@ describe("host-prepared embedded tool authority", () => {
             retained = getGatewayToolCallerIdentity();
             publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
             if (reason === "claim") {
-              close();
+              await close();
             }
             if (reason === "lifecycle") {
               rotateAgentEventLifecycleGeneration();

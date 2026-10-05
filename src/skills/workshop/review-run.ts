@@ -45,6 +45,6 @@ export async function runSkillWorkshopReview(
       verboseLevel: "off",
     });
   } finally {
-    preparedRunAdmission.close();
+    await preparedRunAdmission.close();
   }
 }

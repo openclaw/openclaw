@@ -305,7 +305,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           );
           return result;
         } finally {
-          admission.close();
+          await admission.close();
         }
       };
       const reopen = async () => {

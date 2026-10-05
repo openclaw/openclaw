@@ -60,7 +60,7 @@ async function withHostedQuestion(
     ) => ReturnType<typeof dispatchGatewayMethodInProcessRaw>;
     request: ReturnType<typeof vi.fn<(options: GatewayRequestHandlerOptions) => Promise<void>>>;
     revoke: () => void;
-    closeParent: () => void;
+    closeParent: () => Promise<void>;
   }) => Promise<void>,
   foreign = false,
   broadRole?: "write" | "view" | "none",
@@ -224,14 +224,15 @@ async function withHostedQuestion(
           ),
         revoke: () => source.abort(new Error("original question source revoked")),
         closeParent: () => {
-          parent.close();
+          const closing = parent.close();
           captured.release();
+          return closing;
         },
       });
     } finally {
       manager.close();
       await manager.drain();
-      parent.close();
+      await parent.close();
       captured.release();
     }
   });
@@ -265,7 +266,7 @@ it("runs hosted ask_user through the real router with its original narrow operat
         status: "answered",
         answers: { answers: { destination: ["Home"] } },
       });
-      fixture.closeParent();
+      await fixture.closeParent();
       expect(await fixture.read(record.id)).toMatchObject([
         true,
         { question: { status: "answered" } },

@@ -339,11 +339,12 @@ it.each(admissionScenarios)(
           ).toEqual([]);
         }
       } finally {
-        namespaceRun.close();
+        const closing = namespaceRun.close();
         options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
         reply?.complete();
         successor?.cleanup();
         release.resolve();
+        await closing;
         if (owned) {
           await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
           owned.admission.cleanupAdmittedRun();

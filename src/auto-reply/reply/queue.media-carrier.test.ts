@@ -326,7 +326,7 @@ describe("queued Gateway attach evidence", () => {
     try {
       await prepared.admit("embedded");
     } finally {
-      prepared.close();
+      await prepared.close();
     }
   }
   const prepareIngress = (profileId: string) =>

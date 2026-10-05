@@ -110,7 +110,7 @@ describe("rooted CLI preparation", () => {
       await prepared.preparedBackend.cleanup?.();
     }
     for (const admission of admissions.splice(0)) {
-      admission.close();
+      await admission.close();
     }
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
@@ -261,8 +261,8 @@ describe("rooted CLI preparation", () => {
       expect(mintGrant).not.toHaveBeenCalled();
       expect(prepareExecution).not.toHaveBeenCalled();
     } finally {
-      replacement?.close();
-      admission.close();
+      await replacement?.close();
+      await admission.close();
     }
   });
 

@@ -470,7 +470,7 @@ describe("worker turn launcher terminal results", () => {
       } finally {
         uninstall();
         await service.stop();
-        workerTurn.preparedRunAdmission.close();
+        await workerTurn.preparedRunAdmission.close();
         releaseAgentRunContext(runId, dispatchClaim);
       }
     },
@@ -619,7 +619,7 @@ describe("worker turn launcher terminal results", () => {
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, stopping]);
-      workerTurn.preparedRunAdmission.close();
+      await workerTurn.preparedRunAdmission.close();
     }
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
@@ -828,7 +828,7 @@ describe("worker turn launcher terminal results", () => {
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, moving]);
-      workerTurn.preparedRunAdmission.close();
+      await workerTurn.preparedRunAdmission.close();
     }
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);

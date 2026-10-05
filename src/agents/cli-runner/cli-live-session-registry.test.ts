@@ -131,13 +131,13 @@ async function createOwner(
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const session of sessions) {
     session.close("restart");
   }
   sessions.clear();
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
   vi.restoreAllMocks();
 });
@@ -240,7 +240,7 @@ describe("generic plugin-owned live session registry", () => {
     async (revocation) => {
       const owner = await createOwner();
       if (revocation === "admission") {
-        owner.admission.close();
+        await owner.admission.close();
       } else if (revocation === "caller") {
         owner.revokeCaller();
       } else {
@@ -595,15 +595,17 @@ describe("generic plugin-owned live session registry", () => {
         sessionId: "transfer-closed-owner",
         capture: { token: "replacement-turn-token", key: "replacement-capture" },
       });
+      const closing: { promise?: Promise<void> } = {};
       resumed.grant?.adoptProcessToken.mockImplementation(() => {
         if (authority === "caller") {
           resumed.revokeCaller();
         } else {
-          resumed.admission.close();
+          closing.promise = resumed.admission.close();
         }
       });
 
       expect(() => resumed.capability.activate(original.session)).toThrow("no longer active");
+      await closing.promise;
 
       expect(resumed.grant?.adoptProcessToken).toHaveBeenCalledExactlyOnceWith(
         "original-process-token",

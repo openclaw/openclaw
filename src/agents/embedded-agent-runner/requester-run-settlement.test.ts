@@ -78,7 +78,7 @@ describe("logical requester settlement", () => {
       });
       expect(result.requesterContinuationSettled).toBe(true);
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 
@@ -151,7 +151,7 @@ describe("logical requester settlement", () => {
           abortSignal: abort.signal,
         };
         if (owner === "closed") {
-          admission.close();
+          await admission.close();
         }
         if (owner === "replaced") {
           await replacement.admit("embedded");
@@ -176,8 +176,8 @@ describe("logical requester settlement", () => {
           expect(registry.settle).not.toHaveBeenCalled();
         }
       } finally {
-        admission.close();
-        replacement.close();
+        await admission.close();
+        await replacement.close();
       }
     },
   );
@@ -200,24 +200,28 @@ describe("logical requester settlement", () => {
       expect(await settleFailedRequesterRun(params, combined)).toBe(combined);
       expect(registry.settle).toHaveBeenCalledOnce();
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 
   it("revalidates admission after the final caller assertion", async () => {
     const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "assertion-test");
+    const closing: { promise?: Promise<void> } = {};
     try {
       await admission.admit("embedded");
       await expect(
         settleRequesterRun(
           { ...requester, preparedRunAdmission: admission },
           makeResult({ yielded: true }),
-          () => admission.close(),
+          () => {
+            closing.promise = admission.close();
+          },
         ),
       ).rejects.toThrow("settlement is closed");
+      await closing.promise;
       expect(registry.settle).not.toHaveBeenCalled();
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 });

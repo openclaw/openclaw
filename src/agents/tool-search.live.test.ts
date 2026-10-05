@@ -393,7 +393,7 @@ module.exports = {
             // Exclude fixture creation and teardown; include run admission/lease setup.
             const wallElapsedMs = Math.round(performance.now() - runStartedAtMs);
             configureAiTransportHost(host);
-            admission.close();
+            await admission.close();
             await lease?.dispose();
             logLiveProgress(
               JSON.stringify({

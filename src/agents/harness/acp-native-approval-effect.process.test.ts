@@ -168,7 +168,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           if (kind === "allow") {
             const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
             expect(transcript.map((row) => row.role)).toEqual(["user", "assistant"]);
-            attempt.close();
+            await attempt.close();
             const next = await attemptFor(state, disabledConfig, "qwen", "full");
             try {
               await expect(runAgentHarnessAttempt(next.input)).rejects.toThrow("disabled");
@@ -188,7 +188,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
                 }),
               ).resolves.toEqual({ entries: [] });
             } finally {
-              next.close();
+              await next.close();
             }
           }
           if (kind === "cancel") {
@@ -199,7 +199,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           }
         } finally {
           abort.abort();
-          attempt.close();
+          await attempt.close();
           await Promise.allSettled([run]);
         }
       } finally {

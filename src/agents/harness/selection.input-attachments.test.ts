@@ -45,7 +45,7 @@ beforeEach(async () => {
   createAttemptParams = (config) => createHarnessAttemptParams(context, config);
 });
 afterEach(async () => {
-  admission.close();
+  await admission.close();
   clearAgentHarnesses();
   resetAgentRunRegistryForTest();
   await closeOpenClawAgentDatabasesAsync();
@@ -221,7 +221,7 @@ describe("registered harness input attachment preparation", () => {
           expect(JSON.stringify(recorder?.message)).toBe(transcript);
           turnIndex += 1;
         } finally {
-          turnAdmission.close();
+          await turnAdmission.close();
         }
       }
       expect(runAttempt).toHaveBeenCalledTimes(2);

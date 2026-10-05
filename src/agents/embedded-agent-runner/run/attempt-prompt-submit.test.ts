@@ -684,7 +684,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         );
         expect(loadTranscriptEventsSync(target)).toEqual(persistedBefore);
       } finally {
-        admission.close();
+        await admission.close();
         clearActiveEmbeddedRun(sessionId, handle, target.sessionKey);
         forgetPromptBuildDrainCacheForRun(attempt.runId);
       }

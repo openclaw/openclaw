@@ -65,9 +65,9 @@ async function admittedAttempt(
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
@@ -185,7 +185,7 @@ it("binds Full node invocation to the exact live admission, session and placemen
                 host.close();
                 break;
               case "admission":
-                admission.close();
+                await admission.close();
                 break;
               case "restart":
                 rotateAgentRunRegistryLifecycleGeneration();
@@ -223,7 +223,7 @@ it("binds Full node invocation to the exact live admission, session and placemen
           }),
       );
       host.close();
-      admission.close();
+      await admission.close();
     }
   } finally {
     if (previousRegistry) {

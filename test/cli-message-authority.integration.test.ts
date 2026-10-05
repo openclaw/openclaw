@@ -122,7 +122,7 @@ describe("CLI message authority integration", () => {
     body: string;
     usesWorkCredential: boolean;
   }> = [];
-  const cleanupTurns: Array<() => void> = [];
+  const cleanupTurns: Array<() => Promise<void>> = [];
   const providerWork = new Set<Promise<void>>();
   const providerErrors: unknown[] = [];
   let provider: Server;
@@ -417,7 +417,7 @@ describe("CLI message authority integration", () => {
     heldRequest?.release.resolve();
     heldRequest = undefined;
     for (const cleanup of cleanupTurns.splice(0)) {
-      cleanup();
+      await cleanup();
     }
     await Promise.all(providerWork);
     if (providerErrors.length) {
@@ -614,14 +614,14 @@ describe("CLI message authority integration", () => {
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     } as GatewayRequestContext;
     bindGatewayContextResolver(admitted, () => gatewayContext);
-    cleanupTurns.push(() => {
+    cleanupTurns.push(async () => {
       source.abort();
       scheduledSource.abort();
       revokeMcpLoopbackClientGrant(grant.token);
       revokeMessageActionTurnCapability(capability);
       clearMcpLoopbackToolCallCapture(capture.captureKey);
       clearGatewayContextResolver(admitted);
-      admission.close();
+      await admission.close();
     });
     expect(activateMcpLoopbackClientGrantCapture(capture)).not.toBe(false);
     beginMcpLoopbackToolCallCapture({ captureKey: capture.captureKey, onToolCallResult() {} });

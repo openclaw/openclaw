@@ -553,7 +553,7 @@ it.each([
       source.abort();
       releaseBoundary.resolve();
       await pending?.catch(() => undefined);
-      admission?.close();
+      await admission?.close();
       releaseCancellation?.();
       clearCronJobActive(jobId, marker);
       restoreActivePluginRegistrySnapshot(registry);

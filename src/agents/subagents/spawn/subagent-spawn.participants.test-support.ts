@@ -184,7 +184,7 @@ export function registerParticipantSpawnCases(options: {
               await spawn("alice", "alice");
               const bobChild = await spawn("bob", "bob");
               turn.complete();
-              bound.admission.close();
+              await bound.admission.close();
               bound.parent.cleanup();
               aliceSource.closeRequest();
               bobSource.closeRequest();
@@ -203,7 +203,7 @@ export function registerParticipantSpawnCases(options: {
         await bound.execution.drain();
         await settleRootWork();
         runtime.close();
-        bound.admission.close();
+        await bound.admission.close();
         bound.parent.cleanup();
       }
     },
@@ -273,7 +273,7 @@ export function registerParticipantSpawnCases(options: {
             expect(result.details, JSON.stringify(result)).toMatchObject({ status: "accepted" });
             expect(runEmbeddedAgent).not.toHaveBeenCalled();
             turn.complete();
-            bound.admission.close();
+            await bound.admission.close();
             bound.parent.cleanup();
             aliceSource.closeRequest();
             bobSource.closeRequest();
@@ -298,7 +298,7 @@ export function registerParticipantSpawnCases(options: {
       await bound.execution.drain();
       await settleRootWork();
       runtime.close();
-      bound.admission.close();
+      await bound.admission.close();
       bound.parent.cleanup();
     }
   });

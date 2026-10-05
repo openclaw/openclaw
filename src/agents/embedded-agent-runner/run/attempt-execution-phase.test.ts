@@ -431,7 +431,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       if (owner === "replaced") {
         await replacement.admit("embedded");
       } else if (owner === "closed" || owner === "cancelled") {
-        admission.close();
+        await admission.close();
         if (owner === "cancelled") {
           fixture.input.runAbortController.abort(cancelled);
         }
@@ -494,8 +494,8 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     } finally {
       releaseSummary.resolve();
       await Promise.allSettled([work]);
-      admission.close();
-      replacement.close();
+      await admission.close();
+      await replacement.close();
     }
   });
 

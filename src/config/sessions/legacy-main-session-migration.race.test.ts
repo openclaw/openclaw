@@ -176,9 +176,12 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
           { env: state.env },
         );
       const ledgerBefore = readLedger();
+      const closing: { promise?: Promise<void> } = {};
       try {
         if (boundary === "ledger") {
-          race.afterDelete = () => admission.close();
+          race.afterDelete = () => {
+            closing.promise = admission.close();
+          };
         } else {
           const blockedPath = boundary === "cleanup queue" ? mainPath : opsPath;
           blocker = runExclusiveSqliteSessionWrite(
@@ -222,7 +225,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
             "migration never queued",
           );
           beforePersistentApply();
-          admission.close();
+          closing.promise = admission.close();
           resume.resolve();
         }
         expect
@@ -259,7 +262,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         resume.resolve();
         await blocker;
         await migration;
-        admission.close();
+        await (closing.promise ?? admission.close());
       }
     });
   },

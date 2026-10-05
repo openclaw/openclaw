@@ -212,12 +212,14 @@ describe("pending spawn preparation authority", () => {
           modelOverride: "gpt-5.4",
           providerOverride: "openai",
         });
+        let closing: Promise<void> | undefined;
         if (closure === "closed") {
-          admission.close();
+          closing = admission.close();
           expect(parent.controller.signal.aborted).toBe(false);
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
         }
         releaseWriter.resolve();
+        await closing;
         const result = await forkSettled.promise;
         const entry = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
         const transcript = await loadTranscriptEvents({
@@ -276,7 +278,7 @@ describe("pending spawn preparation authority", () => {
         inspected.resolve();
         await blocker;
         await pending;
-        admission.close();
+        await admission.close();
         parent.cleanup();
         bindingFixture.unregister();
       }
@@ -525,6 +527,7 @@ describe("pending spawn preparation authority", () => {
         expect(subagentRuns.size, "accepted local run still awaits source registration").toBe(0);
         expect(childController?.controller.signal.aborted).toBe(false);
       }
+      let closing: Promise<void> | undefined;
       if (closure === "native abort" || closure === "native acceptance") {
         const reply = await invokeChatAbortHandler({
           handler: handleChatAbortRequest,
@@ -549,7 +552,7 @@ describe("pending spawn preparation authority", () => {
         } else if (closure.endsWith("signal")) {
           invocationAbort.abort();
         } else {
-          admission.close();
+          closing = admission.close();
         }
         expect(
           parent.controller.signal.aborted,
@@ -558,6 +561,7 @@ describe("pending spawn preparation authority", () => {
       }
       release.resolve();
       acceptedGate.resolve();
+      await closing;
       await forwarded;
       if (closure === "native acceptance") {
         expect(agentDispatch).toHaveBeenCalledOnce();
@@ -611,7 +615,7 @@ describe("pending spawn preparation authority", () => {
       childController?.cleanup();
       await wrappedOutcome;
       host?.close();
-      admission.close();
+      await admission.close();
       parent.cleanup();
       attachmentFixture?.restore();
       bindingFixture?.unregister();

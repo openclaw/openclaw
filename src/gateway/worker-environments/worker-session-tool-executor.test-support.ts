@@ -509,7 +509,7 @@ async function createWorkerSessionToolTestFixture(
     delegatedAuthorities,
     closeSourceRun: () => {
       sourceRunActive = false;
-      scheduledAdmission?.close();
+      return scheduledAdmission?.close();
     },
     revokeOperatorAuthority: () => {
       operatorAuthorityActive = false;
@@ -527,7 +527,7 @@ async function createWorkerSessionToolTestFixture(
       for (const authority of delegatedAuthorities) {
         releaseAgentRunDelegatedAuthority(authority);
       }
-      scheduledAdmission?.close();
+      await scheduledAdmission?.close();
       rootAdmission.release();
       await closeOpenClawStateDatabaseByPathAsync(database.path);
       closeOpenClawStateDatabaseForTest();

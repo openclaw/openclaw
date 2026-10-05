@@ -149,6 +149,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "compaction-recovery-test");
   const admissions: PreparedAgentRunAdmission[] = [admission];
   const work: Promise<unknown>[] = [];
+  const closures: Promise<void>[] = [];
   let unsubscribe = () => {};
   let forgetCommittedSuccessor = () => {};
   const drain = () =>
@@ -159,10 +160,11 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     });
   const dispose = async () => {
     for (const ownedAdmission of admissions) {
-      ownedAdmission.close();
+      closures.push(ownedAdmission.close());
     }
     controller.abort(callerError);
     await Promise.allSettled(work);
+    await Promise.all(closures);
     try {
       await drain();
     } finally {
@@ -389,7 +391,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     };
     const invalidate = async (loss: AuthorityLoss) => {
       if (loss === "closed") {
-        admission.close();
+        await admission.close();
       } else {
         const replacementRunId = loss === "replaced" ? runId : randomUUID();
         const replacement = prepareSystemAgentRunAdmission(
@@ -441,7 +443,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       assertActive,
       dispose,
       stop: () => {
-        admission.close();
+        closures.push(admission.close());
         controller.abort(callerError);
       },
       loadEntry: () => loadSessionEntry(target),

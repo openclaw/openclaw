@@ -329,14 +329,22 @@ async function closeBoundGateway(
   for (const close of [
     () => runtime.close(),
     ...(releaseQueuedAuthority ? [releaseQueuedAuthority] : []),
-    () => bound.admission.close(),
-    () => bound.parent.cleanup(),
   ]) {
     try {
       close();
     } catch (error) {
       failures.push(error);
     }
+  }
+  try {
+    await bound.admission.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    bound.parent.cleanup();
+  } catch (error) {
+    failures.push(error);
   }
   return failures;
 }
@@ -680,7 +688,7 @@ describe("recursive spawn production boundary", () => {
           parentState === "operator-completed" ||
           parentState === "operator-revoked"
         ) {
-          bound.admission.close();
+          await bound.admission.close();
           bound.parent.cleanup();
           source?.closeRequest();
           expect(bound.parent.controller.signal.aborted).toBe(false);

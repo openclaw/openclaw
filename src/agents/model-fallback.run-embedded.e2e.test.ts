@@ -236,7 +236,7 @@ async function runEmbeddedEntryFallback(params: {
       },
     });
   } finally {
-    preparedRunAdmission.close();
+    await preparedRunAdmission.close();
   }
 }
 

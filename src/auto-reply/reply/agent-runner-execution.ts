@@ -520,9 +520,11 @@ async function executeAgentTurnInternal(
     try {
       await deferredLifecycle.complete();
     } finally {
-      await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
-        preparedRunAdmission.close,
-      );
+      try {
+        await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance);
+      } finally {
+        await preparedRunAdmission.close();
+      }
     }
   }
 }

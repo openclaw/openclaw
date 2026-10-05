@@ -41,11 +41,12 @@ async function createSettlementFixture(state: OpenClawTestState) {
   const admission = prepareSystemAgentRunAdmission({}, runId, target.agentId, "settlement-test");
   const controller = new AbortController();
   const unsubscriptions: Array<() => void> = [];
+  let closing: Promise<void> | undefined;
   const close = () => {
     for (const unsubscribe of unsubscriptions) {
       unsubscribe();
     }
-    admission.close();
+    return closing ?? admission.close();
   };
   try {
     const admittedRunContext = await admission.admit("embedded");
@@ -108,7 +109,7 @@ async function createSettlementFixture(state: OpenClawTestState) {
       signal: controller.signal,
       close,
       stop: () => {
-        admission.close();
+        closing = admission.close();
         controller.abort(new Error("caller stopped after successor commit"));
       },
       loadEntry: () => loadSessionEntry(target),
@@ -158,7 +159,7 @@ async function createSettlementFixture(state: OpenClawTestState) {
       settle: () => settleEmbeddedRun(input),
     };
   } catch (error) {
-    close();
+    await close();
     throw error;
   }
 }
@@ -171,7 +172,7 @@ async function withSettlementFixture(
     try {
       await body(fixture);
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 }

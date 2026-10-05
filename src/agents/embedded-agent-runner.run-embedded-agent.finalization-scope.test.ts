@@ -132,7 +132,7 @@ describe("nested settled-turn finalization ownership", () => {
             finalizerRuns += 1;
             expect(params.disableTools).toBe(true);
             if (finalization === "closed") {
-              childAdmission.close();
+              await childAdmission.close();
             }
             if (finalization !== "answer") {
               throw new Error("Synthetic summary provider unavailable");
@@ -222,8 +222,9 @@ describe("nested settled-turn finalization ownership", () => {
               },
             ),
         );
-        parentAdmission.close();
+        const closing = parentAdmission.close();
         release();
+        await closing;
         if (finalization === "closed") {
           await expect(child).rejects.toThrow("admitted run authority is no longer active");
           expect(toolRuns).toBe(1);
@@ -248,8 +249,8 @@ describe("nested settled-turn finalization ownership", () => {
       } finally {
         release();
         await child?.catch(() => undefined);
-        parentAdmission.close();
-        childAdmission.close();
+        await parentAdmission.close();
+        await childAdmission.close();
         const { waitForSessionTranscriptIndexReconcile } =
           await import("../config/sessions/session-transcript-reconcile.js");
         const { closeAuthProfileReadPool } = await import("./auth-profiles/sqlite.js");

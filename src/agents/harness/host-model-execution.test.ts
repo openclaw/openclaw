@@ -127,7 +127,7 @@ async function withHarness(
       sourceHolds: () => holds,
     });
   } finally {
-    admission.close();
+    await admission.close();
     restoreActivePluginRegistrySnapshot(registrySnapshot);
   }
   expect(holds).toBe(0);
@@ -287,7 +287,7 @@ it.each([
         }
         expect(retained?.modelPolicyRequired).toBe(initialPolicy);
         host.close();
-        admission.close();
+        await admission.close();
       }
       if (initialPolicy) {
         expect(() => bind({ provider: "fixture", model: "denied" })).toThrow(
@@ -311,7 +311,7 @@ it.each([
         : undefined;
 
       host.close();
-      admission.close();
+      await admission.close();
       expect(retainedSources).toBe(bindings.length + (retained ? 2 : 0));
       for (const binding of bindings) {
         expect(binding.signal.aborted).toBe(false);
@@ -399,7 +399,7 @@ it.each([
       retained?.release();
       siblingSource?.release();
       host.close();
-      admission.close();
+      await admission.close();
     }
   },
 );

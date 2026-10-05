@@ -117,14 +117,14 @@ describe("cron message action authority", () => {
           resolveMessageActionTurnAuthorization({ ...lookup, runId: "another-invocation" }),
         ).toBeUndefined();
         if (end === "closure") {
-          owner.close();
+          await owner.close();
           expect(resolveMessageActionTurnAuthorization(lookup)).toBeUndefined();
         } else {
           controller.abort();
         }
         expect(grant.assertCurrent).toThrow();
       } finally {
-        owner.close();
+        await owner.close();
         clock.mockRestore();
       }
     },
@@ -159,11 +159,11 @@ describe("cron message action authority", () => {
       expect(assertCurrent).toThrow();
       bindCronJobAdmittedRun(marker, await expected.admit("embedded"), controller.signal);
       expect(assertCurrent).not.toThrow();
-      expected.close();
+      await expected.close();
       expect(assertCurrent).toThrow();
     } finally {
-      expected.close();
-      other.close();
+      await expected.close();
+      await other.close();
     }
   });
 
@@ -205,7 +205,7 @@ describe("cron message action authority", () => {
         expect(resolveAdmittedRunActiveAssertion(admitted, controller.signal)).not.toThrow();
         expect(controller.signal.aborted).toBe(false);
         sourceCurrent = true;
-        first.close();
+        await first.close();
         const next = await replacement.admit("embedded");
         bindCronJobAdmittedRun(marker, next, controller.signal);
         const assertReplacementCurrent = captureCronJobMessageActionAuthority({
@@ -216,8 +216,8 @@ describe("cron message action authority", () => {
         expect(assertReplacementCurrent).toThrow();
         expect(hasActiveCronJobs()).toBe(true);
       } finally {
-        first.close();
-        replacement.close();
+        await first.close();
+        await replacement.close();
       }
     },
   );
@@ -289,7 +289,7 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
         );
         let currentMarker = marker;
         if (scenario === "closed admission") {
-          admission.close();
+          await admission.close();
         } else if (scenario === "aborted run") {
           controller.abort();
         } else if (scenario === "expired caller") {
@@ -323,8 +323,8 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
           expect(cancel).toHaveBeenCalledExactlyOnceWith("Cron job removed by operator.");
         }
       } finally {
-        admission.close();
-        replacement.close();
+        await admission.close();
+        await replacement.close();
       }
     });
   },

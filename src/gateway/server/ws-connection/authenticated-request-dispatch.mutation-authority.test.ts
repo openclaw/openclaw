@@ -185,7 +185,7 @@ describe("authenticated request mutation custody", () => {
           } catch (error) {
             failures.push(error);
           } finally {
-            prepared.close();
+            await prepared.close();
             completeFollowupRunLifecycle(run);
           }
         });

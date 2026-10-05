@@ -186,7 +186,7 @@ export function installAgentAuthorityProofFixture() {
     const admitted = await admission.admit("embedded");
     const authority = getAdmittedRunDelegatedAuthority(admitted);
     if (!authority) {
-      admission.close();
+      await admission.close();
       throw new Error("real run was not admitted");
     }
     const identity = await createAgentRuntimeIdentity({
@@ -195,10 +195,11 @@ export function installAgentAuthorityProofFixture() {
       operationalRunInstance: admitted.operationalRunInstance,
     });
     if (!identity) {
-      admission.close();
+      await admission.close();
       throw new Error("real runtime identity missing");
     }
     const closed: string[] = [];
+    let closing: Promise<void> | undefined;
     const unobserve = registerAgentRunDelegatedAuthorityClosedHandler((value, reason) => {
       if (!reason && value.claimId === authority.claimId) {
         closed.push(value.claimId);
@@ -218,16 +219,19 @@ export function installAgentAuthorityProofFixture() {
       authority,
       observation,
       revoke: () => {
-        admission.close();
+        closing = admission.close();
         observe("authority-close", observation());
         expect(closed).toEqual([authority.claimId]);
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
         expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
         expect(context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(false);
       },
-      dispose: () => {
-        admission.close();
-        unobserve();
+      dispose: async () => {
+        try {
+          await (closing ?? admission.close());
+        } finally {
+          unobserve();
+        }
       },
     };
   }
@@ -388,7 +392,7 @@ export function installAgentAuthorityProofFixture() {
         } finally {
           observer.mockRestore();
           for (const source of owners) {
-            source.dispose();
+            await source.dispose();
           }
         }
       },

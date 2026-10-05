@@ -329,6 +329,6 @@ export async function withPersonalToolTurn<T>(
       clearAgentRunContext(runId);
     }
     operation.complete();
-    admission?.close();
+    await admission?.close();
   }
 }

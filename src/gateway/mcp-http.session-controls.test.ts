@@ -308,7 +308,7 @@ for (const transport of ["dispatch", "HTTP"] as const) {
                           if (grantToken) {
                             revokeMcpLoopbackClientGrant(grantToken);
                           }
-                          admission.close();
+                          await admission.close();
                         }
                       },
                     ),

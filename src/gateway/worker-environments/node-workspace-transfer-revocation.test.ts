@@ -264,10 +264,11 @@ describe("attachment transfer revocation", () => {
     });
     const admitted = await admission.admit("worker");
     let reached = false;
+    const closing: { promise?: Promise<void> } = {};
     const crossBoundary = () => {
       reached = true;
       if (revoke) {
-        admission.close();
+        closing.promise = admission.close();
         controller.abort(new Error("Exact turn revoked during transfer"));
       }
     };
@@ -466,12 +467,13 @@ describe("attachment transfer revocation", () => {
         );
       }
     } finally {
-      admission.close();
+      closing.promise ??= admission.close();
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
       await service.closeAll();
+      await closing.promise;
     }
   });
 });

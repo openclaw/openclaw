@@ -99,6 +99,7 @@ it.each([
       auth: { mode: "token", token: "synthetic-setup-token" },
     },
   };
+  const closing: { promise?: Promise<void> } = {};
   const pause = async () => {
     if (paused) {
       return;
@@ -139,7 +140,7 @@ it.each([
       // before invocation. The real synchronous SQLite updater must never be entered.
       preparation.execImport = () => {
         beforePersistentApply();
-        admission.close();
+        closing.promise = admission.close();
         paused = true;
         entered.resolve();
       };
@@ -175,7 +176,7 @@ it.each([
     const pauseRaw = await fs.readFile(state.configPath, "utf8");
     const pauseFiles = (await fs.readdir(workspace)).toSorted();
     if (loss === "close") {
-      admission.close();
+      await (closing.promise ?? admission.close());
     }
     if (loss === "replace") {
       replacement = prepareSystemAgentRunAdmission(
@@ -228,8 +229,8 @@ it.each([
   } finally {
     resume.resolve();
     await completion;
-    admission.close();
-    replacement?.close();
+    await (closing.promise ?? admission.close());
+    await replacement?.close();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();

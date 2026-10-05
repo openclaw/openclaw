@@ -408,6 +408,7 @@ it.each([
       ]);
       expect(subagentRuns.size).toBe(0);
       expect(readChild(childSessionKey)).toBeDefined();
+      let closing: Promise<void> | undefined;
       if (closure === "abort") {
         const reply = vi.fn();
         const request = { sessionKey: parentSessionKey, runId: parentRunId };
@@ -426,11 +427,12 @@ it.each([
         });
         expect(await wrappedOutcome).toBeInstanceOf(Error);
       } else if (closure === "admission close") {
-        admission.close();
+        closing = admission.close();
         expect(parent.controller.signal.aborted).toBe(false);
       }
       expect(getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(live);
       release.resolve();
+      await closing;
       const result = await forwarded;
       const sourceBoundary = {
         entry: readChild(childSessionKey),
@@ -472,7 +474,7 @@ it.each([
       release.resolve();
       await forwarded;
       await wrappedOutcome;
-      admission.close();
+      await admission.close();
       parent.cleanup();
       await work.drain();
       const projection = getSessionRowProjection(context);

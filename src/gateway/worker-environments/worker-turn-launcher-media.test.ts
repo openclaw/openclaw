@@ -485,7 +485,7 @@ describe("cloud turn media boundary", () => {
         if (failure === "cancellation") {
           controller.abort(new Error("cancelled during source loading"));
         } else if (failure === "admission") {
-          input.preparedRunAdmission.close();
+          await input.preparedRunAdmission.close();
         } else {
           rig.environment.ownerEpoch++;
         }
@@ -545,7 +545,7 @@ describe("cloud turn media boundary", () => {
         if (closure === "caller") {
           controller.abort(new Error("caller cancelled"));
         } else if (closure === "admission") {
-          input.preparedRunAdmission.close();
+          await input.preparedRunAdmission.close();
         } else if (closure === "replacement" || closure === "unrelated") {
           const other = claimAgentRunDelegatedAuthority({
             instanceId: "another-instance",
@@ -565,12 +565,13 @@ describe("cloud turn media boundary", () => {
         cancelledAtBoundary = request.signal?.aborted;
         request.signal?.throwIfAborted();
       });
+      const closing: { promise?: Promise<void> } = {};
       const operation = rig.execute({
         ...input,
         abortSignal: controller.signal,
         onExecutionPhase: ({ phase }) => {
           if (closure === "dispatch" && phase === "attempt_dispatch") {
-            input.preparedRunAdmission.close();
+            closing.promise = input.preparedRunAdmission.close();
           }
         },
         media: [{ url: `media://inbound/${saved.id}`, contentType: "text/plain" }],
@@ -579,11 +580,12 @@ describe("cloud turn media boundary", () => {
         await operation;
         expect(rig.launches).toHaveLength(1);
         expect(transferSignal?.aborted).toBe(true);
-        input.preparedRunAdmission.close();
+        await input.preparedRunAdmission.close();
       } else {
         await expect(operation).rejects.toThrow();
         expect(rig.launches).toHaveLength(0);
       }
+      await closing.promise;
       expect(cancelledAtBoundary).toBe(closure !== "unrelated" && closure !== "dispatch");
       if (closure === "dispatch") {
         expect(launchCancelled).toBe(true);

@@ -196,14 +196,16 @@ export function prepareAgentCommandExecutionIdentity(params: {
   return Object.freeze({
     ...admission,
     // Observational events do not await consumers. Finish their recovery write
-    // before releasing the admission; explicit close remains immediate.
+    // before releasing the admission; revocation remains immediate.
     finish: async () => {
       try {
         await turnRegistration;
       } finally {
-        await drainAgentRunTerminalWrites(admission.operationalRunInstance).finally(
-          admission.close,
-        );
+        try {
+          await drainAgentRunTerminalWrites(admission.operationalRunInstance);
+        } finally {
+          await admission.close();
+        }
       }
     },
     onRuntimeTurnStarted: (): Promise<void> | undefined => {

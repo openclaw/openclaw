@@ -617,7 +617,7 @@ export async function withWorkerCompactionAdoption<T>(
       runParams,
     );
   } finally {
-    preparedRunAdmission.close();
+    await preparedRunAdmission.close();
   }
 }
 

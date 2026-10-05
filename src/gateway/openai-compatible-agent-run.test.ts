@@ -146,11 +146,11 @@ describe("OpenAI-compatible operator run authority", () => {
           const childAuthority = readAdmittedRunOperatorAuthority(childContext);
           assert(childAuthority, "Detached work lost its original operator authority");
           expect(() => childAuthority.assertCurrent()).not.toThrow();
-          child.close();
+          await child.close();
           expect(() => authority.assertCurrent()).toThrow(/no longer active/);
         } finally {
           await close();
-          child?.close();
+          await child?.close();
         }
       });
     },
@@ -312,7 +312,7 @@ describe("OpenAI-compatible operator run authority", () => {
           completedResult,
         );
       } finally {
-        admission?.close();
+        await admission?.close();
       }
     });
   });

@@ -216,7 +216,7 @@ describe("host-owned harness completion recovery", () => {
             expect(effect).toThrow();
           }
         } finally {
-          admission.close();
+          await admission.close();
         }
       });
     },
@@ -244,7 +244,7 @@ describe("host-owned harness completion recovery", () => {
             expect(effect).toThrow();
           }
         } finally {
-          admission.close();
+          await admission.close();
         }
       });
     },

@@ -89,7 +89,7 @@ async function fromParent(
     );
   } finally {
     clearActiveEmbeddedRun(parent.sessionId, handle, parent.sessionKey, parent.sessionFile);
-    admission.close();
+    await admission.close();
   }
 }
 
@@ -151,7 +151,7 @@ describe("independent placement caller scope", () => {
         expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
         expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
       } finally {
-        input.preparedRunAdmission.close();
+        await input.preparedRunAdmission.close();
       }
     },
   );
@@ -188,7 +188,7 @@ describe("independent placement caller scope", () => {
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     } finally {
       await lifecycle.complete();
-      input.preparedRunAdmission.close();
+      await input.preparedRunAdmission.close();
     }
   });
 
@@ -215,7 +215,7 @@ describe("independent placement caller scope", () => {
           owner.register();
           expect(resolveActiveEmbeddedRunOwner(claim.sessionId)?.runId).toBe(claim.runId);
           await Promise.resolve();
-          owner.preparedRunAdmission.close();
+          await owner.preparedRunAdmission.close();
           expect(owner.register).toThrow(/no longer active/);
           return { meta: { durationMs: 0 } };
         };

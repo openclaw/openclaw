@@ -203,10 +203,12 @@ describe("Workboard terminal hook automation ownership", () => {
                     },
                     { childSessionKey: sessionKey, runId },
                   );
-            if (closeCaller) {
-              admission.close();
+            const closing = closeCaller ? admission.close() : undefined;
+            try {
+              await pending;
+            } finally {
+              await closing;
             }
-            await pending;
             if (closeCaller) {
               await expect(
                 dispatchTrustedPluginGatewayMethod(
@@ -242,7 +244,7 @@ describe("Workboard terminal hook automation ownership", () => {
       expect(enqueue).toHaveBeenCalledOnce();
       expect(warn).not.toHaveBeenCalled();
     } finally {
-      admission.close();
+      await admission.close();
       await handle.stop();
       cron.stop();
       for (const lifecycle of captured.runtimeLifecycles) {

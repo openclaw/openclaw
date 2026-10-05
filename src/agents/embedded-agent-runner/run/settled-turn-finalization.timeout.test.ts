@@ -73,8 +73,8 @@ describe("prepareTerminalWithSettledTurnFinalization after an idle prompt timeou
     admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "finalization-test");
     admittedRunContext = await admission.admit("embedded");
   });
-  afterEach(() => {
-    admission.close();
+  afterEach(async () => {
+    await admission.close();
   });
 
   it.each(["empty", "failed"])(

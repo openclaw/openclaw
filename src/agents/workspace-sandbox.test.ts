@@ -118,12 +118,12 @@ it.each(["realpath", "mkdir"] as const)(
       const realpath = vi.spyOn(fs, "realpath");
       if (boundary === "realpath") {
         realpath.mockImplementationOnce(async () => {
-          admission.close();
+          await admission.close();
           return state.workspaceDir;
         });
       } else {
         mkdir.mockImplementationOnce(async () => {
-          admission.close();
+          await admission.close();
           return undefined;
         });
       }
@@ -144,7 +144,7 @@ it.each(["realpath", "mkdir"] as const)(
       } finally {
         mkdir.mockRestore();
         realpath.mockRestore();
-        admission.close();
+        await admission.close();
       }
     });
   },

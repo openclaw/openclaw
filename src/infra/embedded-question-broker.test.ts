@@ -189,7 +189,7 @@ describe("EmbeddedQuestionBroker", () => {
         if (ending === "answer") {
           broker.resolve({ id: request.id, answers: { answers: { destination: ["Staging"] } } });
         } else {
-          admission.close();
+          await admission.close();
         }
         expect(await answer).toMatchObject({
           status: ending === "answer" ? "answered" : "cancelled",
@@ -197,7 +197,7 @@ describe("EmbeddedQuestionBroker", () => {
         expect(resolveActiveEmbeddedRunRecoveryBlocker(sessionId)).toBeUndefined();
       } finally {
         clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-        admission.close();
+        await admission.close();
       }
     },
   );
@@ -253,7 +253,7 @@ describe("EmbeddedQuestionBroker", () => {
         async () => {
           const request = broker.request(requestParams());
           const answer = broker.waitAnswer({ id: request.id });
-          admission.close();
+          await admission.close();
           expect(await answer).toEqual({ status: "cancelled" });
           expect(() => broker.request({ ...requestParams(), id: "retired-question" })).toThrow(
             "no longer active",
@@ -261,7 +261,7 @@ describe("EmbeddedQuestionBroker", () => {
         },
       );
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 

@@ -313,15 +313,23 @@ describe("plugin runtime refresh admission", () => {
       mockedBuildEmbeddedRunPayloads.mockImplementation(({ assistantTexts }) =>
         assistantTexts.map((text) => ({ text })),
       );
-      const result = await runEmbeddedAgent({
-        ...runParams,
-        provider: "openai",
-        model: "fixture-model",
-        sessionKey: undefined,
-        onAgentEvent,
-        preparedRunAdmission: admission,
-        ...(kind === "generated" ? {} : { sourceReplyDeliveryMode: "message_tool_only" as const }),
-      }).finally(() => admission.close());
+      const result = await (async () => {
+        try {
+          return await runEmbeddedAgent({
+            ...runParams,
+            provider: "openai",
+            model: "fixture-model",
+            sessionKey: undefined,
+            onAgentEvent,
+            preparedRunAdmission: admission,
+            ...(kind === "generated"
+              ? {}
+              : { sourceReplyDeliveryMode: "message_tool_only" as const }),
+          });
+        } finally {
+          await admission.close();
+        }
+      })();
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(result.didSendViaMessagingTool).not.toBe(true);
       expect(result.messagingToolSentMediaUrls ?? []).toEqual([]);

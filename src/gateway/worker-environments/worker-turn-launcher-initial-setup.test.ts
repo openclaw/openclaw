@@ -1,7 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
@@ -324,15 +323,17 @@ describe("initial worker setup admission", () => {
         runLocal,
       );
       void run.catch(() => undefined);
+      let closing: ReturnType<typeof admission.close> | undefined;
       try {
         await setImmediate();
         if (admitted) {
-          closeAdmittedRunDelegatedAuthority(admitted);
+          closing = admission.close();
         } else {
           sourceLive = false;
         }
         fixture.finish.resolve();
         await fixture.operation;
+        await closing;
         await expect(run).rejects.toThrow(/authority/);
         expect(resolveWorkspace).not.toHaveBeenCalled();
         expect(environments.startTunnel).not.toHaveBeenCalled();
@@ -341,7 +342,7 @@ describe("initial worker setup admission", () => {
       } finally {
         fixture.finish.resolve();
         await Promise.allSettled([run, fixture.operation]);
-        admission.close();
+        await admission.close();
         uninstall();
       }
     },

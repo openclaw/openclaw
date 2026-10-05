@@ -215,7 +215,7 @@ async function runCliIsolatedCompletion(params: {
           ...(usage ? { usage } : {}),
         };
       } finally {
-        preparedRunAdmission.close();
+        await preparedRunAdmission.close();
       }
     },
   );

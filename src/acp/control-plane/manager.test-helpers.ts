@@ -119,7 +119,7 @@ export class AcpSessionManager extends managerModule.AcpSessionManager {
     try {
       return await super.runTurn({ ...input, admittedRunContext: await admission.admit("acp") });
     } finally {
-      admission.close();
+      await admission.close();
     }
   }
 }

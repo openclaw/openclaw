@@ -230,7 +230,7 @@ describe("local claim recovery before backend registration", () => {
         finishReplacement.resolve();
         await Promise.allSettled([oldRun, replacement]);
         operation.complete();
-        params.preparedRunAdmission.close();
+        await params.preparedRunAdmission.close();
         uninstall();
       }
     },

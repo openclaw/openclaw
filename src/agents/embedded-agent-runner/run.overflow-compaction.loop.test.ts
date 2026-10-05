@@ -400,7 +400,7 @@ describe("embedded run retry dispatch", () => {
       const gateway = {} as GatewayRequestContext;
       for (const continuation of [false, true]) {
         if (continuation) {
-          admission.close();
+          await admission.close();
           admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
           admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
         }
@@ -490,7 +490,7 @@ describe("embedded run retry dispatch", () => {
           ? input.runInput.laneController.createAttemptControls({ admittedRunContext })
           : undefined;
       if (kind === "closed") {
-        admission.close();
+        await admission.close();
       } else if (kind === "aborted") {
         input.runInput.laneController.laneTaskAbortController.abort();
       } else if (kind === "replaced") {

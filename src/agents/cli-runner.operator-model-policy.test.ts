@@ -94,7 +94,7 @@ describe("CLI operator model execution", () => {
             expect(processStart).toHaveBeenCalledOnce();
           }
         } finally {
-          admission.close();
+          await admission.close();
         }
       });
     },
@@ -192,7 +192,7 @@ describe("CLI operator model execution", () => {
     } finally {
       complete.resolve();
       await outcome;
-      admission.close();
+      await admission.close();
     }
   });
 });

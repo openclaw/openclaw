@@ -79,7 +79,7 @@ beforeAll(async () => {
     try {
       return await run({ ...params, preparedRunAdmission: admission });
     } finally {
-      admission.close();
+      await admission.close();
     }
   };
   ({ runWithModelFallback } = await import("../model-fallback-runner.js"));
@@ -551,7 +551,7 @@ describe("embedded run detached session metadata", () => {
           await expect(run).resolves.toMatchObject({ payloads: [{ text: "Blue Heron." }] });
         }
       } finally {
-        replacement?.close();
+        await replacement?.close();
       }
       expect(compact).toHaveBeenCalledOnce();
       expect(summaryStream).toHaveBeenCalledOnce();

@@ -304,7 +304,7 @@ it.each([
       if (!selected) {
         throw new Error("Candidate registry source was not selected");
       }
-      admission.close();
+      await admission.close();
       signalAbortedAtLogicalResult = workSignal?.aborted;
       expect.soft(selected.disposed).toBe(0);
       expect.soft(signalAbortedAtLogicalResult ?? false).toBe(false);
@@ -367,7 +367,7 @@ it.each([
       finishNested.resolve();
       finishInitialWriter.resolve();
       await Promise.allSettled([logical, actualCleanup, nested]);
-      admission?.close();
+      await admission?.close();
       await parentClose;
       await cliResources?.release();
       await resetPreparedModelRuntimeSnapshotsForTest();

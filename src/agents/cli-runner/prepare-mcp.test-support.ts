@@ -72,7 +72,7 @@ export function registerCliMcpPreparationTests({
         await context.preparedBackend.cleanup?.();
       }
     } finally {
-      preparedRunAdmission.close();
+      await preparedRunAdmission.close();
     }
   });
 }

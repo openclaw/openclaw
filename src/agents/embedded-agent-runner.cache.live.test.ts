@@ -374,7 +374,7 @@ async function runEmbeddedCacheProbe(params: {
       hitRate: computeCacheHitRate(usage),
     };
   } finally {
-    preparedRunAdmission.close();
+    await preparedRunAdmission.close();
   }
 }
 

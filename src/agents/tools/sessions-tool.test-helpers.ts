@@ -96,6 +96,6 @@ export async function withSessionToolTestCaller<T>(
       run,
     );
   } finally {
-    admission.close();
+    await admission.close();
   }
 }

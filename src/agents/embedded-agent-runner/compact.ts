@@ -172,7 +172,7 @@ export async function compactNativeCliSession(params: {
       reason: `CLI backend "${runtime}" failed to compact its native session: ${formatErrorMessage(err)}`,
     };
   } finally {
-    preparedRunAdmission.close();
+    await preparedRunAdmission.close();
   }
   return {
     ok: true,

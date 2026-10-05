@@ -159,7 +159,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         await owner.drain();
       }
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 });

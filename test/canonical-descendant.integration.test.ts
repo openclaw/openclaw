@@ -371,8 +371,8 @@ async function withFixture(
             if (workerClaim) {
               await placements?.releaseTurn(workerClaim);
             }
-            admission.close();
-            successor?.close();
+            await admission.close();
+            await successor?.close();
           },
         };
       },

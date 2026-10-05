@@ -148,10 +148,9 @@ describe("Gateway agent command execution identity", () => {
         expect(loadSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
           "mainRestartRecovery.startedAttempt",
         );
-        if (outcome === "closed-before-admission") {
-          prepared.close();
-        }
+        const closing = outcome === "closed-before-admission" ? prepared.close() : undefined;
         releaseCallback.resolve();
+        await closing;
         await settled;
         if (outcome === "closed-before-admission") {
           await expect(admission).rejects.toThrow("closed during admission");
@@ -177,7 +176,7 @@ describe("Gateway agent command execution identity", () => {
           );
         }
         if (outcome === "closed-before-start") {
-          prepared.close();
+          await prepared.close();
         } else if (outcome === "stale-attempt") {
           await replaceSessionEntry(
             { sessionKey, storePath },
@@ -209,8 +208,9 @@ describe("Gateway agent command execution identity", () => {
         });
       });
     } finally {
-      prepared?.close();
+      const closing = prepared?.close();
       releaseCallback.resolve();
+      await closing;
     }
   });
 

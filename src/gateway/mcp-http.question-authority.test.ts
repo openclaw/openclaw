@@ -418,7 +418,7 @@ describe("CLI loopback question creator authority", () => {
             }),
           ).toBeUndefined();
         } else {
-          owner.admission.close();
+          await owner.admission.close();
         }
 
         await expect(fixture.answer()).rejects.toThrow();
@@ -517,7 +517,7 @@ describe("CLI loopback question creator authority", () => {
       expect(fixture.persist).not.toHaveBeenCalled();
       fixture.retire(old.id);
       await old.response;
-      oldOwner.admission.close();
+      await oldOwner.admission.close();
 
       const beforeList = fixture.resolutionCount();
       await fixture.list(oldOwner.token);

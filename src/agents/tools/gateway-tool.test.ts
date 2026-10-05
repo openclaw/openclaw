@@ -138,7 +138,7 @@ describe("gateway update action", () => {
       });
       expect(dispatchMock).not.toHaveBeenCalled();
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 
@@ -183,7 +183,7 @@ describe("gateway update action", () => {
             requester: undefined,
             deliveryContext: { channel: "telegram", to: "123" },
           });
-          admission.close();
+          await admission.close();
           expect((await invoke()).details).toMatchObject({
             ok: false,
             code: "owner_required",
@@ -202,7 +202,7 @@ describe("gateway update action", () => {
           expect(dispatchMock).not.toHaveBeenCalled();
         }
       } finally {
-        admission.close();
+        await admission.close();
       }
     },
   );

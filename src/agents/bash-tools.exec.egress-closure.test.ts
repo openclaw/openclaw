@@ -33,7 +33,7 @@ const admissions: PreparedAgentRunAdmission[] = [];
 
 afterEach(async () => {
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
   vi.restoreAllMocks();
   try {
@@ -162,15 +162,16 @@ describe("exec proxy registration after store preparation", () => {
         retired.controller.abort();
       }
       // Cancellation's cron owner closes admission before a detached exec can resume.
-      retired.admission.close();
+      const closing = retired.admission.close();
       const retiredOutcome = await retiredExecution;
+      await closing;
       const lateRegistrationCount = registrations.mock.calls.length;
       const retiredSpawnCount = spawns.mock.calls.length;
       storeRead.mockRestore();
 
       const later = await createInvocation(`egress-${revocation}-later`);
       const laterResult = await later.execute();
-      later.admission.close();
+      await later.admission.close();
 
       expect(retiredOutcome.status).toBe("rejected");
       expect(retired.controller.signal.aborted).toBe(revocation === "abort");

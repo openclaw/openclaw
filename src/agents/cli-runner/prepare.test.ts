@@ -388,7 +388,7 @@ describe("prepareCliRunContext", () => {
         ),
       );
     } finally {
-      admission.close();
+      await admission.close();
     }
   }
 
@@ -437,20 +437,26 @@ describe("prepareCliRunContext", () => {
       boundary: "cli-prepare-test",
     });
 
-    const { decisionWork } = await captureRoutingDecisionWork(() =>
-      fixture.prepare({
-        runId,
-        config: cfg,
-        preparedRunAdmission,
-        model: "mock-2",
-        modelRoutingProvenance: {
-          requestedProvider: "openai",
-          requestedModel: "mock-1",
-          stage: "fallback",
-          fallbackReason: "rate_limit",
-        },
-      }),
-    ).finally(preparedRunAdmission.close);
+    const { decisionWork } = await (async () => {
+      try {
+        return await captureRoutingDecisionWork(() =>
+          fixture.prepare({
+            runId,
+            config: cfg,
+            preparedRunAdmission,
+            model: "mock-2",
+            modelRoutingProvenance: {
+              requestedProvider: "openai",
+              requestedModel: "mock-1",
+              stage: "fallback",
+              fallbackReason: "rate_limit",
+            },
+          }),
+        );
+      } finally {
+        await preparedRunAdmission.close();
+      }
+    })();
 
     expect(decisionWork).toHaveLength(1);
     expect(decisionWork[0]?.receipt).toMatchObject({
@@ -736,10 +742,10 @@ describe("prepareCliRunContext", () => {
             "ISOLATED_CLI_OUTCOME_947",
           );
         } finally {
-          laterAdmission.close();
+          await laterAdmission.close();
         }
       } finally {
-        admission.close();
+        await admission.close();
       }
     },
   );
@@ -780,7 +786,7 @@ describe("prepareCliRunContext", () => {
           (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
         ).toBe("Retained CLI outcome");
       } finally {
-        admission.close();
+        await admission.close();
       }
     },
   );
@@ -800,7 +806,7 @@ describe("prepareCliRunContext", () => {
       "heartbeat-context-test",
     );
     const admittedRunContext = await admission.admit("embedded");
-    admission.close();
+    await admission.close();
     await expect(
       fixture.prepare({
         admittedRunContext,
@@ -2025,12 +2031,16 @@ describe("prepareCliRunContext", () => {
       },
     });
 
-    const context = await fixture
-      .prepare({
-        toolAuthorityFingerprint: "turn-authority",
-        preparedRunAdmission,
-      })
-      .finally(preparedRunAdmission.close);
+    const context = await (async () => {
+      try {
+        return await fixture.prepare({
+          toolAuthorityFingerprint: "turn-authority",
+          preparedRunAdmission,
+        });
+      } finally {
+        await preparedRunAdmission.close();
+      }
+    })();
 
     expect(context.params.prompt).toBe("authorized memory context\n\nlatest ask");
     expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
@@ -3578,7 +3588,7 @@ describe("prepareCliRunContext", () => {
               assertSourceCurrent: () => {},
             });
           if (mode === "creator-closed") {
-            admission.close();
+            await admission.close();
             await expect(answer()).rejects.toThrow("no longer active");
             expect(
               gateway.requests.filter((frame) => frame.method === "question.resolve"),
@@ -3639,7 +3649,7 @@ describe("prepareCliRunContext", () => {
       sourceAbort.abort();
       answeringPlaceholder?.complete();
       sourceOperation?.complete();
-      admission.close();
+      await admission.close();
       await cleanup?.();
     }
   });
@@ -4221,7 +4231,7 @@ describe("prepareCliRunContext", () => {
         await context.preparedBackend.cleanup?.();
       }
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 
@@ -4400,7 +4410,7 @@ describe("prepareCliRunContext", () => {
           return current;
         });
       } finally {
-        admission.close();
+        await admission.close();
       }
     };
     await runTurn("test:a", "account A private history");
@@ -4755,7 +4765,7 @@ describe("prepareCliRunContext", () => {
         expect(ensureSandboxWorkspaceForSessionMock).not.toHaveBeenCalled();
       } finally {
         release.resolve();
-        admission.close();
+        await admission.close();
         access.mockRestore();
       }
     },

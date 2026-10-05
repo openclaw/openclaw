@@ -197,7 +197,7 @@ describe("CronService authenticated channel requester", () => {
       if (loopbackToken) {
         revokeMcpLoopbackClientGrant(loopbackToken);
       }
-      admission.close();
+      await admission.close();
       cron.stop();
     }
   });

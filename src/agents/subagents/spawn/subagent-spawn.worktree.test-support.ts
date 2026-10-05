@@ -155,7 +155,7 @@ export function registerManagedWorktreeSpawnCases(options: {
         } finally {
           restoreAllocation?.();
           ownedGateway?.runtime.close();
-          ownedBound?.admission.close();
+          await ownedBound?.admission.close();
           ownedBound?.parent.cleanup();
           ownedBound = undefined;
           ownedGateway = undefined;

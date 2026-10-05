@@ -651,7 +651,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
         expect(childIo).not.toHaveBeenCalled();
         expect(mocks.callGateway).not.toHaveBeenCalled();
       } finally {
-        admission?.close();
+        await admission?.close();
       }
     },
   );

@@ -165,10 +165,11 @@ export function registerSessionsSendRequesterRetirementTests({
       context.getRuntimeConfig = () => config;
       context.resolveGatewayContext = () => context;
       let requesterRetired = false;
+      let closing: Promise<void> | undefined;
       const retireRequester = () => {
         expect(mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance)).toEqual([]);
         requesterRetired = true;
-        admission.close();
+        closing = admission.close();
       };
       const execute = stateWorker.runOpenClawStateWorkerOperation;
       const retireBeforePublication = vi
@@ -267,9 +268,10 @@ export function registerSessionsSendRequesterRetirementTests({
       } finally {
         stopRetiring();
         retireBeforePublication.mockRestore();
-        admission.close();
+        closing ??= admission.close();
         clearActiveEmbeddedRun(childSessionId, handle, childSessionKey);
         childPending.resolve();
+        await closing;
         stopObserving();
         await resetSubagentRegistryForTests();
         await settleSessionWork();
@@ -416,6 +418,7 @@ export function registerSessionsSendRequesterRetirementTests({
           }),
         () => toolCurrent,
       );
+    let closing: Promise<void> | undefined;
     const stopRetiringTool = subscribeSubagentRunChanges("persistence", () => {
       if (getSubagentRunByRunId("second-watched-run")?.requesterTurnRunId !== requesterTurnRunId) {
         return;
@@ -424,7 +427,7 @@ export function registerSessionsSendRequesterRetirementTests({
         toolCurrent = false;
       }
       if (finish === "retired") {
-        admission.close();
+        closing ??= admission.close();
       }
     });
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
@@ -504,8 +507,9 @@ export function registerSessionsSendRequesterRetirementTests({
           resultsDelivered.resolve();
         }
       });
-      admission.close();
+      closing ??= admission.close();
       childrenPending[firstIndex]!.resolve();
+      await closing;
       await withinTest(firstSettled.promise, signal);
       expect(
         getSubagentRunByRunId(children[firstIndex]!.runId),
@@ -543,8 +547,9 @@ export function registerSessionsSendRequesterRetirementTests({
       ).toHaveLength(1);
     } finally {
       stopRetiringTool();
-      admission.close();
+      closing ??= admission.close();
       childrenPending.forEach((pending) => pending.resolve());
+      await closing;
       stopObserving();
       await settleSessionWork();
       await resetSubagentRegistryForTests();

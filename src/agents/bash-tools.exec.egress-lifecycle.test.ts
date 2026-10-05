@@ -236,7 +236,7 @@ setInterval(() => {
 
 afterEach(async () => {
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
   const supervisor = getProcessSupervisor();
   const join = supervisor.acquireScopeCleanup(sessionKey, { processTree: "required-all" });
@@ -272,7 +272,7 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     expect(survivor.sessionId).not.toBe(killed.sessionId);
     expect(survivor.sessionId.slice(0, 8)).toBe(killed.sessionId.slice(0, 8));
     await killed.request(first, "before-close");
-    first.admission.close();
+    await first.admission.close();
 
     const later = await createInvocation("egress-later");
     await killed.request(later, "after-close");

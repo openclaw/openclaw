@@ -191,7 +191,7 @@ it.each(policyCases)(
           expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual(effects);
         }
       } finally {
-        attempt.close();
+        await attempt.close();
         await native.service.stop?.(native.context);
       }
     });
@@ -234,10 +234,9 @@ it.for(["complete", "revoke"] as const)(
         await expect.poll(() => updates.at(-1)?.data.text).toBe("First chunk");
         expect(finished).toBe(false);
         expect(updates[0]?.sessionKey).toBe(attempt.target.sessionKey);
-        if (completion === "revoke") {
-          attempt.close();
-        }
+        const closing = completion === "revoke" ? attempt.close() : undefined;
         await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
+        await closing;
         const result = await run;
         expect(result.terminal.kind).toBe(completion === "complete" ? "ok" : "failed");
         expect(updates.map((event) => event.data.delta)).toEqual(
@@ -247,7 +246,7 @@ it.for(["complete", "revoke"] as const)(
         await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
         await Promise.allSettled([run]);
         unsubscribe();
-        attempt.close();
+        await attempt.close();
         await native.service.stop?.(native.context);
       }
     });
@@ -324,10 +323,9 @@ it.for([
             throw new Error(`Attempt ended before native ${operation} boundary`, { cause: result });
           }),
         ]);
-        if (kind === "revoke") {
-          attempt.close();
-        }
+        const closing = kind === "revoke" ? attempt.close() : undefined;
         await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
+        await closing;
         await holdingControl;
         const outcome = await run;
         const records = await peerStates(native.peerDirectory);
@@ -356,7 +354,7 @@ it.for([
           ...(run ? [run] : []),
           ...(holdingControl ? [holdingControl] : []),
         ]);
-        attempt.close();
+        await attempt.close();
         await native.service.stop?.(native.context);
       }
     });
@@ -388,14 +386,16 @@ it.each(["active", "cancel", "timeout", "revoke"] as const)(
         const transcriptBeforeRelease = await readVisibleSessionTranscriptMessageEntries(
           attempt.target,
         );
+        let closing: Promise<void> | undefined;
         if (kind === "cancel") {
           controller.abort();
         } else if (kind === "revoke") {
-          attempt.close();
+          closing = attempt.close();
         } else if (kind === "timeout") {
           await timedOut.promise;
         }
         await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
+        await closing;
         const outcome = await run;
         const records = await peerStates(native.peerDirectory);
         const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
@@ -421,7 +421,7 @@ it.each(["active", "cancel", "timeout", "revoke"] as const)(
       } finally {
         await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
         await Promise.allSettled([run]);
-        attempt.close();
+        await attempt.close();
         await native.service.stop?.(native.context);
       }
     });
@@ -463,7 +463,7 @@ it.each([
         expect(await peerStates(native.peerDirectory)).toEqual([]);
         expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
       } finally {
-        attempt.close();
+        await attempt.close();
         await native.service.stop?.(native.context);
       }
     });
@@ -521,7 +521,7 @@ it.each([
           expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
         }
       } finally {
-        attempt.close();
+        await attempt.close();
         await native.service.stop?.(native.context);
       }
     });

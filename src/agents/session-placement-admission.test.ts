@@ -3,7 +3,7 @@ import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { enqueueCommandInLane, resetCommandLane } from "../process/command-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
-import { closeAdmittedRunDelegatedAuthority } from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { isSessionPlacementSettlementClosedError } from "./run-termination.js";
 
 const settleRequesterAfterSessionSpawns = vi.hoisted(() =>
@@ -531,31 +531,32 @@ describe("local turn placement admission", () => {
 
   it("rejects a CLI handoff when its admitted owner closes during execution", async () => {
     const runId = "revoked-cli-parent";
-    await withTestRunAdmission(
-      { admittedRunContext: createTestAdmittedRunContext(runId), runId },
-      async (admittedRunContext) => {
-        await expect(
-          withLocalSessionPlacementTurnSettlement(
-            { sessionId: runId, sessionKey: "agent:main:revoked-cli", runId },
-            async () => {
-              closeAdmittedRunDelegatedAuthority(admittedRunContext);
-              return {
-                acceptedSessionSpawns: [
-                  {
-                    runId: "child",
-                    childSessionKey: "agent:main:subagent:child",
-                    expectsCompletionMessage: true,
-                  },
-                ],
-                meta: { durationMs: 1, yielded: true },
-              };
-            },
-            { admittedRunContext },
-          ),
-        ).rejects.toThrow("admitted run authority is no longer active");
-        expect(settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
-      },
-    );
+    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test.cli-owner");
+    try {
+      const admittedRunContext = await admission.admit("embedded");
+      await expect(
+        withLocalSessionPlacementTurnSettlement(
+          { sessionId: runId, sessionKey: "agent:main:revoked-cli", runId },
+          async () => {
+            await admission.close();
+            return {
+              acceptedSessionSpawns: [
+                {
+                  runId: "child",
+                  childSessionKey: "agent:main:subagent:child",
+                  expectsCompletionMessage: true,
+                },
+              ],
+              meta: { durationMs: 1, yielded: true },
+            };
+          },
+          { admittedRunContext },
+        ),
+      ).rejects.toThrow("admitted run authority is no longer active");
+      expect(settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
+    } finally {
+      await admission.close();
+    }
   });
 
   it.each([undefined, false, true])(

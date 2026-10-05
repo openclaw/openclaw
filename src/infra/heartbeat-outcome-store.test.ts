@@ -78,7 +78,7 @@ describe("heartbeat outcome store", () => {
         trigger: "user",
         assertCurrent: resolveAdmittedRunActiveAssertion(admitted),
       });
-      admission.close();
+      await admission.close();
       await expect(pending).rejects.toThrow();
       expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "another-run" })).toMatchObject({
         summary: "Saved outcome",
@@ -87,7 +87,7 @@ describe("heartbeat outcome store", () => {
         await claimHeartbeatOutcomeForRun({ ...target, runId: "retired-run" }),
       ).toBeUndefined();
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 
@@ -234,7 +234,7 @@ describe("heartbeat outcome store", () => {
       expect(context).toContain(`summary=${stored?.summary}\n`);
       expect(context).not.toContain("x".repeat(4_001));
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 

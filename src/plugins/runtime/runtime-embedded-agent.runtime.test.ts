@@ -60,7 +60,7 @@ describe("plugin embedded-agent runtime admission", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.authorityActive = true;
-    mocks.close.mockImplementation(() => {
+    mocks.close.mockImplementation(async () => {
       mocks.authorityActive = false;
     });
     mocks.prepareAgentRunAdmission.mockReturnValue({
@@ -120,6 +120,37 @@ describe("plugin embedded-agent runtime admission", () => {
     ).rejects.toThrow("core failed");
     expect(mocks.close).toHaveBeenCalledOnce();
   });
+
+  it.each(["completion", "abort"] as const)(
+    "joins resource cleanup after %s and surfaces its failure",
+    async (end) => {
+      const core = createDeferred<{ payloads: never[] }>();
+      const cleanup = createDeferred();
+      const started = createDeferred();
+      const controller = new AbortController();
+      mocks.close.mockImplementation(() => {
+        mocks.authorityActive = false;
+        started.resolve();
+        return cleanup.promise;
+      });
+      mocks.runEmbeddedAgentCore.mockReturnValueOnce(core.promise);
+      const run = withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+        runPluginEmbeddedAgent({ ...params, abortSignal: controller.signal }),
+      );
+      const settled = vi.fn();
+      void run.then(settled, settled);
+      const rejected = expect(run).rejects.toThrow("resource exit unconfirmed");
+      if (end === "abort") {
+        controller.abort();
+      }
+      core.resolve({ payloads: [] });
+      await started.promise;
+      expect(settled).not.toHaveBeenCalled();
+      cleanup.reject(new Error("resource exit unconfirmed"));
+      await rejected;
+      expect(mocks.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([true, false])("ignores the shipped GitHub availability input %s", async (available) => {
     await expect(

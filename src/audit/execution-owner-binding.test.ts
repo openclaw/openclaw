@@ -83,7 +83,7 @@ describe("execution owner binding settlement", () => {
       ]);
       expect(bind).toHaveBeenCalledOnce();
     } finally {
-      source.close();
+      await source.close();
     }
   });
 
@@ -98,11 +98,12 @@ describe("execution owner binding settlement", () => {
     try {
       const pending = owner.admit("gateway");
       await entered.promise;
-      owner.close();
+      const closing = owner.close();
       durable.resolve();
+      await closing;
       await expect(pending).rejects.toThrow("authority is no longer active");
     } finally {
-      source.close();
+      await source.close();
     }
   });
 });

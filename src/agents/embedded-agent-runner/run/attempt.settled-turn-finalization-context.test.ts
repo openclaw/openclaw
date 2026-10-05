@@ -143,7 +143,7 @@ describe("settled post-tool turn finalization context", () => {
         expect.objectContaining(genuineUser),
       );
     } finally {
-      admission.close();
+      await admission.close();
     }
   });
 

@@ -75,8 +75,8 @@ async function assembleWithCapturedHookCtx(
 ) {
   const { session, sessionManager, modelRegistry } = await createTestSession();
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "provenance-hook-test");
-  onTestFinished(() => {
-    admission.close();
+  onTestFinished(async () => {
+    await admission.close();
     forgetPromptBuildDrainCacheForRun(runId);
   });
   const attempt: EmbeddedRunAttemptParams = {

@@ -35,9 +35,9 @@ const fixtures = setupCronRegressionFixtures({
 });
 
 const admissions: PreparedAgentRunAdmission[] = [];
-afterEach(() => {
+afterEach(async () => {
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
 });
 

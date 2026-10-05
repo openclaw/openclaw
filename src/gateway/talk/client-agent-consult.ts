@@ -98,16 +98,15 @@ function createTalkClientAgentRuntime(params: {
         },
       },
     });
-    let closed = false;
-    const close = () => {
-      if (!closed) {
-        closed = true;
-        preparedRunAdmission.close();
-      }
+    let closing: Promise<void> | undefined;
+    const close = () => (closing ??= Promise.resolve(preparedRunAdmission.close()));
+    const onAbort = () => {
+      // The finalizer joins the same settlement and reports cleanup failures.
+      void close().catch(() => {});
     };
     // Abort owns authority revocation independently of core completion; the
     // post-registration check closes the prepare-to-listener race.
-    runParams.abortSignal?.addEventListener("abort", close, { once: true });
+    runParams.abortSignal?.addEventListener("abort", onAbort, { once: true });
     try {
       runParams.abortSignal?.throwIfAborted();
       // Provider-owned work can outlive or replace its audio transport. Unlike
@@ -141,8 +140,8 @@ function createTalkClientAgentRuntime(params: {
         }),
       });
     } finally {
-      runParams.abortSignal?.removeEventListener("abort", close);
-      close();
+      runParams.abortSignal?.removeEventListener("abort", onAbort);
+      await close();
     }
   };
   Object.defineProperty(agentRuntime, "runEmbeddedAgent", {

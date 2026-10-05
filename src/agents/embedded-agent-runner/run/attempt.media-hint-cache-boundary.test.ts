@@ -38,8 +38,8 @@ async function createTurnFixture(systemPromptOverride?: string) {
   const { session, sessionManager, modelRegistry } = await createTestSession();
   const runId = `media-cache-${systemPromptOverride ? "override" : "base"}`;
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "media-cache-test");
-  onTestFinished(() => {
-    admission.close();
+  onTestFinished(async () => {
+    await admission.close();
     forgetPromptBuildDrainCacheForRun(runId);
   });
   const attempt: EmbeddedRunAttemptParams = {

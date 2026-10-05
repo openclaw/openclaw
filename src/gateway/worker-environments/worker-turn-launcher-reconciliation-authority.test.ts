@@ -2,7 +2,6 @@ import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
@@ -94,9 +93,10 @@ describe("reconciliation continuation authority", () => {
         },
       });
       const admitted = authority === "admitted" ? await admission.admit("embedded") : undefined;
+      const closing: { promise?: ReturnType<typeof admission.close> } = {};
       const revoke = () => {
         if (admitted) {
-          closeAdmittedRunDelegatedAuthority(admitted);
+          closing.promise = admission.close();
         } else {
           sourceLive = false;
         }
@@ -224,11 +224,12 @@ describe("reconciliation continuation authority", () => {
           expect(runLocal).not.toHaveBeenCalled();
           expect(await readdir(remote)).toEqual([]);
         }
+        await closing.promise;
         expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       } finally {
         abort.abort();
         await run.catch(() => undefined);
-        admission.close();
+        await admission.close();
         uninstall();
       }
     },

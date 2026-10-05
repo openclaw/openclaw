@@ -206,17 +206,21 @@ it.each(
       if (active) {
         const admittedRunContext = await preparedAdmission.admit("acp");
         // Match /acp steer: the manager owns the only cancellation signal.
-        turn = manager
-          .runTurn({
-            cfg,
-            admittedRunContext,
-            sessionKey: acpKey,
-            requestId: "acp-steer",
-            mode: "steer",
-            provenance: "agent",
-            text: "keep working",
-          })
-          .finally(() => preparedAdmission.close());
+        turn = (async () => {
+          try {
+            return await manager.runTurn({
+              cfg,
+              admittedRunContext,
+              sessionKey: acpKey,
+              requestId: "acp-steer",
+              mode: "steer",
+              provenance: "agent",
+              text: "keep working",
+            });
+          } finally {
+            await preparedAdmission.close();
+          }
+        })();
         acpSignal = await Promise.race([
           turnStarted.promise,
           turn.then(() => {
@@ -372,7 +376,7 @@ it.each(
       finishTurn.resolve();
       await pending?.catch(() => undefined);
       await turn?.catch(() => undefined);
-      preparedAdmission.close();
+      await preparedAdmission.close();
       native.complete();
       clearActiveEmbeddedRun("running-session", handle, runningKey);
       releaseSwarmRun("capacity");

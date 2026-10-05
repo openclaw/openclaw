@@ -108,7 +108,7 @@ describe("followup queue authority", () => {
         } catch (error) {
           failures.push(error);
         } finally {
-          prepared.close();
+          await prepared.close();
           completeFollowupRunLifecycle(run);
         }
       });
@@ -186,7 +186,7 @@ describe("followup queue authority", () => {
             // The real admitted-run guard must reject before the modeled effect.
           }
         } finally {
-          prepared.close();
+          await prepared.close();
           completeFollowupRunLifecycle(run);
         }
       });

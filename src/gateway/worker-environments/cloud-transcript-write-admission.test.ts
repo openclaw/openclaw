@@ -158,7 +158,7 @@ describe("cloud transcript write admission", () => {
       } finally {
         gate.release.resolve();
         await operation;
-        input.preparedRunAdmission.close();
+        await input.preparedRunAdmission.close();
       }
     },
   );

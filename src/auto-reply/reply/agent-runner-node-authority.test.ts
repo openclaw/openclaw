@@ -304,7 +304,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                     });
                     break;
                   case "admission":
-                    admission.close();
+                    await admission.close();
                     break;
                   case "gateway":
                     currentContext = { ...context };

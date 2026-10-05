@@ -275,7 +275,7 @@ describe("native child cancellation authority", () => {
               await acpManager.runTurn({ ...input, admittedRunContext });
               return admittedRunContext;
             } finally {
-              admission.close();
+              await admission.close();
             }
           }
           replaceSessionEntrySync(

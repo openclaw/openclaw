@@ -219,7 +219,7 @@ describe("Gateway worker-turn selected transcript preparation", () => {
           hasUnjoinedOwner = false;
         } finally {
           try {
-            request.preparedRunAdmission.close();
+            await request.preparedRunAdmission.close();
           } finally {
             if (ownContextDescriptor) {
               Object.defineProperty(

@@ -623,7 +623,7 @@ async function runCliBtwSideQuestion(params: {
     try {
       await prepared?.preparedBackend.cleanup?.();
     } finally {
-      preparedRunAdmission.close();
+      await preparedRunAdmission.close();
     }
   }
 }
@@ -1050,7 +1050,7 @@ export async function runBtwSideQuestion(
         recordBtwUsage(runtimeModel, result.usage);
         return { kind: "handled", payload: { text: result.text } };
       } finally {
-        preparedRunAdmission.close();
+        await preparedRunAdmission.close();
       }
     };
     if (harness.runSideQuestion) {

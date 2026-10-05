@@ -92,7 +92,7 @@ afterAll(async () => {
     revokeMcpLoopbackClientGrant(token);
   }
   for (const admission of admissions) {
-    admission.close();
+    await admission.close();
   }
   await closeMcpLoopbackServer();
   await state?.cleanup();

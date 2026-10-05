@@ -45,9 +45,9 @@ describe("mcp-grant-store", () => {
     revokeMcpLoopbackClientGrantsForRuntime("runtime-two");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const admission of admissions.splice(0)) {
-      admission.close();
+      await admission.close();
     }
   });
 
@@ -387,7 +387,7 @@ describe("mcp-grant-store", () => {
       });
       activateMcpLoopbackClientGrantCapture(params);
     } else if (invalidation === "close") {
-      admissions.at(-1)?.close();
+      await admissions.at(-1)?.close();
     } else if (invalidation === "source-abort") {
       sourceController.abort();
     } else if (invalidation === "caller-revocation") {
@@ -427,7 +427,7 @@ describe("mcp-grant-store", () => {
       captureKey: "capture-a",
     });
     expect(resolved?.isCurrent()).toBe(true);
-    admissions.at(-1)?.close();
+    await admissions.at(-1)?.close();
     expect(resolved?.isCurrent()).toBe(false);
 
     expect(

@@ -18,7 +18,6 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
-  closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
@@ -120,10 +119,10 @@ function bindTool(
   return { host, bound };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
   for (const admission of admissions.splice(0)) {
-    admission.close();
+    await admission.close();
   }
   resetAgentRunRegistryForTest();
 });
@@ -459,7 +458,7 @@ describe("agent harness host capability", () => {
     await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();
 
-    admission.close();
+    await admission.close();
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBeUndefined();
   });
 
@@ -551,7 +550,7 @@ describe("agent harness host capability", () => {
       readStarted.resolve();
       return await readResult.promise;
     });
-    const { attempt } = await admittedAttempt("run-reply-media");
+    const { attempt, admission } = await admittedAttempt("run-reply-media");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
     const prepare = host.capabilities.prepareReplyMedia;
     if (!prepare) {
@@ -565,8 +564,9 @@ describe("agent harness host capability", () => {
     const pending = prepare(request);
     const rejected = expect(pending).rejects.toThrow();
     await readStarted.promise;
-    closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+    const closing = admission.close();
     readResult.resolve(Buffer.from("remote artifact"));
+    await closing;
     await rejected;
     await expect(prepare(request)).rejects.toThrow();
     expect(readWorkspaceFile).toHaveBeenCalledTimes(1);
@@ -660,7 +660,7 @@ describe("agent harness host capability", () => {
   });
 
   it("rejects a deferred policy result after exact authority release", async () => {
-    const { attempt } = await admittedAttempt("run-policy-race");
+    const { attempt, admission } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
     const hookStarted = createDeferred<(() => boolean | void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
@@ -675,16 +675,17 @@ describe("agent harness host capability", () => {
     });
     const receiptAuthority = await hookStarted.promise;
     expect(receiptAuthority).toEqual(expect.any(Function));
-    closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+    const closing = admission.close();
     expect(receiptAuthority?.()).toBe(false);
     hookResult.resolve({ blocked: false, params: { command: "true" } });
+    await closing;
     await expect(pending).rejects.toThrow("no longer active");
   });
 
   it.each(["replacement", "lifecycle rotation"])(
     "keeps a native policy lease after foreground close but fences %s",
     async (revocation) => {
-      const { attempt } = await admittedAttempt("run-retained-policy");
+      const { attempt, admission } = await admittedAttempt("run-retained-policy");
       const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
       const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
       const retained = retainBeforeToolCallForNativeHookRelay(host.capabilities.runBeforeToolCall);
@@ -698,7 +699,7 @@ describe("agent harness host capability", () => {
         throw new Error("expected retained native policy lease");
       }
 
-      expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+      await admission.close();
       expect(validateAgentRunDelegatedAuthority(delegatedAuthority!)).toBe(false);
       await expect(
         host.capabilities.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
@@ -749,8 +750,9 @@ describe("agent harness host capability", () => {
     });
     const pending = operation.start(host);
     await started.promise;
-    admission.close();
+    const closing = admission.close();
     result.resolve(operation.result);
+    await closing;
     await expect(pending).rejects.toThrow("no longer active");
   });
 
@@ -867,7 +869,7 @@ describe("agent harness host capability", () => {
     "rejects in-flight bound tool results after %s",
     async (revocation) => {
       const controller = new AbortController();
-      const { attempt } = await admittedAttempt("run-bound-race", {
+      const { attempt, admission } = await admittedAttempt("run-bound-race", {
         abortSignal: controller.signal,
       });
       const started = createDeferred();
@@ -882,8 +884,9 @@ describe("agent harness host capability", () => {
       const pending = bound.execute("call-race", {});
       await started.promise;
       if (revocation === "authority release") {
-        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+        const closing = admission.close();
         result.resolve({ content: [], details: {} });
+        await closing;
         await expect(pending).rejects.toThrow("no longer active");
       } else {
         if (revocation === "host close") {
@@ -962,7 +965,7 @@ describe("agent harness host capability", () => {
 
   it("fails closed when constructing a host after admission authority closes", async () => {
     const { attempt, admission } = await admittedAttempt("run-closed-before-host");
-    admission.close();
+    await admission.close();
 
     expect(() => createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" })).toThrow(
       "requires active admitted run authority",
@@ -980,7 +983,7 @@ describe("agent harness host capability", () => {
     attachInternalToolExecutionPreparer(tool, prepare);
     const { bound } = bindTool(attempt, tool);
     const boundPreparer = getInternalToolExecutionPreparer(bound);
-    admission.close();
+    await admission.close();
 
     await expect(boundPreparer?.({ toolCallId: "call-prepare", args: {} })).rejects.toThrow(
       "no longer active",
@@ -1006,7 +1009,7 @@ describe("agent harness host capability", () => {
     }
     const prepared = await boundPreparer({ toolCallId: "call-ready", args: {} });
     expect(prepared.kind).toBe("ready");
-    admission.close();
+    await admission.close();
 
     if (prepared.kind !== "ready") {
       throw new Error("expected ready execution preparation");

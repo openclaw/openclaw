@@ -77,7 +77,7 @@ describe("runBtwSideQuestion CLI lifecycle", () => {
         "prepared execution context is already closed",
       );
     } finally {
-      preparedRunAdmission.close();
+      await preparedRunAdmission.close();
     }
   });
 });

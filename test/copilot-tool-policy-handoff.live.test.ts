@@ -191,7 +191,7 @@ async function runLiveCopilotTurn(params: {
     } satisfies CopilotLiveAttemptParams;
     return await runAgentHarnessAttempt(attempt);
   } finally {
-    admission.close();
+    await admission.close();
   }
 }
 

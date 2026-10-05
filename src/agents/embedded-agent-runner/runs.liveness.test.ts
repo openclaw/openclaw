@@ -82,9 +82,9 @@ beforeEach(async () => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
   resetDiagnosticStateForTest();
-  admission.close();
+  await admission.close();
   testing.resetActiveEmbeddedRuns();
   replyTesting.resetReplyRunRegistry();
   resetDiagnosticEventsForTest();
@@ -214,11 +214,13 @@ describe("runtime-owned embedded liveness", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("does not let a probe revive closed admission", () => {
+  it("does not let a probe revive closed admission", async () => {
+    const closing: { promise?: Promise<void> } = {};
     handle.ownsLiveness = () => {
-      admission.close();
+      closing.promise = admission.close();
       return true;
     };
     expect(resolveActiveEmbeddedRunRecoveryBlocker(sessionId)).toBeUndefined();
+    await closing.promise;
   });
 });

@@ -458,7 +458,9 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
     },
     async cleanup() {
       await lifetime.cleanup();
-      admissions.splice(0).forEach((admission) => admission.close());
+      for (const admission of admissions.splice(0)) {
+        await admission.close();
+      }
       for (const databasePath of databasePaths) {
         await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       }
