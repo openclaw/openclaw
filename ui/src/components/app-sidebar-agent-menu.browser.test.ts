@@ -23,7 +23,15 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     root.className = "sidebar-agent-menu";
     root.style.width = "320px";
     document.body.append(root);
-    for (const count of [0, 1, 2, 3, 4, 5, 8]) {
+    for (const [count, pinCount] of [
+      [0, 0],
+      [1, 0],
+      [2, 0],
+      [3, 0],
+      [4, 4],
+      [5, 5],
+      [8, 8],
+    ] as const) {
       render(
         renderSidebarAgentMenuSwitcher({
           activeId: agents[0]!.id,
@@ -32,7 +40,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
           openMode: "hover",
           agents: agents.slice(0, count),
           identities: new Map(),
-          pinnedAgentIds: [],
+          pinnedAgentIds: ["agent-0"],
+          onTogglePinnedAgent: async () => {},
           resolveAvatarUrl: (url) => url,
           avatarErrorHandler: () => () => {},
           agentUnreadCount: () => 0,
@@ -42,6 +51,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
       });
+      expect(root.querySelectorAll(".sidebar-agent-menu__pin")).toHaveLength(pinCount);
       const all = root.querySelector('[value="scope:all"]');
       if (count < 2) {
         expect(all).toBeNull();
