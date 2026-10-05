@@ -189,8 +189,16 @@ export function listReferencedLegacyOAuthSidecarPaths(
     return [];
   }
   const referencedIds = new Set<string>();
-  const referenceEnv = stateDir ? { ...runtimeEnv, OPENCLAW_STATE_DIR: stateDir } : runtimeEnv;
-  for (const { authPath } of listAuthProfileStoreCandidates(cfg ?? {}, referenceEnv)) {
+  // The importer selects stores from the caller's env; config env may select others.
+  const authPaths = new Set(
+    [env, runtimeEnv].flatMap((selectionEnv) =>
+      listAuthProfileStoreCandidates(
+        cfg ?? {},
+        stateDir ? { ...selectionEnv, OPENCLAW_STATE_DIR: stateDir } : selectionEnv,
+      ).map(({ authPath }) => authPath),
+    ),
+  );
+  for (const authPath of authPaths) {
     let raw: unknown;
     try {
       raw = JSON.parse(fs.readFileSync(authPath, "utf8"));
