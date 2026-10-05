@@ -187,9 +187,9 @@ export async function settlePendingPackageActivation(installKey: string) {
   const journal = openPackageActivationJournal(anchor);
   const admission = await journal.readForRecovery();
   const initial = admission.record;
-  if (isPackageActivationComplete(anchor, initial)) {
-    // Replay the receipt if reporting was interrupted after custody settled.
-    return initial.intent?.kind === "publication-settled-external-change"
+  const complete = isPackageActivationComplete(anchor, initial);
+  const receipt =
+    initial.intent && "detail" in initial.intent && initial.intent.detail
       ? {
           operationId: initial.descriptor.operationId,
           reason: initial.intent.kind,
@@ -197,6 +197,8 @@ export async function settlePendingPackageActivation(installKey: string) {
           detail: initial.intent.detail,
         }
       : undefined;
+  if (complete && initial.intent?.kind !== "publication-settled-external-change") {
+    return receipt;
   }
   const originalAuthority = initial.descriptor.authority;
   let currentDatabase: ManagedUpdateLeaseDatabaseIdentity;
@@ -225,6 +227,11 @@ export async function settlePendingPackageActivation(installKey: string) {
     currentDatabase.databasePath !== originalAuthority.databasePath ||
     currentDatabase.databaseIdentity !== originalAuthority.databaseIdentity ||
     currentDatabase.parentIdentity !== originalAuthority.parentIdentity;
+  // Reporting can replay a completed receipt, but an external settlement must
+  // first release its old lease identity after reboot so the next preparation works.
+  if (complete && !leaseIdentityChanged) {
+    return receipt;
+  }
   const reason = leaseWasMissing
     ? "recovery-lease-missing"
     : leaseIdentityChanged
@@ -311,9 +318,14 @@ export async function settlePendingPackageActivation(installKey: string) {
         journal,
         initial,
         fence.assertCurrent,
-        { kind: reason },
+        { kind: reason, ...(receipt ? { detail: receipt.detail } : {}) },
       );
-      return { operationId: initial.descriptor.operationId, retained, reason };
+      return {
+        operationId: initial.descriptor.operationId,
+        retained,
+        reason,
+        ...(receipt ? { detail: receipt.detail } : {}),
+      };
     },
     { existingAuthority: { ...originalAuthority, ...currentDatabase } },
   );

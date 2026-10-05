@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
+import * as directoryDurability from "../../infra/directory-durability.js";
 import {
   encodePackageActivationLauncher,
   openPackageActivationJournal,
@@ -289,9 +290,14 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(f.journal.read().phase).toBe("prepared");
   });
 
-  it.each(["anchor", "helper"] as const)(
-    "resumes verified publication settlement after losing the %s rename acknowledgement",
-    async (boundary) => {
+  it.each([
+    { boundary: "anchor", lease: "current" },
+    { boundary: "helper", lease: "current" },
+    { boundary: "anchor", lease: "missing" },
+    { boundary: "helper", lease: "replaced" },
+  ] as const)(
+    "resumes verified settlement after $boundary rename with lease $lease",
+    async ({ boundary, lease }) => {
       const f = await interruptedPublication();
       const rename = fsp.rename.bind(fsp);
       const interruption = vi
@@ -310,35 +316,78 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         kind: "publication-settled-external-change",
         settled: false,
       });
+      if (lease !== "current") {
+        const databasePath = f.record.descriptor.authority.databasePath;
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        if (lease === "replaced") {
+          fs.copyFileSync(`${databasePath}.previous`, databasePath);
+          fs.chmodSync(databasePath, 0o600);
+        }
+      }
       await repair();
+      expect(f.journal.read().intent).toMatchObject({
+        kind:
+          lease === "current"
+            ? "publication-settled-external-change"
+            : lease === "missing"
+              ? "recovery-lease-missing"
+              : "recovery-lease-identity-changed",
+        settled: true,
+      });
       expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
-      expect(getUpdateRun(f.record.descriptor.operationId)?.steps).toContainEqual(
-        expect.objectContaining({ detail: expect.stringContaining("dist/index.js.bak") }),
-      );
+      if (lease === "current") {
+        expect(getUpdateRun(f.record.descriptor.operationId)?.steps).toContainEqual(
+          expect.objectContaining({ detail: expect.stringContaining("dist/index.js.bak") }),
+        );
+      }
+      await prepareNextPackage(f);
+      expect(f.journal.read().phase).toBe("prepared");
     },
   );
 
-  it("replays completed custody into one terminal history receipt after reporting was interrupted", async () => {
-    const f = await interruptedPublication();
-    vi.mocked(defaultRuntime.error).mockImplementationOnce(() => {
-      throw new Error("reporting interrupted");
-    });
-    await expect(repair()).rejects.toThrow("reporting interrupted");
-    expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
-    expect(getUpdateRun(f.record.descriptor.operationId)).toBeUndefined();
-    await repair();
-    const receipt = getUpdateRun(f.record.descriptor.operationId);
-    expect(receipt).toMatchObject({
-      status: "succeeded",
-      reason: "publication-settled-external-change",
-    });
-    await repair();
-    expect(getUpdateRun(f.record.descriptor.operationId)).toEqual(receipt);
-  });
+  it.each(["current", "missing", "replaced"] as const)(
+    "replays completed custody after interrupted reporting with lease %s",
+    async (lease) => {
+      const f = await interruptedPublication();
+      vi.mocked(defaultRuntime.error).mockImplementationOnce(() => {
+        throw new Error("reporting interrupted");
+      });
+      await expect(repair()).rejects.toThrow("reporting interrupted");
+      expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
+      expect(getUpdateRun(f.record.descriptor.operationId)).toBeUndefined();
+      if (lease !== "current") {
+        const databasePath = f.record.descriptor.authority.databasePath;
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        if (lease === "replaced") {
+          fs.copyFileSync(`${databasePath}.previous`, databasePath);
+          fs.chmodSync(databasePath, 0o600);
+        }
+      }
+      await repair();
+      const receipt = getUpdateRun(f.record.descriptor.operationId);
+      expect(receipt).toMatchObject({
+        status: "succeeded",
+        reason:
+          lease === "current"
+            ? "publication-settled-external-change"
+            : lease === "missing"
+              ? "recovery-lease-missing"
+              : "recovery-lease-identity-changed",
+      });
+      await repair();
+      expect(getUpdateRun(f.record.descriptor.operationId)).toEqual(receipt);
+      expect(receipt?.steps).toContainEqual(
+        expect.objectContaining({ detail: expect.stringContaining("dist/index.js.bak") }),
+      );
+      await prepareNextPackage(f);
+      expect(f.journal.read().phase).toBe("prepared");
+    },
+  );
 
   it.each([
     "content mismatch",
     "inventoried symlink",
+    "unsupported launcher synchronization",
     "live executor",
     "helper changed",
     "wrong version",
@@ -350,6 +399,14 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     if (failure === "inventoried symlink") {
       fs.unlinkSync(path.join(f.packageRoot, "dist/index.js"));
       fs.symlinkSync("index.js.bak", path.join(f.packageRoot, "dist/index.js"));
+    }
+    if (failure === "unsupported launcher synchronization") {
+      const sync = directoryDurability.syncDirectory;
+      vi.spyOn(directoryDurability, "syncDirectory").mockImplementation(async (...args) =>
+        args[0] === f.record.descriptor.binDir
+          ? { status: "unsupported", code: "EINVAL" }
+          : sync(...args),
+      );
     }
     if (failure === "helper changed") {
       fs.appendFileSync(resolvePackageActivationHelper(f.anchor), "// changed\n");
@@ -373,9 +430,11 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
           ? /dist\/index.js/u
           : failure === "inventoried symlink"
             ? /symlink path component not allowed/u
-            : failure === "helper changed"
-              ? /helper/iu
-              : /version/iu,
+            : failure === "unsupported launcher synchronization"
+              ? /crash-durable directory synchronization/u
+              : failure === "helper changed"
+                ? /helper/iu
+                : /version/iu,
       );
     }
     expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);

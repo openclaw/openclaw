@@ -178,6 +178,6 @@ export async function verifyPackagePublicationSettlement(
   assertUnchanged();
   return {
     assertUnchanged,
-    detail: `Sealed package tree evidence no longer matches; inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.${uninspected.length ? ` Extra directories whose contents could not be inspected: ${uninspected.join(", ")}.` : ""}`,
+    detail: `Inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.${uninspected.length ? ` Extra directories whose contents could not be inspected: ${uninspected.join(", ")}.` : ""}`,
   };
 }

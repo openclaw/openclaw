@@ -197,6 +197,7 @@ export async function supersedePackageActivationCustody(
           | "superseded-by-manual-install"
           | "recovery-lease-identity-changed"
           | "recovery-lease-missing";
+        detail?: string;
       },
 ) {
   let record = initial;
@@ -243,7 +244,14 @@ export async function supersedePackageActivationCustody(
   for (const entry of transfers) {
     inspectTransfer(entry);
   }
-  if (record.phase !== "superseded") {
+  if (settlement.kind === "publication-settled-external-change") {
+    // A lost launcher rename acknowledgement must be durable before disarming recovery.
+    assertSupersession();
+    const outcome = await syncDirectory(descriptor.binDir);
+    assertSupersession();
+    requireDirectorySync(outcome, "Package settlement launcher directory");
+  }
+  if (record.phase !== "superseded" || record.intent?.kind !== settlement.kind) {
     // Disarm even an old sealed helper before moving evidence. No old package
     // or launcher is restored over the operator's manual installation.
     record = journal.transition(

@@ -87,9 +87,9 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
         settled.retained
           ? `Recovery evidence retained at ${settled.retained}.`
           : "The original package and launchers remain unchanged."
-      }${"detail" in settled ? ` ${settled.detail}` : ""}`;
+      }${"detail" in settled && settled.detail ? ` ${settled.detail}` : ""}`;
       defaultRuntime.error(message);
-      if (settled.reason === "publication-settled-external-change") {
+      if ("detail" in settled && settled.detail) {
         // The operation UUID identifies this repair receipt, not the original failed run.
         // Replaying it after interrupted reporting preserves the original update outcome.
         createUpdateRun(
@@ -98,7 +98,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
             trigger: "cli",
             settlement: {
               reason: settled.reason,
-              detail: `${"detail" in settled ? settled.detail : ""} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+              detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
             },
           },
           options,
