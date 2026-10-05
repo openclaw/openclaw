@@ -919,4 +919,40 @@ describe("audit event writer", () => {
       (await inspectExecutionIdentityRun({ runId: "after-key-loss" }, database)).identity,
     ).toMatchObject({ state: "unknown", reasonCode: "run_not_found" });
   });
+  it("continues accepting audit records after a non-cloneable event is rejected", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
+    await writer.ready;
+
+    expect(
+      writer.record({
+        ...input(),
+        sourceId: "malformed-event",
+        runId: "malformed-event",
+        input: { value: () => "not cloneable" } as never,
+      }),
+    ).toBe(false);
+
+    expect(
+      writer.record({
+        ...input(),
+        sourceId: "valid-event-after-malformed",
+        runId: "valid-event-after-malformed",
+      }),
+    ).toBe(true);
+
+    await writer.stop();
+
+    expect(errors).toHaveLength(1);
+    expect(
+      (await listAuditEvents({ database, limit: 10 })).events.map((event) => event.runId),
+    ).toContain("valid-event-after-malformed");
+  });
+
 });
