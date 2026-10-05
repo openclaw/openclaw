@@ -179,20 +179,20 @@ Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
 validation. Other runtime files remain hardlinked when supported.
 
-When a container or filesystem refuses file cloning, retention and candidate
-snapshot copies warn once per copy operation and continue with a guarded byte
-copy. Native filesystem safeguards, source identity checks, file modes, and
-snapshot verification remain active. Genuine I/O errors still fail the copy.
+Updaters using `@openclaw/fs-safe` 0.23.1 or later rely on its guarded byte-copy
+fallback when a container or filesystem refuses file cloning. Native filesystem
+safeguards, source identity checks, file modes, snapshot verification, and SQLite
+byte-copy space admission remain active. Genuine I/O errors still fail the copy.
 This includes Proxmox LXC containers whose seccomp policy denies the `FICLONE`
-ioctl; changing that policy is unnecessary for an updater carrying this fix.
+ioctl; changing that policy is unnecessary for an updater using this dependency.
 Do not globally disable native filesystem support to bypass cloning: Doctor's
 state migrations require native safeguards.
 
 These lifecycle and copying changes apply when the installed updater supports
 them; installing a newer candidate cannot change the updater already running.
 For the first hop from 2026.9.7 in an affected container, manually install a
-release containing this fix with npm. Subsequent `openclaw update` runs use the
-repaired copier.
+release containing this fix with npm. Subsequent `openclaw update` runs inherit
+the fallback from the installed updater's fs-safe dependency.
 
 On Windows, interruption before activation still lets the admitted recovery
 owner restore task autostart after pending task operations settle. Cancellation
