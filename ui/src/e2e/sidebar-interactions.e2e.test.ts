@@ -692,6 +692,22 @@ suite.define(() => {
       await expect
         .poll(() => trigger.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+      await composer.click();
+      await trigger.hover();
+      await expect.poll(() => menu.count()).toBe(1);
+      await expect
+        .poll(() =>
+          active.evaluate((row) => {
+            const bounds = row.getBoundingClientRect();
+            const viewport = row.parentElement!.getBoundingClientRect();
+            return bounds.top >= viewport.top - 1 && bounds.bottom <= viewport.bottom + 1;
+          }),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
     }

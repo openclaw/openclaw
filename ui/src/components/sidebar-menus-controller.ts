@@ -516,6 +516,9 @@ export class SidebarMenusController implements ReactiveController {
     if (this.agentMenuInteractionState !== "open-hover") {
       return;
     }
+    this.host
+      .querySelector<HTMLElement>(".sidebar-agent-menu__agent-switch--active")
+      ?.scrollIntoView?.({ block: "nearest" });
     const previous = this.agentMenuFocusBeforeHover;
     this.agentMenuFocusBeforeHover = null;
     if (previous && previous !== document.body && previous.isConnected) {

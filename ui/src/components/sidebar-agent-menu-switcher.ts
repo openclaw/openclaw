@@ -97,7 +97,6 @@ function renderAgentRow(
         active ? "sidebar-agent-menu__agent-switch--active" : ""
       }"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
-      title=${label}
       aria-current=${active ? "true" : nothing}
       ?autofocus=${autofocus}
     >
