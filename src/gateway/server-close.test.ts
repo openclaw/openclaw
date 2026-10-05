@@ -154,8 +154,12 @@ const createGatewayCloseHandler = createGatewayCloseTestHandlerFactory(
   await import("./server-close.js"),
 );
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
-const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
-  await import("./restart-trace.js");
+const {
+  finishGatewayRestartTrace,
+  formatGatewayPendingCloseSteps,
+  recordGatewayRestartTraceSpan,
+  startGatewayRestartTrace,
+} = await import("./restart-trace.js");
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
   GatewayCloseParams["markMainSessionsAbortedForRestart"]
@@ -1305,11 +1309,14 @@ describe("createGatewayCloseHandler", () => {
       expect(stopPeriodicTasks).toHaveBeenCalledOnce();
       expect(mocks.stopGmailWatcher).toHaveBeenCalledOnce();
       expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(formatGatewayPendingCloseSteps()).toContain(`restart.close.gateway-${action}-hook=`);
+      expect(formatGatewayPendingCloseSteps()).not.toContain(`gateway-${action}-hook-grace=`);
     } finally {
       cleanup.resolve();
       await closing;
     }
     expect((await closing).warnings).toContain(`gateway:${action}`);
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
     expect(stopPeriodicTasks).toHaveBeenCalledOnce();
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(action === "pre-restart" ? 2 : 1);
     expect(

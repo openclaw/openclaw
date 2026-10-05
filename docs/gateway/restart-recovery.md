@@ -255,7 +255,11 @@ joins final chat persistence, drains Memory's database borrows, and closes agent
 databases before exiting. It skips plugin and channel teardown that could retain
 the process until the deadline. Database admission stays fenced through lock
 release and log flushing, which have a final five-second exit window. Shutdown
-logs report the elapsed time for these steps. The supervisor deadline remains
+logs report each cleanup step that takes at least one second, including its name
+and elapsed milliseconds. Deadline exits list the currently pending cleanup steps
+and how long each has been waiting (up to eight, with a count of any others).
+These diagnostics are always enabled; `OPENCLAW_GATEWAY_RESTART_TRACE=1` adds
+begin/end timing for fast steps too. The supervisor deadline remains
 the hard upper bound. Clean database restart proof is published only after writer
 leases, checkpointing, and native connection closure settle; one database's idle
 receipt alone does not authorize process exit.

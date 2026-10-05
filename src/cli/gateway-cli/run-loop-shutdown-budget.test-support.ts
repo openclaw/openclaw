@@ -3,6 +3,7 @@ import { expect, it, vi, type Mock } from "vitest";
 import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
+import { runGatewayCloseSteps } from "../../gateway/server-shutdown.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -112,7 +113,20 @@ export function registerShutdownBudgetTests({
           }
         });
         const close = vi.fn<GatewayServer["close"]>(async () => {
-          await connectionWork.drain();
+          await runGatewayCloseSteps({
+            owner: {
+              connectionWork,
+              stopConnectionDependentSidecars() {},
+              stopRegisteredGatewayLifetimeSidecars() {},
+              stopRegisteredPostReadySidecars() {},
+              runClosePrelude() {},
+              sealAndJoinRegisteredSidecarStops() {},
+            },
+            close() {},
+            onError: (message) => {
+              throw new Error(message);
+            },
+          });
         });
         const { start, started } = createSignaledStart(close);
         const { runtime } = createRuntimeWithExitSignal();
@@ -217,7 +231,9 @@ export function registerShutdownBudgetTests({
           expect(start).toHaveBeenCalledOnce();
           if (!honorsAbort) {
             expect(gatewayLog.warn).toHaveBeenCalledWith(
-              expect.stringMatching(/abandoning.*embeddedRuns=1/),
+              expect.stringMatching(
+                /abandoning.*embeddedRuns=1.*pending close steps: shutdown.received-connection-work=\d+ms/,
+              ),
             );
             expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
               signal === "SIGTERM"
@@ -227,6 +243,8 @@ export function registerShutdownBudgetTests({
             );
           }
         } finally {
+          provider.resolve();
+          await Promise.allSettled(close.mock.results.map((result) => result.value));
           clock.mockRestore();
           vi.clearAllTimers();
           vi.useRealTimers();
