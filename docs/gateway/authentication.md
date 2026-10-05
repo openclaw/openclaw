@@ -58,7 +58,7 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic models through the local `claude-cli` backend.
 
-OpenClaw never reads, stores, refreshes, or forwards the native login tokens. The installed `claude` process reads and refreshes its own login. `CLAUDE_CONFIG_DIR` selects a separate Claude login when set on the Gateway process. OpenClaw-managed setup tokens and API keys remain separate credentials.
+OpenClaw never reads, stores, refreshes, or forwards the native login tokens. The installed `claude` process reads and refreshes its own login. `CLAUDE_CONFIG_DIR` selects a separate Claude login when set on the Gateway process. To keep the existing file-backed login (Linux and Windows) with a separate config directory, also set `CLAUDE_SECURESTORAGE_CONFIG_DIR`. On macOS the login lives in the Keychain, so log in once for the new directory instead (see [CLI backends](/gateway/cli-backends)). OpenClaw-managed setup tokens and API keys remain separate credentials.
 
 The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a
