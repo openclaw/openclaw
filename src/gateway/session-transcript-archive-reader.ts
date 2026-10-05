@@ -31,6 +31,8 @@ import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessageByIdResult,
   ReadSessionMessagesResult,
+  SessionTranscriptSourcePageOptions,
+  SessionTranscriptSourceSnapshot,
 } from "./session-transcript-read.types.js";
 import {
   MAX_TRANSCRIPT_PARSE_LINE_BYTES,
@@ -39,8 +41,6 @@ import {
 import {
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
-  type SessionTranscriptSourcePageOptions,
-  type SessionTranscriptSourceSnapshot,
 } from "./session-transcript-source-pages.js";
 
 export type { ReadRecentSessionMessagesOptions } from "./session-transcript-read.types.js";

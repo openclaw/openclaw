@@ -13,11 +13,6 @@ import type {
   TranscriptReadWindow,
   TranscriptReadWindowOptions,
 } from "../sessions/transcript-read-window.js";
-import type {
-  SessionTranscriptSourceCursor,
-  SessionTranscriptSourcePageOptions,
-  SessionTranscriptSourceSnapshot,
-} from "./session-transcript-source-pages.js";
 
 export type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 
@@ -78,6 +73,27 @@ export type ReadSessionMessageByIdResult = {
 export type SessionTranscriptReadOptions = {
   allowResetArchiveFallback?: boolean;
   readOnly?: boolean;
+};
+
+export type SessionTranscriptSourceSnapshot = {
+  indexedSeq: number;
+  activeEventCount: number;
+  totalMessages: number;
+  generation: string | undefined;
+  tailEventSeq: number | undefined;
+  resetSeq: number | null;
+};
+
+export type SessionTranscriptSourceCursor = {
+  snapshot: SessionTranscriptSourceSnapshot;
+  position: number;
+  messageSeq: number;
+} & ({ kind: "kept" | "active" | "off-path" } | { kind: "archive"; path: string; source: string });
+
+export type SessionTranscriptSourcePageOptions = SessionTranscriptReadOptions & {
+  mode: "page";
+  includeOffPathMessages?: boolean;
+  cursor?: SessionTranscriptSourceCursor;
 };
 
 export type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {

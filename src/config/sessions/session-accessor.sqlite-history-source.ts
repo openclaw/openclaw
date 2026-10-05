@@ -1,9 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  SessionTranscriptSourceCursor,
+  SessionTranscriptSourcePageOptions,
+} from "../../gateway/session-transcript-read.types.js";
 import {
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
-  type SessionTranscriptSourceCursor,
-  type SessionTranscriptSourcePageOptions,
 } from "../../gateway/session-transcript-source-pages.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {

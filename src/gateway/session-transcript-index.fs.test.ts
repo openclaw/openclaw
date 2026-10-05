@@ -14,12 +14,12 @@ import {
   readSessionTranscriptIndex,
   selectArchiveTranscriptEntries,
 } from "./session-transcript-index.fs.js";
+import type { SessionTranscriptSourceSnapshot } from "./session-transcript-read.types.js";
 import * as recordParser from "./session-transcript-record-parser.js";
 import {
   parseTranscriptRecord,
   type TranscriptRecord,
 } from "./session-transcript-record-parser.js";
-import type { SessionTranscriptSourceSnapshot } from "./session-transcript-source-pages.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),

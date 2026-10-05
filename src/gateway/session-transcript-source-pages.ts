@@ -4,31 +4,12 @@ import type {
   SessionTranscriptReader,
   SessionTranscriptReadOptions,
   SessionTranscriptReadScope,
+  SessionTranscriptSourceCursor,
+  SessionTranscriptSourcePageOptions,
 } from "./session-transcript-read.types.js";
 
 export const SOURCE_PAGE_MAX_MESSAGES = 128;
 export const SOURCE_PAGE_MAX_BYTES = 8 * 1024 * 1024;
-
-export type SessionTranscriptSourceSnapshot = {
-  indexedSeq: number;
-  activeEventCount: number;
-  totalMessages: number;
-  generation: string | undefined;
-  tailEventSeq: number | undefined;
-  resetSeq: number | null;
-};
-
-export type SessionTranscriptSourceCursor = {
-  snapshot: SessionTranscriptSourceSnapshot;
-  position: number;
-  messageSeq: number;
-} & ({ kind: "kept" | "active" | "off-path" } | { kind: "archive"; path: string; source: string });
-
-export type SessionTranscriptSourcePageOptions = SessionTranscriptReadOptions & {
-  mode: "page";
-  includeOffPathMessages?: boolean;
-  cursor?: SessionTranscriptSourceCursor;
-};
 
 type SourceReader = SessionTranscriptReader["readSessionMessagesWithSourceAsync"];
 
