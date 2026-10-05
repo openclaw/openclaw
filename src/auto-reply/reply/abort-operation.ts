@@ -129,7 +129,7 @@ async function resolveBoundAcpAbortTargetSessionKey(params: {
   if (!bindingContext) {
     return undefined;
   }
-  return await resolveEffectiveResetTargetSessionKey({
+  return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,

@@ -426,8 +426,8 @@ extensions/irc/src/irc-ingress.ts	9
 extensions/irc/src/message-adapter.ts	1
 extensions/irc/src/monitor.ts	1
 extensions/irc/src/send.ts	1
-extensions/irc/src/setup-core.ts	6
-extensions/irc/src/setup-surface.ts	25
+extensions/irc/src/setup-core.ts	4
+extensions/irc/src/setup-surface.ts	24
 extensions/kilocode/provider-models.ts	3
 extensions/kilocode/stream.ts	1
 extensions/kimi-coding/provider-policy-api.ts	2
@@ -440,7 +440,7 @@ extensions/line/src/flex-templates/schedule-cards.ts	27
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
-extensions/line/src/outbound.ts	4
+extensions/line/src/outbound.ts	3
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
@@ -1954,7 +1954,6 @@ src/config/sessions/session-reset-boundary-event.ts	2
 src/config/sessions/session-snapshot-merge.ts	9
 src/config/sessions/session-sqlite-target.ts	2
 src/config/sessions/session-store-config.ts	1
-src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
 src/config/sessions/store-entry-shape.ts	1
 src/config/sessions/transcript-assistant-message.ts	2
@@ -2320,7 +2319,6 @@ src/infra/state-migrations.mcp-oauth.ts	2
 src/infra/state-migrations.meeting-transcripts-detection.ts	4
 src/infra/state-migrations.meeting-transcripts-files.ts	5
 src/infra/state-migrations.meeting-transcripts.ts	2
-src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.session-store.ts	5
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1

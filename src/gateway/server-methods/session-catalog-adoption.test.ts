@@ -13,9 +13,7 @@ import {
 
 beforeEach(resetSessionCatalogTestState);
 
-it("records an upstream link and settles the adopted event before responding", async ({
-  signal,
-}) => {
+it("settles the upstream link and adopted event before responding", async ({ signal }) => {
   const continueSession = vi.fn(async () => ({
     sessionKey: "agent:main:adopted",
     upstream: {
@@ -25,6 +23,13 @@ it("records an upstream link and settles the adopted event before responding", a
     },
   }));
   hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
+  const linking = createDeferred();
+  const releaseLink = createDeferred();
+  hoisted.upsertSessionUpstreamLink.mockImplementationOnce(async () => {
+    linking.resolve();
+    await releaseLink.promise;
+    return true;
+  });
   const recording = createDeferred();
   const release = createDeferred();
   hoisted.recordSessionStateEventAsync.mockImplementationOnce(async () => {
@@ -41,6 +46,17 @@ it("records an upstream link and settles the adopted event before responding", a
   try {
     await withinTest(
       awaitGateBeforeSettlement(
+        linking.promise,
+        pending.completion,
+        "Catalog continuation settled before persisting its link",
+      ),
+      signal,
+    );
+    expect(hoisted.recordSessionStateEventAsync).not.toHaveBeenCalled();
+    expect(pending.respond).not.toHaveBeenCalled();
+    releaseLink.resolve();
+    await withinTest(
+      awaitGateBeforeSettlement(
         recording.promise,
         pending.completion,
         "Catalog continuation settled before recording adoption",
@@ -48,7 +64,7 @@ it("records an upstream link and settles the adopted event before responding", a
       signal,
     );
     expect(pending.respond).not.toHaveBeenCalled();
-    expect(hoisted.upsertSessionUpstreamLink).toHaveBeenCalledWith({
+    expect(hoisted.upsertSessionUpstreamLink.mock.calls[0]?.[0]).toEqual({
       sessionKey: "agent:main:adopted",
       agentId: "main",
       catalogId: "codex",
@@ -74,6 +90,7 @@ it("records an upstream link and settles the adopted event before responding", a
     await pending.completion;
     expect(pending.respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
   } finally {
+    releaseLink.resolve();
     release.resolve();
     await pending.completion;
   }

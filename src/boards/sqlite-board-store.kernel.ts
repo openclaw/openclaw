@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { BoardOp, BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -46,6 +47,7 @@ type BoardDatabase = Pick<
   "board_tabs" | "board_widgets" | "session_nodes"
 >;
 type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
+export type BoardSessionIdentity = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 
 type StoredBoard = {
   snapshot: BoardSnapshot;
@@ -267,7 +269,11 @@ function deleteRemovedTabs(
   }
 }
 
-export function hasBoardSession(database: BoardDatabaseHandle, sessionKey: string): boolean {
+export function hasBoardSession(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  expected?: BoardSessionIdentity,
+): boolean {
   const row = getBoardReadQueries(database.db).session(sessionKey).rows[0];
   if (!row) {
     return false;
@@ -279,7 +285,11 @@ export function hasBoardSession(database: BoardDatabaseHandle, sessionKey: strin
       typeof entry === "object" &&
       !Array.isArray(entry) &&
       "sessionId" in entry &&
-      typeof entry.sessionId === "string",
+      typeof entry.sessionId === "string" &&
+      (!expected ||
+        (entry.sessionId === expected.sessionId &&
+          ("lifecycleRevision" in entry ? entry.lifecycleRevision : undefined) ===
+            expected.lifecycleRevision)),
     );
   } catch {
     return false;

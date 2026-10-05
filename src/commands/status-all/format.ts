@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../../daemon/service-types.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
@@ -59,6 +60,7 @@ type StatusManagedService = {
     status?: string | null;
     pid?: number | null;
     detail?: string | null;
+    systemd?: GatewayServiceRuntime["systemd"];
   } | null;
 };
 
@@ -140,7 +142,7 @@ function formatStatusServiceValue(params: StatusManagedService): string {
         : undefined;
   const inspectionFailed = params.loadState?.status === "unknown" || Boolean(inspectionDetail);
   // A missing definition does not make a failed native inspection evidence of absence.
-  if (params.installed === false && !inspectionFailed) {
+  if (params.installed === false && !inspectionFailed && !params.runtime?.systemd?.startRefusal) {
     return `${params.label} not installed`;
   }
   const installedPrefix = params.managedByOpenClaw ? "installed · " : "";

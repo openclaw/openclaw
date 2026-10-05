@@ -13,7 +13,7 @@ type MSTeamsSecretCredentials = {
   tenantId: string;
 };
 
-export type MSTeamsFederatedCredentials = {
+type MSTeamsFederatedCredentials = {
   type: "federated";
   appId: string;
   tenantId: string;

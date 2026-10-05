@@ -217,7 +217,7 @@ export function resolveProviderPluginChoiceCore(params: {
       const choiceId =
         normalizeOptionalString(wizard.choiceId) ||
         buildProviderPluginMethodChoice(provider.id, method.id);
-      if ((normalizeOptionalString(choiceId) ?? "") === choice) {
+      if (choiceId === choice) {
         return withManifestTarget({ provider, method, wizard });
       }
     }

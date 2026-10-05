@@ -1,4 +1,3 @@
-// Twitch plugin module implements access control behavior.
 import {
   defineStableChannelIngressIdentity,
   type ChannelIngressContextBinding,
@@ -14,15 +13,11 @@ type TwitchAccessControlResult =
   | {
       allowed: false;
       reason?: string;
-      matchKey?: string;
-      matchSource?: string;
     }
   | {
       allowed: true;
       channelIngress: ResolvedChannelMessageIngress;
       reason?: string;
-      matchKey?: string;
-      matchSource?: string;
     };
 
 type TwitchPolicyKind = "open" | "allowFrom" | "role";
@@ -99,22 +94,6 @@ export async function checkTwitchAccessControl(params: {
   }
 
   if (decision.admission === "dispatch") {
-    if (policyKind === "allowFrom") {
-      return {
-        allowed: true,
-        channelIngress: resolved,
-        matchKey: params.message.userId,
-        matchSource: "allowlist",
-      };
-    }
-    if (policyKind === "role") {
-      return {
-        allowed: true,
-        channelIngress: resolved,
-        matchKey: params.account.allowedRoles?.join(","),
-        matchSource: "role",
-      };
-    }
     return {
       allowed: true,
       channelIngress: resolved,

@@ -21,6 +21,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readSessionTranscriptWatermark, type TranscriptEvent } from "./session-accessor.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -32,7 +33,6 @@ import {
 } from "./session-cold-storage.js";
 import { createSessionTranscriptFtsInserter } from "./session-transcript-fts.js";
 import {
-  hasOrphanedTranscriptIndexRows,
   listSessionsNeedingTranscriptIndexReconcile,
   SYNC_REBUILD_MAX_BYTES,
 } from "./session-transcript-index.js";
@@ -41,7 +41,10 @@ import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
+import {
+  searchSessionTranscripts as searchSessionTranscriptsAsync,
+  searchSessionTranscriptsReadOnlySync,
+} from "./session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 
 vi.mock("../config.js", async () => ({
@@ -84,6 +87,17 @@ async function appendAssistantMessage(sessionId: string, sessionKey: string, tex
   await appendTranscriptMessage(transcriptScope(sessionId, sessionKey), {
     message: { role: "assistant", content: [{ type: "text", text }] },
   });
+}
+
+// Keep projection fixtures deterministic; the worker suite covers host scheduling.
+function searchSessionTranscripts(params: SessionTranscriptSearchParams) {
+  const { found, revision: _revision, ...result } = searchSessionTranscriptsReadOnlySync(params);
+  const indexing =
+    found &&
+    listSessionsNeedingTranscriptIndexReconcile(
+      openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(params))).db,
+    ).length > 0;
+  return { ...result, indexing };
 }
 
 function search(
@@ -155,7 +169,8 @@ describe("searchSessionTranscripts", () => {
       closeOpenClawAgentDatabasesForTest();
 
       expect(
-        searchSessionTranscripts({ agentId, env: env(), query: "needle", storePath }).hits,
+        searchSessionTranscriptsReadOnlySync({ agentId, env: env(), query: "needle", storePath })
+          .hits,
       ).toEqual([expect.objectContaining({ sessionKey, sessionId: "session-1" })]);
       expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
     },
@@ -204,10 +219,13 @@ describe("searchSessionTranscripts", () => {
     ).toEqual(sessions.map(([, sessionKey]) => sessionKey).toSorted());
   });
 
-  it("returns empty results without creating a missing database", () => {
+  it("returns empty results without creating a missing database", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: env() });
 
     expect(search("missing")).toEqual({ hits: [], indexing: false, truncated: false });
+    expect(
+      await searchSessionTranscriptsAsync({ agentId: "main", env: env(), query: "missing" }),
+    ).toEqual({ hits: [], indexing: false, truncated: false });
     expect(fs.existsSync(databasePath)).toBe(false);
     expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
   });
@@ -739,7 +757,6 @@ describe("searchSessionTranscripts", () => {
     await appendUserMessage("session-1", "agent:main:main", "anchor row");
     await appendUserMessage("session-2", "agent:main:sibling", "anchor sibling");
     const { db, kysely } = agentKysely();
-    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
     // Simulate derived rows left by an out-of-band writer with foreign keys disabled.
     db.exec(`
       PRAGMA foreign_keys = OFF;
@@ -748,9 +765,12 @@ describe("searchSessionTranscripts", () => {
         VALUES ('active-ghost', 0, 0, 1);
       PRAGMA foreign_keys = ON;
     `);
-    expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
     await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });
-    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+    expect(
+      db
+        .prepare("SELECT 1 FROM session_transcript_active_events WHERE session_id = ?")
+        .get("active-ghost"),
+    ).toBeUndefined();
 
     runOpenClawAgentWriteTransaction(
       (database) =>
@@ -775,11 +795,9 @@ describe("searchSessionTranscripts", () => {
           .where("session_id", "=", "session-ghost"),
       ).rows.length;
     expect(ghostRows()).toBe(1);
-    expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
     expect(search("anchor").indexing).toBe(false);
     await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });
     expect(ghostRows()).toBe(0);
-    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
 
     db.exec(`
       PRAGMA foreign_keys = OFF;
@@ -787,9 +805,12 @@ describe("searchSessionTranscripts", () => {
         VALUES ('state-ghost', 0, 1);
       PRAGMA foreign_keys = ON;
     `);
-    expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
     await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });
-    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+    expect(
+      db
+        .prepare("SELECT 1 FROM session_transcript_index_state WHERE session_id = ?")
+        .get("state-ghost"),
+    ).toBeUndefined();
     expect(
       search("anchor")
         .hits.map((hit) => hit.sessionId)

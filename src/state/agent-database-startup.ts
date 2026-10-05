@@ -228,6 +228,11 @@ class AgentDatabaseStartupAdmission {
     };
   }
 
+  /** Joins startup work already scheduled before a background consumer begins. */
+  get pendingPreparation(): Promise<unknown> | undefined {
+    return this.work.size > 0 ? Promise.allSettled(this.work) : undefined;
+  }
+
   track(work: Promise<unknown>): void {
     this.work.add(work);
     void work.then(

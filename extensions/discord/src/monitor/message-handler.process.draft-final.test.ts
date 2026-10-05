@@ -740,7 +740,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      params?.replyOptions?.onVerboseProgressVisibility?.(() => true);
+      await params?.replyOptions?.onVerboseProgressVisibilityAsync?.(async () => true);
       await params?.replyOptions?.onItemEvent?.({
         itemId: "preamble-1",
         kind: "preamble",
@@ -951,7 +951,7 @@ describe("Discord durable commentary delivery", () => {
   it("delivers admitted commentary once without exposing ordinary progress blocks", async () => {
     createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      params?.replyOptions?.onVerboseProgressVisibility?.(() => true);
+      await params?.replyOptions?.onVerboseProgressVisibilityAsync?.(async () => true);
       await params?.dispatcher.sendBlockReply({ text: "ordinary interim text" });
       await params?.dispatcher.sendBlockReply({
         text: "Checking the source before asking.",

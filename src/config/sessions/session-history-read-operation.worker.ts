@@ -13,6 +13,7 @@ type DurableHistoryReadOperationRequest = Extract<
     kind:
       | "transcript-match"
       | "transcript-search"
+      | "transcript-search-current"
       | "branch-summaries"
       | "session-title-fields"
       | "session-preview"
@@ -43,6 +44,7 @@ export function isSessionHistoryReadOperation(
   switch (request.kind) {
     case "transcript-match":
     case "transcript-search":
+    case "transcript-search-current":
     case "branch-summaries":
     case "session-title-fields":
     case "session-preview":
@@ -192,6 +194,17 @@ async function prepareHistoryRead(
         );
         return { kind: request.kind, result: opened.found ? opened.value : undefined };
       };
+    }
+    case "transcript-search-current": {
+      const { isSessionTranscriptSearchCurrentSync } =
+        await import("./session-transcript-search.js");
+      return () => ({
+        kind: request.kind,
+        current: isSessionTranscriptSearchCurrentSync(request.revision, {
+          ...request.database,
+          env: request.env,
+        }),
+      });
     }
     case "transcript-search": {
       const { searchSessionTranscriptsReadOnlySync } =

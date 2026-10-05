@@ -1,19 +1,13 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
-import type {
-  GetReplyOptions,
-  SourceReplyDeliveryMode,
-} from "../auto-reply/get-reply-options.types.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
   ReplyDispatchKind,
   ReplyDispatcher,
 } from "../auto-reply/reply/reply-dispatcher.types.js";
-import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import type { ChatType } from "../channels/chat-type.js";
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type {
   PluginHookAgentContext,
@@ -44,6 +38,7 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 import type {
   PluginHookSkillChangedEvent,
   PluginHookSkillContext,
@@ -60,6 +55,8 @@ import type {
 } from "./host-hook-turn-types.js";
 import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 import type { PluginHookSessionContext } from "./session-end-transcript.js";
+
+export type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 
 export type {
   PluginHookAgentContext,
@@ -415,30 +412,6 @@ export type PluginHookBeforeDispatchContext = {
 export type PluginHookBeforeDispatchResult = {
   handled: boolean;
   text?: string;
-};
-
-export type PluginHookReplyDispatchEvent = {
-  ctx: FinalizedMsgContext;
-  runId?: string;
-  sessionKey?: string;
-  toolsAllow?: string[];
-  images?: Array<{ data: string; mimeType: string }>;
-  inboundAudio: boolean;
-  sessionTtsAuto?: TtsAutoMode;
-  ttsChannel?: string;
-  suppressUserDelivery?: boolean;
-  suppressReplyLifecycle?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  shouldRouteToOriginating: boolean;
-  originatingChannel?: string;
-  originatingTo?: string;
-  originatingAccountId?: string;
-  originatingThreadId?: string | number;
-  originatingChatType?: ChatType;
-  shouldSendToolSummaries: boolean;
-  shouldSendFullToolDetails: boolean;
-  sendPolicy: "allow" | "deny";
-  isTailDispatch?: boolean;
 };
 
 export type PluginHookReplyDispatchContext = {
