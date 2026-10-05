@@ -351,13 +351,18 @@ export function recordSessionStateEventInDatabase(
   // Explicit watch registrations (registerSessionStateWatch) live as cursor rows;
   // union them with producer-passed watchers so sessions_send coordinators get
   // notices without every producer knowing about registration.
-  const registeredWatcherKeys = NOTIFY_BY_KIND[input.kind]
+  const terminalRunEvent = input.kind === "run_completed" || input.kind === "run_failed";
+  const notifiesWatchers = NOTIFY_BY_KIND[input.kind] || terminalRunEvent;
+  const registeredWatcherKeys = notifiesWatchers
     ? executeSqliteQuerySync(
         db,
         getSessionStateKysely(db)
           .selectFrom("session_watch_cursors")
           .select("watcher_session_key")
-          .where("target_session_key", "=", input.sessionKey),
+          .where("target_session_key", "=", input.sessionKey)
+          .$if(terminalRunEvent, (query) =>
+            query.where("provenance", "=", SESSION_WATCH_PROVENANCE_EXPLICIT),
+          ),
       ).rows.map((row) => row.watcher_session_key)
     : [];
   const watcherSessionKeys = [
@@ -383,7 +388,7 @@ export function recordSessionStateEventInDatabase(
       });
       continue;
     }
-    if (!NOTIFY_BY_KIND[input.kind] || input.actorId === watcherSessionKey) {
+    if (!notifiesWatchers || input.actorId === watcherSessionKey) {
       continue;
     }
     const materialCursor = updateMaterialCursor({

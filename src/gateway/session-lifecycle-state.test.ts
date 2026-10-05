@@ -1,7 +1,7 @@
 /**
  * Session lifecycle state derivation tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
@@ -14,6 +14,9 @@ const loggerMocks = vi.hoisted(() => ({
   error: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
+}));
+const terminalStateMocks = vi.hoisted(() => ({
+  recordCurrent: vi.fn(async () => {}),
 }));
 
 // Lifecycle projection formats stored failures without initializing provider runtime.
@@ -32,6 +35,11 @@ vi.mock("./session-utils.js", () => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
+}));
+
+vi.mock("../sessions/session-run-terminal-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sessions/session-run-terminal-state.js")>()),
+  recordCurrentSessionRunTerminalState: terminalStateMocks.recordCurrent,
 }));
 
 import {
@@ -71,6 +79,10 @@ function persistLifecycle(
   return persistLifecycleThroughMockedStore(persistenceMocks, { sessionKey, entry, event });
 }
 
+beforeEach(() => {
+  terminalStateMocks.recordCurrent.mockClear();
+});
+
 describe("session lifecycle state", () => {
   const goalEntry: SessionEntry = {
     sessionId: "goal-session",
@@ -101,6 +113,33 @@ describe("session lifecycle state", () => {
       error: "stream disconnected before completion",
     },
   };
+
+  it("records a watched terminal event from the persisted visible-session owner", async () => {
+    const entry: SessionEntry = {
+      sessionId: "visible-session",
+      updatedAt: 1_000,
+      startedAt: 1_000,
+      status: "running",
+      lifecycleRunId: "visible-run",
+    };
+    await persistLifecycle(entry, {
+      sessionId: entry.sessionId,
+      runId: "visible-run",
+      ts: 2_000,
+      data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+    });
+
+    expect(terminalStateMocks.recordCurrent).toHaveBeenCalledOnce();
+    expect(terminalStateMocks.recordCurrent).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      sessionId: entry.sessionId,
+      storePath: "/tmp/sessions.json",
+      agentId: "main",
+      runId: "visible-run",
+      outcome: expect.objectContaining({ status: "ok" }),
+      occurredAt: 2_000,
+    });
+  });
 
   it.each([
     { phase: "error", stopReason: undefined, status: "failed" },

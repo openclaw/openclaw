@@ -230,7 +230,7 @@ describe("session state events", () => {
     seedChild(database);
     const material = recordSessionStateEvent(eventInput(), database)!;
     recordSessionStateEvent(
-      eventInput({ kind: "run_completed", actorType: "system", runId: "run-log-only" }),
+      eventInput({ kind: "compacted", actorType: "system", runId: "run-log-only" }),
       database,
     );
     const watcherStorePath = peekSystemEventEntries(watcher)[0]?.sessionStorePath ?? null;
@@ -699,6 +699,46 @@ describe("session state events", () => {
       notified_sequence: afterRegistration.sequence,
       material_sequence: afterRegistration.sequence,
     });
+  });
+
+  it("materializes terminal runs for explicit watches but not ambient group watches", async () => {
+    const database = createDatabaseOptions();
+    await createWatcherSession(database, watcher);
+    await createWatcherSession(database, nestedWatcher);
+    expect(
+      await registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database),
+    ).toBe(true);
+    expect(
+      await registerSessionStateWatch(
+        { watcherSessionKey: nestedWatcher, targetSessionKey: group },
+        database,
+      ),
+    ).toBe(true);
+
+    const terminal = recordSessionStateEvent(
+      eventInput({
+        sessionKey: group,
+        sessionId: "session-group",
+        kind: "run_completed",
+        actorType: "system",
+        runId: "run-group",
+        dedupeKey: "run-terminal:run-group",
+        summary: "session run completed",
+        watcherSessionKeys: [],
+      }),
+      database,
+    )!;
+
+    expect(readCursor(database, nestedWatcher, group)).toMatchObject({
+      notified_sequence: terminal.sequence,
+      material_sequence: terminal.sequence,
+    });
+    expect(readCursor(database, watcher, group)).toMatchObject({
+      notified_sequence: 0,
+      material_sequence: 0,
+    });
+    expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
+    expect(peekSystemEventEntries(watcher)).toHaveLength(0);
   });
 
   it.each(["ambient", "explicit"])(

@@ -15,6 +15,7 @@ export async function persistLifecycleThroughMockedStore(
   mocks.loadSessionEntry.mockReset().mockReturnValue({
     storePath: "/tmp/sessions.json",
     canonicalKey: params.sessionKey,
+    agentId: "main",
     entry: currentEntry,
   });
   mocks.updateSessionEntry

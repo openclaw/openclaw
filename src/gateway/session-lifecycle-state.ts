@@ -25,6 +25,7 @@ import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
 } from "../sessions/session-run-error.js";
+import { recordCurrentSessionRunTerminalState } from "../sessions/session-run-terminal-state.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -529,6 +530,22 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         }),
     },
   );
+  if (persisted) {
+    const runId = normalizeLifecycleRunId(params.event.runId);
+    const outcome = resolveSettledLifecycleTerminalOutcome(params.event);
+    if (runId && outcome) {
+      await recordCurrentSessionRunTerminalState({
+        sessionKey: sessionEntry.canonicalKey,
+        sessionId: persisted.sessionId,
+        storePath: sessionEntry.storePath,
+        agentId: sessionEntry.agentId,
+        runId,
+        outcome,
+        occurredAt: outcome.endedAt ?? params.event.ts,
+        ...(params.assertCommitAllowed ? { assertCurrent: params.assertCommitAllowed } : {}),
+      });
+    }
+  }
   if (persisted && terminalRecovery) {
     const message = `main-session restart recovery terminal: session=${sessionEntry.canonicalKey} run=${terminalRecovery.runId} status=${terminalRecovery.outcome.status} reason=${terminalRecovery.outcome.reason}`;
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
