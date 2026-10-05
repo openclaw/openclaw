@@ -137,7 +137,6 @@ extensions/policy/src/doctor/register.models-and-mcp.test-utils.ts
 extensions/policy/src/doctor/register.sandbox-and-tools.test-utils.ts
 extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
-extensions/qa-lab/src/confidence-report.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
 extensions/qa-lab/src/gateway-process-boundary.ts

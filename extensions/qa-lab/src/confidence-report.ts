@@ -733,5 +733,3 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   }
   return `${lines.join("\n")}\n`;
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
