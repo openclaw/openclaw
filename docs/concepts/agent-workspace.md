@@ -39,7 +39,7 @@ Override in `~/.openclaw/openclaw.json`:
 }
 ```
 
-Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries. `openclaw doctor --fix` records this pin for an unpinned system agent whose files are in the root ([Agent roster migration](/gateway/doctor/config-migrations#agent-roster-migration)).
+Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries. For an unpinned system agent whose files are in the root, `openclaw doctor --fix` warns instead of choosing: set the pin yourself ([Agent roster migration](/gateway/doctor/config-migrations#agent-roster-migration)).
 
 Run workspace selection rejects an explicitly supplied blank or invalid agent ID. Omit the selector to use configured ownership, or supply the intended agent ID.
 

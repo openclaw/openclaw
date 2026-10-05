@@ -285,7 +285,7 @@ export async function workspaceProfileLooksConfigured(params: {
   );
 }
 
-async function workspaceRequiredBootstrapLooksCustomized(
+export async function workspaceRequiredBootstrapLooksCustomized(
   dir: string,
   opts?: { generatedHashes?: ReadonlyMap<string, string> },
 ): Promise<boolean> {

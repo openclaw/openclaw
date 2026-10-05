@@ -45,19 +45,102 @@ async function writePersona(dir: string, soul: string) {
 }
 
 describe("repairSystemAgentWorkspacePin", () => {
-  it("pins the shared root when only it holds the agent's files", async () => {
+  it("warns without pinning when only the shared root holds the agent's files", async () => {
     await writePersona(root, "root persona");
     await ensureAgentWorkspace({ dir: path.join(root, "main"), ensureBootstrapFiles: true });
     const cfg = convergedRoster();
-    expect(resolveAgentWorkspaceDir(cfg, "main")).toBe(path.join(root, "main"));
 
     const result = await repairSystemAgentWorkspacePin(cfg, testState.env);
 
-    expect(result.config.agents?.entries?.main?.workspace).toBe(root);
-    expect(resolveAgentWorkspaceDir(result.config, "main")).toBe(root);
-    expect(resolveAgentWorkspaceDir(result.config, "dev")).toBe(path.join(root, "dev"));
-    expect(result.changes).toHaveLength(1);
+    expect(result.config).toBe(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.explicitSetPaths).toBeUndefined();
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]).toContain(root);
+    expect(result.warnings?.[0]).toContain(path.join(root, "main"));
+    expect(result.warnings?.[0]).toContain("agents.entries.main.workspace");
     expect(await fs.readFile(path.join(root, "SOUL.md"), "utf8")).toBe("root persona");
+  });
+
+  it("counts a customized AGENTS.md as files in either directory", async () => {
+    await fs.writeFile(path.join(root, "SOUL.md"), "root persona");
+    await fs.mkdir(path.join(root, "main"), { recursive: true });
+    await fs.writeFile(path.join(root, "main", "AGENTS.md"), "customized agent rules");
+    const cfg = convergedRoster();
+
+    const both = await repairSystemAgentWorkspacePin(cfg, testState.env);
+
+    expect(both.config).toBe(cfg);
+    expect(both.changes).toEqual([]);
+    expect(both.warnings).toEqual([
+      expect.stringContaining("set agents.entries.main.workspace to the directory to keep"),
+    ]);
+    expect(both.warnings?.[0]).toContain(root);
+    expect(both.warnings?.[0]).toContain(path.join(root, "main"));
+
+    await fs.rm(path.join(root, "SOUL.md"));
+    await fs.writeFile(path.join(root, "AGENTS.md"), "customized root rules");
+    await fs.rm(path.join(root, "main", "AGENTS.md"));
+    const rootOnly = await repairSystemAgentWorkspacePin(cfg, testState.env);
+    expect(rootOnly.changes).toEqual([]);
+    expect(rootOnly.warnings).toHaveLength(1);
+  });
+
+  it("pins the agent directory when only its AGENTS.md is customized", async () => {
+    await fs.mkdir(path.join(root, "main"), { recursive: true });
+    await fs.writeFile(path.join(root, "main", "AGENTS.md"), "customized agent rules");
+
+    const result = await repairSystemAgentWorkspacePin(convergedRoster(), testState.env);
+
+    expect(result.config.agents?.entries?.main?.workspace).toBe(path.join(root, "main"));
+  });
+
+  it("keeps the authored env reference in the pin and resolves to the same directory", async () => {
+    await writePersona(path.join(root, "main"), "subdirectory persona");
+    const env = { ...testState.env, WORKSPACE_ROOT: root };
+    const cfg = convergedRoster();
+    cfg.agents!.defaults!.workspace = root;
+
+    const result = await repairSystemAgentWorkspacePin(cfg, env, {
+      authoredDefaultWorkspace: "${WORKSPACE_ROOT}/",
+    });
+
+    expect(result.config.agents?.entries?.main?.workspace).toBe("${WORKSPACE_ROOT}/main");
+    expect(result.explicitSetPaths).toEqual([["agents", "entries", "main", "workspace"]]);
+    // Moving the variable moves defaults and the pin together.
+    const moved = path.join(testState.path("elsewhere"));
+    const resolved = structuredClone(result.config);
+    resolved.agents!.entries!.main!.workspace = "${WORKSPACE_ROOT}/main".replace(
+      "${WORKSPACE_ROOT}",
+      moved,
+    );
+    resolved.agents!.defaults!.workspace = moved;
+    expect(resolveAgentWorkspaceDir(resolved, "main", env)).toBe(path.join(moved, "main"));
+  });
+
+  it("keeps a tilde root as authored", async () => {
+    const home = testState.path("home");
+    const env = { ...testState.env, HOME: home };
+    await writePersona(path.join(home, "x", "main"), "subdirectory persona");
+    const cfg = convergedRoster();
+    cfg.agents!.defaults!.workspace = "~/x";
+
+    const result = await repairSystemAgentWorkspacePin(cfg, env, {
+      authoredDefaultWorkspace: "~/x",
+    });
+
+    expect(result.config.agents?.entries?.main?.workspace).toBe("~/x/main");
+    expect(resolveAgentWorkspaceDir(result.config, "main", env)).toBe(path.join(home, "x", "main"));
+  });
+
+  it("falls back to the resolved path when the authored root does not match", async () => {
+    await writePersona(path.join(root, "main"), "subdirectory persona");
+
+    const result = await repairSystemAgentWorkspacePin(convergedRoster(), testState.env, {
+      authoredDefaultWorkspace: "${UNSET_WORKSPACE_ROOT}",
+    });
+
+    expect(result.config.agents?.entries?.main?.workspace).toBe(path.join(root, "main"));
   });
 
   it("pins the agent directory when only it holds the agent's files", async () => {
@@ -108,7 +191,7 @@ describe("repairSystemAgentWorkspacePin", () => {
   });
 
   it("warns instead of writing when the roster lives in an include", async () => {
-    await writePersona(root, "root persona");
+    await writePersona(path.join(root, "main"), "subdirectory persona");
     const cfg = convergedRoster();
 
     const result = await repairSystemAgentWorkspacePin(cfg, testState.env, {

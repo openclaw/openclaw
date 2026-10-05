@@ -485,14 +485,18 @@ An already converged explicit roster can leave the system agent
 (`agents.defaults.systemAgent.agentId`) without `workspace`: its Gateway turns
 then run in the shared workspace root while its persona, bootstrap, and memory
 files resolve to `<root>/<agentId>`. `openclaw doctor --fix` records
-`agents.entries.<agentId>.workspace` for that agent: the root when only the
-root holds a customized `SOUL.md`, `IDENTITY.md`, or `USER.md`, `memory/`,
-`MEMORY.md`, or workspace skills, otherwise the agent directory. Seeded
-templates do not count. When both
-directories hold such files, Doctor changes nothing and warns; set the entry's
-`workspace` to the directory to keep. Doctor never assigns the root when
-another agent's workspace already resolves to it, and only warns when the
-roster lives in an included file. No files are moved or deleted.
+`agents.entries.<agentId>.workspace` as `<root>/<agentId>` only when the root
+holds no customized files, so nothing changes where the files live. The pin
+keeps the root as you wrote it (`${WORKSPACE_ROOT}/<agentId>`, `~/x/<agentId>`),
+so changing that variable moves defaults and pin together. A customized
+`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, or `USER.md`, `memory/`, `MEMORY.md`, or
+workspace skills count as files; seeded templates do not. When the root holds
+such files, Doctor never assigns the shared root to the agent: it writes
+nothing and warns with the root, `<root>/<agentId>`, and the
+`agents.entries.<agentId>.workspace` key to set. The same applies when both
+directories hold files. Doctor also never picks a root another agent already
+resolves to, and only warns when the roster lives in an included file. No files
+are moved or deleted.
 
 Doctor follows the existing [include write constraints](/gateway/config-secrets-env).
 A root-level `$include`, or a repair spanning an included roster and root-owned
