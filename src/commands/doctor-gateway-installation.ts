@@ -53,7 +53,9 @@ export async function canRepairRunningGatewayDefinition(params: {
 /** One native writer retains Doctor custody through publication and recovery. */
 export async function installDoctorGatewayService(
   params: Omit<GatewayServiceInstallationRepair, "activeRoot"> & {
-    repair: { kind: "config" } | { kind: "definition" | "installation"; root: string };
+    repair:
+      | { kind: "config"; root?: string }
+      | { kind: "definition" | "installation"; root: string };
     args: GatewayServiceInstallArgs;
     runtime: RuntimeEnv;
   },
@@ -76,7 +78,7 @@ export async function installDoctorGatewayService(
         }
         await params.service.install({ ...params.args, assertCurrent, definitionTransaction });
       };
-      if (params.repair.kind === "definition") {
+      if (params.repair.kind !== "installation" && params.repair.root) {
         const { reconcileGatewayServiceDefinition } =
           await import("../daemon/service-reconciliation.js");
         await reconcileGatewayServiceDefinition({

@@ -163,10 +163,9 @@ When launchd drives the stop, macOS uses the running job's own `ExitTimeOut`, ca
 by the launcher's own stop timer when a launcher is in the path, and Linux units use
 their own stop timeout; both are described in the deadline sections below.
 This requires a Gateway started with the updated launcher: replacing files cannot
-change a launcher that is already running. The stop deadlines below are the
-exception: the serving Gateway derives the launcher's reap timer rather than being
-told it, precisely so a Gateway started by an already-running older launcher still
-bounds itself correctly.
+change a launcher that is already running. On macOS, a marked launcher parent
+keeps a conservative 19-second child deadline because its existing markers do not
+identify whether it loaded the old or new stop policy.
 
 For these managed restarts, if the CLI cannot verify the service command, serving
 owner, or restart-intent recording, it refuses the restart before signaling with
@@ -346,9 +345,18 @@ new work and wait for active turns and background tasks to settle. The rest is
 reserved for final writes and service cleanup (up to 10 seconds). The Gateway
 logs the chosen source, drain, shutdown deadline, reserve, and exit margin.
 
-For the installed 20-second LaunchAgent job, the nominal split is 5 seconds of
-drain, 10 seconds for cleanup, and 5 seconds before launchd's deadline. Time
-spent inspecting the job is debited. For a shorter custom deadline the exit
+New LaunchAgent plists request `ExitTimeOut=330`, derived from the same service
+stop budget as Linux's `TimeoutStopSec=330`. With that effective deadline, the
+nominal split is 315 seconds of drain, 10 seconds for cleanup, and 5 seconds before
+the supervisor deadline. `openclaw doctor --fix` backs up and migrates the retired
+installer value of 20 seconds to 330. Other explicit values, including 600 and
+unlimited (`0`), are reported and preserved; short custom values receive a warning.
+Update finalization uses the same backed-up service reconciliation. The first
+stop still obeys the previously loaded job's deadline until the replacement is
+bootstrapped.
+
+Time spent inspecting the job is debited. A legacy 20-second job nominally leaves
+5 seconds of drain, 10 seconds for cleanup, and a 5-second exit margin. For a shorter custom deadline the exit
 margin is at most a quarter, and the cleanup reserve gives way to leave active
 work up to 5 seconds of drain (at most half of the remaining shutdown budget
 when it is very short). For example, a 5-second job nominally leaves 1.875
@@ -361,7 +369,10 @@ consume up to three 2-second calls; a very slow inspection can leave no drain.
 If a Node-recovery or compile-cache launcher is the job's PID, its own child
 reap timer may be shorter than launchd's deadline. The Gateway caps its budget
 at that timer only when its respawn markers establish that this launcher started
-it; an unrelated parent does not shorten the budget.
+it; an unrelated parent does not shorten the budget. New launchers use the shared
+330-second service budget, but the child conservatively retains the older
+19-second launcher cap until a parent runtime-generation contract can distinguish
+already-running launchers. Raising the plist value alone does not remove that cap.
 
 A direct signal to a marked launcher can start its own timer while launchd
 still reports `running`. The Gateway cannot distinguish that forwarded signal

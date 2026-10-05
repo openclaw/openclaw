@@ -1,6 +1,7 @@
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   LAUNCH_AGENT_POLICY,
   decodeLaunchdPlistMetadata,
 } from "./launchd-plist.js";
@@ -52,6 +53,19 @@ export async function auditLaunchdDefinition(
   const installed = await decodeLaunchdPlistMetadata(content, timeoutMs);
   if (!installed) {
     throw new Error("LaunchAgent definition could not be decoded.");
+  }
+  const exitTimeout = installed.ExitTimeOut ?? 20;
+  if (
+    typeof exitTimeout === "number" &&
+    exitTimeout > 0 &&
+    exitTimeout < LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS
+  ) {
+    issues.push({
+      code: "launchd-stop-timeout",
+      message: `ExitTimeOut=${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS} or longer is required for the Gateway drain and final cleanup; the loaded launchd job may enforce a shorter deadline.`,
+      detail: `${sourcePath}: ${exitTimeout}s`,
+      level: "recommended",
+    });
   }
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env));
   const args = installed.ProgramArguments;
@@ -123,9 +137,10 @@ export async function auditLaunchdDefinition(
     "Comment",
   ]);
   const legacyLogs = resolveGatewayLogPaths(env);
-  // Stable releases used 60s/1s throttles, state-directory logs, and discarded stderr.
+  // Stable releases used a 20s exit timeout, 60s/1s throttles, and state-directory logs.
   // Installation age alone does not attribute arbitrary explicit values to the installer.
   const released: Record<string, readonly (string | number)[]> = {
+    ExitTimeOut: [20],
     ThrottleInterval: [60, 1],
     StandardOutPath: [legacyLogs.stdoutPath],
     StandardErrorPath: [legacyLogs.stderrPath, "/dev/null"],

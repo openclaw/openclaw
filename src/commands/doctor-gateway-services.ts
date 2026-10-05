@@ -70,6 +70,7 @@ import {
   formatServiceConfigIssues,
   hasRepairableServiceDefinitionDrift,
   isOperatorOwnedEnvironmentIssue,
+  isPreservedLaunchdTimeoutWarning,
   isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
   reportServiceDefinitionDrift,
@@ -475,6 +476,10 @@ export async function maybeRepairGatewayServiceConfig(
   }
   consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
   note(consolidatedLines.join("\n"), "Gateway service config");
+  // A short custom timeout is diagnostic, not permission to overwrite native policy.
+  if (!definitionRepair && !installationDrift && isPreservedLaunchdTimeoutWarning(audit)) {
+    return cfg;
+  }
   if (
     audit.issues.length > 0 &&
     audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)
@@ -639,7 +644,14 @@ export async function maybeRepairGatewayServiceConfig(
         ? { kind: "installation", root: expectedRoot }
         : definitionRepair && expectedRoot
           ? { kind: "definition", root: expectedRoot }
-          : { kind: "config" },
+          : {
+              kind: "config",
+              ...(expectedRoot &&
+              !expectedLayout?.entrypointSourceCheckout &&
+              audit.definitionDrift?.some((finding) => finding.kind === "preserved")
+                ? { root: expectedRoot }
+                : {}),
+            },
     args: {
       ...updatedPlan,
       runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },

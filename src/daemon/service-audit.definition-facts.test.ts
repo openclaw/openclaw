@@ -239,21 +239,27 @@ it.each(["other-source", "disappeared", "reload-pending", "unreadable-drop-in"])
   },
 );
 
-it.each(["missing", "custom", "stale", "legacy-1", "legacy-60"])(
-  "distinguishes missing and released launchd policy from custom policy: %s",
-  async (kind) => {
+it.each([
+  { seconds: undefined, kind: "outdated" },
+  { seconds: 20, kind: "outdated" },
+  { seconds: 30, kind: "preserved" },
+  { seconds: 600, kind: "preserved" },
+  { seconds: 0, kind: "preserved" },
+  { seconds: 330, kind: undefined },
+  { seconds: 600, kind: "preserved", stale: true },
+  { seconds: 20, kind: "outdated", throttle: 1 },
+  { seconds: 20, kind: "outdated", throttle: 60 },
+])(
+  "audits launchd exit timeout $seconds and preserves custom policy (throttle=$throttle)",
+  async ({ seconds, kind, stale, throttle }) => {
     const home = dirs.make("definition-facts-launchd-");
     const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
     const sourcePath = resolveLaunchAgentPlistPath(env);
     const command = {
       programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
-      environment: {
-        PATH: "/usr/bin:/bin",
-        ...(kind !== "custom" ? staleServiceEnvironment : {}),
-      },
+      environment: { PATH: "/usr/bin:/bin", ...(stale ? staleServiceEnvironment : {}) },
     };
     const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
-    const legacyThrottle = kind.startsWith("legacy-") ? Number(kind.slice(7)) : undefined;
     const original = buildLaunchAgentPlist({
       ...command,
       label: "ai.openclaw.gateway",
@@ -261,14 +267,12 @@ it.each(["missing", "custom", "stale", "legacy-1", "legacy-60"])(
       stderrPath: stdoutPath,
     })
       .replace(
-        /<key>ExitTimeOut<\/key>\s*<integer>20<\/integer>/u,
-        kind === "missing"
-          ? ""
-          : `<key>ExitTimeOut</key><integer>${legacyThrottle ? 20 : 600}</integer>`,
+        /<key>ExitTimeOut<\/key>\s*<integer>\d+<\/integer>/u,
+        seconds === undefined ? "" : `<key>ExitTimeOut</key><integer>${seconds}</integer>`,
       )
       .replace(
         /<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/u,
-        `<key>ThrottleInterval</key><integer>${legacyThrottle ?? 10}</integer>`,
+        `<key>ThrottleInterval</key><integer>${throttle ?? 10}</integer>`,
       );
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, original);
@@ -278,26 +282,37 @@ it.each(["missing", "custom", "stale", "legacy-1", "legacy-60"])(
       platform: "darwin",
       expectedServicePath: "/usr/bin:/bin",
     });
-    expect(result.issues).toEqual([]);
-    expect(result.definitionDrift).toEqual([
-      expect.objectContaining(
-        kind === "custom" || kind === "stale"
-          ? {
-              kind: "preserved",
-              key: "ExitTimeOut",
-              message: expect.stringContaining("not changed"),
-            }
-          : {
+    expect(result.issues).toEqual(
+      seconds === undefined || (seconds > 0 && seconds < 330)
+        ? [
+            expect.objectContaining({
+              code: "launchd-stop-timeout",
+              message: expect.stringContaining("ExitTimeOut=330"),
+            }),
+          ]
+        : [],
+    );
+    expect(result.definitionDrift ?? []).toEqual([
+      ...(kind
+        ? [
+            expect.objectContaining(
+              kind === "preserved"
+                ? { kind, key: "ExitTimeOut", message: expect.stringContaining("not changed") }
+                : { kind, key: "ExitTimeOut", current: seconds ?? null, expected: 330 },
+            ),
+          ]
+        : []),
+      ...(throttle
+        ? [
+            expect.objectContaining({
               kind: "outdated",
-              key: legacyThrottle ? "ThrottleInterval" : "ExitTimeOut",
-              current: legacyThrottle ?? null,
-              expected: legacyThrottle ? 10 : 20,
-            },
-      ),
+              key: "ThrottleInterval",
+              current: throttle,
+              expected: 10,
+            }),
+          ]
+        : []),
     ]);
-    if (kind === "custom" || kind === "stale") {
-      expect(JSON.stringify(result.definitionDrift)).not.toContain("600");
-    }
     expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
   },
 );

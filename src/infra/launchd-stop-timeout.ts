@@ -5,11 +5,7 @@ import { execLaunchctl, formatLaunchctlResultDetail } from "../daemon/launchd-ex
 import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
 import { parseKeyValueOutput } from "../daemon/runtime-parse.js";
 import { formatErrorMessage } from "./errors.js";
-import {
-  isRespawnedByLauncher,
-  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
-  resolveLauncherStopTimeoutMs,
-} from "./gateway-shutdown-budget.js";
+import { isRespawnedByLauncher, resolveLauncherStopTimeoutMs } from "./gateway-shutdown-budget.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
 type LaunchdStopTimeout = { timeoutMs: number; source: string };
@@ -20,6 +16,8 @@ type LaunchdStopTimeout = { timeoutMs: number; source: string };
 export type LaunchdStopRead = { stop: LaunchdStopTimeout | null; warning?: string };
 
 const LAUNCHCTL_PRINT_TIMEOUT_MS = 2_000;
+const LAUNCHD_DEFAULT_EXIT_TIMEOUT_MS = 20_000;
+const LEGACY_LAUNCHD_LAUNCHER_STOP_TIMEOUT_MS = 19_000;
 
 // Check all domains: a service account may lack a GUI session, and a matching
 // label in a different domain must not supply this process's deadline.
@@ -56,8 +54,7 @@ function isLaunchdStoppingJob(state: string | undefined): boolean {
 }
 
 // A respawn marker, not parenthood alone, proves the launcher runs a reap timer.
-// Derive that timer from the same shared expression: an already-running parent
-// cannot be taught a new announced deadline by upgrading the child.
+// An already-running parent cannot adopt a longer deadline by upgrading the child.
 function resolveParentLauncherStopTimeoutMs(env: NodeJS.ProcessEnv): number | undefined {
   // One of these is set on every child the launcher respawns, and all of them predate
   // this deadline being derived, so a marker is present for a Gateway that launcher
@@ -67,18 +64,24 @@ function resolveParentLauncherStopTimeoutMs(env: NodeJS.ProcessEnv): number | un
   if (!isRespawnedByLauncher(env)) {
     return undefined;
   }
-  return resolveLauncherStopTimeoutMs({
-    env,
+  const timeoutMs = resolveLauncherStopTimeoutMs({
     platform: process.platform,
     // The launcher branched on its own argv, and it respawns the child with the same
     // user arguments, so testing ours reproduces the branch it took.
     foreground: isForegroundGatewayRunArgv(process.argv),
   });
+  const launchdService = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  // Shipped launchers with these markers reap macOS service children after 19s.
+  // Keep that cap until a runtime-generation contract can distinguish the parent;
+  // the installed files cannot identify code already loaded into that process.
+  return process.platform === "darwin" && launchdService && env.XPC_SERVICE_NAME === launchdService
+    ? Math.min(timeoutMs, LEGACY_LAUNCHD_LAUNCHER_STOP_TIMEOUT_MS)
+    : timeoutMs;
 }
 
 // The job is stopping but its value is missing; use launchd's 20s default.
 function defaultStopDeadline(target: string, reason: string): LaunchdStopRead {
-  const timeoutMs = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
+  const timeoutMs = LAUNCHD_DEFAULT_EXIT_TIMEOUT_MS;
   return {
     stop: { timeoutMs, source: `launchd ${target} exit timeout unavailable; default ExitTimeOut` },
     warning: `launchd is stopping ${target} but ${reason}; using ${timeoutMs}ms default. Check the running job with launchctl print.`,
