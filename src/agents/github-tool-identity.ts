@@ -596,19 +596,20 @@ export async function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation & { allowAnonymous?: boolean },
 ): Promise<PreparedGitHubSourceReadIdentity> {
   const selected = resolveGitHubToolIdentity(params);
-  const profileId = selected.source === "system-detected" ? undefined : selected.config.profileId;
-  const kind = selected.source === "system-detected" ? undefined : selected.config.kind;
-  const assertSelected = () => {
-    params.assertActive();
-    const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
-    if (
-      current.source !== selected.source ||
-      (current.source !== "system-detected" &&
-        (current.config.profileId !== profileId || current.config.kind !== kind))
-    ) {
-      throw new GitHubIdentityError("changed");
-    }
-  };
+  const { profileId, kind } = selected.source === "system-detected" ? {} : selected.config;
+  const assertSelected = composeSessionSourceAssertion([
+    captureExternalSessionCommitGuard(params.assertActive),
+    () => {
+      const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
+      if (
+        current.source !== selected.source ||
+        (current.source !== "system-detected" &&
+          (current.config.profileId !== profileId || current.config.kind !== kind))
+      ) {
+        throw new GitHubIdentityError("changed");
+      }
+    },
+  ]);
   const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
   await startGitHubIdentityOperation(params.refresh, caller);
   assertSelected();
@@ -744,3 +745,7 @@ export async function installManagedGitHubProfile(params: {
     await fs.rm(stagingRoot, { recursive: true, force: true });
   }
 }
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";

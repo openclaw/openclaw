@@ -275,7 +275,6 @@ export function createSessionRowMaterializer(owner: {
   prepare: () => records.Inputs["cfg"];
   revision: () => number;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
-  readEntry: (row: records.Row) => records.Row["storedEntry"];
   materialize: (
     row: records.Row,
     agentIds: Set<string>,
@@ -300,15 +299,17 @@ export function createSessionRowMaterializer(owner: {
         }
         const current = owner.rows.get(id),
           revision = owner.revision();
-        const databaseFacts = accepted ? current?.pendingDatabaseFacts : undefined;
-        if (accepted && !databaseFacts) {
+        const databaseFacts = accepted
+          ? current?.pendingDatabaseFacts
+          : current?.retainedDatabaseFacts;
+        if (!databaseFacts) {
           continue;
         }
         if (!accepted && current?.unresolvedDatabaseFacts === "category") {
           continue;
         }
         const row =
-          current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
+          current && (accepted ? current : owner.acquireEntry(current, databaseFacts.entry));
         if (row && isColdArchivedSessionRow(row) && !accepted) {
           owner.dirty.delete(id);
           owner.forgetBackfill(id);
@@ -320,6 +321,7 @@ export function createSessionRowMaterializer(owner: {
           owner.revision() === revision
         ) {
           row.pendingDatabaseFacts = undefined;
+          row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
           // A bulk slice may finish an exact read's accepted archive row. Keep its
           // residency under the archive owner's pins and bounded cache either way.

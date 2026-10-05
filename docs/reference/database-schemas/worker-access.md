@@ -892,6 +892,17 @@ callbacks retain their existing owner. Native-binding settlement and incognito
 activation remain separate cutovers. These changes require no schema, durability,
 retention, configuration, or update migration.
 
+Durable Board writes prepare exact session existence in the session reader and carry
+its session and lifecycle identity into transaction and commit checks. Session
+presentation consumes worker-prepared Board membership through its existing row
+projection; unavailable facts stay dirty until preparation finishes. Process-held
+incognito retains its native reader. Board request authority prepares session and
+membership predicates before worker grants; the worker rereads those facts at
+transaction and commit while the host rechecks live caller authority. Released
+opaque SDK guards and cross-store assertions retain their synchronous transaction
+contract. Board publication, schemas, permissions,
+retention, and update behavior are unchanged.
+
 Durable entry deletion can carry prepared Agents API and Codex binding participants
 through the same executing worker. Binding deletion still commits in shared state
 before the agent transaction commits, and can veto that transaction. Confirmed agent
