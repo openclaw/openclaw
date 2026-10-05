@@ -8,6 +8,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -273,13 +274,14 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         await retiringRelated;
       }
       for (const ending of ["release", "close"] as const) {
-        const borrowed = await captureOpenClawAgentDatabaseExecution({
-          kind: "ephemeral",
-          agentId: actor.agentId,
-          env: state.env,
-          authority,
-          existingOnly: true,
-        });
+        const borrowed: IncognitoAgentDatabaseExecution | undefined =
+          await captureOpenClawAgentDatabaseExecution({
+            kind: "ephemeral",
+            agentId: actor.agentId,
+            env: state.env,
+            authority,
+            existingOnly: true,
+          });
         assert(borrowed);
         const prepare = borrowed.acp.prepareEntryRead.bind(borrowed.acp);
         let retiring: Promise<void> | undefined;
