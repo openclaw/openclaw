@@ -140,6 +140,53 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it.each(["revoked", "other-account", "replaced"] as const)(
+    "rejects a %s listener after dispatch before native message I/O",
+    async (change) => {
+      const listener = hoisted.controllerListeners.get("default")!;
+      const replacementSend = vi.fn<ActiveWebListener["sendMessage"]>();
+      const onPlatformSendDispatch = vi.fn(async () => {
+        hoisted.controllerListeners.delete("default");
+        if (change === "other-account") {
+          hoisted.controllerListeners.set("other-account", listener);
+        } else if (change === "replaced") {
+          hoisted.controllerListeners.set("default", { ...listener, sendMessage: replacementSend });
+        }
+      });
+
+      await expect(
+        sendMessageWhatsApp("+1555", "hi", {
+          verbose: false,
+          cfg: WHATSAPP_TEST_CFG,
+          accountId: "default",
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(replacementSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects listener loss during media preparation before native message I/O", async () => {
+    loadWebMediaMock.mockImplementationOnce(async () => {
+      hoisted.controllerListeners.delete("default");
+      return { buffer: Buffer.from("image"), contentType: "image/png", kind: "image" };
+    });
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    await expect(
+      sendMessageWhatsApp("+1555", "caption", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        mediaUrl: "/tmp/authority.png",
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(loadWebMediaMock).toHaveBeenCalledOnce();
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "an image without alt text",

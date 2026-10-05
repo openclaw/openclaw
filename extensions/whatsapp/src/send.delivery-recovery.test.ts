@@ -107,8 +107,9 @@ describe("WhatsApp delivery recovery", () => {
       sendMessage.mockImplementation(async () =>
         createAcceptedWhatsAppSendResult("text", `part-${sendMessage.mock.calls.length}`),
       );
+      const listener = { sendMessage, sendComposingTo: vi.fn() };
       runtimeContextMocks.controllers.set(accountId, {
-        getActiveListener: () => ({ sendMessage, sendComposingTo: vi.fn() }),
+        getActiveListener: () => listener,
       });
       const onDeliveryResult = vi.fn();
       const result = await sendDurableMessageBatch({
@@ -160,8 +161,9 @@ describe("WhatsApp delivery recovery", () => {
     sendMessage.mockImplementation(async () =>
       createAcceptedWhatsAppSendResult("text", `payload-${sendMessage.mock.calls.length}`),
     );
+    const listener = { sendMessage, sendComposingTo: vi.fn() };
     runtimeContextMocks.controllers.set(accountId, {
-      getActiveListener: () => ({ sendMessage, sendComposingTo: vi.fn() }),
+      getActiveListener: () => listener,
     });
     const onPlatformSendDispatch = vi.fn(async () => {});
     const onDeliveryResult = vi.fn();
@@ -416,7 +418,7 @@ describe("WhatsApp delivery recovery", () => {
     );
   });
 
-  it.each(["abort", "transport"] as const)(
+  it.each(["abort", "transport", "listener"] as const)(
     "retains accepted chunks after a later %s failure",
     async (failure) => {
       await withStateDirEnv("openclaw-whatsapp-partial-reply-", async () => {
@@ -427,9 +429,8 @@ describe("WhatsApp delivery recovery", () => {
           }
           return createAcceptedWhatsAppSendResult("text", "accepted-first");
         });
-        runtimeContextMocks.controllers.set(accountId, {
-          getActiveListener: () => ({ sendMessage, sendComposingTo: vi.fn() }),
-        });
+        const listener = { sendMessage, sendComposingTo: vi.fn() };
+        runtimeContextMocks.controllers.set(accountId, { getActiveListener: () => listener });
         const result = await sendDurableMessageBatch({
           cfg: { channels: { whatsapp: { textChunkLimit: 160 } } },
           channel: "whatsapp",
@@ -439,6 +440,8 @@ describe("WhatsApp delivery recovery", () => {
           onDeliveryResult: () => {
             if (failure === "abort") {
               controller.abort(new Error("cancelled after first part"));
+            } else if (failure === "listener") {
+              runtimeContextMocks.controllers.delete(accountId);
             }
           },
           durability: "required",
@@ -448,7 +451,7 @@ describe("WhatsApp delivery recovery", () => {
           results: [{ messageId: "accepted-first" }],
           receipt: { platformMessageIds: ["accepted-first"] },
         });
-        expect(sendMessage).toHaveBeenCalledTimes(failure === "abort" ? 1 : 2);
+        expect(sendMessage).toHaveBeenCalledTimes(failure === "transport" ? 2 : 1);
       });
     },
   );
