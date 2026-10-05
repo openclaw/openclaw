@@ -84,8 +84,8 @@ export function createHeadlessDeadlineScope(
         },
         {
           signal: controller.signal,
-          onAbort: (signal) => {
-            throw headlessAbortError(signal);
+          onAbort: (abortedSignal) => {
+            throw headlessAbortError(abortedSignal);
           },
         },
       );

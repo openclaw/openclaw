@@ -29,10 +29,10 @@ export async function raceWithTimeoutAndAbort<T>(
     const result =
       options.timeoutMs === undefined
         ? await racePromiseWithAbortSignal(promise, options.abortSignal, () => RACE_ABORT)
-        : await raceWithTimeout(
+        : await raceWithTimeout<T, typeof RACE_TIMEOUT | typeof RACE_ABORT>(
             promise,
             resolveTimerTimeoutMs(options.timeoutMs, 1),
-            (): typeof RACE_TIMEOUT | typeof RACE_ABORT => RACE_TIMEOUT,
+            () => RACE_TIMEOUT,
             { signal: options.abortSignal, onAbort: () => RACE_ABORT },
           );
     if (result === RACE_TIMEOUT) {

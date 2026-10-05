@@ -1,3 +1,5 @@
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+
 export function raceNodeWorkerOperation<T>(
   operation: Promise<T>,
   signal?: AbortSignal,
@@ -15,4 +17,3 @@ export function raceNodeWorkerOperation<T>(
     throw error instanceof Error ? error : new Error(messages.failed ?? String(error));
   });
 }
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
