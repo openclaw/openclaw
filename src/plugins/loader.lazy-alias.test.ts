@@ -9,6 +9,7 @@ import { Command } from "commander";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubCliByName } from "../cli/program/register.subclis.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createPluginCliLoadSession,
   loadPluginCliRegistrationEntriesWithDefaults,
@@ -18,8 +19,12 @@ import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import {
+  installOpenClawPluginSdkNativeResolver,
+  resolvePluginNativeAliasForParent,
+} from "./plugin-sdk-native-resolver.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { preparePluginLoaderAliases } from "./sdk-alias.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 beforeEach(() => resetPluginCache());
@@ -61,9 +66,10 @@ function fixture() {
   return { root, entry, used, unused };
 }
 
-afterEach(() => {
+afterEach(async () => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
+  await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   for (const root of roots.splice(0)) {
@@ -77,6 +83,28 @@ afterEach(() => {
 });
 
 describe("native plugin alias preparation", () => {
+  it("returns native SDK filenames without changing Jiti alias targets", () => {
+    const f = fixture();
+    const specifier = "openclaw/plugin-sdk/used";
+    const aliases = preparePluginLoaderAliases({
+      modulePath: f.entry,
+      moduleUrl: import.meta.url,
+      devSourceRoot: f.root,
+      pluginSdkResolution: "dist",
+    });
+    installOpenClawPluginSdkNativeResolver({
+      pluginModulePath: f.entry,
+      devSourceRoot: f.root,
+      pluginSdkResolution: "dist",
+    });
+    const jitiTarget = process.platform === "win32" ? f.used.replaceAll("\\", "/") : f.used;
+    expect(aliases.resolveAlias(specifier)).toBe(jitiTarget);
+    expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
+    expect(aliases.getAliasMap()[specifier]).toBe(jitiTarget);
+    expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
+    expect(createRequire(f.entry).resolve(specifier)).toBe(f.used);
+  });
+
   it.each([
     ["src", "production", "source"],
     ["dist", "development", "dist"],

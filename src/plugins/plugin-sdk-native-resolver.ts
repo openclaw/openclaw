@@ -294,7 +294,7 @@ export function resolvePluginNativeAliasForParent(
         first = { target, order: provider.order };
       }
     }
-    return first?.target;
+    return first ? path.normalize(first.target) : undefined;
   }
   const entries = native.aliases.get(request);
   if (!entries || !parentFilename) {
