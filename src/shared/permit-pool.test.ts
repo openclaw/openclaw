@@ -77,4 +77,55 @@ describe("permit pool", () => {
     await expect(pool.acquire({ signal: aborted.signal })).resolves.toBeNull();
     await expect(pool.acquire({ deadlineAtMs: Date.now() })).resolves.toBeNull();
   });
+
+  it("does not expire a queued permit before its deadline after a wall-clock step", async () => {
+    vi.setSystemTime(1000);
+    const pool = createPermitPool(1);
+    const owner = pool.tryAcquire();
+    let settled = false;
+    const waiting = pool.acquire({ deadlineAtMs: 1100 }).then((release) => {
+      settled = true;
+      return release;
+    });
+    vi.setSystemTime(950);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBe(false);
+    expect(pool.pendingCount).toBe(1);
+    owner?.();
+    const release = await waiting;
+    expect(release).toBeTypeOf("function");
+    release?.();
+  });
+
+  it("keeps a distant deadline from overflowing the native timer range", async () => {
+    vi.setSystemTime(1000);
+    const pool = createPermitPool(1);
+    const owner = pool.tryAcquire();
+    let settled = false;
+    const waiting = pool.acquire({ deadlineAtMs: Date.now() + 2 ** 31 }).then((release) => {
+      settled = true;
+      return release;
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(false);
+    owner?.();
+    const release = await waiting;
+    expect(release).toBeTypeOf("function");
+    release?.();
+  });
+
+  it("removes a waiter when its deadline passes while admission is being prepared", async () => {
+    const pool = createPermitPool(1);
+    const owner = pool.tryAcquire();
+    const clock = vi.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValue(1100);
+    try {
+      const waiting = pool.acquire({ deadlineAtMs: 1100 });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(waiting).resolves.toBeNull();
+      expect(pool.pendingCount).toBe(0);
+    } finally {
+      clock.mockRestore();
+      owner?.();
+    }
+  });
 });

@@ -1,3 +1,5 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+
 type PermitRelease = () => void;
 type PermitWaiter = {
   expired: () => boolean;
@@ -77,12 +79,24 @@ export function createPermitPool(limit: number) {
             resolve(release);
           },
         };
-        if (deadlineAtMs !== undefined) {
-          timer = setTimeout(cancel, Math.max(1, deadlineAtMs - Date.now()));
-          timer.unref();
-        }
         signal?.addEventListener("abort", cancel, { once: true });
         waiters.push(waiter);
+        if (deadlineAtMs !== undefined) {
+          const checkDeadline = () => {
+            if (expired()) {
+              cancel();
+              return;
+            }
+            // A timer can fire before the wall-clock deadline after a clock step
+            // or overflow. Keep checking without extending the caller's deadline.
+            timer = setTimeout(
+              checkDeadline,
+              Math.min(MAX_TIMER_TIMEOUT_MS, Math.max(1, deadlineAtMs - Date.now())),
+            );
+            timer.unref();
+          };
+          checkDeadline();
+        }
       });
     },
   };
