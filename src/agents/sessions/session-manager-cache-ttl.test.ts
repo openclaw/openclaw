@@ -391,9 +391,9 @@ it.each([
         throw new Error("Missing fixture reset boundary");
       }
       if (action === "refused summary" && boundary) {
-        expect(manager.getEntry(boundary.id)).toBeUndefined();
+        expect(manager.getEntry(fixture.olderId)).toBeUndefined();
         await expect(
-          manager.branchWithSummaryAsync(boundary.id, "unavailable branch"),
+          manager.branchWithSummaryAsync(fixture.olderId, "unavailable branch"),
         ).rejects.toThrow("not found");
         expect(serializeCacheTtlToolResultProjections(restore(manager))).toEqual(expected);
         return;
@@ -668,4 +668,55 @@ it("resolves checkpoint ancestry by active position when imported rows have forw
   expect(bounded.getEntry(checkpoint.id)).toBeUndefined();
   expect(replay(bounded)).toEqual([fixture.expected]);
   expect(bounded.getBranch()).toHaveLength(2);
+});
+
+it("preserves a retained checkpoint through a forward label with an omitted target", async () => {
+  const fixture = await seedProjection("projection-forward-label");
+  const { checkpoint, retained, delta } = projectionEntries(fixture);
+  const label = {
+    type: "label",
+    id: "forward-label",
+    parentId: checkpoint.id,
+    timestamp: checkpoint.timestamp,
+    targetId: fixture.olderId,
+    label: "older message",
+    appendMode: "side",
+  };
+  // A rewritten side path may store descendants before their checkpoint ancestor.
+  expect(
+    replaceTranscriptEventsSync(fixture.scope, [
+      fixture.source.getHeader(),
+      ...fixture.source
+        .getBranch()
+        .filter(
+          (entry) =>
+            entry.id !== checkpoint.id && entry.id !== retained.id && entry.id !== delta.id,
+        ),
+      { ...retained, parentId: label.id, appendMode: "side" },
+      label,
+      checkpoint,
+      delta,
+    ]),
+  ).toBe(true);
+  const expected = serializeCacheTtlToolResultProjections(fixture.state);
+  const full = await SessionManager.openAsync(fixture.scope, fixture.dir);
+  expect(
+    full
+      .getBranch()
+      .slice(-4)
+      .map((entry) => entry.id),
+  ).toEqual([checkpoint.id, label.id, retained.id, delta.id]);
+  expect(serializeCacheTtlToolResultProjections(restore(full))).toEqual(expected);
+  expect(replay(full).at(-1)).toEqual(fixture.expected);
+
+  const options = { cwd: fixture.dir, maxEvents: 4, maxBytes: 64_000 };
+  const bounded = await SessionManager.openBoundedAsync(fixture.scope, options);
+  const detached = await SessionManager.openDetachedBoundedAsync(fixture.scope, options);
+  expect(bounded.getEntry(fixture.olderId)).toBeUndefined();
+  expect(bounded.getEntry(label.id)).toBeUndefined();
+  expect(bounded.getEntry(checkpoint.id)).toBeDefined();
+  for (const manager of [bounded, detached]) {
+    expect(serializeCacheTtlToolResultProjections(restore(manager))).toEqual(expected);
+    expect(replay(manager)).toEqual([fixture.expected]);
+  }
 });

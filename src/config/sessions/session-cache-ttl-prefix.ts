@@ -40,6 +40,11 @@ export function readCacheTtlProjectionPrefix(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
+      .leftJoin("transcript_event_identities as identity", (join) =>
+        join
+          .onRef("identity.session_id", "=", "active.session_id")
+          .onRef("identity.seq", "=", "active.event_seq"),
+      )
       .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.active_position", "<", anchor.activePosition)
@@ -49,20 +54,27 @@ export function readCacheTtlProjectionPrefix(
           : query.where("active.event_seq", "<", anchor.beforeRawSeq),
       )
       .where((eb) =>
-        eb.or([
-          eb(
-            /* kysely-allow-raw: control kinds live in canonical transcript navigation JSON. */
-            sql<string>`json_extract(${transcriptEventResetNavigationSql("event")}, '$.type')`,
-            "=",
-            "reset",
-          ),
-          eb(
-            /* kysely-allow-raw: filter cache-TTL markers using their recorded custom type. */
-            sql<string>`json_extract(${transcriptEventResetNavigationSql("event")}, '$.customType')`,
-            "=",
-            "openclaw.cache-ttl",
-          ),
-        ]),
+        eb
+          .case()
+          .when("identity.event_type", "not in", ["custom", "reset"])
+          .then(false)
+          .else(
+            eb.or([
+              eb(
+                /* kysely-allow-raw: control kinds live in canonical transcript navigation JSON. */
+                sql<string>`json_extract(${transcriptEventResetNavigationSql("event")}, '$.type')`,
+                "=",
+                "reset",
+              ),
+              eb(
+                /* kysely-allow-raw: filter cache-TTL markers using their recorded custom type. */
+                sql<string>`json_extract(${transcriptEventResetNavigationSql("event")}, '$.customType')`,
+                "=",
+                "openclaw.cache-ttl",
+              ),
+            ]),
+          )
+          .end(),
       )
       .orderBy("active.active_position", "desc"),
   );
@@ -89,17 +101,19 @@ export function bindCacheTtlProjectionPrefixes(
     SessionTranscriptBoundedActiveContext,
     "cacheTtlProjectionPrefixes" | "activeLeafEntryId" | "parents" | "opaqueParents"
   >,
-  branch: readonly { id: string }[],
-  indexed: ReadonlyMap<string, unknown>,
+  view: {
+    getBranch(): readonly { id: string }[];
+    getEntry(id: string): { id: string } | undefined;
+  },
 ): SessionTranscriptBoundedActiveContext["cacheTtlProjectionPrefixes"] {
   const prefixes = bounded.cacheTtlProjectionPrefixes;
   if (!prefixes?.length) {
     return prefixes;
   }
-  const visible = new Set(branch.map((entry) => entry.id));
+  const visible = new Set(view.getBranch().map((entry) => entry.id));
   const parents = new Map([...bounded.opaqueParents, ...bounded.parents]);
   return prefixes.flatMap((prefix) => {
-    if (prefix.anchorIds.some((id) => indexed.has(id))) {
+    if (prefix.anchorIds.some((id) => view.getEntry(id) !== undefined)) {
       return [prefix];
     }
     const seen = new Set<string>();
