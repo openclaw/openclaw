@@ -3,6 +3,7 @@ import { html } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
+import { downloadBlobFile } from "../../../lib/download.ts";
 import { showToast } from "../../../lib/toast.ts";
 
 function imageDownloadFileName(title: string, mimeType: string): string {
@@ -15,15 +16,6 @@ function imageDownloadFileName(title: string, mimeType: string): string {
     .replace(/[. -]+$/u, "");
   const stem = truncateUtf16Safe(rawStem, 120);
   return `${stem || "generated-image"}.${/^[a-z0-9.+-]{1,12}$/u.test(extension) ? extension : "img"}`;
-}
-
-function downloadImageBlob(blob: Blob, fileName: string): void {
-  const blobUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = blobUrl;
-  anchor.download = fileName;
-  anchor.click();
-  globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
 }
 
 async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
@@ -56,7 +48,7 @@ export function renderChatImageActions(title: string, readOriginalBlob: () => Pr
   const download = async () => {
     try {
       const blob = await readOriginalBlob();
-      downloadImageBlob(blob, imageDownloadFileName(title, blob.type));
+      downloadBlobFile(imageDownloadFileName(title, blob.type), blob);
     } catch {
       showToast({ message: t("chat.imageLightbox.downloadFailed") });
     }

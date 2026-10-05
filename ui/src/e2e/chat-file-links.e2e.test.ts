@@ -26,6 +26,28 @@ beforeEach(() => {
   artifactDir = createControlUiE2eArtifactDir("chat-file-links");
 });
 
+function minimalPdf(text: string): Buffer {
+  const stream = `BT /F1 24 Tf 40 150 Td (${text}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets = objects.map((object, index) => {
+    const offset = body.length;
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  body += offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(body, "latin1");
+}
+
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -181,6 +203,72 @@ describeControlUiE2e("Control UI chat file links", () => {
       }
     },
   );
+
+  it("previews a linked workspace PDF in the side panel", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      const pdf = minimalPdf("Workspace brochure");
+      const mediaRequests: URL[] = [];
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const url = new URL(route.request().url());
+        mediaRequests.push(url);
+        if (url.searchParams.get("meta") === "1") {
+          await route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              available: true,
+              mimeType: "application/pdf",
+              sizeBytes: pdf.length,
+              mediaTicket: "ticket-pdf",
+              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            }),
+          });
+          return;
+        }
+        await route.fulfill({ contentType: "application/pdf", body: pdf });
+      });
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "The brochure is at `docs/brochure.pdf`." }],
+            timestamp: 1,
+          },
+        ],
+        methodResponses: {
+          "sessions.files.get": {
+            root: "/workspace",
+            sessionKey: "agent:main:main",
+            file: {
+              kind: "read",
+              missing: false,
+              name: "brochure.pdf",
+              path: "docs/brochure.pdf",
+              workspacePath: "docs/brochure.pdf",
+              mimeType: "application/pdf",
+              previewKind: "unsupported",
+              size: pdf.length,
+            },
+          },
+        },
+      });
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator('a.markdown-file-link[data-file-path="docs/brochure.pdf"]').click();
+
+      const frame = page.locator(".sidebar-pdf-preview__frame");
+      await frame.waitFor({ state: "visible" });
+      await page.screenshot({ path: path.join(artifactDir, "workspace-pdf-preview.png") });
+      expect(await page.getByText("This file is not previewable inline.").count()).toBe(0);
+      const byteRequest = mediaRequests.find((url) => url.searchParams.get("meta") !== "1");
+      expect(byteRequest?.searchParams.get("source")).toBe("/workspace/docs/brochure.pdf");
+      expect(byteRequest?.searchParams.get("mediaTicket")).toBe("ticket-pdf");
+    } finally {
+      await context.close();
+    }
+  });
 
   it("keeps authored and root-distinct file targets through click and keyboard", async () => {
     const files = [
@@ -538,7 +626,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     }
   });
 
-  it("previews text and browser-safe images while falling back for unsupported binaries", async () => {
+  it("previews text and images while offering a download for other binaries", async () => {
     const png = fs.readFileSync(path.resolve(process.cwd(), "ui/public/apple-touch-icon.png"));
     expect(png.byteLength).toBeLessThan(256 * 1024);
     const pngBase64 = png.toString("base64");
@@ -600,6 +688,18 @@ describeControlUiE2e("Control UI chat file links", () => {
     try {
       const page = await context.newPage();
       page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      await page.route("**/__openclaw__/assistant-media?**", (route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            available: true,
+            mimeType: "image/bmp",
+            sizeBytes: 4096,
+            mediaTicket: "ticket-bmp",
+            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          }),
+        }),
+      );
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.files.get": {
@@ -661,13 +761,16 @@ describeControlUiE2e("Control UI chat file links", () => {
       await closePreview("openclaw.png");
 
       await openPreview("unsupported-binary.bmp");
-      const fallback = page.locator(".sidebar-markdown-shell");
-      await fallback.waitFor({ state: "visible" });
-      const fallbackText = await fallback.textContent();
-      expect(fallbackText).toContain("This file is not previewable inline.");
-      expect(fallbackText).toContain("unsupported-binary.bmp");
-      expect(fallbackText).toContain("image/bmp");
-      await page.screenshot({ path: path.join(artifactDir, "06-bmp-fallback.png") });
+      const download = page
+        .locator(".sidebar-attachment-preview .chat-assistant-attachment-card")
+        .filter({ hasText: "unsupported-binary.bmp" })
+        .locator("a[download]");
+      await download.waitFor({ state: "attached" });
+      const downloadUrl = new URL((await download.getAttribute("href")) ?? "", server.baseUrl);
+      expect(downloadUrl.pathname).toBe("/__openclaw__/assistant-media");
+      expect(downloadUrl.searchParams.get("source")).toBe("/workspace/unsupported-binary.bmp");
+      expect(downloadUrl.searchParams.get("mediaTicket")).toBe("ticket-bmp");
+      await page.screenshot({ path: path.join(artifactDir, "06-bmp-download.png") });
 
       expect(
         (await gateway.getRequests("sessions.files.get")).map((request) => request.params),

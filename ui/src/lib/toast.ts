@@ -25,6 +25,13 @@ export type ToastOptions = {
   fifo?: boolean;
 };
 
+declare global {
+  interface Document {
+    /** Open modal dialogs, registered by openclaw-modal-dialog. */
+    openClawModalLayers?: Set<HTMLElement>;
+  }
+}
+
 const DEFAULT_TOAST_DURATION_MS = 6_000;
 const TOAST_EXIT_FALLBACK_MS = 450;
 
