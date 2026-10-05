@@ -25,19 +25,30 @@ ENV PATH=${BUN_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/sbin
 
 RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-sandbox-common-apt-lists,target=/var/lib/apt,sharing=locked \
-  apt-get update \
-  && apt-get install -y --no-install-recommends ${PACKAGES}
+  set -eu; \
+  for attempt in 1 2 3; do \
+    if apt-get -o Acquire::Retries=5 update --error-on=any; then break; fi; \
+    echo "apt-get update failed (attempt ${attempt})" >&2; \
+    if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
+    sleep 5; \
+  done; \
+  apt-get -o Acquire::Retries=5 install -y --no-install-recommends ${PACKAGES}
 
 RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-sandbox-common-apt-lists,target=/var/lib/apt,sharing=locked \
   if [ "${INSTALL_NODE}" = "1" ]; then \
-    apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl; \
+    for attempt in 1 2 3; do \
+      if apt-get -o Acquire::Retries=5 update --error-on=any; then break; fi; \
+      echo "apt-get update failed (attempt ${attempt})" >&2; \
+      if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
+      sleep 5; \
+    done; \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl || exit 1; \
     installer="$(mktemp)"; \
     curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" || exit 1; \
     bash "$installer" || exit 1; \
     rm -f "$installer"; \
-    apt-get install -y --no-install-recommends nodejs; \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends nodejs || exit 1; \
     node --version; \
     npm --version; \
   fi
