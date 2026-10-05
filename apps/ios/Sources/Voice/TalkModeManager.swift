@@ -2809,6 +2809,21 @@ final class TalkModeManager: NSObject {
         ChatSendStatus.acceptance(of: response.status) == .terminalSuccess ? nil : startedAt
     }
 
+    static func chatSendRequest(
+        message: String,
+        sessionKey: String,
+        idempotencyKey: String) -> OpenClawChatGatewayRequest
+    {
+        OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: sessionKey,
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: message,
+            thinking: chatThinkingOverride,
+            idempotencyKey: idempotencyKey,
+            attachments: [])
+    }
+
     private func sendChat(
         _ message: String,
         gateway: GatewayNodeSession,
@@ -2816,15 +2831,10 @@ final class TalkModeManager: NSObject {
         gatewayRoute: GatewayNodeSessionRoute,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
-        let request = OpenClawChatGatewayRequests.sendMessage(
-            sessionKey: sessionKey,
-            agentID: nil,
-            expectedSessionRoutingContract: nil,
+        let request = Self.chatSendRequest(
             message: message,
-            thinking: Self.chatThinkingOverride,
-            idempotencyKey: idempotencyKey,
-            attachments: [],
-            runTimeoutMs: 30000)
+            sessionKey: sessionKey,
+            idempotencyKey: idempotencyKey)
         let res = try await gateway.request(
             request,
             ifCurrentRoute: gatewayRoute)
