@@ -46,7 +46,8 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
 vi.mock("./developer-instruction-sections.js", () => ({
   joinPresentSections: () => "developer instructions",
 }));
-vi.mock("./turn-params.js", () => ({
+vi.mock("./turn-params.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./turn-params.js")>()),
   buildCodexParentLocalInstructions: vi.fn(),
   buildTurnStartParams: (_params: unknown, options: { threadId: string; promptText: string }) => ({
     threadId: options.threadId,

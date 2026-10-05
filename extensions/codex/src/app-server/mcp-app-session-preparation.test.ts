@@ -60,7 +60,10 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: mocks.acquire,
   releaseLeasedSharedCodexAppServerClient: mocks.release,
 }));
-vi.mock("./thread-lifecycle-run.js", () => ({ startOrResumeThread: mocks.start }));
+vi.mock("./thread-lifecycle-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./thread-lifecycle-run.js")>()),
+  startOrResumeThread: mocks.start,
+}));
 vi.mock("./session-binding.js", () => ({
   sessionBindingIdentity: () => ({ sessionId: "session" }),
   resolveCodexSessionBinding: async () => ({
