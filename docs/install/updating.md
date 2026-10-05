@@ -472,6 +472,8 @@ the refusal.
 SQLite recovery and rollback custody verify file identity, size, and content.
 Timestamp-only changes are accepted after verifying identical bytes; replaced
 files or changed database or journal bytes still require recovery by their owner.
+Snapshot publication uses the same checks, including on older Linux kernels where
+reported file creation time changes after ordinary writes or hard-link removal.
 
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The
