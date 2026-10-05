@@ -5147,7 +5147,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/infra/device-pairing-node-desktop-migration.test.ts",
   "src/infra/device-pairing-node.test.ts",
   "src/infra/file-descriptor.test.ts",
-  "src/infra/gateway-lock.roles.test.ts",
   "src/infra/git-worker.lifecycle.test.ts",
   "src/infra/heartbeat-runner.structured-delivery.test.ts",
   "src/infra/openclaw-cli-shim.test.ts",
