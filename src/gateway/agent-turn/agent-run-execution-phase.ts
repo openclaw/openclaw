@@ -171,20 +171,23 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         );
       }
     };
+    let dispatched = false;
     const dispatchAdmittedAgentRun = (
       dispatch: Parameters<typeof dispatchAgentRunWithCommentaryMedia>[0],
     ) => {
-      const run = () =>
-        withPreparedModelRuntimePluginGenerationScope(
+      const run = () => {
+        const execution = withPreparedModelRuntimePluginGenerationScope(
           replyDispatchRuntime.pluginGeneration,
           () => dispatchAgentRunWithCommentaryMedia(dispatch, params),
           () => (leaseActive ? preparedModelRuntimeLease?.snapshot : undefined),
         );
+        dispatched = true;
+        return execution;
+      };
       return withCurrentUserTurnInput(prepared.userTurn.recorder, run);
     };
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();
-      let dispatched = false;
       let publishFinalAfterCleanup: (() => void) | undefined;
       let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
       const settleUnstartedFollowup = (outcome: AgentRunTerminalOutcome) =>
@@ -652,7 +655,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             executionIdentitySpawnFacts,
           ),
         );
-        dispatched = true;
         await execution;
       } catch (err) {
         if (prepared.activeRunAbort.controller.signal.aborted && isAbortError(err)) {

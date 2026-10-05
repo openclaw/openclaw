@@ -357,11 +357,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       sessionKey: sessionStoreEntry.sessionKey,
       sessionId: sessionStoreEntry.entry.sessionId,
     };
-    const prepareRecovery = () =>
-      prepareSessionPendingInputDedupeRecovery(recoveryScope, sourceRunId);
-    reclaimPendingInput = await (recorder.withPendingInputCurrent
-      ? recorder.withPendingInputCurrent(prepareRecovery)
-      : prepareRecovery());
+    reclaimPendingInput = await prepareSessionPendingInputDedupeRecovery(
+      recoveryScope,
+      sourceRunId,
+    );
   }
   const claimInput = () => {
     const reclaim = reclaimPendingInput;

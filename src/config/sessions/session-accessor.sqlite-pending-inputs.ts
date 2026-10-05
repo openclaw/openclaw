@@ -467,7 +467,8 @@ export function prepareCurrentSessionPendingInputDedupeRecovery(
   ) {
     return undefined;
   }
-  assertPendingInputOwnerCurrent(owner);
+  // Preparation does not spend replay custody; the claim rechecks current authority.
+  assertSessionPendingInputLifetimeCurrent(owner);
   return (
     path: string,
     snapshot: { current: boolean; pending?: SessionPendingInputRow },
