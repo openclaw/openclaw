@@ -20,6 +20,7 @@ import {
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.sqlite-projection.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
@@ -726,7 +727,7 @@ it("releases agent leases for Doctor after the final Gateway stops while its pro
 
 it.skipIf(process.platform !== "linux")(
   "releases restart-aborted run leases before sidecar settlement and joins managed SIGTERM cleanup",
-  async () => {
+  async ({ signal }) => {
     const fixture = await createGatewayMetadataCloseFixture("gateway-agent-resource-close");
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -789,6 +790,12 @@ it.skipIf(process.platform !== "linux")(
       assert(admitted.status === "owned" && admitted.databaseClaim);
       operation = admitted.operation;
       operation.setPhase("running");
+      // Session delivery recovery joins its accepted reply before its service stops.
+      const replyAborted = waitForAbortSignal(operation.abortSignal);
+      kernel.kernel.setScheduledServiceHandles({
+        heartbeatRunner: kernel.runtimeState.heartbeatRunner,
+        stopDeliveryRecovery: () => Promise.race([replyAborted, release.promise]),
+      });
       const releaseClaim = admitted.databaseClaim.release;
       vi.spyOn(admitted.databaseClaim, "release").mockImplementation(() => {
         const released = Promise.resolve(releaseClaim());
@@ -837,12 +844,14 @@ it.skipIf(process.platform !== "linux")(
       });
       closing = close.mock.results[0]?.value;
       assert(closing);
-      await Promise.race([
-        entered.promise,
-        closing.then(() => {
-          throw new Error("Gateway acknowledged closure before its agent resource joined");
-        }),
-      ]);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          closing,
+          "Gateway acknowledged closure before its agent resource joined",
+        ),
+        signal,
+      );
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
       expect(admitted.databaseClaim.isCurrent()).toBe(false);
       await writerReleased.promise;
