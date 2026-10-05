@@ -106,13 +106,16 @@ function messageTexts(messages: Context["messages"]): string[] {
 
 /** Extracts the projected "Active exec sessions:" section from one boundary. */
 function findActiveExecSection(messages: Context["messages"]): string | undefined {
+  // The boundary refresh appends a new carrier rather than replacing the
+  // original, so the LAST matching section is the current one.
+  let last: string | undefined;
   for (const text of messageTexts(messages)) {
     const index = text.indexOf("Active exec sessions:");
     if (index >= 0) {
-      return text.slice(index, index + 500);
+      last = text.slice(index, index + 500);
     }
   }
-  return undefined;
+  return last;
 }
 
 describe("runEmbeddedAttempt active-exec boundary visibility", () => {

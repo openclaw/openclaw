@@ -84,12 +84,13 @@ function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): st
 }
 
 /**
- * Refreshes the active-exec-session fragment of the CURRENT-TURN carrier at each
- * boundary. The stored carrier text is a prompt-assembly snapshot; background
- * processes registered mid-turn must appear at the next model boundary without
- * rewriting any other fragment or any historical carrier. Only the last carrier
- * (the current turn's) is touched, and only its projected copy changes — the
- * persisted carrier details and transcript stay exactly as stored.
+ * Appends a refresh carrier with the current active-exec-session listing at
+ * each boundary. Background processes registered mid-turn appear at the next
+ * model boundary as a NEW carrier appended after the last existing carrier
+ * that carried an active-exec fragment. Previously emitted carrier bytes are
+ * never modified, preserving provider prompt-cache prefixes and reasoning
+ * continuity for append-only sessions. Works for both version 3 (raw) and
+ * version 4 (escaped) session projections.
  */
 function refreshCurrentTurnActiveExecSessions(
   messages: AgentMessage[],
@@ -98,40 +99,41 @@ function refreshCurrentTurnActiveExecSessions(
   let lastCarrierIndex = -1;
   for (const [index, message] of messages.entries()) {
     if (message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) {
-      lastCarrierIndex = index;
+      const details = runtimeContextDetailsSchema.safeParse(message.details);
+      if (
+        details.success &&
+        details.data.fragments.some((fragment) => fragment.text.startsWith("Active exec sessions:"))
+      ) {
+        lastCarrierIndex = index;
+      }
     }
   }
   if (lastCarrierIndex < 0) {
     return messages;
   }
-  return messages.map((message, index) => {
-    if (index !== lastCarrierIndex) {
-      return message;
-    }
-    const details = runtimeContextDetailsSchema.safeParse(message.details);
-    if (!details.success) {
-      return message;
-    }
-    if (
-      !details.data.fragments.some((fragment) => fragment.text.startsWith("Active exec sessions:"))
-    ) {
-      return message;
-    }
-    const sessions = listActiveProcessSessionReferences({ scopeKey }).toSorted((a, b) =>
-      a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0,
-    );
-    return {
-      ...message,
-      details: {
-        ...details.data,
-        fragments: details.data.fragments.map((fragment) =>
-          fragment.text.startsWith("Active exec sessions:")
-            ? { ...fragment, text: buildActiveExecSessionsSection(sessions) }
-            : fragment,
-        ),
-      },
-    };
-  });
+  const sessions = listActiveProcessSessionReferences({ scopeKey }).toSorted((a, b) =>
+    a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0,
+  );
+  const refreshText = buildActiveExecSessionsSection(sessions);
+  const refreshFragment: RuntimeContextFragment = {
+    kind: "conversation-data",
+    text: refreshText,
+  };
+  const refreshCarrier = {
+    role: "custom",
+    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+    content: refreshText,
+    details: {
+      source: "openclaw-runtime-context",
+      runtimeContextCarrier: true,
+      fragments: [refreshFragment],
+    },
+  } as AgentMessage;
+  return [
+    ...messages.slice(0, lastCarrierIndex + 1),
+    refreshCarrier,
+    ...messages.slice(lastCarrierIndex + 1),
+  ];
 }
 
 function projectRuntimeContextMessages(messages: AgentMessage[]): AgentMessage[] {
@@ -200,14 +202,13 @@ export function normalizeMessagesForLlmBoundary(
   const retained = options?.appendOnlyRuntimeContext
     ? withPersistedSenderContext
     : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+  const refreshed = options?.refreshActiveExecSessionsScopeKey
+    ? refreshCurrentTurnActiveExecSessions(retained, options.refreshActiveExecSessionsScopeKey)
+    : retained;
   if (!usesEscapedRuntimeContext(options?.sessionVersion)) {
-    return retained;
+    return refreshed;
   }
-  return projectRuntimeContextMessages(
-    options?.refreshActiveExecSessionsScopeKey
-      ? refreshCurrentTurnActiveExecSessions(retained, options.refreshActiveExecSessionsScopeKey)
-      : retained,
-  );
+  return projectRuntimeContextMessages(refreshed);
 }
 
 type CurrentPromptBoundaryInput = {
