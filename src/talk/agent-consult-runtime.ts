@@ -7,8 +7,10 @@ import {
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
+import { resolveEmbeddedCliBackendDispatchEligibility } from "../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveInitialEmbeddedRunModel } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
+import { resolveModelCandidateChain } from "../agents/model-fallback-candidates.js";
 import { runWithModelFallback } from "../agents/model-fallback-runner.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
@@ -519,6 +521,39 @@ export async function consultRealtimeVoiceAgent(params: {
         provider: params.provider,
         model: params.model,
       });
+      // Consults run on the embedded path only. A candidate whose provider is reachable
+      // solely through a subscription CLI runtime (e.g. anthropic via claude-cli with no
+      // API key) is certain to fail there, so start from the first candidate that can run.
+      // If none can, keep the configured chain so the real error still surfaces.
+      const runnableCandidates = resolveModelCandidateChain({
+        cfg: params.cfg,
+        agentId,
+        provider: primary.provider,
+        model: primary.modelId,
+      }).filter(
+        (candidate) =>
+          !resolveEmbeddedCliBackendDispatchEligibility({
+            provider: candidate.provider,
+            model: candidate.model,
+            agentId,
+            config: params.cfg,
+            agentDir,
+            workspaceDir,
+          }),
+      );
+      const [firstRunnable, ...laterRunnable] = runnableCandidates;
+      const skipsPrimary =
+        firstRunnable !== undefined &&
+        (firstRunnable.provider !== primary.provider || firstRunnable.model !== primary.modelId);
+      const route = skipsPrimary
+        ? {
+            provider: firstRunnable.provider,
+            model: firstRunnable.model,
+            fallbacksOverride: laterRunnable.map(
+              (candidate) => `${candidate.provider}/${candidate.model}`,
+            ),
+          }
+        : { provider: primary.provider, model: primary.modelId };
       // A consult that already ran a tool may have acted; never replay it on another model.
       let toolActivity = false;
       // The consult owns one terminal lifecycle event across its fallback attempts, like a
@@ -597,8 +632,7 @@ export async function consultRealtimeVoiceAgent(params: {
       const runPromise = runWithModelFallback({
         cfg: params.cfg,
         agentId,
-        provider: primary.provider,
-        model: primary.modelId,
+        ...route,
         runId,
         sessionId,
         lane: params.lane,

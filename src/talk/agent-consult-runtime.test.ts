@@ -47,6 +47,17 @@ vi.mock("../auto-reply/reply/session-fork.js", async (importOriginal) => {
   };
 });
 
+const cliDispatchMocks = vi.hoisted(() => ({
+  resolveEmbeddedCliBackendDispatchEligibility: vi.fn<
+    (params: { provider?: string }) => { provider: string } | undefined
+  >(() => undefined),
+}));
+
+vi.mock("../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
+  resolveEmbeddedCliBackendDispatchEligibility:
+    cliDispatchMocks.resolveEmbeddedCliBackendDispatchEligibility,
+}));
+
 let testTempDir: string | undefined;
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -705,6 +716,43 @@ describe("realtime voice agent consult runtime", () => {
       expect(call[0]?.deferTerminalLifecycle).toBe(true);
     }
     expect(lifecycle.map((evt) => evt.data.phase)).toEqual(["end"]);
+  });
+
+  it("skips a primary that can only run through a subscription CLI runtime", async () => {
+    cliDispatchMocks.resolveEmbeddedCliBackendDispatchEligibility.mockImplementation((params) =>
+      params.provider === "anthropic" ? { provider: "claude-cli" } : undefined,
+    );
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+
+    try {
+      const result = await runConsult({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-5-5",
+                fallbacks: ["openai/gpt-5.6-sol"],
+              },
+            },
+          },
+        } as never,
+        agentRuntime: runtime as never,
+        sessionKey: "voice:skip-cli-only",
+        runIdPrefix: "voice-realtime-consult:skip-cli-only",
+        args: { question: "What is on today?" },
+      });
+      expect(result).toEqual({ text: "Speak this." });
+    } finally {
+      cliDispatchMocks.resolveEmbeddedCliBackendDispatchEligibility.mockImplementation(
+        () => undefined,
+      );
+    }
+
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
   });
 
   it("does not replay a consult on a fallback model after a tool ran", async () => {
