@@ -85,6 +85,23 @@ export async function preserveSubagentRunForRestart(params: {
   );
 }
 
+const COLLECTOR_YIELD_ERROR =
+  "Collector yielded under a build that predates the admission gate, so it has no recorded collectorCompletion and nothing can continue it. Rerun the collector and have it end its turn normally instead of calling sessions_yield.";
+
+type YieldedRunContinuation = { state: "continuable" } | { state: "unreachable"; error: string };
+
+/**
+ * Owns "can a continuation still resume this yielded run?" for a row where
+ * `isYieldedSubagentRun` (execution observation) holds. Callers settle an unreachable run through the
+ * completion owner instead of leaving it parked. Every other yielded row stays continuable.
+ */
+export function resolveYieldedRunContinuation(entry: SubagentRunRecord): YieldedRunContinuation {
+  // A collector result is read by an explicit wait, never delivered by a continuation.
+  return entry.collect === true && entry.collectorCompletion === undefined
+    ? { state: "unreachable", error: COLLECTOR_YIELD_ERROR }
+    : { state: "continuable" };
+}
+
 export type SubagentYieldClaim =
   | "nothing-pending"
   | "pending-work"

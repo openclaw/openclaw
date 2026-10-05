@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
@@ -274,6 +275,43 @@ describe("agents_wait", () => {
       pending: ["pending"],
     });
     expect(isToolResultError(result)).toBe(false);
+  });
+
+  it("projects the registry settle reason only when the completion carries one", async () => {
+    const settled = collectorRun("settled", "agent:main:main", {
+      status: "failed",
+      reason: "yielded_without_result",
+    });
+    settled.execution = {
+      status: "terminal",
+      outcome: { status: "error", error: "Collector yielded without recording a result" },
+    };
+    settled.completion = { required: false, resultText: null, capturedAt: 10 };
+    const ordinary = collectorRun("ordinary", "agent:main:main", { status: "failed" });
+    ordinary.execution = {
+      status: "terminal",
+      outcome: { status: "error", error: "provider failed" },
+    };
+    ordinary.completion = { required: false, resultText: null, capturedAt: 11 };
+    records.set(settled.runId, settled);
+    records.set(ordinary.runId, ordinary);
+    const tool = createMainSessionWaitTool();
+
+    const result = await tool.execute("call", {
+      ids: [settled.runId, ordinary.runId],
+      timeoutSeconds: 0,
+    });
+
+    const completed = (result.details as { completed: Array<Record<string, unknown>> }).completed;
+    expect(completed.map((item) => [item.runId, item.status, item.reason])).toEqual([
+      ["settled", "failed", "yielded_without_result"],
+      ["ordinary", "failed", undefined],
+    ]);
+    expect("reason" in expectDefined(completed[1], "ordinary completion")).toBe(false);
+    const outputSchema = expectDefined(tool.outputSchema, "agents_wait output schema");
+    expect(Value.Check(outputSchema, result.details)).toBe(true);
+    const unknownReason = { completed: [{ ...completed[0], reason: "other" }], pending: [] };
+    expect(Value.Check(outputSchema, unknownReason)).toBe(false);
   });
 
   it.each([-60_000, 60_000])(

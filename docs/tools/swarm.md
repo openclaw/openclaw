@@ -576,6 +576,7 @@ type AgentsWaitResult = {
     structured?: unknown;
     error?: string;
     schemaError?: string;
+    reason?: "yielded_without_result";
     sessionKey: string;
     label?: string;
     usage?: { inputTokens: number; outputTokens: number };
@@ -593,6 +594,11 @@ A completed item can contain partial `structured` data and still have
 `error` is the authoritative terminal failure. Recovery code should prefer a
 nonblank `error`, then `schemaError`, then a nonblank `result`, and finally a
 run/status fallback.
+
+`reason: "yielded_without_result"` marks a collector that the registry settled after
+a legacy yield. Branch on it rather than on `error` text. It is absent on every other
+completion and independent of `schemaError`, so a settled collector with an
+`outputSchema` carries both.
 
 Individual failed items do not make a mixed `agents_wait` poll a top-level tool
 error. The poll remains a successful JSON result so callers can process its

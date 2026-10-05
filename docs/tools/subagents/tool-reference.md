@@ -405,7 +405,16 @@ collected explicitly. Other paths do not pass that context yet: a CLI-backed
 collector turn through the Gateway tool resolver can still be offered the tool
 and receive a successful `yielded` result. In every case a collector that yields
 is settled at its own terminal instead of pausing, so its waiter resolves rather
-than blocking for good.
+than blocking for good. A collector that an earlier version persisted as yielded
+without a result is settled as failed by the first registry sweep after the
+registry restores, and `agents_wait` then returns that failure with its error and
+`reason: "yielded_without_result"`. That row has no terminal turn left to evaluate,
+so the sweep records the failure itself as an `error` outcome, where a collector
+that yields now ends as an ordinary terminal. The optional `reason` appears only on
+that registry settlement; every other failed, killed, or timed-out collector omits
+it, and `status` keeps its four values. Only collectors are settled this way: a
+child that declared a message wait stays paused until a continuation reaches it,
+however long that takes.
 
 The registry also continues a yielded sub-agent when its announced children
 settle, including an orchestrator spawned by cron. That internal settlement

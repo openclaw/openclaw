@@ -48,6 +48,8 @@ export type SubagentCompletionRequest = {
   sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
+  /** Explicitly settle a yielded run that no continuation can reach; kill is the only other exception. */
+  settleYielded?: true;
 };
 
 export type ContextEngineSubagentEndedParams = {
@@ -101,6 +103,8 @@ type SwarmCollectorCompletion = NonNullable<SubagentRunReadRecord["collectorComp
   structured?: unknown;
   schemaError?: string;
   usage?: { inputTokens: number; outputTokens: number };
+  /** Set only when the registry sweeper settled a collector that yielded without a result. */
+  reason?: "yielded_without_result";
 };
 
 export type SwarmStructuredOutputState = {
