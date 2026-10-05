@@ -356,6 +356,37 @@ describe("requester settle dispatch deadline", () => {
     },
   );
 
+  it("never completes an ordinary batch on requester_turn_pending, so it cannot reach the settle park (#154252)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const child = settledChild();
+    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    deliver.mockResolvedValue({
+      delivered: false,
+      path: "direct",
+      disposition: "retryable",
+      reason: "requester_turn_pending",
+    });
+    const completeBatch = vi.fn();
+    for (let observation = 0; observation < 8; observation += 1) {
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
+          requesterSessionKey: REQUESTER_KEY,
+          settledEntry: child,
+          transitionBatch: publishWakeTransition,
+          completeBatch,
+        }),
+      ).resolves.toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+
+    expect(deliver.mock.calls.length).toBeGreaterThanOrEqual(8);
+    expect(completeBatch).not.toHaveBeenCalled();
+    expect(child.requesterSettleWake).toBeDefined();
+    expect(child.suppressCompletionDelivery).not.toBe(true);
+  });
+
   it("preserves the final attempt when its Gateway closes during runtime loading", async () => {
     const retired = settledChild();
     retired.requesterSettleWake!.attemptCount = 2;
