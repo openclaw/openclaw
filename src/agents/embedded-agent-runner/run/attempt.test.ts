@@ -762,19 +762,18 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   it.each([true, false])(
     "keeps repeated provider ids unique across compacted responses (prior history: %s)",
     async (hasPriorHistory) => {
-      const makeMessage = () => ({
-        role: "assistant",
-        content: [{ type: "toolCall", name: "exec", id: "exec_0", arguments: {} }],
-      });
+      const makeToolCall = () => ({ type: "toolCall", name: "exec", id: "exec_0", arguments: {} });
+      const makeMessage = (call = makeToolCall()) => ({ role: "assistant", content: [call] });
       const baseFn = vi.fn(() => {
-        const partial = makeMessage();
+        const partialCall = makeToolCall();
+        const partial = makeMessage(partialCall);
         const message = makeMessage();
         const result = makeMessage();
         return {
           async *[Symbol.asyncIterator]() {
             yield { type: "toolcall_delta", partial };
             // Later transport deltas can restore the provider id on the same block.
-            partial.content[0].id = "exec_0";
+            partialCall.id = "exec_0";
             yield { type: "toolcall_delta", partial };
             yield { type: "done", message };
           },
