@@ -407,10 +407,15 @@ export function refreshClientPluginNodeCapability(params: {
 }
 
 export function hasAuthorizedPluginNodeCapability(params: {
-  clients: Iterable<PluginNodeCapabilityClient>;
+  clients: Iterable<
+    PluginNodeCapabilityClient & {
+      connect?: { role?: string; caps?: readonly string[] };
+    }
+  >;
   surface: PluginNodeCapabilitySurface;
   capability: string;
   nowMs?: number;
+  renew?: boolean;
 }) {
   const surface = normalizeOptionalString(params.surface.surface);
   const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
@@ -423,6 +428,12 @@ export function hasAuthorizedPluginNodeCapability(params: {
     return false;
   }
   for (const client of params.clients) {
+    // Operators retain the existing capability-token path. Node connections
+    // additionally require the live effective surface after pairing approval.
+    const role = client.connect?.role;
+    if (role !== "operator" && (role !== "node" || !client.connect?.caps?.includes(surface))) {
+      continue;
+    }
     if (client.invalidated) {
       continue;
     }
@@ -431,7 +442,9 @@ export function hasAuthorizedPluginNodeCapability(params: {
       continue;
     }
     if (safeEqualSecret(entry.capability, params.capability)) {
-      entry.expiresAtMs = nextExpiresAtMs;
+      if (params.renew !== false) {
+        entry.expiresAtMs = nextExpiresAtMs;
+      }
       return true;
     }
   }
