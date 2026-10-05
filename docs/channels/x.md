@@ -124,12 +124,23 @@ For an explicitly configured account, the switch writes that account's override;
 otherwise it writes `channels.x.guests.enabled`. Account overrides inherit the
 other guest settings from the channel root.
 
-Guests receive only the core `read` and `ls` tools, further restricted by the
-agent's normal policy. They cannot edit files, run commands, browse or fetch the
-web, use memory, send messages, inspect other sessions, or create work sessions.
-Subagents, `sessions_spawn`, and `sessions_yield` are currently excluded. The
-optional `guests.tools.allow` can narrow access to `read`, `ls`, or neither;
-`guests.tools.deny` takes precedence. It cannot add stronger tools.
+Guests receive the core `read`, `ls`, `sessions_spawn`, `sessions_yield`, and
+`subagents` tools, further restricted by the agent's normal policy. They can
+start hidden helpers of the same agent. Helpers inherit the guest's restricted
+tools and repository root; they cannot become visible work sessions or target
+another agent. `sessions_yield` waits for helper completion, and `subagents`
+lists, waits for, or cancels helpers.
+
+Guests cannot edit files, run commands, browse or fetch the web, use memory,
+send messages, or inspect unrelated sessions. The optional `guests.tools.allow`
+can narrow the five default tools; an empty array disables all tools.
+`guests.tools.deny` takes precedence. Neither setting can add stronger tools.
+
+Hidden helpers require a host that advertises enforcement of these restrictions.
+Older hosts keep the `read` and `ls` defaults, even when they report the same
+OpenClaw version. The X replies settings page shows upgrade guidance when helper
+support is missing. Explicitly selecting only helper tools on an older host
+disables all guest tools; it does not restore the default read tools.
 
 Each guest mention gets a separate channel session and the quoted X thread
 context. It does not reuse a maintainer's conversation history, permission mode,
@@ -375,33 +386,33 @@ configured usernames alone cannot authorize a reply.
 
 These fields work at `channels.x` and on individual account entries unless noted.
 
-| Field                               | Default              | Purpose                                                                 |
-| ----------------------------------- | -------------------- | ----------------------------------------------------------------------- |
-| `enabled`                           | `true`               | Enables the channel or account.                                         |
-| `name`                              | Unset                | Optional account display name.                                          |
-| `userId`                            | Required             | Numeric user ID of the bot account.                                     |
-| `username`                          | Required             | Bot username without `@`.                                               |
-| `clientId`                          | Required             | OAuth2 confidential application client ID.                              |
-| `clientSecret`                      | Required             | Application secret; supports SecretRef.                                 |
-| `refreshToken`                      | Required             | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
-| `bearerToken`                       | Unset                | App-only Activity API bearer token; supports SecretRef.                 |
-| `events.mode`                       | `auto`               | `auto`, `stream`, or `poll`.                                            |
-| `events.pollSeconds`                | `60`                 | Mentions polling interval, minimum 15 seconds.                          |
-| `allowFrom`                         | `[]`                 | Numeric author IDs, optionally prefixed with `x:`.                      |
-| `groupPolicy`                       | `allowlist`          | `allowlist`, `open`, or `disabled`.                                     |
-| `dmPolicy`                          | `disabled`           | Only `disabled` is accepted.                                            |
-| `threadContext.maxPosts`            | `50`                 | Maximum posts included in agent thread context, from 2 to 100.          |
-| `guests.enabled`                    | `false`              | Enables repository-only answers for non-allowlisted authors.            |
-| `guests.maxMentionsPerAuthorPerDay` | `5`                  | Per-author, per-account UTC-day limit, from 0 to 1000.                  |
-| `guests.threadContextMaxPosts`      | `10`                 | Guest thread context cap, from 2 to 100 posts.                          |
-| `guests.tools.allow`                | `["read", "ls"]`     | Narrows the read-only guest tools; an empty array disables all tools.   |
-| `guests.tools.deny`                 | `[]`                 | Further denies guest tools; deny wins.                                  |
-| `costLimits.dailyUsd`               | `100`                | Maximum estimated X API spend per UTC day; `0` blocks paid calls.       |
-| `costLimits.monthlyUsd`             | `1000`               | Maximum estimated X API spend per billing cycle; `0` blocks paid calls. |
-| `costLimits.cycleStartDay`          | `1`                  | UTC billing-cycle start day of the month, from 1 to 28.                 |
-| `replySignature`                    | `🤖 automated reply` | Added to the last reply chunk; up to 140 characters, empty disables it. |
-| `accounts`                          | Unset                | Named account overrides; channel root only.                             |
-| `defaultAccount`                    | `default`            | Account selected when none is specified; channel root only.             |
+| Field                               | Default                 | Purpose                                                                 |
+| ----------------------------------- | ----------------------- | ----------------------------------------------------------------------- |
+| `enabled`                           | `true`                  | Enables the channel or account.                                         |
+| `name`                              | Unset                   | Optional account display name.                                          |
+| `userId`                            | Required                | Numeric user ID of the bot account.                                     |
+| `username`                          | Required                | Bot username without `@`.                                               |
+| `clientId`                          | Required                | OAuth2 confidential application client ID.                              |
+| `clientSecret`                      | Required                | Application secret; supports SecretRef.                                 |
+| `refreshToken`                      | Required                | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
+| `bearerToken`                       | Unset                   | App-only Activity API bearer token; supports SecretRef.                 |
+| `events.mode`                       | `auto`                  | `auto`, `stream`, or `poll`.                                            |
+| `events.pollSeconds`                | `60`                    | Mentions polling interval, minimum 15 seconds.                          |
+| `allowFrom`                         | `[]`                    | Numeric author IDs, optionally prefixed with `x:`.                      |
+| `groupPolicy`                       | `allowlist`             | `allowlist`, `open`, or `disabled`.                                     |
+| `dmPolicy`                          | `disabled`              | Only `disabled` is accepted.                                            |
+| `threadContext.maxPosts`            | `50`                    | Maximum posts included in agent thread context, from 2 to 100.          |
+| `guests.enabled`                    | `false`                 | Enables repository-only answers for non-allowlisted authors.            |
+| `guests.maxMentionsPerAuthorPerDay` | `5`                     | Per-author, per-account UTC-day limit, from 0 to 1000.                  |
+| `guests.threadContextMaxPosts`      | `10`                    | Guest thread context cap, from 2 to 100 posts.                          |
+| `guests.tools.allow`                | Host-supported defaults | Narrows the default guest tools; an empty array disables all tools.     |
+| `guests.tools.deny`                 | `[]`                    | Further denies guest tools; deny wins.                                  |
+| `costLimits.dailyUsd`               | `100`                   | Maximum estimated X API spend per UTC day; `0` blocks paid calls.       |
+| `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls. |
+| `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                 |
+| `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it. |
+| `accounts`                          | Unset                   | Named account overrides; channel root only.                             |
+| `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.             |
 
 ## Troubleshooting
 
