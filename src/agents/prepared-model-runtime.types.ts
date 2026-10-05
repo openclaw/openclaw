@@ -34,12 +34,21 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  /** Extends foreground waiting for one caller; catalog access caps this at 12 seconds. */
+  foregroundWaitMs?: number;
 };
 
 export type PreparedNativeModelSelection = {
   provider: string;
   modelId: string;
   runtime: string;
+  /** Session-pinned auth profile for account-scoped native discovery. */
+  authProfileId?: string;
+};
+
+/** Per-call selected-row result; never persisted on a catalog snapshot. */
+export type PreparedNativeModelCatalogLoadOptions = {
+  onSelectionReady?: (ready: boolean) => void;
 };
 
 export type PreparedModelRuntimeResourceClaim = { release: () => Promise<void> };
@@ -99,6 +108,7 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     /** Acquires the selected runtime's native facts before host model resolution. */
     loadNativeModelCatalog?: (
       selection: PreparedNativeModelSelection,
+      options?: PreparedNativeModelCatalogLoadOptions,
     ) => Promise<ModelCatalogSnapshot>;
     /** Full static models for configured refs, resolved once at the lifecycle boundary. */
     configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];

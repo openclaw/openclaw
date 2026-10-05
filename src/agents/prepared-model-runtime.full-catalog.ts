@@ -43,6 +43,7 @@ import {
   buildPreparedPluginModelCatalog,
 } from "./prepared-model-runtime.plugin-generation.js";
 import type {
+  PreparedNativeModelCatalogLoadOptions,
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
@@ -599,6 +600,7 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   ) => Promise<ModelCatalogSnapshot>;
   loadNativeModelCatalog: (
     selection: PreparedNativeModelSelection,
+    options?: PreparedNativeModelCatalogLoadOptions,
   ) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
