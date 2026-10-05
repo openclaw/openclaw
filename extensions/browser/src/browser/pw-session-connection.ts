@@ -25,7 +25,7 @@ import {
   closeRelayOperationConnection,
 } from "./extension-relay/owner-playwright.js";
 import { getBorrowedRelayCdpAccess } from "./extension-relay/relay-access.js";
-import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+import { connectOverCdpTransport, UnresponsiveCdpTargetError } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -497,7 +497,11 @@ export async function connectBrowser(
             throw new Error("Relay connection was superseded");
           }
         } catch (err) {
-          if (!configuredIsWebSocket || endpointUrl === normalized) {
+          if (
+            err instanceof UnresponsiveCdpTargetError ||
+            !configuredIsWebSocket ||
+            endpointUrl === normalized
+          ) {
             throw err;
           }
           browser = await connectEndpoint(normalized, configuredPin?.lookup);
@@ -528,7 +532,7 @@ export async function connectBrowser(
         }
         // Don't retry rate-limit errors; retrying worsens the 429.
         const errMsg = formatErrorMessage(err);
-        if (errMsg.includes("rate limit")) {
+        if (err instanceof UnresponsiveCdpTargetError || errMsg.includes("rate limit")) {
           break;
         }
         await new Promise((r) => {
