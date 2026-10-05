@@ -2150,8 +2150,9 @@ fi
       },
     );
 
-    expect(existsSync(attemptsPath), result.stderr).toBe(true);
-    expect(readFileSync(attemptsPath, "utf8"), result.stderr).toBe(String(attempts));
+    const publishOutput = `${result.stdout}\n${result.stderr}`;
+    expect(existsSync(attemptsPath), publishOutput).toBe(true);
+    expect(readFileSync(attemptsPath, "utf8"), publishOutput).toBe(String(attempts));
     expect(readFileSync(sleepsPath, "utf8")).toBe(sleeps.map((delay) => `${delay}\n`).join(""));
     expect(result.status === 0).toBe(attempts > failures && !mutate);
     if (diagnostic) {
