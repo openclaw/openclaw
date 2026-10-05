@@ -290,7 +290,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/monitor/catchup-startup.test.ts",
   "extensions/imessage/src/monitor.debounce-policy.test.ts",
   "extensions/imessage/src/monitor.last-route.test.ts",
-  "extensions/imessage/src/monitor.media-policy.test.ts",
   "extensions/imessage/src/monitor.plugin-payload.test.ts",
   "extensions/imessage/src/monitor.watch-subscribe-retry.test.ts",
   "extensions/matrix/doctor-contract-api.account-state.test.ts",
