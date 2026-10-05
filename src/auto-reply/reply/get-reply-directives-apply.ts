@@ -3,6 +3,7 @@ import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -32,7 +33,7 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = AgentConfig;
 
 const commandsStatusLoader = createLazyImportLoader(() => import("./commands-status.runtime.js"));
 const directiveLevelsLoader = createLazyImportLoader(
@@ -174,36 +175,6 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
-  const directiveModelState = {
-    modelPolicy: modelState.modelPolicy,
-    operatorAuthority: modelState.operatorAuthority,
-    allowedModelKeys: modelState.allowedModelKeys,
-    allowedModelCatalog: modelState.allowedModelCatalog,
-    resetModelOverride: modelState.resetModelOverride,
-  };
-  const createDirectiveHandlingBase = () => ({
-    cfg,
-    agentId,
-    directives,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    ...directiveModelState,
-    provider,
-    model,
-    initialModelLabel,
-    formatModelSwitchEvent,
-    canPersistStickyModelSelection,
-    ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
-  });
-
   let directiveAck: ReplyPayload | undefined;
   let selectionCatalog = modelState.allowedModelCatalog;
 
@@ -286,7 +257,7 @@ export async function applyInlineDirectiveOverrides(params: {
     effectiveModelDirective &&
     isModelSelectionLocked(sessionEntry)
   ) {
-    const lockedModelResolution = resolveEffectiveModelSelection();
+    const lockedModelResolution = await resolveEffectiveModelSelection();
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
       return directiveRejection("model-selection-locked", MODEL_SELECTION_LOCKED_MESSAGE);
@@ -358,7 +329,30 @@ export async function applyInlineDirectiveOverrides(params: {
     const reply = await (
       await directiveImplLoader.load()
     ).handleDirectiveOnly({
-      ...createDirectiveHandlingBase(),
+      cfg,
+      agentId,
+      directives,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled,
+      elevatedAllowed,
+      elevatedFailures,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      modelPolicy: modelState.modelPolicy,
+      operatorAuthority: modelState.operatorAuthority,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      resetModelOverride: modelState.resetModelOverride,
+      provider,
+      model,
+      initialModelLabel,
+      formatModelSwitchEvent,
+      canPersistStickyModelSelection,
+      ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
       ...currentLevels,
       thinkingCatalog,
       ctx,
@@ -384,7 +378,7 @@ export async function applyInlineDirectiveOverrides(params: {
     // Only the exact model-only case uses the focused service; mixed directives
     // fall through so their settings remain one broad atomic session transaction.
     if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
-      const modelResolution = resolveEffectiveModelSelection();
+      const modelResolution = await resolveEffectiveModelSelection();
       if (modelResolution.errorText) {
         typing.cleanup();
         return directiveRejection("model-selection-rejected", modelResolution.errorText);

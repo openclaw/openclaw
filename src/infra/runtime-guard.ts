@@ -63,45 +63,31 @@ export function parseSemver(version: string | null): NodeReleaseVersion | null {
 /** Reads current process runtime metadata for startup support checks. */
 export async function detectRuntime(): Promise<RuntimeDetails> {
   const bunVersion = process.versions?.bun;
-  const kind: RuntimeKind = bunVersion ? "bun" : process.versions?.node ? "node" : "unknown";
-  const version = bunVersion ?? process.versions?.node ?? null;
-  const execPath = process.execPath ?? null;
-  const pathEnv = process.env.PATH ?? "(not set)";
-  const sqlite = await detectCurrentRuntimeSqlite();
-
-  return {
-    kind,
-    version,
-    execPath,
-    pathEnv,
-    hasNodeSqlite: sqlite.available,
-    sqliteVersion: sqlite.version,
-    sqliteSelectionError: sqlite.selectionError,
-    sqliteProbe: sqlite.probe,
+  const details: RuntimeDetails = {
+    kind: bunVersion ? "bun" : process.versions?.node ? "node" : "unknown",
+    version: bunVersion ?? process.versions?.node ?? null,
+    execPath: process.execPath ?? null,
+    pathEnv: process.env.PATH ?? "(not set)",
+    hasNodeSqlite: false,
+    sqliteVersion: null,
+    sqliteSelectionError: undefined,
+    sqliteProbe: undefined,
   };
-}
-
-async function detectCurrentRuntimeSqlite(): Promise<{
-  available: boolean;
-  version: string | null;
-  selectionError?: string;
-  probe?: SqliteCapabilities;
-}> {
   try {
     ensureSqliteLibrarySelected();
   } catch (error) {
-    return {
-      available: false,
-      version: null,
-      selectionError: error instanceof Error ? error.message : String(error),
-    };
+    details.sqliteSelectionError = error instanceof Error ? error.message : String(error);
+    return details;
   }
   try {
     const probe = await detectCurrentSqliteCapabilities();
-    return { available: probe.available, version: probe.version, probe };
+    details.hasNodeSqlite = probe.available;
+    details.sqliteVersion = probe.version;
+    details.sqliteProbe = probe;
   } catch {
-    return { available: false, version: null };
+    return details;
   }
+  return details;
 }
 
 /** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */

@@ -228,7 +228,7 @@ suite.define(() => {
   );
 
   it.each(["patch", "command-metadata"])(
-    "coalesces a burst of %s events without reloading models or auth",
+    "coalesces a burst of %s events into one catalog refresh without reloading auth",
     async (reason) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
         await seedSharedSessionPanes(page);
@@ -236,17 +236,17 @@ suite.define(() => {
           agentRuntime: { id: "alternate", source: "model" },
           available: true,
         };
-        const metadataModel = { ...model, runtimeChoices: [runtimeChoice] };
+        const catalogModel = { ...model, runtimeChoices: [runtimeChoice] };
         const gateway = await installMockGateway(page, {
           sessionKey: sessionKeys[0],
           models: [model],
           methodResponses: {
             "sessions.list": sessionsResponse(),
-            "chat.metadata": { commands: [], models: [metadataModel] },
+            "chat.metadata": { commands: [] },
             "models.list": {
               models: [
                 {
-                  ...metadataModel,
+                  ...catalogModel,
                   manualSelectionAllowed: true,
                   runtimeChoices: [{ ...runtimeChoice, manualSelectionAllowed: true }],
                 },
@@ -284,7 +284,7 @@ suite.define(() => {
         await page.clock.runFor(2_500);
         expect.soft(await requestCounts(gateway)).toEqual({
           "chat.metadata": before["chat.metadata"] + 1,
-          "models.list": before["models.list"],
+          "models.list": before["models.list"] + 1,
         });
         expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
         expect(await sessionFacts()).toHaveLength(factsBefore + 2);
@@ -307,11 +307,11 @@ suite.define(() => {
         await page.clock.runFor(100);
         expect(await requestCounts(gateway)).toEqual({
           "chat.metadata": visibleCounts["chat.metadata"] + 1,
-          "models.list": visibleCounts["models.list"],
+          "models.list": visibleCounts["models.list"] + 1,
         });
 
-        // Metadata still detects unmarked projection changes; explicit selections
-        // carry the owner's hint and must refresh before the debounce elapses.
+        // The direct catalog refresh catches unmarked selection changes. Explicit
+        // selections carry the owner's hint and refresh before the debounce elapses.
         for (const catalogChanged of [false, true]) {
           const selectedModel = catalogChanged ? { ...model, name: "Selected model" } : freshModel;
           const accountSelection = {
@@ -320,11 +320,6 @@ suite.define(() => {
             label: "Replacement account",
             source: "user",
           };
-          await gateway.setMethodResponse("chat.metadata", {
-            commands: [],
-            models: [metadataModel],
-            accountSelection,
-          });
           await gateway.setMethodResponse("models.list", {
             models: [selectedModel],
             accountSelection,

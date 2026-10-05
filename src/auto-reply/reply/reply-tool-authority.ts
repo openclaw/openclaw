@@ -23,7 +23,7 @@ import {
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { cloneConfigWithResolutionFacts } from "../../config/resolution-facts.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
@@ -46,14 +46,11 @@ export type ReplyToolAuthorityInput = {
     Pick<
       FollowupRun["run"],
       | "config"
-      | "sessionId"
       | "sessionKey"
       | "runtimePolicySessionKey"
       | "agentId"
       | "agentDir"
       | "agentAccountId"
-      | "provider"
-      | "model"
       | "messageProvider"
       | "chatType"
       | "conversationToolPolicy"
@@ -67,13 +64,11 @@ export type ReplyToolAuthorityInput = {
       | "senderUsername"
       | "senderE164"
       | "senderIsOwner"
-      | "workspaceDir"
       | "cwd"
       | "inputProvenance"
       | "trustedInternalHandoff"
       | "scheduledToolPolicy"
       | "runtimePluginToolGrant"
-      | "sessionFile"
       | "permissionMode"
       | "toolOverrides"
       | "execOverrides"
@@ -136,52 +131,6 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     clientCaps: ctx.GatewayClientCaps,
     gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
     toolBindings: ctx.GatewayRunToolBindings,
-  };
-}
-
-function snapshotFollowupRunToolAuthority(run: ReplyToolAuthorityInput): ReplyToolAuthorityInput {
-  const handoff = run.run.trustedInternalHandoff;
-  const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
-  const intersection = run.toolsAllow
-    ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
-    : undefined;
-  if (toolsAllow && intersection) {
-    attachToolAllowlistIntersection(toolsAllow, intersection);
-  }
-  return {
-    originatingChannel: run.originatingChannel,
-    operatorAuthority: run.operatorAuthority,
-    toolsAllow,
-    disableTools: run.disableTools === true,
-    run: {
-      ...run.run,
-      config: run.run.config ? cloneConfigWithResolutionFacts(run.run.config) : undefined,
-      conversationToolPolicy: structuredClone(run.run.conversationToolPolicy),
-      inputProvenance: structuredClone(run.run.inputProvenance),
-      scheduledToolPolicy: structuredClone(run.run.scheduledToolPolicy),
-      runtimePluginToolGrant: structuredClone(run.run.runtimePluginToolGrant),
-      // Copy policy facts while retaining the settle owner's live revocation check.
-      trustedInternalHandoff: handoff
-        ? {
-            ...handoff,
-            ...(handoff.settleBatch
-              ? {
-                  settleBatch: {
-                    ...handoff.settleBatch,
-                    sourceSessionKeys: [...handoff.settleBatch.sourceSessionKeys],
-                  },
-                }
-              : {}),
-          }
-        : undefined,
-      toolOverrides: structuredClone(run.run.toolOverrides),
-      execOverrides: structuredClone(run.run.execOverrides),
-      bashElevated: structuredClone(run.run.bashElevated),
-      toolBindings: structuredClone(run.run.toolBindings),
-      clientCaps: run.run.clientCaps ? [...run.run.clientCaps] : undefined,
-      gatewayUiCommandTarget: structuredClone(run.run.gatewayUiCommandTarget),
-      memberRoleIds: run.run.memberRoleIds ? [...run.run.memberRoleIds] : undefined,
-    },
   };
 }
 
@@ -347,7 +296,8 @@ function assertCurrentOperatorAuthority(authority: AdmittedRunOperatorAuthority 
   }
 }
 
-function resolveReplyToolAuthorityInputFingerprint(
+/** Fingerprints the complete model-facing tool authority owned by one queued turn. */
+export function resolveFollowupRunToolAuthorityFingerprint(
   snapshot: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
 ): string {
@@ -412,20 +362,50 @@ function resolveReplyToolAuthorityInputFingerprint(
     .digest("hex");
 }
 
-/** Fingerprints the complete model-facing tool authority owned by one queued turn. */
-export function resolveFollowupRunToolAuthorityFingerprint(
-  run: ReplyToolAuthorityInput,
-  route?: ReplyToolAuthorityRoute,
-): string {
-  return resolveReplyToolAuthorityInputFingerprint(snapshotFollowupRunToolAuthority(run), route);
-}
-
 /** Capture execution policy once; incoming overlays replace only caller-owned facts. */
 export function prepareReplyToolAuthority(
   run: ReplyToolAuthorityInput,
   narrow?: (input: ReplyToolAuthorityInput) => ReplyToolAuthorityInput,
 ): ReplyToolAuthoritySnapshot {
-  const snapshot = snapshotFollowupRunToolAuthority(run);
+  const handoff = run.run.trustedInternalHandoff;
+  const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
+  const intersection = run.toolsAllow
+    ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
+    : undefined;
+  if (toolsAllow && intersection) {
+    attachToolAllowlistIntersection(toolsAllow, intersection);
+  }
+  const snapshot: ReplyToolAuthorityInput = {
+    originatingChannel: run.originatingChannel,
+    operatorAuthority: run.operatorAuthority,
+    toolsAllow,
+    disableTools: run.disableTools === true,
+    run: {
+      ...run.run,
+      config: run.run.config ? captureRuntimeConfig(run.run.config) : undefined,
+      conversationToolPolicy: structuredClone(run.run.conversationToolPolicy),
+      inputProvenance: structuredClone(run.run.inputProvenance),
+      scheduledToolPolicy: structuredClone(run.run.scheduledToolPolicy),
+      runtimePluginToolGrant: structuredClone(run.run.runtimePluginToolGrant),
+      // Copy policy facts while retaining the settle owner's live revocation check.
+      trustedInternalHandoff: handoff
+        ? {
+            ...handoff,
+            settleBatch: handoff.settleBatch && {
+              ...handoff.settleBatch,
+              sourceSessionKeys: [...handoff.settleBatch.sourceSessionKeys],
+            },
+          }
+        : undefined,
+      toolOverrides: structuredClone(run.run.toolOverrides),
+      execOverrides: structuredClone(run.run.execOverrides),
+      bashElevated: structuredClone(run.run.bashElevated),
+      toolBindings: structuredClone(run.run.toolBindings),
+      clientCaps: run.run.clientCaps ? [...run.run.clientCaps] : undefined,
+      gatewayUiCommandTarget: structuredClone(run.run.gatewayUiCommandTarget),
+      memberRoleIds: run.run.memberRoleIds ? [...run.run.memberRoleIds] : undefined,
+    },
+  };
   return {
     personalToolOwner: {
       operatorAuthority: snapshot.operatorAuthority,
@@ -434,12 +414,15 @@ export function prepareReplyToolAuthority(
       gatewayUiCommandTarget: snapshot.run.gatewayUiCommandTarget,
     },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
-    fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
+    fingerprint: (route) => resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
     project: (overlay, route) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       const incoming = applyReplyToolAuthorityOverlay(snapshot, overlay);
-      return resolveReplyToolAuthorityInputFingerprint(narrow ? narrow(incoming) : incoming, route);
+      return resolveFollowupRunToolAuthorityFingerprint(
+        narrow ? narrow(incoming) : incoming,
+        route,
+      );
     },
   };
 }

@@ -101,14 +101,12 @@ export function resolveExtraParams(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
-  cacheRetention?: "none" | "short" | "long";
+type CacheRetentionStreamOptions = SimpleStreamOptions & {
   cachedContent?: string;
   topP?: number;
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;
-  stop?: string[];
 };
 function resolveSupportedTransport(value: unknown): AgentRuntimeTransport | undefined {
   return value === "sse" ||
@@ -216,10 +214,7 @@ function stripRequestScopedExtraParams(
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
-function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined): boolean {
-  if (!value) {
-    return false;
-  }
+function hasRequestScopedExtraParams(value: Record<string, unknown>): boolean {
   return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
 }
 
@@ -513,7 +508,9 @@ function applyPostPluginStreamWrappers(
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
       shouldPatchModel: (model) =>
-        isDeepSeekV4OpenAICompatibleModel(model) && deepSeekV4NativeThinkingAllowedByCompat(model),
+        isDeepSeekV4OpenAICompletionsModel(model) &&
+        !isMicrosoftFoundryProviderId(model.provider) &&
+        deepSeekV4NativeThinkingAllowedByCompat(model),
     });
     ctx.agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(ctx.agent.streamFn);
 
@@ -522,13 +519,15 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
+      shouldPatchModel: (model) =>
+        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS),
     });
     // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
     // the response-side fallback here for custom Xiaomi-compatible proxy routes.
     ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
       baseStreamFn: ctx.agent.streamFn,
-      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
+      shouldPatchModel: (model) =>
+        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS),
     });
 
     // Guard Google-family payloads against invalid negative thinking budgets
@@ -584,10 +583,6 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   return withoutSuffix.split("/").pop();
 }
 
-function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  return isDeepSeekV4OpenAICompletionsModel(model) && !isMicrosoftFoundryProviderId(model.provider);
-}
-
 function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
@@ -641,34 +636,24 @@ function createDeepSeekV4NonNativeCompatSanitizerWrapper(
     return undefined;
   }
   return (model, context, options) => {
-    if (!shouldSanitizeDeepSeekV4NonNativeFields(model)) {
+    if (
+      !isDeepSeekV4OpenAICompletionsModel(model) ||
+      (!isMicrosoftFoundryProviderId(model.provider) &&
+        deepSeekV4NativeThinkingAllowedByCompat(model))
+    ) {
       return baseStreamFn(model, context, options);
     }
     return streamWithPayloadPatch(baseStreamFn, model, context, options, (payload) => {
       delete payload.thinking;
-      stripDeepSeekV4ReasoningContent(payload);
+      if (Array.isArray(payload.messages)) {
+        for (const message of payload.messages) {
+          if (message && typeof message === "object") {
+            delete (message as Record<string, unknown>).reasoning_content;
+          }
+        }
+      }
     });
   };
-}
-
-function shouldSanitizeDeepSeekV4NonNativeFields(model: Parameters<StreamFn>[0]): boolean {
-  return (
-    isDeepSeekV4OpenAICompletionsModel(model) &&
-    (isMicrosoftFoundryProviderId(model.provider) ||
-      !deepSeekV4NativeThinkingAllowedByCompat(model))
-  );
-}
-
-function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    delete (message as Record<string, unknown>).reasoning_content;
-  }
 }
 
 const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
@@ -680,23 +665,15 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
-function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    normalizedModelId !== undefined &&
-    MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
-  );
-}
-
-function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
+function isMiMoOpenAICompatibleModel(
   model: Parameters<StreamFn>[0],
+  modelIds: ReadonlySet<string>,
 ): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
     normalizedModelId !== undefined &&
-    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
+    modelIds.has(normalizedModelId)
   );
 }
 

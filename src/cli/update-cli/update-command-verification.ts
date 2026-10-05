@@ -1,5 +1,6 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import type { SystemdServiceStartRefusal } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
@@ -123,7 +124,9 @@ export async function verifyPreviousManagedGatewayForUpdate(
   const verdict = params.service.serviceUpdateVerdict;
   const installationDrift = verdict?.kind === "owned" && verdict.requiresInstallRootRefresh;
   const identity = installationDrift
-    ? await (await import("./update-command-package.js")).readPackageUpdateIdentity(params.root)
+    ? await (
+        await import("./update-command-package-identity.js")
+      ).readPackageUpdateIdentity(params.root)
     : undefined;
   params.assertCurrent?.();
   let verified = false;
@@ -196,7 +199,12 @@ export async function verifyUpdatedGateway(
     onVerified?: (verifiedAtMs: number) => void;
     purpose?: "recovery";
   },
-): Promise<UpdateRepairValidation & { pluginWarnings?: PluginUpdateWarning[] }> {
+): Promise<
+  UpdateRepairValidation & {
+    pluginWarnings?: PluginUpdateWarning[];
+    serviceDefinitionRefusal?: SystemdServiceStartRefusal;
+  }
+> {
   const startedAtMs = Date.now();
   const { proofOptions, assertCurrent } = captureUpdateGatewayReadinessOwner(params);
   const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
@@ -218,6 +226,15 @@ export async function verifyUpdatedGateway(
       updateGatewayHealthFacts(health, params.gatewayPort, readyz),
       { env: proofOptions.run.env },
     );
+  }
+  const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
+  if (serviceDefinitionRefusal && (!health.healthy || !serviceRunning || !readyz)) {
+    return {
+      ok: false,
+      score: 0,
+      summary: serviceDefinitionRefusal.message,
+      serviceDefinitionRefusal,
+    };
   }
   const recordVerificationStep = (
     failureFacts?: UpdateFailureFact[],

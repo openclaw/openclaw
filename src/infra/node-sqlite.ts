@@ -157,13 +157,3 @@ export function openNodeSqliteDatabase(
   registerSqliteReaderConnection(database);
   return database;
 }
-
-/** Compare versions only across reads on the same connection. */
-export function readSqliteDataVersion(database: import("node:sqlite").DatabaseSync): number {
-  // SAFETY: SQLite names this PRAGMA's column data_version; its numeric value is checked below.
-  const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
-  if (typeof row.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
-  }
-  return row.data_version;
-}

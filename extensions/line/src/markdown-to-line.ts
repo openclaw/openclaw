@@ -16,16 +16,7 @@ type FlexMessage = messagingApi.FlexMessage;
 type FlexComponent = messagingApi.FlexComponent;
 type FlexSpan = messagingApi.FlexSpan;
 
-export interface ProcessedLineMessage {
-  /** The processed text with markdown stripped */
-  text: string;
-  /** Flex messages extracted from tables/code blocks */
-  flexMessages: FlexMessage[];
-  /** Source-ordered delivery parts whenever Markdown contains rich blocks. */
-  segments?: Array<{ type: "text"; text: string } | { type: "flex"; message: FlexMessage }>;
-}
-
-type LineMessageSegment = NonNullable<ProcessedLineMessage["segments"]>[number];
+type LineMessageSegment = { type: "text"; text: string } | { type: "flex"; message: FlexMessage };
 
 interface CodeBlock {
   language?: string;
@@ -203,9 +194,9 @@ function sameSpanStyle(left: FlexSpan, right: FlexSpan): boolean {
   );
 }
 
-function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string): RenderedCell {
-  if (!cell?.text.trim()) {
-    return { text: fallback, hasMarkup: false };
+function renderTableCell(cell: MarkdownTableCell): RenderedCell {
+  if (!cell.text.trim()) {
+    return { text: "-", hasMarkup: false };
   }
 
   const codeSpans = cell.styles.filter((span) => span.style === "code");
@@ -285,7 +276,7 @@ function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string):
     spans
       .map((span) => span.text ?? "")
       .join("")
-      .trim() || fallback;
+      .trim() || "-";
   return {
     text: renderedText,
     ...(hasMarkup ? { contents: spans } : {}),
@@ -304,7 +295,7 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
   const renderCells = (cells: MarkdownTableCell[]): RenderedCell[] | undefined => {
     const rendered: RenderedCell[] = [];
     for (const cell of cells) {
-      const prepared = renderTableCell(cell, "-");
+      const prepared = renderTableCell(cell);
       if (requiresPlainCells && prepared.hasMarkup) {
         return undefined;
       }
@@ -422,7 +413,7 @@ function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
 }
 
 /** Parse once, route existing block surfaces to Flex, and project the remainder as plain text. */
-export function processLineMessage(text: string): ProcessedLineMessage {
+export function processLineMessage(text: string): LineMessageSegment[] {
   const { ir, tables } = parseLineMarkdown(text);
   const codeSpans = ir.styles.filter((span) => span.style === "code_block");
   const plainTextInsertions: PlainTextInsertion[] = [];
@@ -461,12 +452,6 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   }
 
   const segments: LineMessageSegment[] = [];
-  const processedText = projectPlainText(ir, codeSpans, plainTextInsertions, (segment) =>
-    segments.push(segment),
-  );
-  return {
-    text: processedText,
-    flexMessages: segments.flatMap((segment) => (segment.type === "flex" ? [segment.message] : [])),
-    ...(plainTextInsertions.length > 0 ? { segments } : {}),
-  };
+  projectPlainText(ir, codeSpans, plainTextInsertions, (segment) => segments.push(segment));
+  return segments;
 }

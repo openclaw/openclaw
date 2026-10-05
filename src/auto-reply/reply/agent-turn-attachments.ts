@@ -14,15 +14,6 @@ import { hasInboundMedia } from "./inbound-media.js";
 export const loadAgentTurnMediaRuntime = createLazyPromise(
   () => import("./dispatch-acp-media.runtime.js"),
 );
-type AgentTurnAttachmentRuntime = Pick<
-  Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
-  | "MediaAttachmentCache"
-  | "isImageAttachment"
-  | "isMediaUnderstandingSkipError"
-  | "normalizeAttachments"
-  | "resolveMediaAttachmentLocalRoots"
->;
-
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
@@ -45,9 +36,7 @@ export function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<num
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
-  runtime?: AgentTurnAttachmentRuntime;
   includeRecentHistoryImages?: boolean;
-  includeAttachmentIndexes?: boolean;
 }): Promise<{
   attachments: AgentTurnAttachment[];
   attachmentIndexes?: number[];
@@ -60,7 +49,7 @@ export async function resolveAgentTurnAttachments(params: {
   ) {
     return { attachments: [], recentHistoryImages: [] };
   }
-  const runtime = params.runtime ?? (await loadAgentTurnMediaRuntime());
+  const runtime = await loadAgentTurnMediaRuntime();
   const currentAttachments = runtime
     .normalizeAttachments(params.ctx)
     .map((attachment) =>
@@ -167,7 +156,7 @@ export async function resolveAgentTurnAttachments(params: {
   }
   return {
     attachments: results,
-    ...(params.includeAttachmentIndexes ? { attachmentIndexes: resultIndexes } : {}),
+    attachmentIndexes: resultIndexes,
     recentHistoryImages: resolvedHistoryImages,
   };
 }

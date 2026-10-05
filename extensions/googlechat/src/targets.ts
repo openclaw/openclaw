@@ -77,9 +77,6 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
     throw new Error("Missing Google Chat target.");
   }
   const base = stripMessageSuffix(normalized);
-  if (isGoogleChatSpaceTarget(base)) {
-    return { name: base };
-  }
   if (isGoogleChatUserTarget(base)) {
     const dm = await findGoogleChatDirectMessage({
       account: params.account,

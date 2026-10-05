@@ -1,12 +1,10 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { googleApiError } from "./google-api-errors.js";
+import { requestGoogleApi } from "./google-api.js";
 
 const GOOGLE_MEET_API_ORIGIN = "https://meet.googleapis.com";
 const GOOGLE_MEET_API_BASE_URL = `${GOOGLE_MEET_API_ORIGIN}/v2`;
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
-const GOOGLE_MEET_REQUEST_TIMEOUT_MS = 30_000;
 const GOOGLE_MEET_MEDIA_SCOPE =
   "https://www.googleapis.com/auth/meetings.conference.media.readonly";
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
@@ -203,22 +201,6 @@ function normalizeConferenceRecordName(input: string): string {
   return trimmed.startsWith("conferenceRecords/") ? trimmed : `conferenceRecords/${trimmed}`;
 }
 
-function appendQuery(
-  url: string,
-  query?: Record<string, string | number | boolean | undefined>,
-): string {
-  if (!query) {
-    return url;
-  }
-  const parsed = new URL(url);
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined) {
-      parsed.searchParams.set(key, String(value));
-    }
-  }
-  return parsed.toString();
-}
-
 function assertResourceArray<T extends { name?: string }>(
   value: unknown,
   key: string,
@@ -239,7 +221,7 @@ function assertResourceArray<T extends { name?: string }>(
   return resources;
 }
 
-async function requestGoogleMeetApi<T>(
+function requestGoogleMeetApi<T>(
   params: {
     accessToken: string;
     path: string;
@@ -251,33 +233,19 @@ async function requestGoogleMeetApi<T>(
   },
   read: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: appendQuery(`${GOOGLE_MEET_API_BASE_URL}/${params.path}`, params.query),
-    init: {
-      method: params.method,
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-        ...(params.body === undefined ? {} : { "Content-Type": "application/json" }),
-      },
-      body: params.body,
+  return requestGoogleApi(
+    {
+      url: `${GOOGLE_MEET_API_BASE_URL}/${params.path}`,
+      query: params.query,
+      accessToken: params.accessToken,
+      allowedHostname: GOOGLE_MEET_API_HOST,
+      auditContext: `google-meet.${params.operation}`,
+      prefix: `Google Meet ${params.operation}`,
+      scopes: params.scopes ?? [GOOGLE_MEET_MEDIA_SCOPE],
+      init: { method: params.method, body: params.body },
     },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
-    auditContext: `google-meet.${params.operation}`,
-    timeoutMs: GOOGLE_MEET_REQUEST_TIMEOUT_MS,
-  });
-  try {
-    if (!response.ok) {
-      throw await googleApiError({
-        response,
-        prefix: `Google Meet ${params.operation}`,
-        scopes: params.scopes ?? [GOOGLE_MEET_MEDIA_SCOPE],
-      });
-    }
-    return await read(response);
-  } finally {
-    await release();
-  }
+    read,
+  );
 }
 
 function fetchGoogleMeetJson<T>(params: Parameters<typeof requestGoogleMeetApi>[0]): Promise<T> {

@@ -1,5 +1,5 @@
 import type { Chat, Message } from "grammy/types";
-import { firstDefined } from "openclaw/plugin-sdk/allow-from";
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
@@ -18,7 +18,6 @@ import {
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import {
-  isSenderAllowed,
   normalizeAllowFrom,
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
@@ -322,11 +321,7 @@ async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
   });
   const normalizedAllowFrom = normalizeAllowFrom(expandedAllowFrom);
   return (
-    normalizedAllowFrom.hasEntries &&
-    isSenderAllowed({
-      allow: normalizedAllowFrom,
-      senderId: params.senderId,
-    })
+    normalizedAllowFrom.hasEntries && isSenderIdAllowed(normalizedAllowFrom, params.senderId, true)
   );
 }
 

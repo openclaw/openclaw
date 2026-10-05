@@ -300,7 +300,7 @@ describe("deliverAgentCommandResult", () => {
     const runtime = createRuntime();
     await runDelivery({
       runtime,
-      resultText: "ANNOUNCE_SKIP",
+      resultText: "Child finished",
       opts: {
         message: "hello",
         deliver: false,
@@ -314,7 +314,7 @@ describe("deliverAgentCommandResult", () => {
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      ["[agent:nested] session=agent:main:main run=run-announce channel=webchat ANNOUNCE_SKIP"],
+      ["[agent:nested] session=agent:main:main run=run-announce channel=webchat Child finished"],
     ]);
   });
 
@@ -322,7 +322,7 @@ describe("deliverAgentCommandResult", () => {
     const runtime = createRuntime();
     await runDelivery({
       runtime,
-      resultText: "ANNOUNCE_SKIP",
+      resultText: "Child finished",
       opts: {
         message: "hello",
         deliver: false,
@@ -337,7 +337,7 @@ describe("deliverAgentCommandResult", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
       [
-        "[agent:nested] session=agent:ebao-next:quietchat:channel:1 run=run-announce channel=webchat ANNOUNCE_SKIP",
+        "[agent:nested] session=agent:ebao-next:quietchat:channel:1 run=run-announce channel=webchat Child finished",
       ],
     ]);
   });

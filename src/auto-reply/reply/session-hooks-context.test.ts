@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -22,6 +23,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { emitResetCommandHooks } from "./commands-reset-hooks.js";
 import { finalizeInboundContext } from "./inbound-context.js";
@@ -468,14 +470,19 @@ describe("session hook context wiring", () => {
     expectFields(startContext, { sessionId: startEvent?.sessionId });
   });
 
-  it("keeps rollover hooks and browser cleanup root-admitted until they settle", async () => {
+  it("keeps rollover hooks alive after their requester closes", async ({ signal }) => {
     const releases: Array<() => void> = [];
-    const held = () =>
-      new Promise<void>((resolve) => {
+    const completedHooks: string[] = [];
+    const held = (name: string) => async () => {
+      await new Promise<void>((resolve) => {
         releases.push(resolve);
       });
-    hookRunnerMocks.runSessionEnd.mockImplementationOnce(held);
-    hookRunnerMocks.runSessionStart.mockImplementationOnce(held);
+      await trackAsyncWork(() => {
+        completedHooks.push(name);
+      });
+    };
+    hookRunnerMocks.runSessionEnd.mockImplementationOnce(held("end"));
+    hookRunnerMocks.runSessionStart.mockImplementationOnce(held("start"));
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(
       () =>
         new Promise<number>((resolve) => {
@@ -488,19 +495,56 @@ describe("session hook context wiring", () => {
       sessionKey,
       sessionId: "old-held-session",
     });
-
-    await initSessionState({
-      ctx: { Body: "/new", SessionKey: sessionKey },
-      cfg: { session: { store: storePath } } as OpenClawConfig,
-      commandAuthorized: true,
-    });
-
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(3));
-    await vi.waitFor(() => expect(releases).toHaveLength(3));
-    for (const release of releases) {
-      release();
+    const owner = await import("../../process/gateway-work-admission.js");
+    const continuations = [
+      vi.spyOn(owner, "runWithGatewayIndependentRootWorkContinuation"),
+      vi.spyOn(owner, "runWithGatewayDetachedWorkContinuation"),
+    ];
+    const joinContinuations = () =>
+      Promise.allSettled(
+        continuations.flatMap((spy) =>
+          spy.mock.results
+            .filter((result) => result.type === "return")
+            .map((result) => result.value),
+        ),
+      );
+    const parent = new AsyncWorkScope();
+    const admission = tryBeginGatewayRootWorkAdmission("test:reply-rollover");
+    if (!admission) {
+      throw new Error("Expected parent root admission");
     }
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    try {
+      await admission.run(() =>
+        parent.run(() =>
+          initSessionState({
+            ctx: { Body: "/new", SessionKey: sessionKey },
+            cfg: { session: { store: storePath } } as OpenClawConfig,
+            commandAuthorized: true,
+          }),
+        ),
+      );
+      expect(releases).toHaveLength(3);
+      admission.release();
+      await withinTest(parent.drain(), signal);
+      expect(getActiveGatewayRootWorkCount()).toBe(3);
+      expect(completedHooks).toEqual([]);
+      for (const release of releases) {
+        release();
+      }
+      await withinTest(joinContinuations(), signal);
+      expect(completedHooks.toSorted()).toEqual(["end", "start"]);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      for (const release of releases) {
+        release();
+      }
+      admission.release();
+      await parent.drain();
+      await joinContinuations();
+      for (const spy of continuations) {
+        spy.mockRestore();
+      }
+    }
   });
 
   it("hands rollover hooks off after restart drain closes admission", async () => {

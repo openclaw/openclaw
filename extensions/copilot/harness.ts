@@ -1,4 +1,4 @@
-import type { CopilotClient } from "@github/copilot-sdk";
+import type { CopilotClient, SessionConfig } from "@github/copilot-sdk";
 import {
   compactWithSafetyTimeout,
   getModelProviderRequestTransport,
@@ -22,7 +22,6 @@ import type {
   CopilotAttemptParams,
   ModelRefInputObject,
 } from "./src/attempt-types.js";
-import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
 import {
@@ -69,7 +68,7 @@ interface TrackedSession extends Omit<CopilotSessionBinding, "schemaVersion" | "
   client: CopilotClient;
   clientOptions: ClientCreateOptions;
   poolKey: PoolKey;
-  sessionConfig: CopilotSessionConfig;
+  sessionConfig: SessionConfig;
 }
 
 export type CopilotSessionBinding = {
@@ -203,11 +202,7 @@ async function lookupStoredBinding(
   try {
     return normalizeAttemptBinding(await store?.lookup(key));
   } catch {
-    try {
-      await store?.delete(key);
-    } catch {
-      // Durable binding cleanup is best-effort; the turn can create a fresh SDK session.
-    }
+    await deleteStoredBinding(store, key);
     return undefined;
   }
 }
@@ -220,11 +215,7 @@ async function registerStoredBinding(
   try {
     await store?.register(key, binding);
   } catch {
-    try {
-      await store?.delete(key);
-    } catch {
-      // A failed invalidation just degrades to in-memory reuse for this process.
-    }
+    await deleteStoredBinding(store, key);
   }
 }
 
@@ -236,7 +227,7 @@ async function deleteStoredBinding(
     await store?.delete(key);
     return true;
   } catch {
-    // Reset must still clear tracked SDK sessions even if plugin state is unhealthy.
+    // Failed durable cleanup must not block fresh sessions or tracked-session reset.
     return false;
   }
 }
@@ -248,7 +239,7 @@ async function compactTrackedSdkSession(params: {
   customInstructions?: string;
   gitHubToken?: string;
   onSession?: (session: CopilotHistoryCompactSession) => void;
-  sessionConfig: CopilotSessionConfig;
+  sessionConfig: SessionConfig;
   sdkSessionId: string;
 }): Promise<CopilotHistoryCompactResult> {
   params.assertCurrent();
@@ -337,7 +328,6 @@ function computeSessionKey(
     const authContext = {
       agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
       agentDir: input.params.agentDir,
-      workspaceDir: input.params.workspaceDir,
       copilotHome: input.params.copilotHome,
     };
     const resolved = !options.includeAuth

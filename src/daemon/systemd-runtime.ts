@@ -13,6 +13,7 @@ import {
 } from "./service-inspection-error.js";
 import {
   createServiceRuntimeInspectionFailure,
+  resolveSystemdServiceStartRefusal,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
 import type {
@@ -40,6 +41,9 @@ function parseSystemdShow(output: string) {
   return {
     loadState: entries.loadstate || undefined,
     activeState: entries.activestate || undefined,
+    unitFileState: entries.unitfilestate || undefined,
+    refuseManualStart: entries.refusemanualstart === "yes",
+    canStart: entries.canstart === "yes" ? true : entries.canstart === "no" ? false : undefined,
     subState: entries.substate || undefined,
     mainPid: parseStrictPositiveInteger(entries.mainpid),
     execMainStatus: parseStrictInteger(entries.execmainstatus),
@@ -142,7 +146,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
+    "Id,LoadState,UnitFileState,RefuseManualStart,CanStart,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
   ];
   const res =
     installed?.scope === "system"
@@ -162,14 +166,25 @@ export async function readSystemdServiceRuntime(
   const parsed = parseSystemdShow(res.stdout || "");
   const loadState = normalizeLowercaseStringOrEmpty(parsed.loadState);
   const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
+  const startRefusal = resolveSystemdServiceStartRefusal({
+    ...parsed,
+    unit: unitName,
+    scope: installed?.scope,
+    loadState,
+    activeState,
+  });
   if (loadState !== "loaded") {
     return {
       status: "unknown",
       missingUnit: false,
+      ...(startRefusal
+        ? { systemd: { scope: installed?.scope ?? "user", unit: unitName, startRefusal } }
+        : {}),
       detail:
-        loadState === "not-found"
+        startRefusal?.message ??
+        (loadState === "not-found"
           ? `Unit ${unitName} is not visible in the ${installed?.scope ?? "user"} systemd manager.`
-          : `Unit ${unitName} has an unverified systemd load state.`,
+          : `Unit ${unitName} has an unverified systemd load state.`),
     };
   }
   // Restart and shutdown transitions can still own or respawn the process.
@@ -183,6 +198,7 @@ export async function readSystemdServiceRuntime(
   return {
     ...commandInspectionFailure,
     status,
+    ...(startRefusal ? { detail: startRefusal.message } : {}),
     state: parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,
@@ -192,6 +208,7 @@ export async function readSystemdServiceRuntime(
       scope: installed?.scope ?? "user",
       transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
       unit: parsed.unit ?? unitName,
+      ...(startRefusal ? { startRefusal } : {}),
       controlGroup: parsed.controlGroup,
       killMode: parsed.killMode,
       tasksCurrent: parsed.tasksCurrent,

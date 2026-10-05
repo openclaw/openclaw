@@ -69,65 +69,38 @@ describe("MeetingSessionRuntime participation ownership", () => {
     await runtime.leave(session.id);
   });
 
-  it("rejects a caption snapshot if the browser tab changes while capture is pending", async () => {
-    const { promise: pending, resolve: release } = createDeferredCore<MeetingTranscriptSnapshot>();
-    const { promise: entered, resolve: started } = createDeferredCore();
-    const captureTranscript = vi
-      .fn<NonNullable<Parameters<typeof createTestRuntime>[0]["captureTranscript"]>>()
-      .mockImplementationOnce(async () => {
-        started();
-        return await pending;
-      })
-      .mockResolvedValue(undefined);
-    const { runtime } = createParticipationTestRuntime({ captureTranscript, transcribe: true });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
-    const reading = runtime.transcript(session.id);
-    await entered;
-    session.browser!.tab = { targetId: "replacement-tab", openedByPlugin: false };
-    release({
-      droppedLines: 0,
-      epoch: "old-page",
-      lines: [
-        {
-          text: "A stale invitation",
-          source: {
-            id: "old-caption",
-            epoch: "old-page",
-            revision: "2",
-            finalized: true,
-            ownEcho: false,
-          },
-        },
-      ],
-    });
-    await expect(reading).rejects.toThrow("no longer owns the captured browser tab and route");
-    expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 0, sources: [] });
-    await runtime.leave(session.id);
-  });
-
-  it.each(["tab", "id", "url", "state", "transport", "node"] as const)(
-    "permits only tab recovery during non-participation capture (%s)",
-    async (change) => {
+  it.each([
+    { participation: true, change: "tab" },
+    ...["tab", "id", "url", "state", "transport", "node"].map((change) => ({
+      participation: false,
+      change,
+    })),
+  ])(
+    "revalidates $change during caption capture (participation: $participation)",
+    async ({ participation, change }) => {
       const pending = createDeferredCore<MeetingTranscriptSnapshot>();
       const entered = createDeferredCore();
-      const { runtime } = createTestRuntime({
-        transcribe: true,
-        captureTranscript: async () => {
+      const captureTranscript = vi
+        .fn<NonNullable<Parameters<typeof createTestRuntime>[0]["captureTranscript"]>>()
+        .mockImplementationOnce(async () => {
           entered.resolve();
           return await pending.promise;
-        },
-        joinTransport: async ({ session }) => {
-          session.browser = {
-            launched: true,
-            tab: { targetId: "original-tab", openedByPlugin: false },
-          };
-          return {};
-        },
-        releaseBrowserTab: async () => true,
-      });
+        })
+        .mockImplementation(async () => (participation ? undefined : await pending.promise));
+      const { runtime } = participation
+        ? createParticipationTestRuntime({ captureTranscript, transcribe: true })
+        : createTestRuntime({
+            transcribe: true,
+            captureTranscript,
+            joinTransport: async ({ session }) => {
+              session.browser = {
+                launched: true,
+                tab: { targetId: "original-tab", openedByPlugin: false },
+              };
+              return {};
+            },
+            releaseBrowserTab: async () => true,
+          });
       const url = "https://meeting.example/room";
       const { session } = await runtime.join({ url, agentId: "operator" });
       const sessionId = session.id;
@@ -139,11 +112,36 @@ describe("MeetingSessionRuntime participation ownership", () => {
       session.state = change === "state" ? "ended" : session.state;
       session.transport = change === "transport" ? "chrome-node" : session.transport;
       session.browser!.nodeId = change === "node" ? "another-node" : undefined;
-      pending.resolve({ droppedLines: 0, lines: [{ text: "Recovered caption" }] });
-      if (change === "tab") {
+      pending.resolve({
+        droppedLines: 0,
+        epoch: "old-page",
+        lines: [
+          {
+            text: "Recovered caption",
+            ...(participation
+              ? {
+                  source: {
+                    id: "old-caption",
+                    epoch: "old-page",
+                    revision: "2",
+                    finalized: true,
+                    ownEcho: false,
+                  },
+                }
+              : {}),
+          },
+        ],
+      });
+      if (!participation && change === "tab") {
         await expect(reading).resolves.toMatchObject({ lines: [{ text: "Recovered caption" }] });
       } else {
         await expect(reading).rejects.toThrow("no longer owns the captured browser tab and route");
+      }
+      if (participation) {
+        expect(runtime.participationContext(sessionId)).toMatchObject({
+          sourceOrder: 0,
+          sources: [],
+        });
       }
       session.id = sessionId;
       await runtime.leave(sessionId);

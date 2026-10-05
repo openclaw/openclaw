@@ -22,8 +22,6 @@ import type { TelegramContext } from "./types.js";
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
-const GrammyErrorCtor: typeof GrammyError | undefined =
-  typeof GrammyError === "function" ? GrammyError : undefined;
 
 type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
   message: Pick<
@@ -60,13 +58,8 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateN
   };
 }
 
-/**
- * Returns true if the error is Telegram's "file is too big" error.
- * This happens when trying to download files >20MB via the Bot API.
- * Unlike network errors, this is a permanent error and should not be retried.
- */
 function isFileTooBigError(err: unknown): boolean {
-  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
+  if (err instanceof GrammyError) {
     return FILE_TOO_BIG_RE.test(err.description);
   }
   return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
@@ -81,8 +74,7 @@ function isRetryableGetFileError(err: unknown): boolean {
   }
   // Telegram reports pending file availability as a documented getFile 400.
   return (
-    GrammyErrorCtor !== undefined &&
-    err instanceof GrammyErrorCtor &&
+    err instanceof GrammyError &&
     err.method === "getFile" &&
     err.error_code === 400 &&
     /\bfile is temporarily unavailable\b/i.test(err.description)
@@ -148,7 +140,7 @@ async function resolveTelegramFileWithRetry(
     if (isFileTooBigError(err)) {
       throw new TelegramBotApiFileTooLargeError(err);
     }
-    const status = GrammyErrorCtor && err instanceof GrammyErrorCtor ? err.error_code : undefined;
+    const status = err instanceof GrammyError ? err.error_code : undefined;
     // Keep getFile failures on the same typed path as download failures so the
     // handler can warn the user and durably retry transient spooled updates.
     throw new MediaFetchError(
@@ -181,9 +173,7 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
   };
 }
 
-/** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
-/** Maximum wait for Telegram media response headers (120 seconds). */
 const TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
@@ -281,17 +271,26 @@ async function downloadAndSaveTelegramFile(params: {
     params.filePath,
     params.trustedLocalFileRoots,
   );
-  if (trustedLocalFile) {
+  const containerRelativePaths = trustedLocalFile
+    ? []
+    : resolveTelegramBotApiContainerRelativePaths(params.filePath, params.token);
+  const localFiles = trustedLocalFile
+    ? [trustedLocalFile]
+    : (params.trustedLocalFileRoots ?? []).flatMap((rootDir) =>
+        containerRelativePaths.map((relativePath) => ({ rootDir, relativePath })),
+      );
+  for (const { rootDir, relativePath } of localFiles) {
     let localFile;
     try {
-      const root = await fsRoot(trustedLocalFile.rootDir);
-      localFile = await root.read(trustedLocalFile.relativePath, {
-        maxBytes: params.maxBytes,
-      });
+      const root = await fsRoot(rootDir);
+      localFile = await root.read(relativePath, { maxBytes: params.maxBytes });
     } catch (err) {
+      if (!trustedLocalFile && isTrustedLocalTelegramFileMissing(err)) {
+        continue;
+      }
       throw new MediaFetchError(
         "fetch_failed",
-        `Failed to read local Telegram Bot API media from ${params.filePath}: ${formatErrorMessage(err)}`,
+        `Failed to read ${trustedLocalFile ? `local Telegram Bot API media from ${params.filePath}` : "mapped local Telegram Bot API media"}: ${formatErrorMessage(err)}`,
         { cause: err },
       );
     }
@@ -302,35 +301,6 @@ async function downloadAndSaveTelegramFile(params: {
       params.maxBytes,
       params.telegramFileName ?? path.basename(localFile.realPath),
     );
-  }
-  const containerRelativePaths = resolveTelegramBotApiContainerRelativePaths(
-    params.filePath,
-    params.token,
-  );
-  for (const rootDir of params.trustedLocalFileRoots ?? []) {
-    for (const relativePath of containerRelativePaths) {
-      let localFile;
-      try {
-        const root = await fsRoot(rootDir);
-        localFile = await root.read(relativePath, { maxBytes: params.maxBytes });
-      } catch (err) {
-        if (isTrustedLocalTelegramFileMissing(err)) {
-          continue;
-        }
-        throw new MediaFetchError(
-          "fetch_failed",
-          `Failed to read mapped local Telegram Bot API media: ${formatErrorMessage(err)}`,
-          { cause: err },
-        );
-      }
-      return await saveMediaBuffer(
-        localFile.buffer,
-        params.mimeType,
-        "inbound",
-        params.maxBytes,
-        params.telegramFileName ?? path.basename(localFile.realPath),
-      );
-    }
   }
   if (path.isAbsolute(params.filePath)) {
     throw new MediaFetchError(
@@ -422,7 +392,11 @@ export async function resolveMedia(params: {
     contentType: saved.contentType,
     ...(metadata.fileName ? { fileName: metadata.fileName } : {}),
     kind:
-      nativeKind !== "sticker" && saved.contentType?.startsWith("audio/") ? "audio" : nativeKind,
+      nativeKind !== "sticker" && saved.contentType?.startsWith("audio/")
+        ? "audio"
+        : nativeKind === "document" && saved.contentType?.startsWith("image/")
+          ? "image"
+          : nativeKind,
     fileUniqueId: metadata.fileRef.file_unique_id,
     savedAt: Date.now(),
     ...(stickerMetadata ? { stickerMetadata } : {}),

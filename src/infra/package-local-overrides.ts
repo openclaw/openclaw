@@ -29,6 +29,7 @@ import {
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export { captureLocalPackageOverrides } from "./package-local-overrides-capture.js";
@@ -110,6 +111,7 @@ async function runRequiredFsSafeMove(params: {
     execFile(
       process.execPath,
       [
+        ...resolveRuntimeArgs(),
         "--input-type=module",
         "--eval",
         REQUIRED_FS_SAFE_OPERATION_SCRIPT,
@@ -136,7 +138,6 @@ async function runRequiredFsSafeMove(params: {
 class LocalOverrideRollbackError extends Error {
   constructor(
     readonly relativePath: string,
-    readonly action: string,
     readonly rollbackError: unknown,
   ) {
     super(
@@ -198,11 +199,7 @@ async function throwAfterRestoringMovedLocalOverrideTarget(params: {
     if (params.removeMovedAfterFailedRestore) {
       await params.packageFs.remove(params.movedPath).catch(() => undefined);
     }
-    throw new LocalOverrideRollbackError(
-      params.relativePath,
-      "restore current target",
-      rollbackError,
-    );
+    throw new LocalOverrideRollbackError(params.relativePath, rollbackError);
   }
   throw params.originalError;
 }
@@ -510,9 +507,6 @@ export async function applyLocalPackageOverrides(params: {
       const backupPath = path.join(rollbackDir, change.path);
 
       if (change.kind === "deleted") {
-        if (!change.baseline) {
-          throw new Error(`missing local override baseline for ${change.path}`);
-        }
         const backupMode = await deleteLocalOverrideTarget({
           packageFs,
           runtimeUrls,
@@ -522,9 +516,6 @@ export async function applyLocalPackageOverrides(params: {
         });
         rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
-        if (!change.savedPath) {
-          throw new Error(`missing saved override payload for ${change.path}`);
-        }
         const appliedEntry = await buildLocalOverrideInventoryEntry({
           relativePath: change.path,
           sourcePath: change.savedPath,
@@ -566,7 +557,11 @@ export async function applyLocalPackageOverrides(params: {
       rollbackFailures.set(relativePath, messages);
     };
     if (applyError instanceof LocalOverrideRollbackError) {
-      recordRollbackFailure(applyError.relativePath, applyError.action, applyError.rollbackError);
+      recordRollbackFailure(
+        applyError.relativePath,
+        "restore current target",
+        applyError.rollbackError,
+      );
     }
     for (const entry of rollbackEntries.toReversed()) {
       if (entry.cleanupPaths && packageFs) {

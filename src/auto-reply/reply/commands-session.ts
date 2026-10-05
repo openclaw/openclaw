@@ -99,14 +99,6 @@ function formatSessionExpiry(expiresAt: number) {
   return timestampMsToIsoString(expiresAt) ?? "n/a";
 }
 
-function resolveSessionBindingDurationMs(
-  binding: SessionBindingRecord,
-  key: "idleTimeoutMs" | "maxAgeMs",
-  fallbackMs: number,
-): number {
-  return resolveNonNegativeIntegerOption(binding.metadata?.[key], fallbackMs);
-}
-
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
   const raw = asDateTimestampMs(binding.metadata?.lastActivityAt);
   if (raw === undefined) {
@@ -119,32 +111,6 @@ function resolveSessionBindingExpiryAt(baseMs: number, durationMs: number): numb
   return durationMs > 0
     ? resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: baseMs })
     : undefined;
-}
-
-type UpdatedLifecycleBinding = {
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-};
-
-function resolveUpdatedBindingExpiry(params: {
-  action: typeof SESSION_ACTION_IDLE | typeof SESSION_ACTION_MAX_AGE;
-  bindings: UpdatedLifecycleBinding[];
-}): number | undefined {
-  const expiries = params.bindings
-    .map((binding) => {
-      const isIdle = params.action === SESSION_ACTION_IDLE;
-      const durationMs = (isIdle ? binding.idleTimeoutMs : binding.maxAgeMs) ?? 0;
-      const baseMs = isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt;
-      return resolveSessionBindingExpiryAt(baseMs, durationMs);
-    })
-    .filter((expiresAt): expiresAt is number => typeof expiresAt === "number");
-
-  if (expiries.length === 0) {
-    return undefined;
-  }
-  return Math.min(...expiries);
 }
 
 export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -411,16 +377,15 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     }
   }
 
-  const idleTimeoutMs = resolveSessionBindingDurationMs(
-    activeBinding,
-    "idleTimeoutMs",
+  const idleTimeoutMs = resolveNonNegativeIntegerOption(
+    activeBinding.metadata?.idleTimeoutMs,
     24 * 60 * 60 * 1000,
   );
   const idleExpiresAt = resolveSessionBindingExpiryAt(
     resolveSessionBindingLastActivityAt(activeBinding),
     idleTimeoutMs,
   );
-  const maxAgeMs = resolveSessionBindingDurationMs(activeBinding, "maxAgeMs", 0);
+  const maxAgeMs = resolveNonNegativeIntegerOption(activeBinding.metadata?.maxAgeMs, 0);
   const maxAgeExpiresAt = resolveSessionBindingExpiryAt(activeBinding.boundAt, maxAgeMs);
   const isIdle = action === SESSION_ACTION_IDLE;
   const settingLabel = isIdle ? "Idle timeout" : "Max age";
@@ -471,14 +436,14 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     );
   }
 
-  const nextExpiry = resolveUpdatedBindingExpiry({
-    action,
-    bindings: updatedBindings,
+  const expiries = updatedBindings.flatMap((binding) => {
+    const expiresAt = resolveSessionBindingExpiryAt(
+      isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt,
+      (isIdle ? binding.idleTimeoutMs : binding.maxAgeMs) ?? 0,
+    );
+    return expiresAt === undefined ? [] : [expiresAt];
   });
-  const expiryLabel =
-    typeof nextExpiry === "number" && Number.isFinite(nextExpiry)
-      ? formatSessionExpiry(nextExpiry)
-      : "n/a";
+  const expiryLabel = formatSessionExpiry(Math.min(...expiries));
 
   return sessionCommandReply(
     `✅ ${settingLabel} set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (${expiryDescription} at ${expiryLabel}).`,

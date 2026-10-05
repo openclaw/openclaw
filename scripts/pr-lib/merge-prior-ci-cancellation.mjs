@@ -135,7 +135,7 @@ export function qualifyPriorCiCancelledRoots(context) {
         check.conclusion === "cancelled" &&
         check.started_at === job.started_at &&
         check.completed_at === job.completed_at,
-      "cancelled root requires a matching live GitHub Actions check-run",
+      "cancelled deadline/failed-step root requires a matching live GitHub Actions check-run",
     );
     const attribution = evidence.failures.find((value) => value.jobId === job.id);
     if (attribution.failedStep !== undefined) {
@@ -211,8 +211,17 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
   const { requireEvidence } = context;
   const binding = entry.failedStep;
   const productionTypes = binding?.workflowJob === "check-shard";
-  const workflowJob = productionTypes ? "check-shard" : "checks-node-core-test-nondist-shard";
-  const stepName = productionTypes ? "Run check shard" : "Run Node test shard";
+  const realGateway = binding?.workflowJob === "checks-ui-e2e-real-gateway";
+  const workflowJob = realGateway
+    ? "checks-ui-e2e-real-gateway"
+    : productionTypes
+      ? "check-shard"
+      : "checks-node-core-test-nondist-shard";
+  const stepName = realGateway
+    ? "Test Control UI suites with a real Gateway"
+    : productionTypes
+      ? "Run check shard"
+      : "Run Node test shard";
   const steps = job.steps;
   requireEvidence(
     binding?.workflowJob === workflowJob &&
@@ -247,47 +256,83 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
   const owner = workflow?.jobs?.[workflowJob];
   const sourceSteps = owner?.steps?.filter((value) => value.name === step.name);
   const source = sourceSteps?.[0];
+  const build =
+    realGateway &&
+    owner?.steps?.find(
+      (value) => value.name === "Build runtime and Control UI artifacts for real-Gateway tests",
+    );
   requireEvidence(
     owner?.name ===
-      (productionTypes
-        ? "${{ matrix.check_name || 'check-shard' }}"
-        : "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}") &&
+      (realGateway
+        ? "${{ matrix.shard_count == 1 && 'checks-ui-e2e-real-gateway' || format('checks-ui-e2e-real-gateway ({0}/{1})', matrix.shard, matrix.shard_count) }}"
+        : productionTypes
+          ? "${{ matrix.check_name || 'check-shard' }}"
+          : "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}") &&
       Array.isArray(owner.needs) &&
       owner.needs.includes("preflight") &&
       owner.strategy?.matrix ===
-        (productionTypes
-          ? "${{ fromJSON((needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.check_matrix || needs.preflight.outputs.check_matrix)) }}"
-          : "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}") &&
+        (realGateway
+          ? "${{ fromJson(needs.preflight.outputs.ui_real_gateway_matrix) }}"
+          : productionTypes
+            ? "${{ fromJSON((needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.check_matrix || needs.preflight.outputs.check_matrix)) }}"
+            : "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}") &&
       (!productionTypes ||
         (owner.needs.includes("check-plan") &&
           owner.strategy["fail-fast"] === false &&
           source?.env?.TASK === "${{ matrix.task }}" &&
           source.if ===
             "matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)")) &&
+      (!realGateway ||
+        (owner.strategy["fail-fast"] === false &&
+          owner.strategy["max-parallel"] === 2 &&
+          source?.if === "matrix.run_tests" &&
+          source.env?.FROZEN_TARGET === "${{ needs.preflight.outputs.frozen_target }}" &&
+          source.env?.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64 ===
+            "${{ matrix.test_groups_gzip_base64 }}" &&
+          build?.run === "pnpm build" &&
+          build.env?.OPENCLAW_BUILD_PRIVATE_QA === "1" &&
+          [undefined, false].includes(build["continue-on-error"]) &&
+          steps.some((value) => value.name === build.name && value.conclusion === "success"))) &&
       [undefined, false].includes(owner["continue-on-error"]) &&
       sourceSteps?.length === 1 &&
-      source.shell === "bash" &&
+      source.shell === (realGateway ? undefined : "bash") &&
       source.uses === undefined &&
       [undefined, false].includes(source["continue-on-error"]) &&
       typeof source.run === "string" &&
       // Recognize audited entrypoints, not arbitrary workflow commands.
       digest(source.run) ===
-        (productionTypes
-          ? "bcaa8c10327d52a2964e7b14a085554c34e969eb4c23621198c57800f3a7cc2d"
-          : "43a70550e9537ea675a8052ebd4821200d24ffa6a48ccd3b44c047f667490691"),
-    `cancelled root requires the unchanged canonical ${productionTypes ? "production-type" : "Node shard"} workflow owner`,
+        (realGateway
+          ? "29353781c0f1a64854dd3183b13949d5b4581b091ca95ad5a99e0bb9f10279e2"
+          : productionTypes
+            ? "bcaa8c10327d52a2964e7b14a085554c34e969eb4c23621198c57800f3a7cc2d"
+            : "43a70550e9537ea675a8052ebd4821200d24ffa6a48ccd3b44c047f667490691"),
+    `cancelled root requires the unchanged canonical ${realGateway ? "real-Gateway UI" : productionTypes ? "production-type" : "Node shard"} workflow owner`,
   );
-  if (productionTypes) {
+  if (productionTypes || realGateway) {
     const jobStart = Date.parse(job.started_at);
     const jobEnd = Date.parse(job.completed_at);
+    const runnerPrelude = realGateway && steps[1]?.name === "Set up runner";
+    const offset = runnerPrelude ? 3 : 2;
     requireEvidence(
-      job.name === "check-prod-types" &&
+      (realGateway
+        ? /^checks-ui-e2e-real-gateway(?: \([12]\/2\))?$/u.test(job.name)
+        : job.name === "check-prod-types") &&
         context.jobs.filter((candidate) => candidate.name === job.name).length === 1 &&
-        step.number === owner.steps.indexOf(source) + 2 &&
+        step.number === owner.steps.indexOf(source) + offset &&
         steps[0].number === 1 &&
         steps[0].name === "Set up job" &&
+        (!realGateway ||
+          (steps[0].conclusion === "success" &&
+            steps.length === owner.steps.length + (runnerPrelude ? 5 : 3) &&
+            (!runnerPrelude ||
+              (steps[1].number === 2 &&
+                steps[1].conclusion === "success" &&
+                steps.at(-2).name === "Complete runner" &&
+                steps.at(-2).conclusion === "success")) &&
+            steps.at(runnerPrelude ? -3 : -2).name === "Post Setup Node environment" &&
+            steps.at(runnerPrelude ? -3 : -2).conclusion === "success")) &&
         owner.steps.every((expected, index) =>
-          steps.some((actual) => actual.number === index + 2 && actual.name === expected.name),
+          steps.some((actual) => actual.number === index + offset && actual.name === expected.name),
         ) &&
         steps.every((current, index) => {
           const start = Date.parse(current.started_at);
@@ -303,7 +348,7 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
                 Date.parse(steps[index - 1].completed_at) <= start))
           );
         }),
-      "cancelled production-type root requires complete ordered source-matching steps",
+      "cancelled root requires complete ordered source-matching steps",
     );
   }
   // Matrix membership and causal baseline qualification remain inspected evidence.
@@ -313,7 +358,7 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
     conclusion: job.conclusion,
     workflowBlob,
     step,
-    ...(productionTypes ? { steps } : {}),
+    ...(productionTypes || realGateway ? { steps } : {}),
   };
 }
 
@@ -331,22 +376,27 @@ function verifyMatrixCancellation(context, cancellation, members) {
   const owner = workflow?.jobs?.[workflowJob];
   const failFast = owner?.strategy?.["fail-fast"];
   const repository = run.repository?.full_name;
-  const attemptAwareFailFast =
+  // Historical runs retain the cancellation policy from their tested workflow.
+  const historicalAttemptAware =
     failFast ===
-      "${{ github.event_name == 'pull_request' && (github.run_attempt != 1 || github.repository != 'openclaw/openclaw') }}" &&
+    "${{ github.event_name == 'pull_request' && (github.run_attempt != 1 || github.repository != 'openclaw/openclaw') }}";
+  const scopedFailFast =
+    (historicalAttemptAware ||
+      failFast ===
+        "${{ github.event_name == 'pull_request' && github.repository != 'openclaw/openclaw' }}") &&
     positiveInteger(run.run_attempt) &&
     typeof repository === "string" &&
     /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u.test(repository) &&
     // Actions compares strings without case; github.repository is the workflow owner, not the fork.
-    (run.run_attempt > 1 || repository.toLowerCase() !== "openclaw/openclaw");
+    ((historicalAttemptAware && run.run_attempt > 1) ||
+      repository.toLowerCase() !== "openclaw/openclaw");
   requireEvidence(
     owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
       Array.isArray(owner.needs) &&
       owner.needs.includes("preflight") &&
       owner.strategy?.matrix ===
         "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
-      ([true, "${{ github.event_name == 'pull_request' }}"].includes(failFast) ||
-        attemptAwareFailFast) &&
+      ([true, "${{ github.event_name == 'pull_request' }}"].includes(failFast) || scopedFailFast) &&
       [undefined, false].includes(owner["continue-on-error"]),
     "the tested workflow must enable the existing PR matrix fail-fast contract",
   );

@@ -103,7 +103,6 @@ export function scheduleSafeGatewayRestart(
     reason?: string;
     delayMs?: number;
     skipDeferral?: boolean;
-    preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
@@ -112,10 +111,7 @@ export function scheduleSafeGatewayRestart(
   const restart = scheduleGatewayRestart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
-    ...(opts.preservePendingEmitHooks === true || skipDeferral
-      ? { preservePendingEmitHooksOnDeferralBypass: true }
-      : {}),
-    ...(skipDeferral ? { skipDeferral: true } : {}),
+    ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });
   const status = restart.coalesced
     ? "coalesced"

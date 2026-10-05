@@ -7,9 +7,8 @@ import { listProviderPolicyOwners as collectPolicyOwners } from "../plugins/prov
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const listAgentIds = vi.hoisted(() =>
-  vi.fn(
-    (cfg: { agents?: { list?: Array<{ id: string }> } }) =>
-      cfg.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
+  vi.fn((cfg: OpenClawConfig) =>
+    cfg.agents?.entries ? Object.keys(cfg.agents.entries) : ["agent-default"],
   ),
 );
 const resolveAgentDir = vi.hoisted(() =>
@@ -24,6 +23,7 @@ const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
 const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
 const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
+const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const inspectConfiguredEmbeddingProviderSetup = vi.hoisted(() => vi.fn());
@@ -93,6 +93,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
+  getActiveMemoryProviderCore,
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 }));
@@ -126,24 +127,13 @@ import {
   noteMemorySearchHealth,
   collectMemorySearchHealthFindings,
 } from "./doctor-memory-search.js";
+import {
+  createDoctorNoteAssertions,
+  registerProviderRuntimeDoctorTest,
+} from "./doctor-memory-search.provider-runtime.test-support.js";
 
-function firstNoteMessage(): string {
-  return String(note.mock.calls[0]?.[0] ?? "");
-}
-
-function expectFirstNoteContains(...values: string[]) {
-  const message = firstNoteMessage();
-  for (const value of values) {
-    expect(message).toContain(value);
-  }
-}
-
-function expectFirstNoteExcludes(...values: string[]) {
-  const message = firstNoteMessage();
-  for (const value of values) {
-    expect(message).not.toContain(value);
-  }
-}
+const { firstNoteMessage, expectFirstNoteContains, expectFirstNoteExcludes } =
+  createDoctorNoteAssertions(note);
 
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
@@ -212,12 +202,11 @@ describe("noteMemorySearchHealth", () => {
   ): OpenClawConfig {
     return {
       agents: {
-        list: [
-          {
-            id: "personal",
+        entries: {
+          personal: {
             memory: { search: { rememberAcrossConversations } },
           },
-        ],
+        },
       },
       ...(plugins ? { plugins } : {}),
     } as OpenClawConfig;
@@ -248,9 +237,8 @@ describe("noteMemorySearchHealth", () => {
   beforeEach(() => {
     note.mockClear();
     resolveDefaultAgentId.mockClear();
-    listAgentIds.mockImplementation(
-      (config: { agents?: { list?: Array<{ id: string }> } }) =>
-        config.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
+    listAgentIds.mockImplementation((config: OpenClawConfig) =>
+      config.agents?.entries ? Object.keys(config.agents.entries) : ["agent-default"],
     );
     resolveAgentDir.mockClear();
     resolveAgentWorkspaceDir.mockClear();
@@ -264,6 +252,7 @@ describe("noteMemorySearchHealth", () => {
     isConfiguredAwsSdkAuthProfileForProvider.mockReset();
     isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
     getActiveMemorySearchManagerCore.mockReset();
+    getActiveMemoryProviderCore.mockReset();
     getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
     inspectConfiguredEmbeddingProviderSetup.mockReset();
     inspectConfiguredEmbeddingProviderSetup.mockResolvedValue(null);
@@ -340,15 +329,24 @@ describe("noteMemorySearchHealth", () => {
     ]);
   });
 
+  registerProviderRuntimeDoctorTest({
+    cfg,
+    stubMemorySearchConfig,
+    noteMemorySearchHealth,
+    expectFirstNoteContains,
+  });
+
   it.each([false, true])(
     "preserves disabled-memory lint filtering with multiple agents=%s",
     async (multiple) => {
       const config = {
         agents: {
-          list: (multiple ? ["personal", "secondary"] : ["personal"]).map((id) => ({
-            id,
-            memory: { search: { rememberAcrossConversations: false } },
-          })),
+          entries: Object.fromEntries(
+            (multiple ? ["personal", "secondary"] : ["personal"]).map((id) => [
+              id,
+              { memory: { search: { rememberAcrossConversations: false } } },
+            ]),
+          ),
         },
       } as OpenClawConfig;
       resolveMemorySearchConfig.mockReturnValue(undefined);
@@ -845,7 +843,7 @@ describe("noteMemorySearchHealth", () => {
   it("warns when an opted-in agent has memory search disabled", async () => {
     const memoryCfg = {
       agents: {
-        list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
+        entries: { personal: { memory: { search: { rememberAcrossConversations: true } } } },
       },
     } as OpenClawConfig;
     resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
@@ -1148,7 +1146,7 @@ describe("noteMemorySearchHealth", () => {
 
   it("does not warn for secondary key-optional providers when readiness was skipped", async () => {
     const multiAgentCfg = {
-      agents: { list: [{ id: "agent-default" }, { id: "secondary" }] },
+      agents: { entries: { "agent-default": {}, secondary: {} } },
     } as OpenClawConfig;
     resolveAgentDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
     resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}/workspace`);

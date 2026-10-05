@@ -28,16 +28,13 @@ export function redactOtelAttributes(attributes: Record<string, string | number 
   return redactedAttributes;
 }
 
-function securityTargetNameAttr(value: string | undefined, fallback = "unknown"): string {
-  if (!value) {
-    return fallback;
-  }
+function securityTargetNameAttr(value: string): string {
   const redacted = redactSensitiveText(value.trim());
   const redactedLower = redacted.toLowerCase();
   if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
-    return fallback;
+    return "unknown";
   }
-  return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : fallback;
+  return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : "unknown";
 }
 
 function otelLogTimestampIso(timestamp: LogRecord["timestamp"]): string {
@@ -141,18 +138,6 @@ export function assignOtelLogEventAttributes(
   assignOtelEventAttributes(attributes, eventAttributes, "openclaw.");
 }
 
-function assignOtelSecurityEventAttributes(
-  attributes: Record<string, string | number | boolean>,
-  eventAttributes: Record<string, string | number | boolean> | undefined,
-): void {
-  assignOtelEventAttributes(
-    attributes,
-    eventAttributes,
-    "openclaw.security.attribute.",
-    normalizeDiagnosticValue,
-  );
-}
-
 export function securitySeverityText(
   severity: Extract<DiagnosticEventPayload, { type: "security.event" }>["severity"],
 ): SecuritySeverityText {
@@ -229,5 +214,10 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(attributes, "openclaw.security.control.family", evt.control.family);
     }
   }
-  assignOtelSecurityEventAttributes(attributes, evt.attributes);
+  assignOtelEventAttributes(
+    attributes,
+    evt.attributes,
+    "openclaw.security.attribute.",
+    normalizeDiagnosticValue,
+  );
 }

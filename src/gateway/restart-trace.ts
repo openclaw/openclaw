@@ -6,6 +6,8 @@ const restartTraceLog = createSubsystemLogger("gateway");
 const RESTART_TRACE_HANDOFF_STARTED_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS";
 const RESTART_TRACE_HANDOFF_LAST_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS";
 const RESTART_TRACE_HANDOFF_MAX_AGE_MS = 10 * 60_000;
+const CLOSE_STEP_SLOW_MS = 1_000;
+const MAX_PENDING_CLOSE_STEPS = 8;
 
 type RestartTraceMetricValue = boolean | number | string | null | undefined;
 type RestartTraceMetrics =
@@ -19,6 +21,7 @@ type GatewayRestartTraceHandoff = {
 let startedAt = 0;
 let lastAt = 0;
 let active = false;
+const pendingCloseSteps = new Set<{ name: string; startedAt: number }>();
 
 function nowMs(): number {
   return performance.timeOrigin + performance.now();
@@ -26,15 +29,6 @@ function nowMs(): number {
 
 function isRestartTraceEnabled(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE);
-}
-
-function normalizeMetricEntries(
-  metrics?: RestartTraceMetrics,
-): Array<readonly [string, RestartTraceMetricValue]> {
-  if (!metrics) {
-    return [];
-  }
-  return Array.isArray(metrics) ? [...metrics] : Object.entries(metrics);
 }
 
 function formatMetricKey(key: string): string {
@@ -70,7 +64,7 @@ function formatMetricValue(value: RestartTraceMetricValue): string | null {
 
 function formatMetrics(metrics?: RestartTraceMetrics): string {
   const parts: string[] = [];
-  for (const [key, value] of normalizeMetricEntries(metrics)) {
+  for (const [key, value] of Array.isArray(metrics) ? metrics : Object.entries(metrics ?? {})) {
     const formatted = formatMetricValue(value);
     if (formatted === null) {
       continue;
@@ -130,21 +124,69 @@ export async function measureGatewayRestartTrace<T>(
   run: () => Promise<T> | T,
   metrics?: RestartTraceMetrics | (() => RestartTraceMetrics | undefined),
 ): Promise<T> {
-  if (!isGatewayRestartTraceActive()) {
+  return await measureGatewayTraceSpan(name, run, metrics, false);
+}
+
+/** Tracks shutdown joins even when detailed restart tracing is disabled. */
+export async function measureGatewayCloseStep<T>(
+  name: string,
+  run: () => Promise<T> | T,
+  metrics?: RestartTraceMetrics | (() => RestartTraceMetrics | undefined),
+): Promise<T> {
+  return await measureGatewayTraceSpan(formatMetricValue(name) ?? "unnamed", run, metrics, true);
+}
+
+/** A bounded snapshot for the process deadline; overlapping joins retain separate identities. */
+export function formatGatewayPendingCloseSteps(): string {
+  const now = nowMs();
+  const entries: string[] = [];
+  for (const step of pendingCloseSteps) {
+    entries.push(`${step.name}=${Math.max(0, Math.round(now - step.startedAt))}ms`);
+    if (entries.length === MAX_PENDING_CLOSE_STEPS) {
+      break;
+    }
+  }
+  const omitted = pendingCloseSteps.size - entries.length;
+  if (omitted > 0) {
+    entries.push(`+${omitted} more`);
+  }
+  return entries.join(", ") || "none";
+}
+
+async function measureGatewayTraceSpan<T>(
+  name: string,
+  run: () => Promise<T> | T,
+  metrics: RestartTraceMetrics | (() => RestartTraceMetrics | undefined) | undefined,
+  closeStep: boolean,
+): Promise<T> {
+  const trace = isGatewayRestartTraceActive();
+  if (!trace && !closeStep) {
     return await run();
   }
   const before = nowMs();
+  const pending = closeStep ? { name, startedAt: before } : undefined;
+  if (pending) {
+    pendingCloseSteps.add(pending);
+    markGatewayRestartTrace(`${name}.begin`);
+  }
   try {
     return await run();
   } finally {
+    if (pending) {
+      pendingCloseSteps.delete(pending);
+    }
     const now = nowMs();
-    emitRestartTrace(
-      name,
-      now - before,
-      now - startedAt,
-      typeof metrics === "function" ? metrics() : metrics,
-    );
-    lastAt = now;
+    if (trace) {
+      emitRestartTrace(
+        name,
+        now - before,
+        now - startedAt,
+        typeof metrics === "function" ? metrics() : metrics,
+      );
+      lastAt = now;
+    } else if (closeStep && now - before >= CLOSE_STEP_SLOW_MS) {
+      restartTraceLog.info(`shutdown step ${name} settled after ${Math.round(now - before)}ms`);
+    }
   }
 }
 
@@ -197,58 +239,29 @@ export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [st
     ["externalMb", toMb(usage.external)],
     ["arrayBuffersMb", toMb(usage.arrayBuffers)],
   ];
-  metrics.push(...collectGatewayProcessResourceCounts());
-  return metrics;
-}
-
-function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, number]> {
   const processWithResourceAccess = process as NodeJS.Process & {
     _getActiveHandles?: () => unknown[];
     _getActiveRequests?: () => unknown[];
-    getActiveResourcesInfo?: () => string[];
   };
   const activeHandles = processWithResourceAccess["_getActiveHandles"]?.();
   const activeRequests = processWithResourceAccess["_getActiveRequests"]?.();
-  const activeResources = processWithResourceAccess.getActiveResourcesInfo?.();
-  const metrics: Array<readonly [string, number]> = [
+  const activeResources = process.getActiveResourcesInfo();
+  metrics.push(
     ["processSigintListenersCount", process.listenerCount("SIGINT")],
     ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
     ["processRestartListenersCount", process.listenerCount("SIGUSR2")],
-  ];
+  );
   if (activeHandles) {
     metrics.push(["activeHandlesCount", activeHandles.length]);
   }
   if (activeRequests) {
     metrics.push(["activeRequestsCount", activeRequests.length]);
   }
-  const activeTimersCount = activeResources
-    ? countActiveTimersFromResourceInfo(activeResources)
-    : activeHandles
-      ? countActiveTimersFromHandles(activeHandles)
-      : undefined;
-  if (activeTimersCount !== undefined) {
-    metrics.push(["activeTimersCount", activeTimersCount]);
-  }
+  metrics.push([
+    "activeTimersCount",
+    activeResources.filter((resource) => resource === "Timeout" || resource === "Timer").length,
+  ]);
   return metrics;
-}
-
-function countActiveTimersFromResourceInfo(activeResources: readonly string[]): number {
-  return activeResources.filter((resource) => resource === "Timeout" || resource === "Timer")
-    .length;
-}
-
-function countActiveTimersFromHandles(activeHandles: readonly unknown[]): number {
-  let count = 0;
-  for (const handle of activeHandles) {
-    if (typeof handle !== "object" || handle === null) {
-      continue;
-    }
-    const constructorName = (handle as { constructor?: { name?: string } }).constructor?.name;
-    if (constructorName === "Timeout" || constructorName === "Timer") {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {

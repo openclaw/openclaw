@@ -312,6 +312,8 @@
      surfaces. Board layout math mirrors this value numerically. */
   --widget-frame-inset: var(--space-3);
 
+  --sidebar-nav-row-height: 32px;
+
   /* Radii - Slightly larger for modern feel */
   --radius-sm: 6px;
   --radius-md: 10px;

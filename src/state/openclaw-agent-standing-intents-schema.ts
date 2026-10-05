@@ -8,6 +8,7 @@ import {
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 
 export const STANDING_INTENTS_TABLE = "standing_intents";
 export const STANDING_INTENTS_FTS_TABLE = "standing_intents_fts";
@@ -56,22 +57,6 @@ function rememberCommittedStandingIntentsSchema(db: DatabaseSync, schemaSql: str
   }
 }
 
-type StandingIntentColumnInfo = { name?: unknown };
-
-function ensureStandingIntentCreatorColumn(db: DatabaseSync): void {
-  const columns = /* sqlite-allow-raw -- Canonical additive schema inspection only. */ db
-    .prepare("PRAGMA table_info(standing_intents)")
-    .all() as StandingIntentColumnInfo[];
-  if (columns.some((column) => column.name === "creator_sender")) {
-    return;
-  }
-  // sqlite-allow-raw -- Unreleased additive column migration.
-  db.exec(
-    "ALTER TABLE standing_intents ADD COLUMN creator_sender TEXT " +
-      "CHECK (creator_sender IS NULL OR length(trim(creator_sender)) > 0)",
-  );
-}
-
 /** Lazily add the canonical standing-intents tables on first feature use. */
 export function ensureOpenClawAgentStandingIntentsSchema(db: DatabaseSync): void {
   if (hasCurrentStandingIntentsSchema(db)) {
@@ -85,7 +70,11 @@ export function ensureOpenClawAgentStandingIntentsSchema(db: DatabaseSync): void
   const ensure = () => {
     // sqlite-allow-raw -- Canonical additive DDL only.
     db.exec(schemaSql);
-    ensureStandingIntentCreatorColumn(db);
+    ensureColumn(
+      db,
+      STANDING_INTENTS_TABLE,
+      "creator_sender TEXT CHECK (creator_sender IS NULL OR length(trim(creator_sender)) > 0)",
+    );
   };
   if (db.isTransaction) {
     ensure();

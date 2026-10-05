@@ -184,7 +184,6 @@ export function agentsRouteData(
     selectionIntentRevision: selection.intentRevision,
     panel: "files",
     agentsList: roster,
-    error: null,
   };
 }
 

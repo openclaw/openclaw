@@ -14,7 +14,6 @@ import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
   hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
-  type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
@@ -26,7 +25,6 @@ import type {
   PreparedChannelTurn,
 } from "./types.js";
 
-const NO_ADDITIONAL_DELIVERY_SIGNALS: ChannelTurnVisibleDeliverySignals = {};
 const log = createSubsystemLogger("channels/turn/execution");
 
 function emit(
@@ -55,15 +53,6 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
     historyKey: params.historyKey,
     limit: params.limit,
   });
-}
-
-function resolveObserveOnlyDispatchResult<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): TDispatchResult {
-  return (params.observeOnlyDispatchResult ?? {
-    queuedFinal: false,
-    counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
-  }) as TDispatchResult;
 }
 
 function resolveRecordSessionKey<TDispatchResult>(
@@ -104,7 +93,7 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     return;
   }
   // The canonical visible signal includes observed delivery paths with zero queued counts.
-  if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
+  if (hasVisibleChannelTurnDispatch(dispatchResult)) {
     return;
   }
   // The processed outcome names the dispatch branch that produced the silence,
@@ -128,20 +117,16 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   });
 }
 
-function resolveBotLoopProtectionDrop<TDispatchResult>(
+function dropPreparedChannelTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
-): ChannelTurnResult<TDispatchResult> | undefined {
-  if (!params.botLoopProtection) {
-    return undefined;
-  }
-  const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection);
-  if (!botLoopResult.suppressed) {
-    return undefined;
-  }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "bot-loop-protection" };
+  reason: "bot-loop-protection" | "outbound-echo",
+  messageId = params.messageId,
+): ChannelTurnResult<TDispatchResult> {
+  const admission: ChannelTurnAdmission = { kind: "drop", reason };
   emit(params, {
     stage: "authorize",
     event: "drop",
+    messageId,
     admission: admission.kind,
     reason: admission.reason,
   });
@@ -189,20 +174,7 @@ function resolveOutboundEchoDrop<TDispatchResult>(
   if (!matchedMessageId && !matchesSource) {
     return undefined;
   }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "outbound-echo" };
-  emit(params, {
-    stage: "authorize",
-    event: "drop",
-    messageId: params.messageId ?? matchedMessageId,
-    admission: admission.kind,
-    reason: admission.reason,
-  });
-  return {
-    admission,
-    dispatched: false,
-    ctxPayload: params.ctxPayload,
-    routeSessionKey: params.routeSessionKey,
-  };
+  return dropPreparedChannelTurn(params, "outbound-echo", params.messageId ?? matchedMessageId);
 }
 
 export async function runPreparedChannelTurnCore<
@@ -230,8 +202,11 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
     return outboundEchoDrop;
   }
-  const botLoopDrop = resolveBotLoopProtectionDrop(params);
-  if (botLoopDrop) {
+  if (
+    params.botLoopProtection &&
+    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
+  ) {
+    const botLoopDrop = dropPreparedChannelTurn(params, "bot-loop-protection");
     clearPendingHistoryAfterTurn(params.history);
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
@@ -300,14 +275,17 @@ async function runPreparedChannelTurnCoreInTrace<
     });
     let dispatchResult: TDispatchResult;
     try {
-      if (admission.kind === "observeOnly" && !options.suppressObserveOnlyDispatch) {
-        await params.runDispatch();
-      } else if (admission.kind === "observeOnly") {
-        await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
-      }
       let processedOutcome: DispatchProcessedNote | undefined;
       if (admission.kind === "observeOnly") {
-        dispatchResult = resolveObserveOnlyDispatchResult(params);
+        if (options.suppressObserveOnlyDispatch) {
+          await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
+        } else {
+          await params.runDispatch();
+        }
+        dispatchResult = (params.observeOnlyDispatchResult ?? {
+          queuedFinal: false,
+          counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+        }) as TDispatchResult;
       } else {
         // The sink carries the dispatch's terminal outcome to the warning below
         // without widening the plugin-visible dispatch result contract.

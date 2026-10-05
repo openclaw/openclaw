@@ -6,7 +6,7 @@ import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
+import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 type GatewayStart = Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["start"];
@@ -36,7 +36,7 @@ export type UpdateRespawnFixtures = {
   waitForGatewayHealthyRestart: Mock<
     typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart
   >;
-  respawnHealth: (overrides?: Partial<GatewayRestartSnapshot>) => GatewayRestartSnapshot;
+  respawnHealth: (overrides?: Partial<GatewayRestartResult>) => GatewayRestartResult;
   readRestartSentinelReadOnly: Mock<
     typeof import("../../infra/restart-sentinel.js").readRestartSentinelReadOnly
   >;
@@ -348,7 +348,7 @@ export function registerUpdateRespawnProgressTests({
   waitForGatewayHealthyRestart: Mock<
     typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart
   >;
-  respawnHealth: (overrides?: Partial<GatewayRestartSnapshot>) => GatewayRestartSnapshot;
+  respawnHealth: (overrides?: Partial<GatewayRestartResult>) => GatewayRestartResult;
   markUpdateRestartSentinelFailure: Mock<(reason: string) => Promise<null>>;
   writeRestartSentinelIfUnchanged: Mock<
     typeof import("../../infra/restart-sentinel.js").writeRestartSentinelIfUnchanged

@@ -9,8 +9,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
-  iterateSessionEntryKeys,
   readExactSessionEntryRow,
   readSessionEntryCount,
   readSessionEntryStore,
@@ -470,17 +470,21 @@ describe("SQLite candidate reference reads", () => {
     );
   });
 
-  it.each(['"previousSessionId":1', '"usageFamilySessionIds":[1]', '"compactionCheckpoints":[{}]'])(
-    "retains parser failures for malformed references: %s",
-    (fields) => {
-      const database = openDatabase();
-      insertEntry(database, "owner", "current", `{"sessionId":"current","updatedAt":1,${fields}}`);
-      expect(() => readReferencedSessionIds(database, undefined, ["candidate"])).toThrow(TypeError);
-      expect(readReferencedSessionIds(database, new Set(["owner"]), ["candidate"])).toEqual(
-        new Set(),
-      );
-    },
-  );
+  it.each([
+    '"previousSessionId":1',
+    '"usageFamilySessionIds":[1]',
+    '"compactionCheckpoints":[{}]',
+    '"compactionCheckpoints":[{"preCompaction":{"sessionFile":1},"postCompaction":{}}]',
+    '"compactionCheckpoints":[{"preCompaction":{},"postCompaction":{"sessionFile":1}}]',
+    '"compactionCheckpoints":[{"preCompaction":{},"postCompaction":{"entryId":1}}]',
+  ])("retains parser failures for malformed references: %s", (fields) => {
+    const database = openDatabase();
+    insertEntry(database, "owner", "current", `{"sessionId":"current","updatedAt":1,${fields}}`);
+    expect(() => readReferencedSessionIds(database, undefined, ["candidate"])).toThrow(TypeError);
+    expect(readReferencedSessionIds(database, new Set(["owner"]), ["candidate"])).toEqual(
+      new Set(),
+    );
+  });
 
   it.each(["UTF-8", "UTF-16le"] as const)(
     "protects raw current IDs after %s text conversion",

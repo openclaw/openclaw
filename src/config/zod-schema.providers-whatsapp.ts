@@ -15,19 +15,17 @@ const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
 
 const WhatsAppDirectEntrySchema = z
-  .object({
+  .strictObject({
     systemPrompt: z.string().optional(),
   })
-  .strict()
   .optional();
 
 const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
 
 const WhatsAppPluginHooksSchema = z
-  .object({
+  .strictObject({
     messageReceived: z.boolean().optional(),
   })
-  .strict()
   .optional();
 
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
@@ -50,34 +48,29 @@ const WhatsAppCommonShape = {
   pluginHooks: WhatsAppPluginHooksSchema,
 };
 
-const WhatsAppAccountSchema = z
-  .object({
-    ...WhatsAppCommonShape,
-    name: z.string().optional(),
-    /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
-    authDir: z.string().optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
-  })
-  .strict();
+const WhatsAppAccountSchema = z.strictObject({
+  ...WhatsAppCommonShape,
+  name: z.string().optional(),
+  /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
+  authDir: z.string().optional(),
+});
 
 export const WhatsAppConfigSchema = z
-  .object({
+  .strictObject({
     ...WhatsAppCommonShape,
     ...rootPolicyShape,
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
     defaultAccount: z.string().optional(),
     mediaMaxMb: z.number().int().positive().optional().default(50),
     actions: z
-      .object({
+      .strictObject({
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         polls: z.boolean().optional(),
         calls: z.boolean().optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     const defaultAccount = resolveAccountEntry(value.accounts, "default");
     refineChannelDmPolicy({ channelId: "whatsapp", value, ctx });

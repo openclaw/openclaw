@@ -1,5 +1,7 @@
+import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 
 export type WorkerRelaunchSuffixClassification =
   | { kind: "at-admission" }
@@ -113,4 +115,36 @@ export async function resolveWorkerRelaunchBase(params: {
     admissionEntryId: params.admissionEntryId,
     runId: params.runId,
   });
+}
+
+/**
+ * Rebase a model-fallback relaunch onto the durable transcript leaf. A
+ * recorder whose admission persisted before this launch marks a fallback
+ * relaunch: the failed candidate may have committed past that admission, so
+ * the launch base must follow the durable leaf instead of the fenced prefix.
+ * Returns the effective base leaf id, or the recorded refusal when the
+ * failed candidate committed replay-unsafe tool activity.
+ */
+export async function applyWorkerModelFallbackRelaunch(params: {
+  transcriptTarget: SessionTranscriptRuntimeTarget;
+  admissionEntryId: string;
+  runId: string;
+  signal?: AbortSignal;
+}): Promise<
+  { kind: "proceed"; baseLeafId?: string } | { kind: "stopped"; refusal: WorkerTurnExecutionError }
+> {
+  const relaunch = await resolveWorkerRelaunchBase(params);
+  if (relaunch.kind === "self-tool-activity") {
+    // Tool activity is a side effect: replaying the turn would run it twice
+    // and write a second incompatible history, so fallback stops here.
+    const refusal = new WorkerTurnExecutionError(
+      "Cloud worker fallback candidate refused: the failed candidate already committed tool activity for this run",
+    );
+    recordModelFallbackStop(refusal);
+    return { kind: "stopped", refusal };
+  }
+  if (relaunch.kind === "self-terminal-error") {
+    return { kind: "proceed", baseLeafId: relaunch.baseLeafId };
+  }
+  return { kind: "proceed" };
 }

@@ -65,20 +65,17 @@ export function fireAndForgetHook(
 function runFireAndForgetHookJob(
   state: FireAndForgetHookState,
   { task, ...job }: FireAndForgetHookJob,
-  limits: { maxConcurrency: number },
+  maxConcurrency: number,
 ): void {
   // Pending observers need logging metadata, not the invoked factory's captured inputs.
   state.active += 1;
   let didLogTimeout = false;
-  const timeout =
-    job.timeoutMs > 0
-      ? setTimeout(() => {
-          // Timeout is informational only; the hook promise may still settle
-          // later, but the log should not double-report an eventual rejection.
-          didLogTimeout = true;
-          job.logger(`${job.label}: timed out after ${job.timeoutMs}ms`);
-        }, job.timeoutMs)
-      : undefined;
+  const timeout = setTimeout(() => {
+    // Timeout is informational only; the hook promise may still settle
+    // later, but the log should not double-report an eventual rejection.
+    didLogTimeout = true;
+    job.logger(`${job.label}: timed out after ${job.timeoutMs}ms`);
+  }, job.timeoutMs);
 
   void Promise.resolve()
     .then(task)
@@ -88,24 +85,19 @@ function runFireAndForgetHookJob(
       }
     })
     .finally(() => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       state.active -= 1;
-      drainFireAndForgetHookQueue(state, limits);
+      drainFireAndForgetHookQueue(state, maxConcurrency);
     });
 }
 
-function drainFireAndForgetHookQueue(
-  state: FireAndForgetHookState,
-  limits: { maxConcurrency: number },
-): void {
-  while (state.active < limits.maxConcurrency) {
+function drainFireAndForgetHookQueue(state: FireAndForgetHookState, maxConcurrency: number): void {
+  while (state.active < maxConcurrency) {
     const next = state.queue.shift();
     if (!next) {
       return;
     }
-    runFireAndForgetHookJob(state, next, limits);
+    runFireAndForgetHookJob(state, next, maxConcurrency);
   }
 }
 
@@ -136,5 +128,5 @@ export function fireAndForgetBoundedHook(
   }
 
   state.queue.push({ task, label, logger, timeoutMs });
-  drainFireAndForgetHookQueue(state, { maxConcurrency });
+  drainFireAndForgetHookQueue(state, maxConcurrency);
 }

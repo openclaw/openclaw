@@ -20,10 +20,10 @@ import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-iden
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff-current.js";
 import { admitSystemdUpdate } from "../../infra/update-managed-service-handoff-service.js";
-import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
-import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -103,7 +103,7 @@ export function createWindowsTaskAutoStartGuard(params: {
 async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   serviceEnv: NodeJS.ProcessEnv | undefined;
   assertCurrentService?: () => Promise<void>;
-  assertCurrent?: () => void;
+  assertCurrent?: (phase?: "restore") => void;
   updateRun?: UpdateCommandOptions["run"];
 }): Promise<WindowsTaskAutoStartRecovery | undefined> {
   if (process.platform !== "win32" || !params.serviceEnv) {
@@ -150,6 +150,7 @@ async function abortWindowsTaskUpdateIfInterrupted(
 type ManagedServiceStopParams = {
   recovery?: unknown;
   updateRun?: UpdateCommandOptions["run"];
+  recordPhase?: (phase: "activating") => Promise<void>;
   updateInstallKind: "git" | "package";
   root: string;
   shouldRestart: boolean;
@@ -166,10 +167,14 @@ type ManagedServiceStopParams = {
   onStopped?: (state: PreManagedServiceStop) => void;
   /** Doctor restores this same native instance after its offline repair. */
   retainNativeIdentity?: boolean;
-  assertCurrent?: () => void;
+  assertCurrent?: (phase?: "restore") => void;
   timeoutMs?: number;
   warn?: (message: string) => void;
-};
+} & (
+  | { recordPhase: (phase: "activating") => Promise<void> }
+  | { updateRun?: undefined }
+  | { phase: "inspect" | "refresh" }
+);
 
 function unavailableServiceState(
   verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>,
@@ -228,6 +233,7 @@ async function stopManagedServiceBeforeMutableUpdate(
 ): Promise<PreManagedServiceStop> {
   // Retain the original live owner across daemon awaits; history is not authority.
   const updateRun = params.updateRun;
+  const recordPhase = params.recordPhase;
   const executorFence = updateRun?.executorFence;
   const assertExecutor = () => {
     if (params.updateRun !== updateRun || updateRun?.executorFence !== executorFence) {
@@ -235,8 +241,8 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
     executorFence?.assertCurrent();
   };
-  const assertCurrent = () => {
-    params.assertCurrent?.();
+  const assertCurrent = (phase?: "restore") => {
+    params.assertCurrent?.(phase);
     assertNative?.();
     assertExecutor();
   };
@@ -307,7 +313,7 @@ async function stopManagedServiceBeforeMutableUpdate(
             inspectedService,
             serviceEnv,
             params.timeoutMs,
-            params.phase === "inspect"
+            params.phase === "inspect" && !params.assertCurrent
               ? undefined
               : { managerUid: params.expectedService?.serviceManagerUid, assertCurrent },
           ),
@@ -455,10 +461,10 @@ async function stopManagedServiceBeforeMutableUpdate(
         before: inspected,
         timeoutMs: params.timeoutMs,
       }),
-      assertCurrent: () => {
+      assertCurrent: (phase) => {
         // Recovery can hand off after Doctor migrates canonical state. Retain live
         // executor authority without reopening that state through the old runtime.
-        params.assertCurrent?.();
+        params.assertCurrent?.(phase);
         assertExecutor();
       },
     });
@@ -614,12 +620,14 @@ async function stopManagedServiceBeforeMutableUpdate(
         }
       }
       assertCurrent();
-      stoppedAtMs = Date.now();
-      if (params.updateRun) {
-        recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
-          env: params.updateRun.env,
-        });
+      if (updateRun) {
+        if (!recordPhase) {
+          throw new Error("Update service preparation has no phase persistence owner.");
+        }
+        await recordPhase("activating");
+        assertCurrent();
       }
+      stoppedAtMs = Date.now();
       await service.stop({
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
@@ -651,7 +659,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
   } catch (err) {
     try {
-      assertCurrent();
+      assertCurrent("restore");
     } catch (cause) {
       const failures = [err, cause];
       try {

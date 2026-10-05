@@ -57,13 +57,13 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
-import { resolveProjectKey } from "../project-memory-scope.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
+import { prepareAgentPromptProjects } from "../runtime-prompt.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import {
   resolveSessionSuspensionTarget,
@@ -71,8 +71,7 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
-import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { redactRunIdentifier } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -91,12 +90,14 @@ import {
   assertInitialOperatorModelPolicy,
   resolveEmbeddedRunConfig,
 } from "./run/model-admission.js";
-import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
+import {
+  bindRunToPreparedModelRuntime,
+  resolvePreparedRuntimeWorkspaces,
+} from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
-import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import {
   createUsageAccumulator,
@@ -151,7 +152,7 @@ async function runEmbeddedAgentInternal(
     sessionKey: paramsBase.sessionKey,
     agentId: paramsBase.agentId,
   });
-  const sessionAdmission = assertAgentHarnessRunAdmission({
+  const sessionAdmission = await assertAgentHarnessRunAdmission({
     ...paramsBase,
     sessionKey: effectiveSessionKey,
   });
@@ -213,11 +214,7 @@ async function runEmbeddedAgentInternal(
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
+    (!channelHint || isMarkdownCapableMessageChannel(channelHint) ? "markdown" : "plain");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
   throwIfAborted();
 
@@ -280,12 +277,11 @@ async function runEmbeddedAgentInternal(
         using _ = { [Symbol.dispose]: () => preReplyGeneration?.release() };
         const preReplyAssertCurrent = preReplyGeneration?.assertCurrent;
         const startupStages = createStageTimingTracker(Date.now);
-        const requestedWorkspaceResolution = resolveRunWorkspaceDir({
-          workspaceDir: params.workspaceDir,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          config: params.config,
-        });
+        const {
+          requestedWorkspaceResolution,
+          runtimeWorkspaceResolution,
+          preserveExecutionWorkspace,
+        } = resolvePreparedRuntimeWorkspaces(params);
         startupStages.mark("workspace");
         const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
         const requestedAgentDir =
@@ -311,7 +307,7 @@ async function runEmbeddedAgentInternal(
           params.pluginGeneration?.pluginMetadataSnapshot ??
           loadPluginMetadataSnapshot({
             config,
-            workspaceDir: requestedWorkspaceResolution.workspaceDir,
+            workspaceDir: runtimeWorkspaceResolution.workspaceDir,
             env: process.env,
           });
         const runtimePluginSelections = resolveModelCandidateChain({
@@ -341,8 +337,8 @@ async function runEmbeddedAgentInternal(
           // Shared credential inheritance stays anchored to its compatibility owner;
           // the selected session agent already owns this prepared runtime.
           inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
-          workspaceDir: requestedWorkspaceResolution.workspaceDir,
-          preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
+          workspaceDir: runtimeWorkspaceResolution.workspaceDir,
+          preserveWorkspaceDirOnRefresh: !runtimeWorkspaceResolution.isCanonicalWorkspace,
           ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
           ...(params.preparedModelRuntimeMode === "isolated-read-only"
             ? { loadRuntimePlugins: true }
@@ -401,26 +397,21 @@ async function runEmbeddedAgentInternal(
             const rebound = bindRunToPreparedModelRuntime({
               runParams: params,
               requestedWorkspaceResolution,
+              preserveExecutionWorkspace,
               preparedModelRuntime: preparedModelRuntimeOwnerSnapshot,
             });
             params = rebound.runParams;
             const workspaceResolution = rebound.workspaceResolution;
-            const repoRoot =
-              resolveSystemPromptRepoRoot({
-                config: rebound.runParams.config,
-                workspaceDir: workspaceResolution.workspaceDir,
-                cwd: rebound.runParams.cwd,
-              }) ?? null;
-            const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
-            const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
-              params.sessionId,
-              projectKey,
-            );
+            const projects = await prepareAgentPromptProjects({
+              config: params.config,
+              workspaceDir: workspaceResolution.workspaceDir,
+              cwd: params.cwd,
+              sessionId: params.sessionId,
+            });
+            const { activeProjectKeys } = projects;
             const preparedModelRuntime = Object.freeze({
               ...preparedModelRuntimeOwnerSnapshot,
-              repoRoot,
-              projectKey,
-              activeProjectKeys,
+              ...projects,
             });
             const runPrepared = async () => {
               params = refresh.withDeliveryCallbacks(params);

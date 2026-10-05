@@ -3,11 +3,14 @@ import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-acce
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { walkSessionCurrentTurn } from "../../config/sessions/session-entry-navigation.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
+import {
+  OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+} from "../internal-runtime-context.js";
 import { isSessionContextMetadataEntry } from "./session-manager-codec.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
 
@@ -19,6 +22,11 @@ export const sessionManagerPrepareCurrentTurnReplay: unique symbol = Symbol.for(
 /** @internal Runtime model history is not the raw persistence/navigation window. */
 export const sessionManagerReadInitialContext: unique symbol = Symbol.for(
   "openclaw.session-manager.read-initial-context",
+);
+
+/** @internal Committed manager facts for the current execution boundary. */
+export const sessionManagerReadTranscriptStart: unique symbol = Symbol.for(
+  "openclaw.session-manager.read-transcript-start",
 );
 
 export type CurrentTurnReplayWitness = {
@@ -48,7 +56,8 @@ function traversalEntry(
       isSessionContextMetadataEntry(entry) ||
       entry.type === "compaction" ||
       (entry.type === "custom_message" &&
-        entry.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) ||
+        (entry.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE ||
+          entry.customType === SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE)) ||
       (isInterruptedTail?.(entry) ?? false),
   };
 }
@@ -94,6 +103,7 @@ export async function prepareCurrentTurnReplayWitness(
   },
   matchesUser: (entry: SessionEntry | undefined) => boolean,
   signal?: AbortSignal,
+  manager?: object,
 ): Promise<CurrentTurnReplayWitness | undefined> {
   const view = readView();
   if (!view.target || !view.version) {
@@ -116,7 +126,7 @@ export async function prepareCurrentTurnReplayWitness(
     }
   };
   assertCurrent();
-  const reader = prepareSessionTranscriptHydration(view.target, undefined, signal);
+  const reader = prepareSessionManagerHydration(view.target, undefined, signal, manager);
   const walk = walkSessionCurrentTurn(view.parentId, view.remainingAncestors);
   let next = walk.next();
   let entry: SessionEntry | undefined;

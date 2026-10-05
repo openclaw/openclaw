@@ -12,6 +12,7 @@ import {
   waitForFixtureLogEntry,
   type FixtureLogEntry,
 } from "./tui-pty-harness-assertion-test-support.js";
+import { tuiFixtureReceipts, tuiFixtureRecordSource } from "./tui-pty-receipts-test-support.js";
 import {
   createTuiReconnectRelease,
   TUI_PTY_RECONNECT_FIXTURE,
@@ -29,6 +30,8 @@ import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
 import { startRuntimePty, type PtyRun } from "./tui-pty-test-support.js";
 
 export * from "./tui-pty-harness-assertion-test-support.js";
+
+export { tuiFixtureReceipts } from "./tui-pty-receipts-test-support.js";
 
 const activeRuns: PtyRun[] = [];
 const OUTPUT_TIMEOUT_MS = 2_000;
@@ -85,9 +88,13 @@ export async function startTuiFixture(
     releaseReconnect: reconnectRelease.releaseReconnect,
     waitForLogEntry: async (
       predicate: (entry: FixtureLogEntry, index: number) => boolean,
-      timeoutMs?: number,
+      signal: AbortSignal,
     ) =>
-      await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
+      await waitForFixtureLogEntry(logPath, predicate, {
+        receipts: tuiFixtureReceipts,
+        run,
+        signal,
+      }),
     cleanup: async () => {
       await run.dispose();
       await rm(tempDir, { recursive: true, force: true });
@@ -108,7 +115,8 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
   ).href;
   const tuiBackendTypeUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui-backend.ts")).href;
   const source = `
-      import { appendFileSync, existsSync, watch, watchFile, unwatchFile } from "node:fs";
+      ${tuiFixtureRecordSource()}
+      import { existsSync, watch, watchFile, unwatchFile } from "node:fs";
       import { dirname, join } from "node:path";
       import { DatabaseSync } from "node:sqlite";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
@@ -117,7 +125,6 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
       import type { TuiBackend } from ${JSON.stringify(tuiBackendTypeUrl)};
       import { runTui } from ${JSON.stringify(tuiModuleUrl)};
 
-      const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       ${TUI_PTY_STARTUP_SESSION_FIXTURE.variables(opts.failInitialHistory === true)}
@@ -172,13 +179,6 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
         : null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
       ${TUI_PTY_TASK_FIXTURE.variables}
-
-      function record(method: string, payload?: unknown) {
-        if (!actionLogPath) {
-          return;
-        }
-        appendFileSync(actionLogPath, JSON.stringify({ method, payload }) + "\\n", "utf8");
-      }
 
       function sessionEntry(key = "main") {
         const isModeSource = key.endsWith(":mode-source");
@@ -673,7 +673,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
           config: {
             agents: {
               defaults: { model: "fixture-provider/fixture-model" },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             session: { scope: "per-sender", mainKey: "main" },
           },

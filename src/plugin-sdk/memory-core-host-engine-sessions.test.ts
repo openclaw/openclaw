@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -10,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -17,8 +20,10 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadArchivedSessions,
+  loadArchivedSessionsAsync,
   loadMemorySessionMetadata,
   resolveMemorySessionTargets,
+  resolveMemorySessionTargetsAsync,
 } from "./memory-core-host-engine-sessions.js";
 
 describe("memory source sessions", () => {
@@ -61,21 +66,44 @@ describe("memory source sessions", () => {
           hookExternalContentSource: "gmail",
           chatType: "group",
         });
+        expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId] })).toEqual([
+          expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
+        ]);
+        const targetSql = observeHostDataSql();
+        try {
+          expect(
+            await resolveMemorySessionTargetsAsync({ ...scope, participants: ["profile-source"] }),
+          ).toEqual([expect.objectContaining({ sessionId, sessionKey, resolution: "live" })]);
+          expect(targetSql.queries).toEqual([]);
+          for (const call of targetSql.calls) {
+            expect(call).not.toHaveBeenCalled();
+          }
+        } finally {
+          targetSql.restore();
+        }
         for (const selectors of [
           { sessionIds: [sessionId] },
           { sessionIds: [sessionKey] },
           { hookSources: ["gmail"] },
           { participants: ["profile-source"] },
         ]) {
-          expect(resolveMemorySessionTargets({ ...scope, ...selectors })).toEqual([
+          expect(await resolveMemorySessionTargetsAsync({ ...scope, ...selectors })).toEqual([
             expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
           ]);
         }
         expect(
-          resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId], since: 2_000 }),
+          await resolveMemorySessionTargetsAsync({
+            ...scope,
+            sessionIds: [sessionId],
+            since: 2_000,
+          }),
         ).toEqual([]);
         expect(
-          resolveMemorySessionTargets({ ...scope, sessionIds: ["unknown"], since: 2_000 }),
+          await resolveMemorySessionTargetsAsync({
+            ...scope,
+            sessionIds: ["unknown"],
+            since: 2_000,
+          }),
         ).toEqual([expect.objectContaining({ sessionId: "unknown", resolution: "unresolved" })]);
 
         await appendTranscriptMessage(
@@ -93,13 +121,28 @@ describe("memory source sessions", () => {
         expect(loadArchivedSessions({ ...scope, sessionIds: [sessionKey] })).toEqual([
           expect.objectContaining({ sessionId, sessionKey }),
         ]);
-        expect(loadArchivedSessions({ ...scope, archiveNames: [archiveName] })).toEqual([
+        const expectedArchives = loadArchivedSessions({ ...scope, archiveNames: [archiveName] });
+        const hostSql = observeHostDataSql();
+        try {
+          expect(
+            await loadArchivedSessionsAsync({ ...scope, archiveNames: [archiveName] }),
+          ).toEqual(expectedArchives);
+          expect(hostSql.queries).toEqual([]);
+          for (const call of hostSql.calls) {
+            expect(call).not.toHaveBeenCalled();
+          }
+        } finally {
+          hostSql.restore();
+        }
+        expect(expectedArchives).toEqual([
           expect.objectContaining({ archiveName, sessionId, sessionKey }),
         ]);
-        expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionKey] })).toEqual([
-          expect.objectContaining({ sessionId, sessionKey, resolution: "archived" }),
-        ]);
-        expect(resolveMemorySessionTargets({ ...scope, hookSources: ["gmail"] })).toEqual([]);
+        expect(
+          await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: [sessionKey] }),
+        ).toEqual([expect.objectContaining({ sessionId, sessionKey, resolution: "archived" })]);
+        expect(
+          await resolveMemorySessionTargetsAsync({ ...scope, hookSources: ["gmail"] }),
+        ).toEqual([]);
       });
     },
   );
@@ -126,7 +169,7 @@ describe("memory source sessions", () => {
         { hookSources: ["gmail"] },
         { participants: ["same-participant"] },
       ]) {
-        expect(resolveMemorySessionTargets({ ...mainScope, ...selectors })).toEqual([
+        expect(await resolveMemorySessionTargetsAsync({ ...mainScope, ...selectors })).toEqual([
           expect.objectContaining({ sessionId: "main-source" }),
         ]);
       }
@@ -143,7 +186,9 @@ describe("memory source sessions", () => {
         target: { canonicalKey: "agent:other:source", storeKeys: ["agent:other:source"] },
         archiveTranscript: true,
       });
-      expect(loadArchivedSessions({ ...mainScope, sessionIds: ["other-source"] })).toEqual([]);
+      expect(
+        await loadArchivedSessionsAsync({ ...mainScope, sessionIds: ["other-source"] }),
+      ).toEqual([]);
     });
   });
 
@@ -161,7 +206,9 @@ describe("memory source sessions", () => {
         expect(loadMemorySessionMetadata({ agentId: "main", sessionId: source })).toMatchObject({
           hookExternalContentSource: source,
         });
-        expect(resolveMemorySessionTargets({ agentId: "main", hookSources: [source] })).toEqual([
+        expect(
+          await resolveMemorySessionTargetsAsync({ agentId: "main", hookSources: [source] }),
+        ).toEqual([
           expect.objectContaining({ sessionId: source, hookExternalContentSource: source }),
         ]);
       }
@@ -174,9 +221,9 @@ describe("memory source sessions", () => {
       expect(loadMemorySessionMetadata({ agentId: "main", sessionId: "email" })).toMatchObject({
         hookExternalContentSource: null,
       });
-      expect(resolveMemorySessionTargets({ agentId: "main", hookSources: ["webhook"] })).toEqual([
-        expect.objectContaining({ sessionId: "webhook" }),
-      ]);
+      expect(
+        await resolveMemorySessionTargetsAsync({ agentId: "main", hookSources: ["webhook"] }),
+      ).toEqual([expect.objectContaining({ sessionId: "webhook" })]);
       expect(
         listSessionTranscriptInstances({ agentId: "main" }).find(
           (instance) => instance.sessionId === "email",
@@ -190,11 +237,59 @@ describe("memory source sessions", () => {
       const storePath = path.join(state.root, "absent", "sessions.json");
       const scope = { agentId: "main", storePath, sessionId: "missing" };
       expect(loadMemorySessionMetadata(scope)).toBeUndefined();
-      expect(loadArchivedSessions({ ...scope, sessionIds: ["missing"] })).toEqual([]);
-      expect(resolveMemorySessionTargets({ ...scope, sessionIds: ["missing"] })).toEqual([
-        expect.objectContaining({ sessionId: "missing", resolution: "unresolved" }),
-      ]);
+      expect(await loadArchivedSessionsAsync({ ...scope, sessionIds: ["missing"] })).toEqual([]);
+      expect(await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: ["missing"] })).toEqual(
+        [expect.objectContaining({ sessionId: "missing", resolution: "unresolved" })],
+      );
       await expect(fs.stat(path.dirname(storePath))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+  it("refuses archive inventory after its retained database closes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", storePath: resolveDefaultSessionStorePath("main") };
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:main:inventory" },
+        { sessionId: "inventory", updatedAt: 1 },
+      );
+      const entered = createDeferred();
+      const release = createDeferred();
+      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      const factory = vi
+        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+        .mockImplementation((run) => {
+          const readers = createReaders(run);
+          return {
+            ...readers,
+            readArchiveInventory: async (input) => {
+              const entries = await readers.readArchiveInventory(input);
+              entered.resolve();
+              await release.promise;
+              return entries;
+            },
+          };
+        });
+      const outcome = loadArchivedSessionsAsync({ ...scope, sessionIds: ["inventory"] }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      let closing: Promise<void> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          outcome,
+          "Inventory settled before the retained read",
+        );
+        closing = closeOpenClawAgentDatabasesAsync(state.stateDir);
+        release.resolve();
+        expect(await outcome).toMatchObject({
+          error: { message: expect.stringMatching(/revoked/) },
+        });
+        await closing;
+      } finally {
+        release.resolve();
+        await Promise.allSettled([outcome, closing]);
+        factory.mockRestore();
+      }
     });
   });
 });

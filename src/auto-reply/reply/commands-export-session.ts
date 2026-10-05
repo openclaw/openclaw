@@ -17,7 +17,6 @@ import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/t
 import { FsSafeError } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  isReplyPayload,
   parseExportCommandOutputPath,
   resolveExportCommandSessionTarget,
 } from "./commands-export-common.js";
@@ -242,7 +241,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     return { text: args.error };
   }
   const sessionTarget = resolveExportCommandSessionTarget(params);
-  if (isReplyPayload(sessionTarget)) {
+  if ("text" in sessionTarget) {
     return sessionTarget;
   }
   const { entry } = sessionTarget;

@@ -1,12 +1,13 @@
-/**
- * Gateway config reload handler tests.
- */
 import fs from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
@@ -46,7 +47,6 @@ import {
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createServiceRegistration } from "../plugins/services.test-support.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -63,8 +63,6 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { buildWindowsCmdExeCommandLine } from "../process/windows-command.js";
 import { createSimpleChannelSecretContract } from "../secrets/channel-secret-basic-runtime.js";
 import { providerResolutionError } from "../secrets/resolve-errors.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
@@ -83,7 +81,6 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createGatewaySchedulerClock,
@@ -106,8 +103,7 @@ import {
   waitForReloadState,
 } from "./config-reload.test-support.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
-import { applyHookMappings } from "./hooks-mapping.js";
-import { commitHooksConfigReload } from "./hooks.js";
+import { applyHookMappings, commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { createChannelManager } from "./server-channels.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -121,6 +117,7 @@ import {
   createTestConfigRevisionProjector,
   createConfigWriteListenerRef,
   createManagedReloadAuthFixture,
+  createMonitorPublicationFailure,
   createManagedRestartSequenceConfigs,
   createConfigWriteNotification,
   createCronRestartPlan,
@@ -131,8 +128,16 @@ import {
   createPluginReloadPlan,
   createTestCronState,
   createValidConfigSnapshot,
+  enableChannelReloadsForTest,
+  makePluginReloadResult,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
+import {
+  createSupervisedExitWatcherFixture,
+  fixtureLifetime,
+  waitForFast,
+} from "./server-reload-handlers.process.test-support.js";
+import { registerGatewayTargetedServiceReloadTests } from "./server-reload-handlers.services.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl } from "./server-reload-managed.js";
@@ -172,14 +177,6 @@ type ManagedReloaderTestParams = Pick<
 > &
   Partial<ManagedReloaderParams>;
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
-const tempDirs: string[] = [];
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const restartTesting = {
@@ -214,7 +211,7 @@ function createGatewayReloadHandlers(
     pruneInactiveChannelAccountState: vi.fn(),
     stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
       return makePluginReloadResult();
     }),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -251,7 +248,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
       return makePluginReloadResult();
     }),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -402,6 +399,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   advancePreparedModelRuntimeConfig: hoisted.advancePreparedModelRuntimeConfig,
+  beginPreparedModelRuntimePluginDrain: () => ({ pendingPublication: false, release: () => {} }),
   markPreparedModelRuntimeSnapshotsStale: (
     reason?: string,
     options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
@@ -432,7 +430,7 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   reloadSessionMcpRuntimes: hoisted.reloadSessionMcpRuntimes,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
   clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
   loadInstalledPluginIndexInstallRecordsSync: vi.fn(() => ({})),
@@ -535,35 +533,6 @@ async function withReloadChannelManager(
   }
 }
 
-function makePluginReloadResult(
-  overrides: Partial<GatewayPluginReloadResult> = {},
-): GatewayPluginReloadResult {
-  return {
-    runtime: { operationId: "test-reload", generation: 1, pluginIds: [] },
-    activeChannels: new Set(),
-    ...overrides,
-  };
-}
-
-function enableChannelReloadsForTest() {
-  const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-  const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-  delete process.env.OPENCLAW_SKIP_CHANNELS;
-  delete process.env.OPENCLAW_SKIP_PROVIDERS;
-  return () => {
-    if (previousSkipChannels === undefined) {
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-    } else {
-      process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-    }
-    if (previousSkipProviders === undefined) {
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    } else {
-      process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-    }
-  };
-}
-
 function createTestCronReconciliation() {
   const complete = vi.fn<() => Promise<void>>(async () => {});
   return {
@@ -647,6 +616,8 @@ function createReloadHandlersForTest(
 async function createManagedRestartSequenceHarness(
   options: { invalidateGenerationOnReconcile?: boolean } = {},
 ) {
+  const watcher = installWatcherMock();
+  onTestFinished(() => watcher.restore());
   const {
     initialConfig,
     deferredConfig,
@@ -658,6 +629,7 @@ async function createManagedRestartSequenceHarness(
   setRuntimeConfigSnapshot(initialConfig, initialConfig);
   activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
   const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
+  const acceptTerminalConfig = vi.fn(terminalPolicy.acceptConfig);
   const writeListenerRef = createConfigWriteListenerRef();
   let snapshotConfig = initialConfig;
   let snapshotHash = "initial";
@@ -736,7 +708,7 @@ async function createManagedRestartSequenceHarness(
       }
     }),
     commitRuntimePolicy: terminalPolicy.commitConfig,
-    acceptTerminalConfig: terminalPolicy.acceptConfig,
+    acceptTerminalConfig,
     sharedGatewaySessionGenerationState,
     requestRecoveryRestart,
   });
@@ -761,6 +733,7 @@ async function createManagedRestartSequenceHarness(
   };
 
   return {
+    acceptTerminalConfig,
     activateRuntimeSecrets,
     assertRestartReady: hoisted.assertOpenClawDatabasesReady,
     deferredConfig,
@@ -779,6 +752,7 @@ async function createManagedRestartSequenceHarness(
     requestRecoveryRestart,
     sharedGatewaySessionGenerationState,
     terminalPolicy,
+    watcher,
     setSecretAvailable: (id: string) => unavailableSecretIds.delete(id),
     setSecretUnavailable: (id: string) => unavailableSecretIds.add(id),
     writeConfig,
@@ -820,7 +794,8 @@ beforeEach((context) => {
   hoisted.applyLoggingConfig.mockClear();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await fixtureLifetime.cleanup();
   restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
   process.removeListener("SIGUSR2", testGatewayRestartListener);
   setGatewayRestartPolicy({ allowExternal: false });
@@ -847,9 +822,6 @@ afterEach(() => {
   hoisted.buildGatewayCronService.mockClear();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 async function runManagedOwnershipScenario(params: {
@@ -1205,7 +1177,7 @@ async function withManagedChannelSecretFixture(
     startChannel: manager.startChannel,
     stopChannel: manager.stopChannel,
     reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(["notes"]), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(["notes"]), channels: new Set() }).retire();
       await commitRuntime();
       return makePluginReloadResult({
         activeChannels: new Set(["mattermost"]),
@@ -1362,32 +1334,32 @@ describe("managed channel credential publication", () => {
   });
 
   it.each([
-    { shape: "named", accountScopedRestart: false, ids: ["ada", "root"] },
-    { shape: "default", accountScopedRestart: true, ids: ["ada", "default"] },
-    { shape: "shared", accountScopedRestart: true, ids: ["ada", "other", "root"] },
+    { shape: "named", accountScopedRestart: false, ids: ["ada", "root"], cold: false },
+    { shape: "default", accountScopedRestart: true, ids: ["ada", "default"], cold: false },
+    { shape: "shared", accountScopedRestart: true, ids: ["ada", "other", "root"], cold: false },
+    { shape: "named", accountScopedRestart: false, ids: ["ada", "root"], cold: true },
   ] as const)(
-    "preserves whole-channel contract for $shape (opt-in=$accountScopedRestart)",
+    "preserves whole-channel contract for $shape (opt-in=$accountScopedRestart, cold=$cold)",
     async (entry) => {
       await withManagedChannelSecretFixture(entry, async (fixture) => {
-        expect(await fixture.write(fixture.nextSource(fixture.newPath))).toBe("applied");
+        expect(
+          await fixture.write(
+            fixture.nextSource(entry.cold ? fixture.missingPath : fixture.newPath),
+          ),
+        ).toBe("applied");
         expect(fixture.stops.toSorted()).toEqual(entry.ids);
-        expect(fixture.starts.map(({ accountId }) => accountId).toSorted()).toEqual(entry.ids);
+        if (entry.cold) {
+          expect(fixture.starts).toEqual([{ accountId: "root", token: "independent" }]);
+          expect(
+            fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost?.ada?.running,
+          ).toBe(false);
+        } else {
+          expect(fixture.starts.map(({ accountId }) => accountId).toSorted()).toEqual(entry.ids);
+        }
         expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
       });
     },
   );
-
-  it("leaves cold accounts stopped during a whole-channel replacement", async () => {
-    await withManagedChannelSecretFixture({ accountScopedRestart: false }, async (fixture) => {
-      expect(await fixture.write(fixture.nextSource(fixture.missingPath))).toBe("applied");
-      expect(fixture.stops.toSorted()).toEqual(["ada", "root"]);
-      expect(fixture.starts).toEqual([{ accountId: "root", token: "independent" }]);
-      expect(fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost?.ada?.running).toBe(
-        false,
-      );
-      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
-    });
-  });
 
   it("prunes a removed account when its surviving sibling becomes cold", async () => {
     await withManagedChannelSecretFixture({}, async (fixture) => {
@@ -1408,30 +1380,20 @@ describe("managed channel credential publication", () => {
     });
   });
 
-  it("does not resume a manually stopped account during provider recovery", async () => {
-    await withManagedChannelSecretFixture({}, async (fixture) => {
-      await fixture.manager.stopChannel("mattermost", "ada");
-      fixture.stops.length = 0;
-      const next = fixture.nextSource(fixture.newPath);
-      expect(await fixture.write(next)).toBe("applied");
-      expect(fixture.starts).toEqual([]);
-      expect(fixture.stops).toEqual([]);
-      expect(fixture.manager.isManuallyStopped("mattermost", "ada")).toBe(true);
-      expect(fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost?.root?.running).toBe(
-        true,
-      );
-      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([false, true])(
-    "recovers a cold account without undoing a manual stop (%s)",
-    async (manualStop) => {
+  it.each([
+    { cold: true, manualStop: false },
+    { cold: true, manualStop: true },
+    { cold: false, manualStop: true },
+  ])(
+    "recovers credentials without undoing manual stops (cold=$cold, manual=$manualStop)",
+    async ({ cold, manualStop }) => {
       await withManagedChannelSecretFixture({}, async (fixture) => {
-        expect(await fixture.write(fixture.nextSource(fixture.missingPath))).toBe("applied");
-        expect(fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost?.ada?.running).toBe(
-          false,
-        );
+        if (cold) {
+          expect(await fixture.write(fixture.nextSource(fixture.missingPath))).toBe("applied");
+          expect(
+            fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost?.ada?.running,
+          ).toBe(false);
+        }
         if (manualStop) {
           await fixture.manager.stopChannel("mattermost", "ada");
         }
@@ -1513,15 +1475,6 @@ describe("managed reload transaction ownership", () => {
     expect(hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0]?.[0]).toBe(resolved);
   });
 
-  it("advances prepared model config stamps for a no-op publication", async () => {
-    const result = await runManagedOwnershipScenario({ kind: "noop", queueRevert: false });
-
-    expect(hoisted.advancePreparedModelRuntimeConfig).toHaveBeenCalledExactlyOnceWith(
-      result.configA,
-    );
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
-  });
-
   it("fences resolved provider credentials before committing a channel edit", async () => {
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({ id: "slack" }),
@@ -1565,26 +1518,31 @@ describe("managed reload transaction ownership", () => {
     expect(result.requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
-  it("publishes a current hot config and its logging settings", async () => {
-    const result = await runManagedOwnershipScenario({
-      kind: "hot",
-      loggingChanged: true,
-      queueRevert: false,
-    });
+  it.each(["noop", "hot"] as const)(
+    "publishes a current %s config without rebuilding models",
+    async (kind) => {
+      const result = await runManagedOwnershipScenario({
+        kind,
+        loggingChanged: kind === "hot",
+        queueRevert: false,
+      });
 
-    expect(hoisted.advancePreparedModelRuntimeConfig).toHaveBeenCalledExactlyOnceWith(
-      result.configA,
-    );
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
-    expect(result.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledOnce();
-    expect(result.commitRuntimePolicy).toHaveBeenCalledOnce();
-    expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
-    expect(result.prepareTerminalConfig).toHaveBeenCalledOnce();
-    expect(result.reconcileRuntimePolicy).toHaveBeenCalledOnce();
-    expect(hoisted.applyLoggingConfig).toHaveBeenCalledExactlyOnceWith({ level: "debug" });
-    expect(hoisted.resetSkillSnapshotConfigFingerprintCache).toHaveBeenCalledOnce();
-    expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(result.configA);
-  });
+      expect(hoisted.advancePreparedModelRuntimeConfig).toHaveBeenCalledExactlyOnceWith(
+        result.configA,
+      );
+      expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
+      expect(result.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledOnce();
+      expect(result.commitRuntimePolicy).toHaveBeenCalledOnce();
+      expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
+      expect(result.prepareTerminalConfig).toHaveBeenCalledOnce();
+      expect(result.reconcileRuntimePolicy).toHaveBeenCalledOnce();
+      if (kind === "hot") {
+        expect(hoisted.applyLoggingConfig).toHaveBeenCalledExactlyOnceWith({ level: "debug" });
+      }
+      expect(hoisted.resetSkillSnapshotConfigFingerprintCache).toHaveBeenCalledOnce();
+      expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(result.configA);
+    },
+  );
 
   it.each(["hot", "restart"] as const)(
     "yields stale config A when queued %s config B reverts to the old source",
@@ -1759,120 +1717,111 @@ describe("gateway hot reload model state", () => {
     },
   );
 
-  it("keeps a supervised on-exit child alive exactly once across lazy cron reload", async () => {
-    const fixtureDir = autoCleanupTempDirs.make("openclaw-cron-exit-reload-");
-    const childScriptPath = path.join(fixtureDir, "watcher.cjs");
-    const markerPath = path.join(fixtureDir, "watcher-runs.txt");
-    const releasePath = path.join(fixtureDir, "release-watcher");
-    const config = {
-      // This fixture runs cron without a heartbeat wake handler.
-      agents: { defaults: { heartbeat: { every: "0m" } } },
-      session: { mainKey: "main", store: path.join(fixtureDir, "sessions.json") },
-      cron: { enabled: true, store: path.join(fixtureDir, "jobs.json") },
-    } as OpenClawConfig;
-    await writeFile(
-      childScriptPath,
-      "const fs=require('node:fs');" +
-        "fs.appendFileSync(process.argv[2],'run\\n');" +
-        "const timer=setInterval(()=>{if(fs.existsSync(process.argv[3]))clearInterval(timer)},10)",
-      "utf8",
-    );
-    const childArgs = [childScriptPath, markerPath, releasePath];
-    const command =
-      process.platform === "win32"
-        ? buildWindowsCmdExeCommandLine(process.execPath, childArgs)
-        : [process.execPath, ...childArgs].map((argument) => JSON.stringify(argument)).join(" ");
-    const supervisor = getProcessSupervisor();
-    const spawn = vi.spyOn(supervisor, "spawn");
-    const previousCronFactory = hoisted.buildGatewayCronService.getMockImplementation();
-    assert(previousCronFactory, "expected the default cron test factory");
-    let state: ReturnType<ReloadHandlerParams["getState"]> | undefined;
+  it("keeps a supervised on-exit child alive exactly once across lazy cron reload", ({ signal }) =>
+    fixtureLifetime.run(async () => {
+      const fixtureDir = autoCleanupTempDirs.make("openclaw-cron-exit-reload-");
+      const { markerPath, releasePath, command, childStarted, spawning, spawn } =
+        await createSupervisedExitWatcherFixture(fixtureDir);
+      const config = {
+        // This fixture runs cron without a heartbeat wake handler.
+        agents: { defaults: { heartbeat: { every: "0m" } } },
+        session: { mainKey: "main", store: path.join(fixtureDir, "sessions.json") },
+        cron: { enabled: true, store: path.join(fixtureDir, "jobs.json") },
+      } as OpenClawConfig;
+      const previousCronFactory = hoisted.buildGatewayCronService.getMockImplementation();
+      assert(previousCronFactory, "expected the default cron test factory");
+      let state: ReturnType<ReloadHandlerParams["getState"]> | undefined;
 
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtureDir);
-    vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
-    hoisted.runtimeConfig.value = config;
-    setRuntimeConfigSnapshot(config, config);
+      vi.stubEnv("OPENCLAW_STATE_DIR", fixtureDir);
+      vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
+      hoisted.runtimeConfig.value = config;
+      setRuntimeConfigSnapshot(config, config);
 
-    const scheduler = createTestGatewayScheduler();
-    try {
-      const actualCron =
-        await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
-      hoisted.buildGatewayCronService.mockImplementation(
-        (params) =>
-          actualCron.buildGatewayCronService(
-            params as Parameters<typeof actualCron.buildGatewayCronService>[0],
-          ) as unknown as ReturnType<typeof hoisted.buildGatewayCronService>,
-      );
-      const initialCronState = createLazyGatewayCronState({
-        scheduler,
-        cfg: config,
-        deps: {} as never,
-        broadcast: vi.fn(),
-      });
-      state = {
-        ...createDefaultGatewayReloadState(),
-        cronState: initialCronState,
-      };
-      await initialCronState.cron.start();
-      const job = await initialCronState.cron.add({
-        name: "preserve the real watched child",
-        enabled: true,
-        schedule: { kind: "on-exit", command },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "watched child finished" },
-      });
-      await initialCronState.reconcileExitWatchers();
-      await waitForFast(async () => expect(await readFile(markerPath, "utf8")).toBe("run\n"), {
-        timeout: 10_000,
-      });
-      expect(spawn).toHaveBeenCalledOnce();
-      const watchedRun = await spawn.mock.results[0]?.value;
-      if (!watchedRun) {
-        throw new Error("expected the supervised cron exit watcher to start");
+      const scheduler = createTestGatewayScheduler();
+      try {
+        const actualCron =
+          await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
+        hoisted.buildGatewayCronService.mockImplementation(
+          (params) =>
+            actualCron.buildGatewayCronService(
+              params as Parameters<typeof actualCron.buildGatewayCronService>[0],
+            ) as unknown as ReturnType<typeof hoisted.buildGatewayCronService>,
+        );
+        const initialCronState = createLazyGatewayCronState({
+          scheduler,
+          cfg: config,
+          deps: {} as never,
+          broadcast: vi.fn(),
+        });
+        state = {
+          ...createDefaultGatewayReloadState(),
+          cronState: initialCronState,
+        };
+        await initialCronState.cron.start();
+        const job = await initialCronState.cron.add({
+          name: "preserve the real watched child",
+          enabled: true,
+          schedule: { kind: "on-exit", command },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "watched child finished" },
+        });
+        await initialCronState.reconcileExitWatchers();
+        expect(spawn).toHaveBeenCalledOnce();
+        const watchedRun = await withinTest(spawning, signal);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            childStarted,
+            watchedRun.wait(),
+            "expected the supervised cron exit watcher to start",
+          ),
+          signal,
+        );
+        expect(await readFile(markerPath, "utf8")).toBe("run\n");
+
+        const resolveGatewayContext = vi.fn(() => undefined);
+        const handlers = createGatewayReloadHandlers({
+          scheduler,
+          resolveGatewayContext,
+          getState: () => {
+            if (!state) {
+              throw new Error("expected gateway state");
+            }
+            return state;
+          },
+          setState: (nextState) => {
+            state = nextState;
+          },
+        });
+
+        await withGatewayRestartSignal(async () => {
+          await handlers.applyHotReload(createCronRestartPlan(), config);
+        });
+
+        expect(hoisted.buildGatewayCronService).toHaveBeenCalledWith(
+          expect.objectContaining({ resolveGatewayContext }),
+        );
+        expect(watchedRun.activity.resultSettled).toBe(false);
+        expect(await readFile(markerPath, "utf8")).toBe("run\n");
+        expect(spawn).toHaveBeenCalledOnce();
+
+        await writeFile(releasePath, "release");
+        await waitForFast(() => expect(state?.cronState.cron.getJob(job.id)?.enabled).toBe(false), {
+          timeout: 10_000,
+        });
+        expect(await readFile(markerPath, "utf8")).toBe("run\n");
+        expect(spawn).toHaveBeenCalledOnce();
+      } finally {
+        await fixtureLifetime.verifyCleanup(async () => {
+          hoisted.buildGatewayCronService.mockImplementation(previousCronFactory);
+          await writeFile(releasePath, "release").catch(() => {});
+          await state?.cronState.cron.stopAndDrain?.();
+          await scheduler.stop();
+          spawn.mockRestore();
+          vi.unstubAllEnvs();
+        });
       }
-
-      const resolveGatewayContext = vi.fn(() => undefined);
-      const handlers = createGatewayReloadHandlers({
-        scheduler,
-        resolveGatewayContext,
-        getState: () => {
-          if (!state) {
-            throw new Error("expected gateway state");
-          }
-          return state;
-        },
-        setState: (nextState) => {
-          state = nextState;
-        },
-      });
-
-      await withGatewayRestartSignal(async () => {
-        await handlers.applyHotReload(createCronRestartPlan(), config);
-      });
-
-      expect(hoisted.buildGatewayCronService).toHaveBeenCalledWith(
-        expect.objectContaining({ resolveGatewayContext }),
-      );
-      expect(watchedRun.activity.resultSettled).toBe(false);
-      expect(await readFile(markerPath, "utf8")).toBe("run\n");
-      expect(spawn).toHaveBeenCalledOnce();
-
-      await writeFile(releasePath, "release");
-      await waitForFast(() => expect(state?.cronState.cron.getJob(job.id)?.enabled).toBe(false), {
-        timeout: 10_000,
-      });
-      expect(await readFile(markerPath, "utf8")).toBe("run\n");
-      expect(spawn).toHaveBeenCalledOnce();
-    } finally {
-      hoisted.buildGatewayCronService.mockImplementation(previousCronFactory);
-      await writeFile(releasePath, "release").catch(() => {});
-      await state?.cronState.cron.stopAndDrain?.();
-      await scheduler.stop();
-      spawn.mockRestore();
-      vi.unstubAllEnvs();
-    }
-  });
+    }));
 
   it("passes an agent-entry-local refresh scope through the commit and rebuild", async () => {
     const logReload = { info: vi.fn(), warn: vi.fn() };
@@ -2145,7 +2094,7 @@ describe("gateway hot reload model state", () => {
         broadcast: vi.fn(),
       });
       cronState.cron.pauseScheduling();
-      const db = openOpenClawStateDatabase().db;
+      const publicationFailure = createMonitorPublicationFailure();
       let state = createDefaultGatewayReloadState({ cronState });
       const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
       const handlers = createGatewayReloadHandlers({
@@ -2192,11 +2141,7 @@ describe("gateway hot reload model state", () => {
           .map((job) => (job.schedule.kind === "every" ? job.schedule.everyMs : undefined));
       try {
         await expect(cronState.reconcileSystemJobs()).resolves.toBe("converged");
-        // Cron writes use a worker connection, which cannot see this connection's TEMP schema.
-        db.exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
-          WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
-            AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
-          BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`);
+        publicationFailure.install();
         const result = await managed
           .onHotReload(
             buildGatewayReloadPlan([
@@ -2212,7 +2157,7 @@ describe("gateway hot reload model state", () => {
         expect(result).toBe("applied-restart-required");
         expect(markRuntimeCommitted).toHaveBeenCalledOnce();
         expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(nextConfig);
-        db.exec("DROP TRIGGER monitor_publication_failure");
+        publicationFailure.remove();
         const successorConfig = { ...nextConfig, logging: { level: "debug" as const } };
         if (successor === "rejected") {
           await expect(
@@ -2241,10 +2186,13 @@ describe("gateway hot reload model state", () => {
             .map((job) => job.enabled),
         ).toEqual([false, false]);
       } finally {
-        db.exec("DROP TRIGGER IF EXISTS monitor_publication_failure");
-        handlers.stopRestartRetries();
-        cronState.cron.stop();
-        await scheduler.stop();
+        try {
+          publicationFailure.dispose();
+        } finally {
+          handlers.stopRestartRetries();
+          cronState.cron.stop();
+          await scheduler.stop();
+        }
       }
     },
   );
@@ -2290,38 +2238,55 @@ describe("gateway hot reload model state", () => {
     }
   });
 
-  it("restarts when the replacement cron fails after runtime commit", async () => {
-    await withGatewayRestartSignal(async (signalSpy) => {
-      const logReload = { info: vi.fn(), warn: vi.fn() };
-      hoisted.buildGatewayCronService.mockReturnValueOnce({
-        cron: {
-          start: vi.fn(async () => {
-            throw new Error("cron start failed");
-          }),
-          stop: vi.fn(),
-        },
-        storePath: "/tmp/rebuilt-cron.json",
-        cronEnabled: true,
-        reconcileExitWatchers: vi.fn(async () => {}),
-        reconcileStreamWatchers: vi.fn(async () => {}),
-        stopStreamWatchers: vi.fn(async () => {}),
-        reconcileSystemJobs: vi.fn(async () => "converged" as const),
+  it.each(["start", "stop"] as const)(
+    "restarts instead of rolling back when cron %s fails after commit",
+    async (phase) => {
+      await withGatewayRestartSignal(async (signalSpy) => {
+        const logReload = { info: vi.fn(), warn: vi.fn() };
+        const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
+        const { applyHotReload, cron, setState } = createReloadHandlersForTest(logReload);
+        if (phase === "start") {
+          hoisted.buildGatewayCronService.mockReturnValueOnce({
+            cron: {
+              start: vi.fn(async () => {
+                throw new Error("cron start failed");
+              }),
+              stop: vi.fn(),
+            },
+            storePath: "/tmp/rebuilt-cron.json",
+            cronEnabled: true,
+            reconcileExitWatchers: vi.fn(async () => {}),
+            reconcileStreamWatchers: vi.fn(async () => {}),
+            stopStreamWatchers: vi.fn(async () => {}),
+            reconcileSystemJobs: vi.fn(async () => "converged" as const),
+          });
+        } else {
+          cron.stop.mockImplementation(() => {
+            throw new Error("cron stop failed");
+          });
+        }
+        await expect(
+          applyHotReload(
+            createCronRestartPlan(),
+            { cron: { enabled: true } },
+            { sourceConfig: { cron: { enabled: true } }, publish, isCurrent: () => true },
+          ),
+        ).resolves.toBe("applied-restart-required");
+        expect(publish).toHaveBeenCalledOnce();
+        expect(setState).toHaveBeenCalledOnce();
+        if (phase === "start") {
+          await waitForFast(() => expect(signalSpy).toHaveBeenCalledOnce());
+        } else {
+          expect(signalSpy).toHaveBeenCalledOnce();
+        }
+        expect(logReload.warn).toHaveBeenCalledWith(
+          `${phase === "start" ? "cron reload" : "runtime commit"} failed after config commit: cron ${phase} failed; restarting gateway`,
+        );
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        markGatewayRestartHandled();
       });
-      const { applyHotReload, setState } = createReloadHandlersForTest(logReload);
-
-      await expect(
-        applyHotReload(createCronRestartPlan(), { cron: { enabled: true } }),
-      ).resolves.toBe("applied-restart-required");
-
-      expect(setState).toHaveBeenCalledOnce();
-      await waitForFast(() => expect(signalSpy).toHaveBeenCalledOnce());
-      expect(logReload.warn).toHaveBeenCalledWith(
-        "cron reload failed after config commit: cron start failed; restarting gateway",
-      );
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      markGatewayRestartHandled();
-    });
-  });
+    },
+  );
 
   it("ignores a delayed cron failure after a newer reload supersedes it", async () => {
     let rejectFirstStart: ((reason: Error) => void) | undefined;
@@ -2368,71 +2333,6 @@ describe("gateway hot reload model state", () => {
       );
       expect(signalSpy).not.toHaveBeenCalled();
     });
-  });
-
-  it("restarts instead of rolling back when cron teardown fails after runtime commit", async () => {
-    await withGatewayRestartSignal(async (signalSpy) => {
-      const logReload = { info: vi.fn(), warn: vi.fn() };
-      const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
-      const { applyHotReload, cron, setState } = createReloadHandlersForTest(logReload);
-      cron.stop.mockImplementation(() => {
-        throw new Error("cron stop failed");
-      });
-
-      await expect(
-        applyHotReload(
-          createCronRestartPlan(),
-          { cron: { enabled: true } },
-          {
-            sourceConfig: { cron: { enabled: true } },
-            publish,
-            isCurrent: () => true,
-          },
-        ),
-      ).resolves.toBe("applied-restart-required");
-
-      expect(publish).toHaveBeenCalledOnce();
-      expect(setState).toHaveBeenCalledOnce();
-      expect(logReload.warn).toHaveBeenCalledWith(
-        "runtime commit failed after config commit: cron stop failed; restarting gateway",
-      );
-      expect(signalSpy).toHaveBeenCalledOnce();
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      markGatewayRestartHandled();
-    });
-  });
-
-  it("refreshes prepared models and context after plugin replacement", async () => {
-    const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
-      hoisted.reloadEvents.push("prepare-plugins");
-      await params.commitRuntime();
-      hoisted.reloadEvents.push("replace-plugins");
-      return makePluginReloadResult();
-    });
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    const { applyHotReload } = createGatewayReloadHandlers({
-      reloadPlugins,
-      logReload,
-    });
-
-    const nextConfig = { plugins: { enabled: true } } as OpenClawConfig;
-    await applyHotReload(createPluginReloadPlan(), nextConfig);
-
-    const firstPrepareIndex = hoisted.reloadEvents.indexOf("prepare-plugins");
-    expect(firstPrepareIndex).toBeGreaterThanOrEqual(0);
-    expect(hoisted.reloadEvents.slice(firstPrepareIndex)).toEqual([
-      "prepare-plugins",
-      "stale-prepared-model-runtime",
-      "replace-plugins",
-      "refresh-prepared-model-runtime",
-      "refresh-context-window",
-    ]);
-    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
-    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
-      "prepared model runtime owner is stale before config publication",
-      { waitForReplacement: true },
-    );
-    expectPreparedModelRefresh(nextConfig);
   });
 
   it("reconciles cached MCP owners on MCP config hot reloads", async () => {
@@ -2513,136 +2413,9 @@ describe("gateway hot reload model state", () => {
   });
 });
 
-describe("gateway targeted service reload", () => {
-  it("forwards the service owner through managed config publication", async () => {
-    vi.useFakeTimers();
-    const registry = createTestRegistry([]);
-    registry.services.push(
-      createServiceRegistration(
-        { id: "exporter", reload: { configPrefixes: ["diagnostics.otel"] }, start() {} },
-        { pluginId: "exporter" },
-      ),
-    );
-    setActivePluginRegistry(registry);
-    const initialConfig: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
-    const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
-    const listener = createConfigWriteListenerRef();
-    const reloadPluginServices = vi.fn(async () => {});
-    const reloader = startManagedGatewayConfigReloader({
-      initialConfig,
-      readSnapshot: async () => createValidConfigSnapshot(nextConfig, "otel-disabled"),
-      subscribeToWrites: captureConfigWriteListener(listener),
-      reloadPluginServices,
-    });
-    await reloader.ready;
-    try {
-      const application = createRuntimeConfigWriteApplication();
-      if (!listener.current) {
-        throw new Error("Expected managed config write listener");
-      }
-      listener.current(
-        attachRuntimeConfigWriteApplication(
-          createConfigWriteNotification(nextConfig, "otel-disabled", 1, "runtime", "source"),
-          application,
-        ),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(application.result).resolves.toBe("applied");
-      expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(
-        nextConfig,
-        new Set(["exporter"]),
-      );
-    } finally {
-      await reloader.stop();
-    }
-  });
-
-  it.each(["success", "failure", "plugin failure"] as const)(
-    "reloads retained services after a different plugin changes in the same config publication (%s)",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const registry = createTestRegistry([]);
-      for (const id of ["replaced", "retained"]) {
-        registry.services.push(createServiceRegistration({ id, start() {} }, { pluginId: id }));
-      }
-      const runtime = {
-        operationId: "mixed-services",
-        generation: 1,
-        pluginIds: ["replaced"],
-        sourceDigests: {},
-      };
-      const events: string[] = [];
-      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-      const reloadPluginServices = vi.fn(async () => {
-        events.push("retained-service");
-        if (outcome === "failure") {
-          throw new Error("retained service failed");
-        }
-      });
-      const handlers = createGatewayReloadHandlers({
-        requestRecoveryRestart,
-        getPluginRegistry: () => registry,
-        reloadPluginServices,
-        reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
-          prepareConfigEffects({ pluginIds: new Set(runtime.pluginIds), channels: new Set() });
-          await commitRuntime();
-          events.push("replaced-plugin");
-          if (outcome === "plugin failure") {
-            throw new PluginRuntimeApplicationError("Plugin activation failed", {
-              ...runtime,
-              phase: "activate",
-              committed: true,
-            });
-          }
-          return makePluginReloadResult({ runtime });
-        },
-      });
-      const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
-      try {
-        const applying = handlers.applyHotReload(
-          createHotTailPlan({
-            changedPaths: ["plugins.entries.replaced.enabled", "diagnostics.otel.enabled"],
-            reloadPlugins: true,
-            pluginLifecycle: {
-              operationId: runtime.operationId,
-              pluginIds: ["replaced"],
-              reason: "enable",
-            },
-            restartServices: new Set(["replaced", "retained"]),
-          }),
-          nextConfig,
-          {
-            sourceConfig: nextConfig,
-            isCurrent: () => true,
-            publish: async (commit) => {
-              await commit();
-              events.push("published");
-            },
-          },
-        );
-        await expect(applying).resolves.toEqual(
-          outcome === "success" ? { status: "applied", runtime } : "applied-restart-required",
-        );
-        expect(events).toEqual(
-          outcome === "plugin failure"
-            ? ["published", "replaced-plugin"]
-            : ["published", "replaced-plugin", "retained-service"],
-        );
-        if (outcome === "plugin failure") {
-          expect(reloadPluginServices).not.toHaveBeenCalled();
-        } else {
-          expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(
-            nextConfig,
-            new Set(["retained"]),
-          );
-        }
-        await vi.advanceTimersByTimeAsync(500);
-        expect(requestRecoveryRestart).toHaveBeenCalledTimes(outcome === "success" ? 0 : 1);
-      } finally {
-        handlers.stopRestartRetries();
-      }
-    },
-  );
+registerGatewayTargetedServiceReloadTests({
+  createGatewayReloadHandlers,
+  startManagedGatewayConfigReloader,
 });
 
 describe("gateway hot reload superseded tail recovery", () => {
@@ -2945,7 +2718,7 @@ describe("gateway hot reload commit policy", () => {
         transform: { modulePath: transformPath },
       },
     ];
-    commitHooksConfigReload();
+    commitHookTransformMappingReload();
     const applyActiveTransform = () =>
       applyHookMappings(activeMappings, {
         payload: {},
@@ -3188,169 +2961,115 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
-  it("preserves deferred hot-recovery debt across unrelated accepted config changes", async () => {
-    const requestRecoveryRestart = vi.fn<
-      NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
-    >(() => ({ status: "emitted" }));
-    const channels = {
-      stop: vi.fn(async () => {}),
-      start: vi.fn(async () => {
-        hoisted.activeAgentRunCount.value = 1;
-        throw new Error("discord restart failed");
-      }),
-    };
-    const {
-      acceptRestartConfig,
-      applyHotReload,
-      beginGatewayRestartLifecycle,
-      pauseGatewayRestartForConfigCandidate,
-      requestGatewayRestart,
-      stopRestartRetries,
-    } = createReloadHandlersForTest(
-      undefined,
-      channels,
-      undefined,
-      undefined,
-      requestRecoveryRestart,
-    );
-    const configA = {
-      channels: { discord: { token: "discord-token-a" } },
-      logging: { level: "info" },
-    } as OpenClawConfig;
-    const configC = {
-      ...configA,
-      logging: { level: "debug" },
-    } as OpenClawConfig;
-    const configB = {
-      ...configA,
-      gateway: { port: 19_001 },
-    } as OpenClawConfig;
-    const plan = createHotTailPlan({
-      changedPaths: ["channels.discord.token", "logging.level"],
-      hotReasons: ["channels.discord.token"],
-      restartChannels: new Set<ChannelKind>(["discord"]),
-      noopPaths: ["logging.level"],
-    }) satisfies GatewayReloadPlan;
-    const configRestartPlan = {
-      ...createHotTailPlan(),
-      changedPaths: ["gateway.port"],
-      restartGateway: true,
-      restartReasons: ["gateway.port"],
-      hotReasons: [],
-    } satisfies GatewayReloadPlan;
-    vi.useFakeTimers();
+  it.each([false, true])(
+    "retains hot-recovery debt until the replacement restart emits (%s)",
+    async (emits) => {
+      const requestRecoveryRestart = vi.fn<
+        NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
+      >(() => ({ status: "emitted" }));
+      const channels = {
+        stop: vi.fn(async () => {}),
+        start: vi.fn(async () => {
+          hoisted.activeAgentRunCount.value = 1;
+          throw new Error("discord restart failed");
+        }),
+      };
+      const {
+        acceptRestartConfig,
+        applyHotReload,
+        beginGatewayRestartLifecycle,
+        hasOutstandingGatewayRestart,
+        pauseGatewayRestartForConfigCandidate,
+        requestGatewayRestart,
+        stopRestartRetries,
+      } = createReloadHandlersForTest(
+        undefined,
+        channels,
+        undefined,
+        undefined,
+        requestRecoveryRestart,
+      );
+      const configA = {
+        channels: { discord: { token: "discord-token-a" } },
+        logging: { level: "info" },
+      } as OpenClawConfig;
+      const configC = {
+        ...configA,
+        logging: { level: "debug" },
+      } as OpenClawConfig;
+      const configB = {
+        ...configA,
+        gateway: { port: 19_001 },
+      } as OpenClawConfig;
+      const plan = createHotTailPlan({
+        changedPaths: ["channels.discord.token", "logging.level"],
+        hotReasons: ["channels.discord.token"],
+        restartChannels: new Set<ChannelKind>(["discord"]),
+        noopPaths: ["logging.level"],
+      }) satisfies GatewayReloadPlan;
+      const configRestartPlan = {
+        ...createHotTailPlan(),
+        changedPaths: ["gateway.port"],
+        restartGateway: true,
+        restartReasons: ["gateway.port"],
+        hotReasons: [],
+      } satisfies GatewayReloadPlan;
+      vi.useFakeTimers();
 
-    try {
-      await applyHotReload(plan, configA);
-      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      try {
+        await applyHotReload(plan, configA);
+        expect(requestRecoveryRestart).not.toHaveBeenCalled();
 
-      pauseGatewayRestartForConfigCandidate();
-      const replacementLifecycle = beginGatewayRestartLifecycle();
-      const replacement = requestGatewayRestart(configRestartPlan, configB);
-      replacement.settle("committed");
-      replacementLifecycle.settle("committed");
-      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+        pauseGatewayRestartForConfigCandidate();
+        const replacementLifecycle = beginGatewayRestartLifecycle();
+        const replacement = requestGatewayRestart(configRestartPlan, configB);
+        replacement.settle("committed");
+        replacementLifecycle.settle("committed");
+        expect(requestRecoveryRestart).not.toHaveBeenCalled();
 
-      // Hot C supersedes and retires B's config-owned restart. Recovery A must
-      // remain independently debt-eligible until a real restart is accepted.
-      pauseGatewayRestartForConfigCandidate();
-      hoisted.activeAgentRunCount.value = 0;
-      await vi.advanceTimersByTimeAsync(500);
-      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+        // Hot C supersedes and retires B's config-owned restart. Recovery A must
+        // remain independently debt-eligible until a real restart is accepted.
+        if (!emits) {
+          pauseGatewayRestartForConfigCandidate();
+        }
+        hoisted.activeAgentRunCount.value = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        if (emits) {
+          expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+          expect(requestRecoveryRestart).toHaveBeenCalledWith(
+            "config reload: gateway.port",
+            undefined,
+          );
+          pauseGatewayRestartForConfigCandidate();
+          expect(acceptRestartConfig(configA)).toEqual({ retireRejectedRestart: true });
+          expect(hasOutstandingGatewayRestart()).toBe(false);
+          return;
+        }
+        expect(requestRecoveryRestart).not.toHaveBeenCalled();
 
-      const accepted = acceptRestartConfig(configC);
-      expect(accepted.retireRejectedRestart).toBe(false);
-      expect(accepted.debt).toBeDefined();
-      if (!accepted.debt) {
-        throw new Error("Expected hot-recovery restart debt");
+        const accepted = acceptRestartConfig(configC);
+        expect(accepted.retireRejectedRestart).toBe(false);
+        expect(accepted.debt).toBeDefined();
+        if (!accepted.debt) {
+          throw new Error("Expected hot-recovery restart debt");
+        }
+        expect(accepted.debt.plan.restartReasons).toEqual([
+          "hot reload recovery: channel restart (discord)",
+        ]);
+        const rearmed = requestGatewayRestart(accepted.debt.plan, configC, {
+          retainDebtAcrossConfigChanges: accepted.debt.retainDebtAcrossConfigChanges,
+        });
+        rearmed.settle("committed");
+
+        expect(requestRecoveryRestart.mock.calls).toEqual([
+          ["config reload: hot reload recovery: channel restart (discord)"],
+        ]);
+      } finally {
+        hoisted.activeAgentRunCount.value = 0;
+        stopRestartRetries();
       }
-      expect(accepted.debt.plan.restartReasons).toEqual([
-        "hot reload recovery: channel restart (discord)",
-      ]);
-      const rearmed = requestGatewayRestart(accepted.debt.plan, configC, {
-        retainDebtAcrossConfigChanges: accepted.debt.retainDebtAcrossConfigChanges,
-      });
-      rearmed.settle("committed");
-
-      expect(requestRecoveryRestart.mock.calls).toEqual([
-        ["config reload: hot reload recovery: channel restart (discord)"],
-      ]);
-    } finally {
-      hoisted.activeAgentRunCount.value = 0;
-      stopRestartRetries();
-    }
-  });
-
-  it("retires conservative hot-recovery debt after a replacement restart emits", async () => {
-    const requestRecoveryRestart = vi.fn<
-      NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
-    >(() => ({ status: "emitted" }));
-    const channels = {
-      stop: vi.fn(async () => {}),
-      start: vi.fn(async () => {
-        hoisted.activeAgentRunCount.value = 1;
-        throw new Error("discord restart failed");
-      }),
-    };
-    const {
-      acceptRestartConfig,
-      applyHotReload,
-      beginGatewayRestartLifecycle,
-      hasOutstandingGatewayRestart,
-      pauseGatewayRestartForConfigCandidate,
-      requestGatewayRestart,
-      stopRestartRetries,
-    } = createReloadHandlersForTest(
-      undefined,
-      channels,
-      undefined,
-      undefined,
-      requestRecoveryRestart,
-    );
-    const configA = {
-      channels: { discord: { token: "discord-token-a" } },
-    } as OpenClawConfig;
-    const configB = {
-      ...configA,
-      gateway: { port: 19_001 },
-    } as OpenClawConfig;
-    const recoveryPlan = {
-      ...createHotTailPlan(),
-      changedPaths: ["channels.discord.token"],
-      hotReasons: ["channels.discord.token"],
-      restartChannels: new Set<ChannelKind>(["discord"]),
-    } satisfies GatewayReloadPlan;
-    const configRestartPlan = {
-      ...createHotTailPlan(),
-      changedPaths: ["gateway.port"],
-      restartGateway: true,
-      restartReasons: ["gateway.port"],
-      hotReasons: [],
-    } satisfies GatewayReloadPlan;
-    vi.useFakeTimers();
-
-    try {
-      await applyHotReload(recoveryPlan, configA);
-      pauseGatewayRestartForConfigCandidate();
-      const replacementLifecycle = beginGatewayRestartLifecycle();
-      const replacement = requestGatewayRestart(configRestartPlan, configB);
-      replacement.settle("committed");
-      replacementLifecycle.settle("committed");
-
-      hoisted.activeAgentRunCount.value = 0;
-      await vi.advanceTimersByTimeAsync(500);
-      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
-      expect(requestRecoveryRestart).toHaveBeenCalledWith("config reload: gateway.port", undefined);
-
-      pauseGatewayRestartForConfigCandidate();
-      const accepted = acceptRestartConfig(configA);
-      expect(accepted).toEqual({ retireRejectedRestart: true });
-      expect(hasOutstandingGatewayRestart()).toBe(false);
-    } finally {
-      hoisted.activeAgentRunCount.value = 0;
-      stopRestartRetries();
-    }
-  });
+    },
+  );
 
   it("does not schedule post-commit hot recovery after restart handling stops", async () => {
     const { promise: channelStart, resolve: markChannelStart } = createDeferred();
@@ -3580,7 +3299,7 @@ describe("gateway restart deferral preflight", () => {
       expect(signalSpy).toHaveBeenCalledTimes(1);
       expect(consumeGatewayRestartIntent()).toEqual({
         force: true,
-        drainBudgetExhausted: true,
+        waitMs: 300_000,
         reason: "config reload forced restart",
       });
       expect(hoisted.markRestartAbortedMainSessions).not.toHaveBeenCalled();
@@ -3720,45 +3439,40 @@ describe("gateway channel hot reload handlers", () => {
     );
   });
 
-  it("promotes unlisted accounts to a wholesale restart", async () => {
-    const events: string[] = [];
-    const channels = createRecordedChannelHandlers(events);
-    const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
-
-    await withChannelReloadsEnabled(async () => {
-      await withDiscordAccounts(["default", "alpha"], async () => {
-        await applyHotReload(createAccountReloadPlan(["removed-account"]), {});
+  it.each(["unlisted", "unresolvable", "already whole-channel"] as const)(
+    "restarts the whole channel once when account targets are %s",
+    async (reason) => {
+      const events: string[] = [];
+      const channels = createRecordedChannelHandlers(events);
+      const { applyHotReload, logChannels } = createReloadHandlersForTest(undefined, channels);
+      await withChannelReloadsEnabled(async () => {
+        await withDiscordAccountResolver(
+          () => ["default", "alpha", "beta"],
+          async () => {
+            await applyHotReload(
+              createAccountReloadPlan(
+                reason === "unlisted" ? ["removed-account"] : ["alpha", "beta"],
+                reason === "already whole-channel" ? { restartChannels: new Set(["discord"]) } : {},
+              ),
+              {},
+            );
+          },
+          (_cfg, accountId) => {
+            if (reason === "unresolvable" && accountId === "beta") {
+              throw new Error("account resolution failed");
+            }
+            return {};
+          },
+        );
       });
-    });
-
-    expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
-  });
-
-  it("promotes unresolvable accounts to a wholesale restart before stopping any account", async () => {
-    const events: string[] = [];
-    const channels = createRecordedChannelHandlers(events);
-    const { applyHotReload, logChannels } = createReloadHandlersForTest(undefined, channels);
-
-    await withChannelReloadsEnabled(async () => {
-      await withDiscordAccountResolver(
-        () => ["default", "alpha", "beta"],
-        async () => {
-          await applyHotReload(createAccountReloadPlan(["alpha", "beta"]), {});
-        },
-        (_cfg, accountId) => {
-          if (accountId === "beta") {
-            throw new Error("account resolution failed");
-          }
-          return {};
-        },
-      );
-    });
-
-    expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
-    expect(logChannels.info).toHaveBeenCalledWith(
-      "promoting discord account reload to whole-channel restart after account resolution failed: account resolution failed",
-    );
-  });
+      expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
+      if (reason === "unresolvable") {
+        expect(logChannels.info).toHaveBeenCalledWith(
+          "promoting discord account reload to whole-channel restart after account resolution failed: account resolution failed",
+        );
+      }
+    },
+  );
 
   it("requests recovery when account enumeration fails after config commit", async () => {
     const channels = {
@@ -3788,23 +3502,6 @@ describe("gateway channel hot reload handlers", () => {
     expect(channels.stop).not.toHaveBeenCalled();
     expect(channels.start).not.toHaveBeenCalled();
     expect(requestRecoveryRestart).toHaveBeenCalledOnce();
-  });
-
-  it("skips per-account restarts for channels already queued for wholesale restart", async () => {
-    const events: string[] = [];
-    const channels = createRecordedChannelHandlers(events);
-    const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
-
-    await withChannelReloadsEnabled(async () => {
-      await withDiscordAccounts(["default", "alpha"], async () => {
-        await applyHotReload(
-          createAccountReloadPlan(["alpha"], { restartChannels: new Set(["discord"]) }),
-          {},
-        );
-      });
-    });
-
-    expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
   });
 
   it("stops account targets without restarting them while autostart is suppressed", async () => {
@@ -3888,38 +3585,12 @@ describe("gateway channel hot reload handlers", () => {
 });
 
 describe("gateway Gmail hot reload handlers", () => {
-  function createGmailReloadPlan(): GatewayReloadPlan {
-    return createHotTailPlan({
-      changedPaths: ["hooks.gmail.account"],
-      hotReasons: ["hooks.gmail.account"],
-      restartGmailWatcher: true,
-    });
-  }
-
   function createGmailConfig(account: string): OpenClawConfig {
     return {
       gateway: { reload: {} },
       hooks: { enabled: true, token: "test-token", gmail: { account } },
     };
   }
-
-  it("stops queued post-ready sidecars before restarting Gmail watcher", async () => {
-    const stopPostReadySidecars = vi.fn();
-    const { applyHotReload } = createGatewayReloadHandlers({
-      stopPostReadySidecars,
-    });
-    const nextConfig = {
-      hooks: { enabled: true, gmail: { account: "next@example.com" } },
-    } as never;
-
-    await applyHotReload(createGmailReloadPlan(), nextConfig);
-
-    expect(hoisted.refreshContextWindowCache).not.toHaveBeenCalled();
-    expect(stopPostReadySidecars).toHaveBeenCalledBefore(hoisted.stopGmailWatcher);
-    expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: nextConfig }),
-    );
-  });
 
   it("retries managed no-op reloads without publishing superseded secret failures", async () => {
     vi.useFakeTimers();
@@ -5059,64 +4730,74 @@ describe("gateway Gmail hot reload handlers", () => {
     }
   });
 
-  it("revalidates restart secrets after held promotion and before emission retries", async () => {
-    vi.useFakeTimers();
-    const harness = await createManagedRestartSequenceHarness();
-    const leaseClock = createPluginLifecycleLeaseTestClock();
-    const promotionGate = createDeferred();
-    const promote = harness.promoteSnapshot.getMockImplementation();
-    assert.isDefined(promote);
-    harness.promoteSnapshot.mockImplementationOnce(async (...args) => {
-      const accepted = await promote(...args);
-      await promotionGate.promise;
-      return accepted;
-    });
-    hoisted.activeAgentRunCount.value = 1;
-
-    try {
-      const promotion = harness.nextPromotion();
-      harness.writeConfig(harness.deferredConfig, "deferred-emission-preflight", 1);
-      await vi.advanceTimersByTimeAsync(0);
-      await leaseClock.waitFor(promotion);
-
-      harness.setSecretUnavailable("RESTART_A_TOKEN");
-      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-      hoisted.activeAgentRunCount.value = 0;
-      await vi.advanceTimersByTimeAsync(500);
-      expect(harness.assertRestartReady).not.toHaveBeenCalled();
-      expect(harness.logReload.warn).not.toHaveBeenCalledWith(
-        "gateway restart recovery emission failed; retrying",
-      );
-      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+  it.each(["absent", "during acceptance"])(
+    "revalidates restart secrets after held promotion and before emission retries (watcher readiness: %s)",
+    async (readiness) => {
+      vi.useFakeTimers();
+      const harness = await createManagedRestartSequenceHarness();
+      if (readiness === "during acceptance") {
+        harness.acceptTerminalConfig.mockImplementationOnce((acceptance) => {
+          harness.terminalPolicy.acceptConfig(acceptance);
+          // The accepted restart target exists, but its config audit write has not settled.
+          harness.watcher.emit("ready");
+        });
+      }
+      const leaseClock = createPluginLifecycleLeaseTestClock();
+      const promotionGate = createDeferred();
+      const promote = harness.promoteSnapshot.getMockImplementation();
+      assert.isDefined(promote);
+      harness.promoteSnapshot.mockImplementationOnce(async (...args) => {
+        const accepted = await promote(...args);
+        await promotionGate.promise;
+        return accepted;
+      });
       hoisted.activeAgentRunCount.value = 1;
-      promotionGate.resolve();
-      // Restart preparation reacquires the outer plugin lease after reload root admission ends.
-      await leaseClock.waitForFirstLease();
-      expect(harness.assertRestartReady).not.toHaveBeenCalled();
-      hoisted.activeAgentRunCount.value = 0;
-      const retryScheduled = harness.nextReloadWarning(
-        "gateway restart recovery emission failed; retrying",
-      );
-      await vi.advanceTimersByTimeAsync(500);
-      await leaseClock.waitFor(retryScheduled);
-      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(harness.assertRestartReady).toHaveBeenCalledOnce();
-      expect(harness.logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining("gateway restart preflight failed"),
-      );
 
-      harness.setSecretAvailable("RESTART_A_TOKEN");
-      await vi.advanceTimersByTimeAsync(1_000);
-      await leaseClock.waitFor(harness.restartEmitted);
-      expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
-      expect(harness.assertRestartReady).toHaveBeenCalledTimes(2);
-      expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledTimes(3);
-    } finally {
-      promotionGate.resolve();
-      hoisted.activeAgentRunCount.value = 0;
-      await harness.reloader.stop();
-    }
-  });
+      try {
+        const promotion = harness.nextPromotion();
+        harness.writeConfig(harness.deferredConfig, "deferred-emission-preflight", 1);
+        await vi.advanceTimersByTimeAsync(0);
+        await leaseClock.waitFor(promotion);
+
+        harness.setSecretUnavailable("RESTART_A_TOKEN");
+        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+        hoisted.activeAgentRunCount.value = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        expect(harness.assertRestartReady).not.toHaveBeenCalled();
+        expect(harness.logReload.warn).not.toHaveBeenCalledWith(
+          "gateway restart recovery emission failed; retrying",
+        );
+        expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+        hoisted.activeAgentRunCount.value = 1;
+        promotionGate.resolve();
+        // Restart preparation reacquires the outer plugin lease after reload root admission ends.
+        await leaseClock.waitForFirstLease();
+        expect(harness.assertRestartReady).not.toHaveBeenCalled();
+        hoisted.activeAgentRunCount.value = 0;
+        const retryScheduled = harness.nextReloadWarning(
+          "gateway restart recovery emission failed; retrying",
+        );
+        await vi.advanceTimersByTimeAsync(500);
+        await leaseClock.waitFor(retryScheduled);
+        expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+        expect(harness.assertRestartReady).toHaveBeenCalledOnce();
+        expect(harness.logReload.warn).toHaveBeenCalledWith(
+          expect.stringContaining("gateway restart preflight failed"),
+        );
+
+        harness.setSecretAvailable("RESTART_A_TOKEN");
+        await vi.advanceTimersByTimeAsync(1_000);
+        await leaseClock.waitFor(harness.restartEmitted);
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
+        expect(harness.assertRestartReady).toHaveBeenCalledTimes(2);
+        expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledTimes(3);
+      } finally {
+        promotionGate.resolve();
+        hoisted.activeAgentRunCount.value = 0;
+        await harness.reloader.stop();
+      }
+    },
+  );
 
   it("supersedes a blocked emission preflight without marking sessions or signaling", async () => {
     vi.useFakeTimers();
@@ -5329,56 +5010,80 @@ describe("gateway Gmail hot reload handlers", () => {
     }
   });
 
-  it("aborts an in-flight managed Gmail restart when the reloader stops", async () => {
-    const writeListenerRef = createConfigWriteListenerRef();
-    let restartSignal: AbortSignal | undefined;
-    type GmailRestartOutcome = { status: "started" } | { status: "failed"; message: string };
-    const { promise: restartOutcome, resolve: settleRestart } =
-      createDeferred<GmailRestartOutcome>();
-    hoisted.startGmailWatcherWithLogs.mockImplementationOnce(
-      async (params: GmailWatcherRestartParams) => {
-        restartSignal = params.signal;
-        settleRestart?.({ status: "started" });
-        await new Promise<void>((resolve) => {
-          params.signal?.addEventListener("abort", () => resolve(), { once: true });
+  it.each(["preparation", "watcher"] as const)(
+    "stops managed Gmail reload during %s without leaving a watcher running",
+    async (phase) => {
+      const writeListenerRef = createConfigWriteListenerRef();
+      const entered = createDeferred<"preparation" | "watcher">();
+      const release = createDeferred();
+      let restartSignal: AbortSignal | undefined;
+      const stopPostReadySidecars = vi.fn();
+      const initialConfig = createGmailConfig("old@example.com");
+      const nextConfig = createGmailConfig("next@example.com");
+      const activateRuntimeSecrets = createMockRuntimeSecretsActivator(async (config) => {
+        if (phase === "preparation") {
+          entered.resolve("preparation");
+          await release.promise;
+        }
+        return makePreparedSecretsSnapshot(config, { webTools: {} as never });
+      });
+      if (phase === "watcher") {
+        hoisted.startGmailWatcherWithLogs.mockImplementationOnce(async (params) => {
+          restartSignal = params.signal;
+          entered.resolve("watcher");
+          await new Promise<void>((resolve) => {
+            params.signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
         });
-      },
-    );
-    const logReload = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn((message: string) => settleRestart?.({ status: "failed", message })),
-    };
-    const initialConfig = createGmailConfig("old@example.com");
-    const nextConfig = createGmailConfig("next@example.com");
-    const readSnapshot = vi.fn(async () => createValidConfigSnapshot(nextConfig, "hash-next"));
-    const reloader = startManagedGatewayConfigReloader({
-      initialConfig,
-      readSnapshot: readSnapshot as never,
-      subscribeToWrites: captureConfigWriteListener(writeListenerRef),
-      logReload,
-    });
-    await reloader.ready;
-    const registeredWriteListener = writeListenerRef.current;
-    assert(registeredWriteListener, "Expected config write listener to be registered");
-
-    registeredWriteListener(
-      createConfigWriteNotification(
-        nextConfig,
-        "hash-next",
-        1,
-        "runtime-hash-next",
-        "source-hash-next",
-      ),
-    );
-    expect(await restartOutcome).toEqual({ status: "started" });
-    expect(restartSignal?.aborted).toBe(false);
-    expect(getActiveGatewayRootWorkHolders()).toEqual(["reload:config"]);
-
-    await reloader.stop();
-
-    expect(restartSignal?.aborted).toBe(true);
-  });
+      }
+      const reloader = startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: vi.fn(async () => createValidConfigSnapshot(nextConfig, "hash-next")),
+        subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+        activateRuntimeSecrets,
+        stopPostReadySidecars,
+      });
+      await reloader.ready;
+      const listener = writeListenerRef.current;
+      assert(listener, "Expected config write listener to be registered");
+      try {
+        listener(
+          createConfigWriteNotification(
+            nextConfig,
+            "hash-next",
+            1,
+            "runtime-hash-next",
+            "source-hash-next",
+          ),
+        );
+        expect(await entered.promise).toBe(phase);
+        if (phase === "watcher") {
+          expect(restartSignal?.aborted).toBe(false);
+          expect(getActiveGatewayRootWorkHolders()).toEqual(["reload:config"]);
+          expect(hoisted.refreshContextWindowCache).not.toHaveBeenCalled();
+          expect(stopPostReadySidecars).toHaveBeenCalledBefore(hoisted.stopGmailWatcher);
+          expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledWith(
+            expect.objectContaining({ cfg: nextConfig }),
+          );
+        }
+        const stopping = reloader.stop();
+        release.resolve();
+        await stopping;
+        if (phase === "watcher") {
+          expect(restartSignal?.aborted).toBe(true);
+        } else {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(hoisted.stopGmailWatcher).not.toHaveBeenCalled();
+          expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await reloader.stop();
+      }
+    },
+  );
 
   it("keeps committed config after a Gmail watcher follow-up fails", async () => {
     await withGatewayRestartSignal(async (signalSpy) => {
@@ -5430,48 +5135,6 @@ describe("gateway Gmail hot reload handlers", () => {
         await reloader.stop();
       }
     });
-  });
-
-  it("does not start a Gmail restart after the managed reloader stops before hot reload applies", async () => {
-    const writeListenerRef = createConfigWriteListenerRef();
-    const { promise: secretsStarted, resolve: secretsEntered } = createDeferred();
-    const { promise: releaseSecretsPromise, resolve: releaseSecrets } = createDeferred();
-    const initialConfig = createGmailConfig("old@example.com");
-    const nextConfig = createGmailConfig("next@example.com");
-    const reloader = startManagedGatewayConfigReloader({
-      initialConfig,
-      readSnapshot: vi.fn(async () => createValidConfigSnapshot(nextConfig, "hash-next")) as never,
-      subscribeToWrites: captureConfigWriteListener(writeListenerRef),
-      activateRuntimeSecrets: createMockRuntimeSecretsActivator(async (config) => {
-        secretsEntered?.();
-        await releaseSecretsPromise;
-        return makePreparedSecretsSnapshot(config, { webTools: {} as never });
-      }),
-    });
-    await reloader.ready;
-    const registeredWriteListener = writeListenerRef.current;
-    assert(registeredWriteListener, "Expected config write listener to be registered");
-
-    registeredWriteListener(
-      createConfigWriteNotification(
-        nextConfig,
-        "hash-next",
-        1,
-        "runtime-hash-next",
-        "source-hash-next",
-      ),
-    );
-    await secretsStarted;
-
-    const stopPromise = reloader.stop();
-    releaseSecrets?.();
-    await stopPromise;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    expect(hoisted.stopGmailWatcher).not.toHaveBeenCalled();
-    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
 });
 
@@ -5641,18 +5304,28 @@ describe("gateway plugin hot reload handlers", () => {
     const events: string[] = [];
     const started = createDeferred();
     const release = createDeferred();
-    const reloadPlugins = vi.fn(
-      async (params: {
-        commitRuntime: () => Promise<void>;
-      }): Promise<GatewayPluginReloadResult> => {
-        events.push("reload:start");
-        started.resolve();
-        await release.promise;
-        await params.commitRuntime();
-        events.push("registry:replace");
-        return makePluginReloadResult();
+    const sourceConfig: OpenClawConfig = {
+      plugins: { enabled: true },
+      hooks: { enabled: true, token: "token", path: "/next" },
+    };
+    const nextConfig: OpenClawConfig = {
+      ...sourceConfig,
+      plugins: {
+        enabled: true,
+        allow: ["external-plugin"],
+        entries: { "external-plugin": { enabled: true } },
       },
-    );
+    };
+    const reloadPlugins = vi.fn<ReloadHandlerParams["reloadPlugins"]>(async (params) => {
+      events.push("reload:start");
+      hoisted.reloadEvents.push("prepare-plugins");
+      started.resolve();
+      await release.promise;
+      await params.commitRuntime();
+      events.push("registry:replace");
+      hoisted.reloadEvents.push("replace-plugins");
+      return makePluginReloadResult();
+    });
     const handlers = createReloadHandlersForTest(
       undefined,
       {
@@ -5671,9 +5344,9 @@ describe("gateway plugin hot reload handlers", () => {
         reloadHooks: true,
         reloadPlugins: true,
       }),
-      { hooks: { enabled: true, token: "token", path: "/next" } },
+      nextConfig,
       {
-        sourceConfig: { hooks: { enabled: true, token: "token", path: "/next" } },
+        sourceConfig,
         isCurrent: () => true,
         publish: async (commit) => {
           events.push("runtime:publish");
@@ -5691,6 +5364,27 @@ describe("gateway plugin hot reload handlers", () => {
 
     expect(events).toEqual(["reload:start", "runtime:publish", "registry:replace"]);
     expect(handlers.setState).toHaveBeenCalledTimes(1);
+    expect(reloadPlugins.mock.calls[0]?.[0].nextConfig).toBe(nextConfig);
+    expect(reloadPlugins.mock.calls[0]?.[0].sourceConfig).toBe(sourceConfig);
+    const firstPrepareIndex = hoisted.reloadEvents.indexOf("prepare-plugins");
+    expect(firstPrepareIndex).toBeGreaterThanOrEqual(0);
+    expect(hoisted.reloadEvents.slice(firstPrepareIndex)).toEqual([
+      "prepare-plugins",
+      "stale-prepared-model-runtime",
+      "replace-plugins",
+      "refresh-prepared-model-runtime",
+      "refresh-context-window",
+    ]);
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
+      "prepared model runtime owner is stale before config publication",
+      { waitForReplacement: true },
+    );
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      joinSupersedingPublication: true,
+    });
   });
 
   it("reports committed state when the plugin afterCommit callback fails", async () => {
@@ -5734,40 +5428,6 @@ describe("gateway plugin hot reload handlers", () => {
     expect(events).toEqual(["plugin", "config", "notification"]);
   });
 
-  it("passes authored plugin config separately from synthesized runtime trust to replacement planning", async () => {
-    const sourceConfig = {
-      plugins: { enabled: true },
-    } satisfies OpenClawConfig;
-    const runtimeConfig = {
-      plugins: {
-        enabled: true,
-        allow: ["external-plugin"],
-        entries: { "external-plugin": { enabled: true } },
-      },
-    } satisfies OpenClawConfig;
-    const reloadPlugins = vi.fn(
-      async (params: {
-        commitRuntime: () => Promise<void>;
-      }): Promise<GatewayPluginReloadResult> => {
-        await params.commitRuntime();
-        return makePluginReloadResult();
-      },
-    );
-    const handlers = createReloadHandlersForTest(undefined, undefined, reloadPlugins);
-
-    await handlers.applyHotReload(createPluginReloadPlan(), runtimeConfig, {
-      sourceConfig,
-      isCurrent: () => true,
-      publish: async (commit) => await commit(),
-    });
-
-    const reloadParams = reloadPlugins.mock.calls[0]?.[0] as
-      | { nextConfig: OpenClawConfig; sourceConfig?: OpenClawConfig }
-      | undefined;
-    expect(reloadParams?.nextConfig).toBe(runtimeConfig);
-    expect(reloadParams?.sourceConfig).toBe(sourceConfig);
-  });
-
   it("returns the plugin owner's receipt and finishes remaining targets after supersession", async () => {
     let current = true;
     const runtime = { operationId: "reload-owner", generation: 7, pluginIds: ["notes"] };
@@ -5779,10 +5439,12 @@ describe("gateway plugin hot reload handlers", () => {
     const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
     const pruneInactiveChannelAccountState = vi.fn();
     const reloadPlugins = vi.fn<ReloadHandlerParams["reloadPlugins"]>(async (params) => {
-      params.prepareConfigEffects({
-        pluginIds: new Set(runtime.pluginIds),
-        channels: new Set(["discord"]),
-      });
+      params
+        .prepareConfigEffects({
+          pluginIds: new Set(runtime.pluginIds),
+          channels: new Set(["discord"]),
+        })
+        .retire();
       await params.commitRuntime();
       current = false;
       return makePluginReloadResult({

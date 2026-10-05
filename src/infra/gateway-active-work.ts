@@ -17,6 +17,7 @@ import {
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
 import { getActiveAgentRunContextCount } from "./agent-run-registry.js";
+import { waitForGatewayDrain } from "./gateway-drain.js";
 import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 type GatewayActiveWorkCounts = {
@@ -215,24 +216,8 @@ export async function waitForGatewayActiveWork(
   timeoutMs?: number,
   options: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void } = {},
 ): Promise<GatewayActiveWorkWaitResult> {
-  const timeout =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.max(0, Math.floor(timeoutMs))
-      : undefined;
-  const deadlineAt = timeout === undefined ? undefined : Date.now() + timeout;
-
-  while (true) {
-    const snapshot = createGatewayActiveWorkSnapshot();
-    options.onSnapshot?.(snapshot);
-    if (snapshot.idle) {
-      return { drained: true, snapshot };
-    }
-    const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
-    if (remainingMs !== undefined && remainingMs <= 0) {
-      return { drained: false, snapshot };
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(GATEWAY_ACTIVE_WORK_POLL_MS, remainingMs ?? Infinity));
-    });
-  }
+  return waitForGatewayDrain(createGatewayActiveWorkSnapshot, timeoutMs, {
+    ...options,
+    pollMs: GATEWAY_ACTIVE_WORK_POLL_MS,
+  });
 }

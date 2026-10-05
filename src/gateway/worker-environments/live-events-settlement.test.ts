@@ -71,7 +71,7 @@ describe("worker live event write settlement", () => {
           updatedAt: 1,
         });
         const warmup = expectDefined(
-          createTrajectoryRuntimeRecorder({
+          await createTrajectoryRuntimeRecorder({
             sessionId: warmupTarget.sessionId,
             sessionTarget: warmupTarget,
           }),
@@ -195,6 +195,7 @@ describe("worker live event write settlement", () => {
           expect(placementStore.updateAckCursors).toHaveBeenCalledExactlyOnceWith({
             claim: identity.turnClaim,
             liveSeq: 2,
+            assertCurrent: expect.any(Function),
           });
           expect(close).not.toHaveBeenCalled();
         }

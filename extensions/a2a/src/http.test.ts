@@ -163,11 +163,11 @@ describe("A2A HTTP agent discovery", () => {
     const harness = await startHttpHarness({
       config: {
         agents: {
-          list: [
-            { id: "hidden", description: hiddenDescription },
-            { id: "writer", name: "Writing assistant", description: "x".repeat(500) },
-            { id: "reviewer" },
-          ],
+          entries: {
+            hidden: { description: hiddenDescription },
+            writer: { name: "Writing assistant", description: "x".repeat(500) },
+            reviewer: {},
+          },
         },
       },
       a2aConfig: {
@@ -246,7 +246,7 @@ describe("A2A HTTP agent discovery", () => {
 
   it("derives the advertised interface origin from the request Host", async () => {
     const harness = await startHttpHarness({
-      config: { agents: { list: [{ id: "main" }] } },
+      config: { agents: { entries: { main: {} } } },
     });
     const response = await harness.get("/.well-known/agent-card.json");
     const card = (await response.json()) as { supportedInterfaces: Array<{ url: string }> };

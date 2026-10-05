@@ -1,4 +1,4 @@
-/** Synchronous binding reads with lazy mutation, lease, and auth machinery. */
+/** Binding reads with lazy mutation, lease, and auth machinery. */
 import {
   createCodexManagedThreadStore,
   type CodexManagedThreadStore,
@@ -13,11 +13,7 @@ import {
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
 } from "./session-binding-record.js";
-import type {
-  CodexAppServerBindingIdentity,
-  CodexAppServerBindingStore,
-  CodexBindingStateStore,
-} from "./session-binding.js";
+import type { CodexAppServerBindingStore, CodexBindingStateStore } from "./session-binding.js";
 
 export { CODEX_APP_SERVER_BINDING_MAX_ENTRIES, CODEX_APP_SERVER_BINDING_NAMESPACE };
 export type { StoredCodexAppServerBinding } from "./session-binding.js";
@@ -38,30 +34,24 @@ export function createLazyCodexAppServerBindingStore(
   return {
     ...(managedThreads ? { managedThreads } : {}),
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
-    // Capability discovery can open plugin state; keep it out of registration.
-    get readMany() {
-      return state.lookupMany
-        ? (identities: readonly CodexAppServerBindingIdentity[]) =>
-            readCurrentCodexAppServerBindings(state, identities)
-        : undefined;
-    },
+    readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
       readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>
       (await store()).hasOtherThreadOwner(threadId, currentIdentity),
-    mutate: async (identity, mutation, assertCurrent) =>
-      (await store()).mutate(identity, mutation, assertCurrent),
+    mutate: async (identity, mutation, assertCurrent, authority) =>
+      (await store()).mutate(identity, mutation, assertCurrent, authority),
     prepareSessionGenerationReclaim: async (identity) =>
       (await store()).prepareSessionGenerationReclaim(identity),
-    adoptSessionGeneration: async (identity, previousSessionId, assertCurrent) =>
-      (await store()).adoptSessionGeneration(identity, previousSessionId, assertCurrent),
+    adoptSessionGeneration: async (identity, previousSessionId, assertCurrent, authority) =>
+      (await store()).adoptSessionGeneration(identity, previousSessionId, assertCurrent, authority),
     resetSessionGeneration: async (identity) => (await store()).resetSessionGeneration(identity),
     retireSessionGeneration: async (identity) => (await store()).retireSessionGeneration(identity),
     withSessionDeletion: async (identity, assertCurrent, run) =>
       (await store()).withSessionDeletion(identity, assertCurrent, run),
     withThreadArchiveFence: async (run) => (await store()).withThreadArchiveFence(run),
-    withLease: async (identity, run) => (await store()).withLease(identity, run),
+    withLease: async (identity, run, options) => (await store()).withLease(identity, run, options),
   };
 }

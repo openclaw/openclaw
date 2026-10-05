@@ -519,6 +519,7 @@ describe("cron execution watchdogs", () => {
     expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
       job: expect.objectContaining({ id: job.id }),
+      routing: { defaultAgentId: "main" },
       payload: {
         text: 'Automation "before agent reply unhandled regression" failed 1 times\nCheck automation history for details.',
       },

@@ -369,10 +369,7 @@ function mapLiveTransportQaCommanderOptions(
   };
 }
 function registerLiveTransportQaCli(
-  params: LiveTransportQaCliRegistrationOptions & {
-    qa: Command;
-    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-  },
+  params: LiveTransportQaCliRegistrationOptions & { qa: Command },
 ) {
   const command = params.qa
     .command(params.commandName)
@@ -453,9 +450,6 @@ type QaRunnerSurface = {
   qaRunnerCliRegistrations?: readonly QaRunnerCliRegistration[];
 };
 
-const QA_RUNNER_API_ARTIFACT_BASENAME = "qa-runner-api.js";
-const LEGACY_QA_RUNNER_API_ARTIFACT_BASENAME = "runtime-api.js";
-
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
     mode: string,
@@ -490,17 +484,6 @@ export type QaRunnerCliContribution =
       status: "blocked";
     };
 
-function isMissingQaRuntimeError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return (
-    error.message.includes("qa-lab") &&
-    (error.message.includes("runtime-api.js") ||
-      error.message.startsWith("Unable to open bundled plugin public surface "))
-  );
-}
-
 /** Load the private QA Lab runtime facade used by QA runner commands. */
 export function loadQaRuntimeModule(): QaRuntimeSurface {
   const env = resolvePrivateQaBundledPluginsEnv();
@@ -528,7 +511,12 @@ export function isQaRuntimeAvailable(): boolean {
     loadQaRuntimeModule();
     return true;
   } catch (error) {
-    if (isMissingQaRuntimeError(error)) {
+    if (
+      error instanceof Error &&
+      error.message.includes("qa-lab") &&
+      (error.message.includes("runtime-api.js") ||
+        error.message.startsWith("Unable to open bundled plugin public surface "))
+    ) {
       return false;
     }
     throw error;
@@ -540,9 +528,7 @@ export async function runLiveTransportQaSuiteCommand(params: LiveTransportQaSuit
   return await loadQaRuntimeModule().runLiveTransportQaSuiteCommand(params);
 }
 
-function listDeclaredQaRunnerPlugins(
-  env: NodeJS.ProcessEnv | undefined = resolvePrivateQaBundledPluginsEnv(),
-): Array<
+function listDeclaredQaRunnerPlugins(env: NodeJS.ProcessEnv | undefined): Array<
   PluginManifestRecord & {
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
@@ -560,13 +546,9 @@ function listDeclaredQaRunnerPlugins(
         qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
       } => Array.isArray(plugin.qaRunners) && plugin.qaRunners.length > 0,
     )
-    .toSorted((left, right) => {
-      const idCompare = left.id.localeCompare(right.id);
-      if (idCompare !== 0) {
-        return idCompare;
-      }
-      return left.rootDir.localeCompare(right.rootDir);
-    });
+    .toSorted(
+      (left, right) => left.id.localeCompare(right.id) || left.rootDir.localeCompare(right.rootDir),
+    );
 }
 
 function indexRuntimeRegistrations(
@@ -589,49 +571,21 @@ function indexRuntimeRegistrations(
   return registrationByCommandName;
 }
 
-function loadQaRunnerSurface(
-  plugin: PluginManifestRecord,
-  env?: NodeJS.ProcessEnv,
-): QaRunnerSurface | null {
-  if (plugin.origin === "bundled") {
-    return loadBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
-      dirName: plugin.id,
-      artifactBasename: QA_RUNNER_API_ARTIFACT_BASENAME,
-      ...(env ? { env } : {}),
-    });
-  }
-  try {
-    return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
-      dirName: plugin.id,
-      artifactBasename: QA_RUNNER_API_ARTIFACT_BASENAME,
-      ...(env ? { env } : {}),
-    });
-  } catch (error) {
-    if (
-      !(error instanceof Error) ||
-      error.message !==
-        `Unable to resolve bundled plugin public surface ${plugin.id}/${QA_RUNNER_API_ARTIFACT_BASENAME}`
-    ) {
-      throw error;
-    }
-  }
-
-  // qaRunners shipped through runtime-api.js in v2026.6.9. Keep activated
-  // installed plugins working until the 2026-10-01 removal review.
-  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
-    dirName: plugin.id,
-    artifactBasename: LEGACY_QA_RUNNER_API_ARTIFACT_BASENAME,
-    ...(env ? { env } : {}),
-  });
-}
-
 /** List QA runner CLI contributions declared by manifests and backed by runtime registrations. */
 export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
   const env = resolvePrivateQaBundledPluginsEnv();
   const contributions = new Map<string, QaRunnerCliContribution>();
 
   for (const plugin of listDeclaredQaRunnerPlugins(env)) {
-    const runnerSurface = loadQaRunnerSurface(plugin, env);
+    const loadSurface =
+      plugin.origin === "bundled"
+        ? loadBundledPluginPublicSurfaceModuleSync
+        : tryLoadActivatedBundledPluginPublicSurfaceModuleSync;
+    const runnerSurface = loadSurface<QaRunnerSurface>({
+      dirName: plugin.id,
+      artifactBasename: "qa-runner-api.js",
+      ...(env ? { env } : {}),
+    });
     const runtimeRegistrationByCommandName = runnerSurface
       ? indexRuntimeRegistrations(plugin.id, runnerSurface)
       : null;

@@ -19,7 +19,10 @@ import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-sourc
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
-export function createPluginDependencyResolver() {
+export function createPluginDependencyResolver(lookupBoundary?: {
+  root: string;
+  onUnresolvable: (name: string, importer: string) => void;
+}) {
   const roots = new Map<string, PluginDependencyResolution | undefined>();
   return (name: string, importer: string): PluginDependencyResolution | undefined => {
     const key = `${path.dirname(importer)}\0${name}`;
@@ -30,6 +33,24 @@ export function createPluginDependencyResolver() {
     for (const nodeModules of createRequire(importer).resolve.paths(`${name}/`) ?? []) {
       const candidate = path.join(nodeModules, name);
       if (fs.existsSync(path.join(candidate, "package.json"))) {
+        if (
+          lookupBoundary &&
+          isPathInside(lookupBoundary.root, importer) &&
+          !isPathInside(lookupBoundary.root, nodeModules)
+        ) {
+          const manifestFile = path.join(resolvePluginModulePackageRoot(importer), "package.json");
+          const manifest = fs.existsSync(manifestFile)
+            ? asOptionalRecord(JSON.parse(fs.readFileSync(manifestFile, "utf8")))
+            : undefined;
+          // Node walks ancestor node_modules up to the filesystem root. An undeclared
+          // optional lookup must not acquire unrelated ancestor code for a rehearsal.
+          // Declared packages and links inside the copy retain containment validation.
+          if (!pluginDependencyNames(manifest).has(name)) {
+            lookupBoundary.onUnresolvable(name, importer);
+            roots.set(key, undefined);
+            return undefined;
+          }
+        }
         const resolved = {
           root: fs.realpathSync(candidate),
           lookupDirectory: path.dirname(nodeModules),
@@ -90,6 +111,9 @@ function pluginDependencyNames(manifest: Record<string, unknown> | undefined): S
 type PluginNativeDependencyScope = { prepareDependencies?: () => void };
 
 export type PluginModuleCapture = {
+  staticImports?: ReadonlySet<string>;
+  isNativeImportPattern: (specifier: string) => boolean;
+  isRequireReference: (specifier: string) => boolean;
   prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
   nativeScope: PluginNativeDependencyScope;
   capture: (
@@ -681,11 +705,11 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
-    const filenames = directory + path.sep;
-    const urls = pathToFileURL(filenames).href;
+    // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
+    const urls = pathToFileURL(directory + path.sep).href;
     const cache = createRequire(import.meta.url).cache;
     for (const id of Object.keys(cache)) {
-      if (id.startsWith(filenames) || id.startsWith(urls)) {
+      if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
         delete cache[id];
       }
     }

@@ -17,13 +17,17 @@ type TraceUsageView = Pick<
   "input" | "output" | "cacheRead" | "cacheWrite" | "total"
 >;
 
-function formatRawTraceBlock(title: string, value: string | undefined): string {
-  const body = value?.trim() ? escapeTraceFence(value) : "<empty>";
-  return `🔎 ${title}:\n~~~text\n${body}\n~~~`;
-}
+const TRACE_USAGE_FIELDS = [
+  ["input", "⬇️"],
+  ["output", "⬆️"],
+  ["cacheRead", "♻️"],
+  ["cacheWrite", "🆕"],
+  ["total", "🔢"],
+] as const;
 
-function escapeTraceFence(value: string): string {
-  return value.replace(/^~~~/gm, "\\~~~");
+function formatRawTraceBlock(title: string, value: string | undefined): string {
+  const body = value?.trim() ? value.replace(/^~~~/gm, "\\~~~") : "<empty>";
+  return `🔎 ${title}:\n~~~text\n${body}\n~~~`;
 }
 
 function formatTraceUsageLine(label: string, value: number | undefined): string {
@@ -35,21 +39,12 @@ function formatUsageTraceBlock(
   title: string,
   usage: TraceUsageView | undefined,
 ): string | undefined {
-  if (
-    !usage ||
-    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].every(
-      (value) => asFiniteNumber(value) === undefined,
-    )
-  ) {
+  if (!usage || TRACE_USAGE_FIELDS.every(([key]) => asFiniteNumber(usage[key]) === undefined)) {
     return undefined;
   }
-  return `🔎 ${title}:\n~~~text\n${[
-    formatTraceUsageLine("input", usage?.input),
-    formatTraceUsageLine("output", usage?.output),
-    formatTraceUsageLine("cacheRead", usage?.cacheRead),
-    formatTraceUsageLine("cacheWrite", usage?.cacheWrite),
-    formatTraceUsageLine("total", usage?.total),
-  ].join("\n")}\n~~~`;
+  return `🔎 ${title}:\n~~~text\n${TRACE_USAGE_FIELDS.map(([key]) =>
+    formatTraceUsageLine(key, usage[key]),
+  ).join("\n")}\n~~~`;
 }
 
 function formatTraceScalar(value: string | number | boolean | undefined): string | undefined {
@@ -302,21 +297,12 @@ function formatRequestContextTraceBlock(params: {
   ].join("\n")}\n~~~`;
 }
 
-function formatSummaryPromptValue(params: {
-  contextLimit?: number;
-  promptTokens?: number;
-}): string | undefined {
-  const used = asPositiveFiniteNumber(params.promptTokens);
-  const limit = asPositiveFiniteNumber(params.contextLimit);
-  return used !== undefined && limit !== undefined
-    ? `${formatTokenCount(used)}/${formatTokenCount(limit)}`
-    : undefined;
-}
-
 function formatRawTraceSummaryLine(
   params: Parameters<typeof buildInlineRawTracePayload>[0],
 ): string | undefined {
   const thinking = normalizeOptionalString(params.requestShaping?.thinking);
+  const used = asPositiveFiniteNumber(params.promptTokens);
+  const limit = asPositiveFiniteNumber(params.contextLimit);
   const fields = [
     params.executionTrace?.winnerModel
       ? `winner=${params.executionTrace.winnerModel}${thinking ? ` 🧠 ${thinking}` : ""}`
@@ -328,28 +314,15 @@ function formatRawTraceSummaryLine(
       ? `attempts=${params.executionTrace.attempts.length.toLocaleString()}`
       : undefined,
     params.completion?.stopReason ? `stop=${params.completion.stopReason}` : undefined,
-    (() => {
-      const prompt = formatSummaryPromptValue({
-        contextLimit: params.contextLimit,
-        promptTokens: params.promptTokens,
-      });
-      return prompt ? `prompt=${prompt}` : undefined;
-    })(),
-    typeof params.usage?.input === "number" && params.usage.input > 0
-      ? `⬇️ ${formatTokenCount(params.usage.input)}`
+    used !== undefined && limit !== undefined
+      ? `prompt=${formatTokenCount(used)}/${formatTokenCount(limit)}`
       : undefined,
-    typeof params.usage?.output === "number" && params.usage.output > 0
-      ? `⬆️ ${formatTokenCount(params.usage.output)}`
-      : undefined,
-    typeof params.usage?.cacheRead === "number" && params.usage.cacheRead > 0
-      ? `♻️ ${formatTokenCount(params.usage.cacheRead)}`
-      : undefined,
-    typeof params.usage?.cacheWrite === "number" && params.usage.cacheWrite > 0
-      ? `🆕 ${formatTokenCount(params.usage.cacheWrite)}`
-      : undefined,
-    typeof params.usage?.total === "number" && params.usage.total > 0
-      ? `🔢 ${formatTokenCount(params.usage.total)}`
-      : undefined,
+    ...TRACE_USAGE_FIELDS.map(([key, icon]) => {
+      const value = params.usage?.[key];
+      return typeof value === "number" && value > 0
+        ? `${icon} ${formatTokenCount(value)}`
+        : undefined;
+    }),
     typeof params.toolSummary?.calls === "number" && params.toolSummary.calls > 0
       ? `tools=${params.toolSummary.calls.toLocaleString()}`
       : undefined,

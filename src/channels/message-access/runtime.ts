@@ -22,7 +22,6 @@ import {
 import { routeFactsFromDescriptors, projectRouteAccess } from "./runtime-routes.js";
 import type {
   ChannelMessageIngressCommandInput,
-  ChannelIngressCommandPresetInput,
   ChannelIngressEventPresetInput,
   ChannelIngressActivationAccess,
   ChannelIngressCommandAccess,
@@ -37,7 +36,6 @@ import type {
 import { resolveChannelIngressState } from "./state.js";
 import { readChannelIngressStoreAllowFrom } from "./store-allow-from.js";
 import type {
-  AccessGraphGate,
   ChannelIngressChannelId,
   ChannelIngressEventInput,
   ChannelIngressPolicyInput,
@@ -54,28 +52,19 @@ function normalizeChannelId(id: string): ChannelIngressChannelId {
   return trimmed;
 }
 
-function findIngressGate(params: {
-  ingress: ResolvedChannelMessageIngress["ingress"];
-  phase: AccessGraphGate["phase"];
-  kind: AccessGraphGate["kind"];
-}): AccessGraphGate | undefined {
-  return params.ingress.graph.gates.find(
-    (gate) => gate.phase === params.phase && gate.kind === params.kind,
-  );
-}
-
-function channelIngressCommand(
-  params: ChannelIngressCommandPresetInput = {},
+function resolveCommandInput(
+  input: ChannelIngressResolverMessageParams["command"],
+  useAccessGroups: boolean | null | undefined,
 ): ChannelMessageIngressCommandInput | undefined {
-  if (params.requested === false) {
+  if (input === false || input == null || input.requested === false) {
     return undefined;
   }
-  const { requested: _requested, cfg: _cfg, ...command } = params;
+  const { requested: _requested, cfg: _cfg, ...command } = input;
   return {
     ...command,
-    useAccessGroups: params.useAccessGroups ?? true,
-    allowTextCommands: params.allowTextCommands ?? false,
-    hasControlCommand: params.hasControlCommand ?? true,
+    useAccessGroups: input.useAccessGroups ?? useAccessGroups ?? true,
+    allowTextCommands: input.allowTextCommands ?? false,
+    hasControlCommand: input.hasControlCommand ?? true,
   };
 }
 
@@ -89,19 +78,6 @@ function channelIngressEvent(
     mayPair: params.mayPair ?? !isGroup,
     ...(params.originSubject ? { originSubject: params.originSubject } : {}),
   };
-}
-
-function resolveCommandInput(params: {
-  command?: ChannelIngressResolverMessageParams["command"];
-  useAccessGroups?: boolean | null;
-}): ChannelMessageIngressCommandInput | undefined {
-  if (params.command === false || params.command == null) {
-    return undefined;
-  }
-  return channelIngressCommand({
-    ...params.command,
-    useAccessGroups: params.command.useAccessGroups ?? params.useAccessGroups,
-  });
 }
 
 function resolveResolverPolicy(params: {
@@ -160,10 +136,7 @@ function createChannelIngressResolverForOwner(
         mentionFacts: input.mentionFacts,
         readStoreAllowFrom: base.readStoreAllowFrom,
         useDefaultPairingStore: base.useDefaultPairingStore,
-        command: resolveCommandInput({
-          command: input.command,
-          useAccessGroups: base.useAccessGroups ?? true,
-        }),
+        command: resolveCommandInput(input.command, base.useAccessGroups),
       },
       owner,
     );
@@ -217,11 +190,10 @@ function projectSenderAccess(params: {
   effectiveGroupAllowFrom: string[];
   providerMissingFallbackApplied?: boolean;
 }): ChannelIngressSenderAccess {
-  const gate = findIngressGate({
-    ingress: params.ingress,
-    phase: "sender",
-    kind: params.isGroup ? "groupSender" : "dmSender",
-  });
+  const gate = params.ingress.graph.gates.find(
+    (entry) =>
+      entry.phase === "sender" && entry.kind === (params.isGroup ? "groupSender" : "dmSender"),
+  );
   const reasonCode =
     !gate &&
     params.isGroup &&
@@ -250,11 +222,9 @@ function projectCommandAccess(params: {
   ingress: ResolvedChannelMessageIngress["ingress"];
   policy: ChannelIngressPolicyInput;
 }): ChannelIngressCommandAccess {
-  const gate = findIngressGate({
-    ingress: params.ingress,
-    phase: "command",
-    kind: "command",
-  });
+  const gate = params.ingress.graph.gates.find(
+    (entry) => entry.phase === "command" && entry.kind === "command",
+  );
   return {
     requested: params.policy.command != null,
     authorized: params.policy.command != null && gate?.allowed === true,
@@ -267,11 +237,9 @@ function projectCommandAccess(params: {
 function projectActivationAccess(params: {
   ingress: ResolvedChannelMessageIngress["ingress"];
 }): ChannelIngressActivationAccess {
-  const gate = findIngressGate({
-    ingress: params.ingress,
-    phase: "activation",
-    kind: "mention",
-  });
+  const gate = params.ingress.graph.gates.find(
+    (entry) => entry.phase === "activation" && entry.kind === "mention",
+  );
   return {
     ran: gate != null,
     allowed: gate?.allowed === true,

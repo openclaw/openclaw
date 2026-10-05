@@ -1,7 +1,4 @@
-import {
-  createIdentityFromEnsure,
-  mergeSessionIdentity,
-} from "@openclaw/acp-core/runtime/session-identity";
+import { createIdentityFromEnsure } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -114,14 +111,7 @@ export async function runManagerInitializeSession(params: {
 
   const identityNow = Date.now();
   const initializedIdentity =
-    mergeSessionIdentity({
-      current: undefined,
-      incoming: createIdentityFromEnsure({
-        handle,
-        now: identityNow,
-      }),
-      now: identityNow,
-    }) ??
+    createIdentityFromEnsure({ handle, now: identityNow }) ??
     ({
       state: "pending",
       source: "ensure",

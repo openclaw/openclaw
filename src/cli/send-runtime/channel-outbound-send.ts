@@ -7,7 +7,7 @@ import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 
-type RuntimeSendOpts = {
+export type RuntimeSendOpts = {
   cfg?: OpenClawConfig;
   blocks?: unknown;
   mediaUrl?: string;
@@ -36,70 +36,62 @@ type RuntimeSendOpts = {
   textMode?: "markdown" | "html";
 };
 
-function resolveRuntimeThreadId(opts: RuntimeSendOpts): string | number | undefined {
-  return opts.messageThreadId ?? opts.threadId ?? opts.threadTs ?? undefined;
-}
-
 function resolveRuntimeReplyToId(opts: RuntimeSendOpts): string | undefined {
   const raw = opts.replyToMessageId ?? opts.replyToId;
   return raw == null ? undefined : normalizeOptionalString(String(raw));
 }
 
-/** Create a send runtime that dispatches text, media, or rich blocks through a channel plugin. */
-export function createChannelOutboundRuntimeSend(params: {
-  channelId: ChannelId;
-  unavailableMessage: string;
-}) {
-  return {
-    sendMessage: async (to: string, text: string, opts: RuntimeSendOpts = {}) => {
-      const outbound = await loadChannelOutboundAdapter(params.channelId);
-      const threadId = resolveRuntimeThreadId(opts);
-      const replyToId = resolveRuntimeReplyToId(opts);
-      // Build context lazily so text/media/block branches share identical delivery metadata.
-      const buildContext = () => ({
-        cfg: opts.cfg ?? getRuntimeConfig(),
-        to,
+export async function sendChannelOutboundMessage(
+  channelId: ChannelId,
+  to: string,
+  text: string,
+  opts: RuntimeSendOpts = {},
+) {
+  const outbound = await loadChannelOutboundAdapter(channelId);
+  const threadId = opts.messageThreadId ?? opts.threadId ?? opts.threadTs ?? undefined;
+  const replyToId = resolveRuntimeReplyToId(opts);
+  // Build context lazily so text/media/block branches share identical delivery metadata.
+  const buildContext = () => ({
+    cfg: opts.cfg ?? getRuntimeConfig(),
+    to,
+    text,
+    mediaUrl: opts.mediaUrl,
+    mediaAccess: opts.mediaAccess,
+    mediaLocalRoots: opts.mediaLocalRoots,
+    mediaReadFile: opts.mediaReadFile,
+    accountId: opts.accountId,
+    threadId,
+    replyToId,
+    silent: opts.silent,
+    forceDocument: opts.forceDocument,
+    formatting: opts.formatting ?? (opts.textMode === "html" ? { parseMode: "HTML" } : undefined),
+    gifPlayback: opts.gifPlayback,
+    gatewayClientScopes: opts.gatewayClientScopes,
+    deliveryQueueId: opts.deliveryQueueId,
+    deliveryPartIndex: opts.deliveryPartIndex,
+    deliveryPartCount: opts.deliveryPartCount,
+    onPlatformSendDispatch: opts.onPlatformSendDispatch,
+  });
+  const hasMedia = Boolean(opts.mediaUrl);
+  if (opts.blocks && outbound?.sendPayload) {
+    return await outbound.sendPayload({
+      ...buildContext(),
+      payload: {
         text,
-        mediaUrl: opts.mediaUrl,
-        mediaAccess: opts.mediaAccess,
-        mediaLocalRoots: opts.mediaLocalRoots,
-        mediaReadFile: opts.mediaReadFile,
-        accountId: opts.accountId,
-        threadId,
-        replyToId,
-        silent: opts.silent,
-        forceDocument: opts.forceDocument,
-        formatting:
-          opts.formatting ?? (opts.textMode === "html" ? { parseMode: "HTML" } : undefined),
-        gifPlayback: opts.gifPlayback,
-        gatewayClientScopes: opts.gatewayClientScopes,
-        deliveryQueueId: opts.deliveryQueueId,
-        deliveryPartIndex: opts.deliveryPartIndex,
-        deliveryPartCount: opts.deliveryPartCount,
-        onPlatformSendDispatch: opts.onPlatformSendDispatch,
-      });
-      const hasMedia = Boolean(opts.mediaUrl);
-      if (opts.blocks && outbound?.sendPayload) {
-        return await outbound.sendPayload({
-          ...buildContext(),
-          payload: {
-            text,
-            channelData: {
-              [params.channelId]: {
-                blocks: opts.blocks,
-              },
-            },
+        channelData: {
+          [channelId]: {
+            blocks: opts.blocks,
           },
-        });
-      }
-      if (hasMedia && outbound?.sendMedia) {
-        return await outbound.sendMedia(buildContext());
-      }
-      if (!outbound?.sendText) {
-        const cause = new Error(params.unavailableMessage);
-        throw new PlatformMessageNotDispatchedError(params.unavailableMessage, { cause });
-      }
-      return await outbound.sendText(buildContext());
-    },
-  };
+        },
+      },
+    });
+  }
+  if (hasMedia && outbound?.sendMedia) {
+    return await outbound.sendMedia(buildContext());
+  }
+  if (!outbound?.sendText) {
+    const message = `${channelId} outbound adapter is unavailable.`;
+    throw new PlatformMessageNotDispatchedError(message, { cause: new Error(message) });
+  }
+  return await outbound.sendText(buildContext());
 }

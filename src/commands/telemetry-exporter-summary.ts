@@ -13,19 +13,9 @@ const REASON_LABELS = {
   shutdown_failed: "shutdown failed",
 } as const;
 
-type ExporterSignal = (typeof SIGNALS)[number];
-type ExporterStatus = (typeof STATUSES)[number];
 type ExporterReason = keyof typeof REASON_LABELS | "configured" | "default_endpoint";
 
-type ExporterHealthRecord = {
-  seq: number;
-  source: string;
-  signal: ExporterSignal;
-  status: ExporterStatus;
-  transport?: string;
-  reason?: ExporterReason;
-  ownership?: "configured" | "default_endpoint";
-};
+type ExporterHealthRecord = NonNullable<ReturnType<typeof parseExporterHealthRecord>>;
 
 type TelemetryExporterSummary = {
   title: string;
@@ -37,7 +27,7 @@ function oneOf<const T extends readonly string[]>(value: unknown, choices: T): v
   return typeof value === "string" && (choices as readonly string[]).includes(value);
 }
 
-function parseExporterHealthRecord(value: unknown): ExporterHealthRecord | undefined {
+function parseExporterHealthRecord(value: unknown) {
   if (
     !isRecord(value) ||
     value.type !== "telemetry.exporter" ||

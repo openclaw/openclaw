@@ -1,4 +1,4 @@
-import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.js";
+import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
@@ -12,25 +12,8 @@ import {
 } from "./registry-read.kernel.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
-export type WorktreeRetirementOperations = {
-  "worktrees.deferCleanup": {
-    input: { observed: ManagedWorktreeRecord; reason: string | null };
-    output: boolean;
-  };
-  "worktrees.retireMissing": {
-    input: {
-      observed: Pick<
-        ManagedWorktreeRecord,
-        "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
-      >;
-      removedAt: number;
-    };
-    output: { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" };
-  };
-};
-
 export function deferWorktreeCleanupInWorker(
-  { observed, reason }: WorktreeRetirementOperations["worktrees.deferCleanup"]["input"],
+  { observed, reason }: { observed: ManagedWorktreeRecord; reason: string | null },
   options: OpenClawStateDatabaseOptions,
 ): boolean {
   return runOpenClawStateWriteTransaction(
@@ -59,9 +42,18 @@ export function deferWorktreeCleanupInWorker(
 }
 
 export function retireMissingWorktreeInWorker(
-  { observed, removedAt }: WorktreeRetirementOperations["worktrees.retireMissing"]["input"],
+  {
+    observed,
+    removedAt,
+  }: {
+    observed: Pick<
+      ManagedWorktreeRecord,
+      "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
+    >;
+    removedAt: number;
+  },
   options: OpenClawStateDatabaseOptions,
-): WorktreeRetirementOperations["worktrees.retireMissing"]["output"] {
+): { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" } {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });

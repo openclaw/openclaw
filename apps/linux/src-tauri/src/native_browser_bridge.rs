@@ -1,4 +1,5 @@
 //! Dashboard-only transport for the shared native browser contract.
+use crate::gateway_windows::matches_route as matches_dashboard;
 use crate::native_browser::NativeBrowserState;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -27,23 +28,6 @@ struct BridgeState {
 pub struct NativeBrowserBridgeState {
     inner: Mutex<BridgeState>,
     lifecycle: tokio::sync::Mutex<()>,
-}
-
-fn matches_dashboard(candidate: &Url, dashboard: &Url) -> bool {
-    if !matches!(candidate.scheme(), "http" | "https")
-        || candidate.origin() != dashboard.origin()
-        || !candidate.username().is_empty()
-        || candidate.password().is_some()
-    {
-        return false;
-    }
-    let base = dashboard.path().trim_end_matches('/');
-    base.is_empty()
-        || candidate.path() == base
-        || candidate
-            .path()
-            .strip_prefix(base)
-            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 impl NativeBrowserBridgeState {

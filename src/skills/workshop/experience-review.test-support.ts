@@ -292,7 +292,7 @@ export async function createExperienceReviewCandidate(
         },
       },
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: {
           model: { primary: `openai/${modelId}` },
           models: {
@@ -326,10 +326,12 @@ export async function createExperienceReviewCandidate(
   if (!created.ok) {
     throw new Error(`Failed to create live review session: ${created.error}`);
   }
-  const session = SessionManager.open(target, workspaceDir);
+  const session = await SessionManager.openAsync(target, workspaceDir);
   let source;
   for (const message of messages) {
-    source = session.appendMessageWithTranscriptAnchor(message, { config: result.config }).anchor;
+    source = (
+      await session.appendMessageWithTranscriptAnchorAsync(message, { config: result.config })
+    ).anchor;
   }
   if (!source) {
     throw new Error("Review fixture requires a completed message");

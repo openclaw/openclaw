@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginServiceContextV2,
   OpenClawPluginGatewayEvents,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -11,9 +11,12 @@ import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "../plugin-registration.js";
 import {
   interceptStoreActions,
@@ -552,7 +555,6 @@ describe("Browser dashboard lifetime", () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserTabRoutes(app, {
       forProfile: () => ({ profile, isReachable, listTabs }),
-      mapTabError: () => null,
     } as unknown as BrowserRouteContext);
     const response = createBrowserRouteResponse();
     await getHandlers.get("/tabs")!(
@@ -658,7 +660,7 @@ describe("Browser dashboard lifetime", () => {
 
   it("publishes changed lifetimes and drains board-change cleanup through the existing service events", async () => {
     const serviceScope = new AsyncLocalStorage<string>();
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     let boardChanged: Parameters<OpenClawPluginGatewayEvents["onSessionsChanged"]>[0] | undefined;
     const emit = vi.fn();
     const unsubscribe = vi.fn();
@@ -676,14 +678,17 @@ describe("Browser dashboard lifetime", () => {
             openKeyedStore: (options: OpenKeyedStoreOptions) =>
               createPluginStateKeyedStoreForTests("browser", options),
           },
-          gateway: { isAvailable: async () => true, request: fixture.readBoard },
+          gateway: fixture.gateway,
         } as unknown as PluginRuntime,
         registerService: (value) => {
           services.push(value);
         },
       }),
     );
-    const context: OpenClawPluginServiceContext = {
+    const scheduler = createTestPluginServiceScheduler();
+    onTestFinished(() => scheduler.stop());
+    const context: OpenClawPluginServiceContextV2 = {
+      scheduler,
       config: {},
       stateDir: fixture.stateDir,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

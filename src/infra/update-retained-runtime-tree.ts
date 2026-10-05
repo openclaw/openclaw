@@ -16,12 +16,10 @@ import type {
   UpdateCandidatePluginEntry,
   UpdateCandidatePluginTreePlan,
 } from "./update-candidate-plugin-tree-schema.js";
-import { relocateRuntimeEntry } from "./update-runtime-relocation.js";
-
-// Relocation rewrites these members in place; a hard link would edit the live package.
-const isRelocatedFile = (file: string) =>
-  path.basename(file) === ".modules.yaml" ||
-  (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe"));
+import {
+  relocateRuntimeSymlink,
+  resolveRuntimeFileRelocator,
+} from "./update-runtime-relocation.js";
 
 const isLinkUnsupported = (error: unknown) =>
   ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].some((code) =>
@@ -44,6 +42,7 @@ export async function linkUpdateCandidatePluginTrees(
     candidateRoot: string;
     assertCurrent: () => void;
     onProgress?: () => void | Promise<void>;
+    onMaterialized?: () => void;
   },
 ): Promise<{ linked: number; copied: number }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
@@ -115,14 +114,10 @@ export async function linkUpdateCandidatePluginTrees(
       },
     });
     await assertEntry(entry);
-    await relocateRuntimeEntry(
-      destination,
-      entry.path,
-      destination,
-      "file",
-      relocations,
-      params.assertCurrent,
-    );
+    const relocate = resolveRuntimeFileRelocator(destination);
+    if (relocate) {
+      await relocate(destination, entry.path, destination, relocations, params.assertCurrent);
+    }
     if ((entry.mode & 0o600) !== 0o600) {
       params.assertCurrent();
       await fs.chmod(destination, entry.mode);
@@ -152,16 +147,16 @@ export async function linkUpdateCandidatePluginTrees(
     await prepareDirectory(directory, entry.kind === "directory" ? entry.mode | 0o700 : 0o700);
     if (entry.kind === "directory") {
       directories.push(entry);
+      params.onMaterialized?.();
       return;
     }
     if (entry.kind === "symlink") {
       params.assertCurrent();
       await fs.symlink(entry.link, destination, entry.linkType);
-      await relocateRuntimeEntry(
+      await relocateRuntimeSymlink(
         destination,
         entry.path,
         destination,
-        "symlink",
         relocations,
         params.assertCurrent,
       );
@@ -170,15 +165,17 @@ export async function linkUpdateCandidatePluginTrees(
         path.resolve(path.dirname(destination), await fs.readlink(destination)),
         { privateRoot, candidateRoot },
       );
+      params.onMaterialized?.();
       return;
     }
     if (
       pluginFiles.has(entry.path) ||
-      isRelocatedFile(destination) ||
+      resolveRuntimeFileRelocator(destination) ||
       (await requiresCopy(entry))
     ) {
       await copyEntry(entry, destination);
       counts.copied += 1;
+      params.onMaterialized?.();
       return;
     }
     params.assertCurrent();
@@ -190,6 +187,7 @@ export async function linkUpdateCandidatePluginTrees(
       }
       await copyEntry(entry, destination);
       counts.copied += 1;
+      params.onMaterialized?.();
       return;
     }
     // The private name must reference the inventoried inode, never a newer file.
@@ -206,6 +204,7 @@ export async function linkUpdateCandidatePluginTrees(
     assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
     linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
     counts.linked += 1;
+    params.onMaterialized?.();
   };
   const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
   const inodes = new Set<string>();
@@ -253,6 +252,7 @@ export async function linkUpdateCandidatePluginTrees(
   for (const entry of directories.toSorted((left, right) => right.path.length - left.path.length)) {
     params.assertCurrent();
     await fs.chmod(destinationFor(entry.path), entry.mode);
+    params.onMaterialized?.();
   }
   return counts;
 }

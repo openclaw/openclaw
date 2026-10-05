@@ -1,15 +1,16 @@
 ---
-summary: "Provider, worker-provider, and embedding registration on OpenClawPluginApi"
+summary: "Provider, storage, worker, and embedding registration on OpenClawPluginApi"
 title: "Plugin SDK capability registration"
 sidebarTitle: "Capability registration"
 read_when:
   - You are registering an inference, media, search, or transcript provider
   - You are implementing the cloud-worker provider lifecycle
   - You are registering an embedding provider
+  - You are implementing a storage location transport
 ---
 
 The capability registrars on `OpenClawPluginApi`, and the runtime contracts a
-worker or embedding provider must satisfy. Part of the
+worker, storage, or embedding provider must satisfy. Part of the
 [Plugin SDK overview](/plugins/sdk-overview).
 
 ## Capability registration
@@ -18,6 +19,7 @@ worker or embedding provider must satisfy. Part of the
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
 | `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
+| `api.registerStorageProvider(...)`               | Opaque object storage for named locations                                         |
 | `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
 | `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
@@ -47,6 +49,51 @@ account exists. Configured auto-start must supply a nonempty source account or
 resolve one with this descriptor. OpenClaw rejects ambiguous or unresolved ownership before it
 persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
+
+### Storage providers
+
+Import `StorageProvider`, `StorageProviderOpenParams`, `StorageBackend`, and
+`StorageObjectInfo` from `openclaw/plugin-sdk/plugin-entry`. Register a transport
+with `api.registerStorageProvider(provider)` and declare its `id` in
+`contracts.storageProviders`. Undeclared IDs, duplicate IDs, and the core-owned
+`filesystem` ID are rejected. A configured `storage.locations.<name>.provider`
+automatically enables its bundled owner, subject to explicit plugin disablement
+and deny rules. External plugins still require explicit enablement.
+
+A provider has an `id`, a `label`, optional synchronous `validateSettings(settings)`
+returning a user-facing error, optional `describeTarget(settings)`, and asynchronous
+`open(params)`. `describeTarget` returns a non-secret display target or `undefined`.
+It must be pure and synchronous: derive the target from settings without I/O or
+secret resolution. Configuration listings call it only for the built-in provider
+or a provider already present in the supplied registry; they never activate a
+plugin or open a backend to describe a target. Otherwise, `displayTarget` is omitted.
+
+Core passes `open` the
+location name, read-only settings, optional abort signal, and `resolveSecret(ref)`.
+Resolve credentials through that callback; secret-bearing settings must contain
+SecretRefs. Return a backend with a non-secret `displayTarget` and these methods:
+
+| Method                                        | Contract                                                                                                  |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `probe({ signal }?)`                          | Return optional `freeBytes` and `totalBytes`.                                                             |
+| `putObject(key, body, { sizeBytes, signal })` | Consume an `AsyncIterable<Uint8Array>` and return the stored byte count. Never overwrite an existing key. |
+| `getObject(key, { signal }?)`                 | Return a byte stream, or `undefined` for an absent object.                                                |
+| `statObject(key, { signal }?)`                | Return `{ key, sizeBytes, modifiedAt? }`, or `undefined`. Timestamps use milliseconds.                    |
+| `listObjects(prefix, { signal }?)`            | Stream object metadata beneath the prefix.                                                                |
+| `deleteObject(key, { signal }?)`              | Delete the object.                                                                                        |
+| `close()`                                     | Optional asynchronous resource cleanup.                                                                   |
+
+`sizeBytes`, when provided, is exact. Use atomic conditional creation when the
+backend supports it; otherwise check for an existing object first and document
+the race. Honor abort signals throughout streaming and keep memory bounded.
+Core validates keys before calling the transport: slash-separated segments of
+ASCII letters, digits, `.`, `_`, and `-`, excluding `.` and `..`, with no empty
+segments, leading slash, or backslash, and a maximum of 512 bytes.
+
+Providers store opaque bytes. Core owns location initialization, marker identity,
+namespacing, encryption, and health classification; consumers own retention.
+Providers must not create or interpret location markers or expose credentials in
+`displayTarget` or errors. See [Storage locations](/concepts/storage-locations).
 
 ### Worker providers
 
@@ -94,7 +141,7 @@ Allocation and fork timestamps do not establish successful foreground demand.
 Keep a newly captured foreground image's demand unset until activation, while
 retaining its producer's actual generation receipt until confirmed source stop.
 
-Before capturing, call `options.prepareNodeRuntime()` to obtain artifact access without creating a node identity or enrollment code. The result includes `nodeBootstrap`, `workerBundle`, and the operation's cancellation `signal`. The worker archive descriptor supplies `url`, secret `token`, `sha256`, `bytes`, optional `tlsFingerprint`, and the core-owned `packageRelativePath` within the installed node package. Download and verify both archives, install the runtime, and publish the compressed worker archive at that exact contained location before capture. Keep one published worker archive per runtime package, exclude credentials and receipts, and never add the standalone payload to the slim runtime archive. The normal authenticated installer validates the prepared bytes and creates a fresh installation after enrollment; the raw archive grants no admission authority. Finish capture before calling `beginNodeEnrollment()`. Beginning enrollment, cancellation, replacement, or closure revokes both preparation grants. A native capture with an uncertain outcome must settle or be explicitly recovered before enrollment can introduce credentials into its source machine. Persist the original cold/checkpoint allocation decision before contacting the provider, retain checkpoint references until confirmed release, and never switch images when replaying the same operation.
+Before ordinary enrollment or project capture, call `options.prepareNodeRuntime()` to obtain artifact access without creating a node identity or enrollment code. The result includes `nodeBootstrap`, `workerBundle`, and the operation's cancellation `signal`. The worker archive descriptor supplies `url`, secret `token`, `sha256`, `bytes`, optional `tlsFingerprint`, and the core-owned `packageRelativePath` within the installed node package. Download and verify both archives, install the runtime, and publish the compressed worker archive at that exact contained location before enrollment or capture. The bundled Crabbox provider uses this same preparation step for project-less enrollment, overlapping the worker archive download with runtime installation. Keep one published worker archive per runtime package, exclude credentials and receipts, and never add the standalone payload to the slim runtime archive. The normal authenticated installer validates the prepared bytes and creates a fresh installation after enrollment; the raw archive grants no admission authority. Finish capture before calling `beginNodeEnrollment()`. Beginning enrollment, cancellation, replacement, or closure revokes both preparation grants. A native capture with an uncertain outcome must settle or be explicitly recovered before enrollment can introduce credentials into its source machine. Persist the original cold/checkpoint allocation decision before contacting the provider, retain checkpoint references until confirmed release, and never switch images when replaying the same operation.
 
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `dormant`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. For ordinary leases, omission retains the legacy dedicated-host behavior; prepared-workspace registration requires an explicit `sharedHost: false` in the provision result. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
 `WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; username?: string; allowsResize?: boolean; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be an absolute path on the worker (POSIX or Windows). Setting `allowsResize: false` restricts a native desktop from provider-wide virtual-display resizing. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; args?: string[]; cdpPort: number }` or `{ id: "terminal"; executablePath: string; args?: string[] }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields. Optional `args` are fixed by the provider and travel with its admitted launcher, never supplied by the viewer. They run without a shell on the node; each argument is NUL-free and bounded to 4 KiB, with at most 32 arguments and 8 KiB total. Gateway validation accepts POSIX and Windows absolute paths independently of the Gateway OS; the node validates its native path syntax. An optional `username` identifies the lease-owned ARD account, with its password read from `passwordFilePath` and kept transient between the node and Gateway. Managed ARD account authentication requires the node carrier; credentials never enter the browser. Ordinary host desktops retain their existing viewer-supplied ARD credentials.
@@ -216,6 +263,23 @@ errors and turn them into fallback work.
 The provider receives the selected `model` and optional `agentId` in its evaluation
 context. Concurrent agent/model selections share provider health without retiring
 each other. A changed selection fences the affected request before returning it.
+
+Automatic consumers check the Labs opt-in at provider dispatch. Disabling it
+stops future evaluations, not already-dispatched work or use of its result. The
+host supplies `context.isAdmissible()` for ongoing consumer authority, model
+selection, and provider configuration/credential generation checks; the Labs
+toggle is not part of those ongoing checks. Providers performing external I/O
+must call it synchronously immediately before sending,
+after any lazy loading, DNS, or other awaited preparation. A false result closes
+that evaluation; a thrown authority assertion is terminal. The host remembers
+either observation across provider cleanup, so revocation cannot become a provider
+health failure or a later successful result. Omission preserves explicit
+`decision_evaluate` calls and older-host compatibility; it is not a Labs check for
+explicit calls. TypeSafe uses its guarded transport’s final `beforeRequest` hook.
+The host still checks before provider dispatch and before returning results, but
+cannot prevent I/O in third-party providers that ignore this callback. Local ONNX
+inference retains its existing signal-controlled worker lifecycle; it does not
+transmit evidence to an external service.
 
 Consumers share the selected provider's host-owned concurrency, circuit, and
 credential-refresh lifecycle; each plugin does not create its own provider client.

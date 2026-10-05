@@ -8,7 +8,7 @@ import {
 import type { SessionMcpRuntime } from "../../agent-bundle-mcp-types.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { wrapToolDefinitions } from "../../sessions/tools/tool-definition-wrapper.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   cleanupTempPaths,
@@ -113,7 +113,7 @@ describe("runEmbeddedAttempt configured MCP lifecycle (agents-embedded-agent-run
             throw new Error("The embedded runner did not prepare its session tools");
           }
           const model = options.model;
-          const tools = wrapToolDefinitions(options.customTools);
+          const tools = options.customTools.map((definition) => wrapToolDefinition(definition));
           expect(tools.map((tool) => tool.name)).toContain(cataloged ? "tool_call" : toolName);
           if (cataloged) {
             expect(tools.map((tool) => tool.name)).not.toContain(toolName);

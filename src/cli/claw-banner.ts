@@ -9,6 +9,7 @@ import {
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sleep as defaultSleep } from "../utils/sleep.js";
 
 // Mascot and wordmark are separate so they can be tinted independently; the
 // wordmark starts on mascot row 3, keeping the claws above the text line.
@@ -90,11 +91,6 @@ function plainTitleLine(): string {
   const icon = decorativeEmoji("🦞");
   return supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
 }
-
-const defaultSleep = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
 
 // One combined entrance: a left-to-right molt wipe reveals the color, a
 // shimmer band sweeps the wordmark, and the claws snip once. The 330ms sequence

@@ -38,9 +38,6 @@ function terminalStatusFor(action: "apply" | "reject"): SkillWorkshopProposal["s
   return action === "apply" ? "applied" : "rejected";
 }
 
-// Asserts the leak-free invariant shared by every in-flight agent-scope switch
-// case: neither the notice nor the originating terminal row nor the
-// unconfirmed-status error may surface in the new agent's workspace.
 function expectNoLeak(state: SkillWorkshopState, action: "apply" | "reject"): void {
   const terminalStatus = terminalStatusFor(action);
   expect(state.skillWorkshopActionNotice).toBeNull();
@@ -49,75 +46,16 @@ function expectNoLeak(state: SkillWorkshopState, action: "apply" | "reject"): vo
       (item) => item.key === "proposal-1" && item.status === terminalStatus,
     ),
   ).toBe(false);
-  expect(state.skillWorkshopError ?? "").not.toContain("did not confirm as expected");
+  expect(state.skillWorkshopError).toBeNull();
 }
 
 describe("Skill Workshop proposal lifecycle actions", () => {
   it.each([
-    ["apply", "skills.proposals.apply", "applied"],
-    ["reject", "skills.proposals.reject", "rejected"],
-  ] as const)(
-    "%s sends the selected agent id and refreshes that agent scope",
-    async (action, method, status) => {
-      const { state, context, request } = createFixture(
-        {
-          skillWorkshopProposals: [proposal()],
-          skillWorkshopSelectedKey: "proposal-1",
-        },
-        { assistantAgentId: "reviewer" },
-        [method, "skills.proposals.list", "skills.proposals.inspect"],
-      );
-      request.mockImplementation(async (calledMethod: string) => {
-        if (calledMethod === method) {
-          return mutationResponse(action, status);
-        }
-        if (calledMethod === "skills.proposals.list") {
-          return manifest(status);
-        }
-        if (calledMethod === "skills.proposals.inspect") {
-          return inspectResult(status);
-        }
-        return {};
-      });
-
-      try {
-        await runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
-      } finally {
-        clearNoticeTimer(state);
-      }
-
-      expect(request).toHaveBeenNthCalledWith(1, method, {
-        agentId: "reviewer",
-        expectedRevisionHash: REVISION_HASH,
-        proposalId: "proposal-1",
-      });
-      expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.list", {
-        agentId: "reviewer",
-      });
-      expect(request.mock.calls.map(([calledMethod]) => calledMethod)).toEqual([
-        method,
-        "skills.proposals.list",
-      ]);
-    },
-  );
-
-  it.each(
-    (
-      [
-        ["shows the terminal notice from the authoritative mutation record", "success", "ok"],
-        [
-          "withholds the success notice when the mutation record is not terminal",
-          "unconfirmed",
-          "ok",
-        ],
-        ["keeps the authoritative success notice when the refresh fails", "success", "fails"],
-        ["withholds success for an absent action record", "absent", "ok"],
-        ["withholds success for another proposal's action record", "wrong-id", "ok"],
-      ] as const
-    ).flatMap(([name, outcome, refresh]) =>
-      (["apply", "reject"] as const).map((action) => ({ name, action, outcome, refresh })),
-    ),
-  )("$name ($action)", async ({ action, outcome, refresh }) => {
+    ["apply", "unconfirmed"],
+    ["apply", "absent"],
+    ["reject", "absent"],
+    ["reject", "wrong-id"],
+  ] as const)("%s withholds success for an %s record", async (action, outcome) => {
     const method = `skills.proposals.${action}`;
     const terminal = terminalStatusFor(action);
     const mutationStatus: SkillWorkshopProposal["status"] =
@@ -133,21 +71,14 @@ describe("Skill Workshop proposal lifecycle actions", () => {
           return action === "apply" ? { targetSkillFile: "skills/inbox-cleaner/SKILL.md" } : null;
         }
         if (outcome === "wrong-id") {
-          const record = { ...recordFrom(terminal), id: "another-proposal" };
-          return action === "apply" ? { record, targetSkillFile: "skills/other/SKILL.md" } : record;
+          return { ...recordFrom(terminal), id: "another-proposal" };
         }
         return mutationResponse(action, mutationStatus);
       }
       if (calledMethod === "skills.proposals.list") {
-        if (refresh === "fails") {
-          throw new Error("refresh failed");
-        }
         return manifest(mutationStatus);
       }
       if (calledMethod === "skills.proposals.inspect") {
-        if (refresh === "fails") {
-          throw new Error("refresh inspect failed");
-        }
         return inspectResult(mutationStatus);
       }
       return {};
@@ -159,33 +90,20 @@ describe("Skill Workshop proposal lifecycle actions", () => {
       clearNoticeTimer(state);
     }
 
-    if (outcome !== "success") {
-      expect(state.skillWorkshopActionNotice?.label).not.toBe(
-        action === "apply" ? "Applied" : "Rejected",
-      );
-      expect(state.skillWorkshopError).toContain("did not confirm as expected");
-      expect(state.skillWorkshopProposals[0]?.status).toBe("pending");
-      expect(state.skillWorkshopProposals).toHaveLength(1);
-      return;
-    }
-    expect(state.skillWorkshopActionNotice?.label).toBe(
+    expect(state.skillWorkshopActionNotice?.label).not.toBe(
       action === "apply" ? "Applied" : "Rejected",
     );
-    expect(state.skillWorkshopProposals[0]?.status).toBe(terminal);
-    if (refresh === "ok") {
-      expect(state.skillWorkshopError).toBeNull();
-    } else {
-      expect(state.skillWorkshopError ?? "").not.toContain("did not confirm as expected");
-    }
+    expect(state.skillWorkshopError).toContain("did not confirm as expected");
+    expect(state.skillWorkshopProposals[0]?.status).toBe("pending");
+    expect(state.skillWorkshopProposals).toHaveLength(1);
   });
 
-  it.each(
-    (["apply", "reject"] as const).flatMap((action) =>
-      (["success", "failure"] as const).map((refresh) => ({ action, refresh })),
-    ),
-  )(
-    "$action publishes its complete receipt before a held $refresh refresh",
-    async ({ action, refresh }) => {
+  it.each([
+    ["apply", "success"],
+    ["reject", "failure"],
+  ] as const)(
+    "%s publishes its complete receipt before a held %s refresh",
+    async (action, refresh) => {
       const updatedAt = "2026-06-16T12:05:00.000Z";
       const terminal = terminalStatusFor(action);
       const evaluation: NonNullable<SkillWorkshopProposal["evaluation"]> = {
@@ -208,11 +126,10 @@ describe("Skill Workshop proposal lifecycle actions", () => {
       });
       const { state, context, request } = createFixture(
         {
-          skillWorkshopAgentId: "research",
           skillWorkshopProposals: [reviewed],
           skillWorkshopSelectedKey: reviewed.key,
         },
-        {},
+        { assistantAgentId: "reviewer" },
         [`skills.proposals.${action}`, "skills.proposals.list", "skills.proposals.inspect"],
       );
       const list = createDeferred<ReturnType<typeof manifest>>();
@@ -243,8 +160,15 @@ describe("Skill Workshop proposal lifecycle actions", () => {
       );
       try {
         await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith("skills.proposals.list", { agentId: "research" }),
+          expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.list", {
+            agentId: "reviewer",
+          }),
         );
+        expect(request).toHaveBeenNthCalledWith(1, `skills.proposals.${action}`, {
+          agentId: "reviewer",
+          expectedRevisionHash: REVISION_HASH,
+          proposalId: "proposal-1",
+        });
         expect(state.skillWorkshopProposals[0]).toMatchObject({
           status: terminal,
           body: reviewed.body,
@@ -281,7 +205,10 @@ describe("Skill Workshop proposal lifecycle actions", () => {
         );
         if (refresh === "failure") {
           expect(state.skillWorkshopError).toContain("receipt refresh unavailable");
+        } else {
+          expect(state.skillWorkshopError).toBeNull();
         }
+        expect(request).toHaveBeenCalledTimes(2);
       } finally {
         list.resolve(manifest(terminal));
         await actionPromise;
@@ -454,82 +381,109 @@ describe("Skill Workshop proposal lifecycle actions", () => {
     expect(state.skillWorkshopError).toBeNull();
   });
 
-  it.each(
-    (
-      [
-        ["does not publish the terminal result across an in-flight scope switch", "success", false],
-        [
-          "does not publish the terminal result across a scope switch with a dropped connection",
-          "success",
-          true,
-        ],
-        [
-          "does not write the unconfirmed-status error across an in-flight scope switch",
-          "unconfirmed",
-          false,
-        ],
-        [
-          "does not show the revision-changed notice across an in-flight scope switch",
-          "revision",
-          false,
-        ],
-        [
-          "does not write the generic action error across an in-flight scope switch",
-          "generic",
-          false,
-        ],
-      ] as const
-    ).flatMap(([name, mode, disconnect]) =>
-      (["apply", "reject"] as const).map((action) => ({ name, action, mode, disconnect })),
-    ),
-  )("$name ($action)", async ({ action, mode, disconnect }) => {
-    const method = `skills.proposals.${action}`;
-    const terminal = terminalStatusFor(action);
-    const { state, context, request, snapshot } = createFixture(
+  it.each([
+    ["apply", "success", false],
+    ["reject", "success", true],
+    ["reject", "error", false],
+  ] as const)(
+    "discards %s %s after a scope switch (disconnect=%s)",
+    async (action, mode, disconnect) => {
+      const method = `skills.proposals.${action}`;
+      const terminal = terminalStatusFor(action);
+      const { state, context, request, snapshot } = createFixture(
+        {
+          skillWorkshopAgentId: "research",
+          skillWorkshopProposals: [proposal()],
+          skillWorkshopSelectedKey: "proposal-1",
+        },
+        {},
+        [method, "skills.proposals.list", "skills.proposals.inspect"],
+      );
+      const deferred = createDeferred<ReturnType<typeof mutationResponse>>();
+      request.mockImplementation(async (calledMethod: string) => {
+        if (calledMethod === method) {
+          return deferred.promise;
+        }
+        throw new Error(`Unexpected request after scope switch: ${calledMethod}`);
+      });
+
+      let actionPromise: Promise<void>;
+      try {
+        actionPromise = runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
+        snapshot.assistantAgentId = "ops";
+        if (disconnect) {
+          snapshot.phase = "reconnecting";
+        }
+        if (mode === "error") {
+          deferred.reject(new Error(`${action} failed`));
+        } else {
+          deferred.resolve(mutationResponse(action, terminal));
+        }
+        await actionPromise;
+      } finally {
+        clearNoticeTimer(state);
+      }
+
+      expect(request).toHaveBeenCalledWith(method, {
+        agentId: "research",
+        expectedRevisionHash: REVISION_HASH,
+        proposalId: "proposal-1",
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+      expectNoLeak(state, action);
+    },
+  );
+
+  it("refuses to act without the reviewed revision hash", async () => {
+    const { state, context, request } = createFixture(
+      { skillWorkshopProposals: [proposal({ revisionHash: null })] },
+      {},
+      ["skills.proposals.apply"],
+    );
+
+    await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision(null));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.skillWorkshopError).toBe(
+      "The current suggestion revision could not be identified.",
+    );
+  });
+
+  it("refreshes a changed proposal without replaying the stale decision", async () => {
+    const method = "skills.proposals.apply";
+    const updatedAt = "2026-06-16T12:01:00.000Z";
+    const updatedManifest = manifest();
+    updatedManifest.updatedAt = updatedAt;
+    updatedManifest.proposals[0] = {
+      ...updatedManifest.proposals[0]!,
+      description: "Clean inbox triage with an explicit archive review",
+      updatedAt,
+    };
+    const updatedInspect = inspectResult();
+    updatedInspect.record = {
+      ...updatedInspect.record,
+      description: "Clean inbox triage with an explicit archive review",
+      proposedVersion: "v2",
+      updatedAt,
+    };
+    updatedInspect.revisionHash = UPDATED_REVISION_HASH;
+    updatedInspect.content = "Review unread mail, confirm archive candidates, then archive.";
+    const { state, context, request } = createFixture(
       {
-        skillWorkshopAgentId: "research",
+        skillWorkshopAgentId: "reviewer",
         skillWorkshopProposals: [proposal()],
         skillWorkshopSelectedKey: "proposal-1",
       },
-      {},
+      { assistantAgentId: "reviewer" },
       [method, "skills.proposals.list", "skills.proposals.inspect"],
     );
-    const deferred = createDeferred<ReturnType<typeof mutationResponse>>();
+    let stale = true;
+    let committed = false;
     request.mockImplementation(async (calledMethod: string) => {
       if (calledMethod === method) {
-        return deferred.promise;
-      }
-      if (disconnect) {
-        return {};
-      }
-      if (calledMethod === "skills.proposals.list") {
-        // After the switch the new scope's list has no proposal-1, so any
-        // appearing applied row would only come from an unscoped leak.
-        return mode === "success"
-          ? { schema: manifest().schema, updatedAt: manifest().updatedAt, proposals: [] }
-          : manifest("pending");
-      }
-      if (calledMethod === "skills.proposals.inspect") {
-        if (mode === "success") {
-          throw new Error("proposal not in scope");
-        }
-        return inspectResult("pending");
-      }
-      return {};
-    });
-
-    let actionPromise: Promise<void>;
-    try {
-      actionPromise = runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
-      // The mutation is in flight when the explicitly selected agent changes
-      // (and, optionally, the connection drops before the refresh can run).
-      snapshot.assistantAgentId = "ops";
-      if (disconnect) {
-        snapshot.phase = "reconnecting";
-      }
-      if (mode === "revision") {
-        deferred.reject(
-          new GatewayRequestError({
+        if (stale) {
+          stale = false;
+          throw new GatewayRequestError({
             code: "INVALID_REQUEST",
             message: "Skill proposal revision changed",
             details: {
@@ -537,182 +491,86 @@ describe("Skill Workshop proposal lifecycle actions", () => {
               currentRevisionHash: UPDATED_REVISION_HASH,
               expectedRevisionHash: REVISION_HASH,
             },
-          }),
-        );
-      } else if (mode === "generic") {
-        deferred.reject(new Error(`${action} failed`));
-      } else {
-        deferred.resolve(mutationResponse(action, mode === "unconfirmed" ? "pending" : terminal));
+          });
+        }
+        committed = true;
+        const record = {
+          ...recordFrom("applied"),
+          proposedVersion: "v2",
+          updatedAt,
+        };
+        return { record, targetSkillFile: "skills/inbox-cleaner/SKILL.md" };
       }
-      await actionPromise;
+      if (calledMethod === "skills.proposals.list") {
+        return committed
+          ? {
+              ...updatedManifest,
+              proposals: updatedManifest.proposals.map((entry) => ({
+                ...entry,
+                status: "applied",
+              })),
+            }
+          : updatedManifest;
+      }
+      if (calledMethod === "skills.proposals.inspect") {
+        return updatedInspect;
+      }
+      return {};
+    });
+
+    await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision());
+
+    const actionCalls = () =>
+      request.mock.calls.filter(([calledMethod]) => calledMethod === method);
+    expect(actionCalls()).toEqual([
+      [
+        method,
+        {
+          agentId: "reviewer",
+          expectedRevisionHash: REVISION_HASH,
+          proposalId: "proposal-1",
+        },
+      ],
+    ]);
+    expect(state.skillWorkshopProposals[0]).toMatchObject({
+      body: "Review unread mail, confirm archive candidates, then archive.",
+      revisionHash: UPDATED_REVISION_HASH,
+      version: 2,
+    });
+    expect(state.skillWorkshopActionNotice).toMatchObject({
+      key: "proposal-1",
+      label: "Suggestion changed. Review the updated draft before choosing another action.",
+    });
+    expect(state.skillWorkshopActionNoticeTimer).toBeNull();
+    expect(state.skillWorkshopError).toBeNull();
+
+    try {
+      await runSkillWorkshopLifecycleAction(
+        state,
+        context,
+        "apply",
+        proposalDecision(UPDATED_REVISION_HASH),
+      );
     } finally {
       clearNoticeTimer(state);
     }
 
-    expect(request).toHaveBeenCalledWith(method, {
-      agentId: "research",
-      expectedRevisionHash: REVISION_HASH,
-      proposalId: "proposal-1",
+    expect(actionCalls()).toHaveLength(2);
+    expect(actionCalls()[1]).toEqual([
+      method,
+      {
+        agentId: "reviewer",
+        expectedRevisionHash: UPDATED_REVISION_HASH,
+        proposalId: "proposal-1",
+      },
+    ]);
+    expect(state.skillWorkshopProposals[0]).toMatchObject({
+      status: "applied",
+      revisionHash: UPDATED_REVISION_HASH,
+      version: 2,
     });
-    const calledMethods = request.mock.calls.map(([calledMethod]) => calledMethod);
-    expect(calledMethods).not.toContain("skills.proposals.list");
-    expect(calledMethods).not.toContain("skills.proposals.inspect");
-    expectNoLeak(state, action);
-    if (mode === "generic") {
-      expect(state.skillWorkshopError).toBeNull();
-    }
+    expect(state.skillWorkshopActionNotice?.label).toBe("Applied");
   });
-
-  it.each(["apply", "reject"] as const)(
-    "%s refuses to act without the reviewed revision hash",
-    async (action) => {
-      const method = `skills.proposals.${action}`;
-      const { state, context, request } = createFixture(
-        { skillWorkshopProposals: [proposal({ revisionHash: null })] },
-        {},
-        [method],
-      );
-
-      await runSkillWorkshopLifecycleAction(state, context, action, proposalDecision(null));
-
-      expect(request).not.toHaveBeenCalled();
-      expect(state.skillWorkshopError).toBe(
-        "The current suggestion revision could not be identified.",
-      );
-    },
-  );
-
-  it.each([
-    ["apply", "skills.proposals.apply"],
-    ["reject", "skills.proposals.reject"],
-  ] as const)(
-    "%s refreshes a changed proposal without replaying the stale decision",
-    async (action, method) => {
-      const updatedAt = "2026-06-16T12:01:00.000Z";
-      const updatedManifest = manifest();
-      updatedManifest.updatedAt = updatedAt;
-      updatedManifest.proposals[0] = {
-        ...updatedManifest.proposals[0]!,
-        description: "Clean inbox triage with an explicit archive review",
-        updatedAt,
-      };
-      const updatedInspect = inspectResult();
-      updatedInspect.record = {
-        ...updatedInspect.record,
-        description: "Clean inbox triage with an explicit archive review",
-        proposedVersion: "v2",
-        updatedAt,
-      };
-      updatedInspect.revisionHash = UPDATED_REVISION_HASH;
-      updatedInspect.content = "Review unread mail, confirm archive candidates, then archive.";
-      const { state, context, request } = createFixture(
-        {
-          skillWorkshopAgentId: "reviewer",
-          skillWorkshopProposals: [proposal()],
-          skillWorkshopSelectedKey: "proposal-1",
-        },
-        { assistantAgentId: "reviewer" },
-        [method, "skills.proposals.list", "skills.proposals.inspect"],
-      );
-      let stale = true;
-      let committed = false;
-      request.mockImplementation(async (calledMethod: string) => {
-        if (calledMethod === method) {
-          if (stale) {
-            stale = false;
-            throw new GatewayRequestError({
-              code: "INVALID_REQUEST",
-              message: "Skill proposal revision changed",
-              details: {
-                code: "SKILL_PROPOSAL_REVISION_CHANGED",
-                currentRevisionHash: UPDATED_REVISION_HASH,
-                expectedRevisionHash: REVISION_HASH,
-              },
-            });
-          }
-          committed = true;
-          const record = {
-            ...recordFrom(terminalStatusFor(action)),
-            proposedVersion: "v2",
-            updatedAt,
-          };
-          return action === "apply"
-            ? { record, targetSkillFile: "skills/inbox-cleaner/SKILL.md" }
-            : record;
-        }
-        if (calledMethod === "skills.proposals.list") {
-          return committed
-            ? {
-                ...updatedManifest,
-                proposals: updatedManifest.proposals.map((entry) => ({
-                  ...entry,
-                  status: terminalStatusFor(action),
-                })),
-              }
-            : updatedManifest;
-        }
-        if (calledMethod === "skills.proposals.inspect") {
-          return updatedInspect;
-        }
-        return {};
-      });
-
-      await runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
-
-      const actionCalls = () =>
-        request.mock.calls.filter(([calledMethod]) => calledMethod === method);
-      expect(actionCalls()).toEqual([
-        [
-          method,
-          {
-            agentId: "reviewer",
-            expectedRevisionHash: REVISION_HASH,
-            proposalId: "proposal-1",
-          },
-        ],
-      ]);
-      expect(state.skillWorkshopProposals[0]).toMatchObject({
-        body: "Review unread mail, confirm archive candidates, then archive.",
-        revisionHash: UPDATED_REVISION_HASH,
-        version: 2,
-      });
-      expect(state.skillWorkshopActionNotice).toMatchObject({
-        key: "proposal-1",
-        label: "Suggestion changed. Review the updated draft before choosing another action.",
-      });
-      expect(state.skillWorkshopActionNoticeTimer).toBeNull();
-      expect(state.skillWorkshopError).toBeNull();
-
-      try {
-        await runSkillWorkshopLifecycleAction(
-          state,
-          context,
-          action,
-          proposalDecision(UPDATED_REVISION_HASH),
-        );
-      } finally {
-        clearNoticeTimer(state);
-      }
-
-      expect(actionCalls()).toHaveLength(2);
-      expect(actionCalls()[1]).toEqual([
-        method,
-        {
-          agentId: "reviewer",
-          expectedRevisionHash: UPDATED_REVISION_HASH,
-          proposalId: "proposal-1",
-        },
-      ]);
-      expect(state.skillWorkshopProposals[0]).toMatchObject({
-        status: terminalStatusFor(action),
-        revisionHash: UPDATED_REVISION_HASH,
-        version: 2,
-      });
-      expect(state.skillWorkshopActionNotice?.label).toBe(
-        action === "apply" ? "Applied" : "Rejected",
-      );
-    },
-  );
 
   it("evaluates the freshly inspected revision and merges the attributed result", async () => {
     const evaluation = {

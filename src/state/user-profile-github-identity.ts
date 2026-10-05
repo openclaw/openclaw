@@ -25,6 +25,7 @@ import {
 } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
+  selectProfileDisplayEntries,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
@@ -34,6 +35,7 @@ import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   CachedGitHubIdentity,
   StoredGitHubIdentity,
+  ProfileDisplayRow,
   UserProfileGitHubAttribution,
   UserProfileGitHubAttributionRead,
 } from "./user-profiles.types.js";
@@ -88,8 +90,9 @@ function toPublicGitHubIdentity(identity: StoredGitHubIdentity): UserProfileGitH
 export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
+  accountIds?: readonly number[],
 ): Map<string, { accounts: StoredGitHubIdentity[]; primary: StoredGitHubIdentity | undefined }> {
-  if (profileIds?.length === 0) {
+  if (profileIds?.length === 0 || accountIds?.length === 0) {
     return new Map();
   }
   const columns = readGitHubColumns(db);
@@ -111,6 +114,11 @@ export function selectStoredGitHubIdentities(
     .orderBy("subject", "asc");
   if (profileIds) {
     query = query.where("profile_id", "in", [...profileIds]);
+  }
+  if (accountIds) {
+    query = query
+      .where("subject", "in", accountIds.map(String))
+      .where("user_profiles.merged_into", "is", null);
   }
   const rows = executeSqliteQuerySync(db, query).rows;
   const profiles = new Map<
@@ -142,6 +150,31 @@ export function selectStoredGitHubIdentities(
       },
     ]),
   );
+}
+
+export function selectProfileAccessEntries(
+  db: DatabaseSync,
+  profileIds?: string[],
+): Array<[string, ProfileDisplayRow]> {
+  const rows = selectProfileDisplayEntries(db, profileIds);
+  if (rows.length === 0) {
+    return rows;
+  }
+  const identities = selectStoredGitHubIdentities(db, profileIds);
+  return rows.map(([id, row]) => {
+    const identity = identities.get(id);
+    const accounts = identity?.accounts;
+    return [
+      id,
+      accounts?.length
+        ? {
+            ...row,
+            githubAccountIds: accounts.map(({ accountId }) => accountId),
+            githubLogin: identity?.primary?.login ?? null,
+          }
+        : row,
+    ];
+  });
 }
 
 function resolveCachedGitHubIdentityInDatabase(

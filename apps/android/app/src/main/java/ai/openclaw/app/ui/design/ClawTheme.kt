@@ -68,10 +68,7 @@ internal data class ClawSpacing(
   val xxs: Dp = 8.dp,
   val xs: Dp = 12.dp,
   val sm: Dp = 16.dp,
-  val md: Dp = 20.dp,
   val lg: Dp = 24.dp,
-  val xl: Dp = 32.dp,
-  val xxl: Dp = 40.dp,
   // Touch target and visible shape are separate: `touchTarget` is the minimum
   // hit area every control keeps, while `control`, `row`, `iconSlot`, and `icon`
   // describe the smaller painted geometry that sits inside it.

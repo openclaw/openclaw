@@ -6,7 +6,6 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.i18n.nativeString
-import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 
@@ -190,7 +189,6 @@ internal fun copyGatewayDiagnosticsReport(
   gatewayAddress: String,
   statusText: String,
 ) {
-  val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
   val report = buildGatewayDiagnosticsReport(screen = screen, gatewayAddress = gatewayAddress, statusText = statusText)
-  clipboard.copyTextWithConfirmation(context, "OpenClaw gateway diagnostics", report, nativeString("Copied gateway diagnostics"))
+  context.copyTextWithConfirmation("OpenClaw gateway diagnostics", report, nativeString("Copied gateway diagnostics"))
 }

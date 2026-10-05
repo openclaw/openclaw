@@ -53,7 +53,6 @@ import {
   SESSION_KEY,
   connectNativeSession,
   installNativePluginTestHooks,
-  nativeCallSession,
   nativeDelegation,
   requireString,
   talkEventTypes,
@@ -62,6 +61,7 @@ import {
   withNativePlugin,
   withRegisteredNativeEmbeddedRun,
 } from "./client-native-control.test-support.js";
+import { nativeCallSession } from "./client-native-request.test-support.js";
 
 // Observe the real admission function before the consult loader captures it for later tests.
 vi.mock("../../../agents/admitted-run-context.js", async (importOriginal) => {
@@ -713,10 +713,9 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  it.each([
-    "use the release branch instead",
-    "<realtime_delegation><input>Keep these literal tags.</input></realtime_delegation>",
-  ])("admits public steering as visible user input: %s", async (text) => {
+  it("admits literal delegation tags in public steering as visible user input", async () => {
+    const text =
+      "<realtime_delegation><input>Keep these literal tags.</input></realtime_delegation>";
     await withParkedNativeTask(
       async ({ invoke, socket, activeRun, queueMessage, abortOwned, settleBackend }) => {
         const result = await invoke("talk.client.steer", {

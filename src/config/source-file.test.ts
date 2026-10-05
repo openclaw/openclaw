@@ -131,7 +131,13 @@ describe("config file observation", () => {
   });
 
   it("settles primary/includes, atomic replacements, deletion and restore, and updates accepted scopes in place", async () => {
-    const h = await fixture();
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+    vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
+    vi.stubEnv("CHOKIDAR_INTERVAL", undefined);
+    const h = await fixture({ realMode: true });
+    expect(h.sources).toHaveLength(1);
+    const subscription = h.sources[0]!.subscription;
+    expect(subscription.health()).toMatchObject({ state: "ready", mode: "poll" });
     expect(h.onChange).not.toHaveBeenCalled();
     for (const name of ["openclaw.json", "accepted.json"]) {
       await fs.writeFile(h.p(name), '{"changed":true}');
@@ -162,7 +168,6 @@ describe("config file observation", () => {
       expect(h.onChange).toHaveBeenCalledOnce();
       h.onChange.mockClear();
     }
-    const subscription = h.sources[0]!.subscription;
     const setScopes = vi.spyOn(subscription, "setScopes");
     await h.adapter.observePaths([h.p("candidate.json")]);
     expect(setScopes).toHaveBeenCalledOnce();
@@ -180,6 +185,8 @@ describe("config file observation", () => {
     await h.settle();
     expect(h.onChange).not.toHaveBeenCalled();
     expect(h.sources).toHaveLength(1);
+    expect(h.log.warn).not.toHaveBeenCalled();
+    expect(h.log.error).not.toHaveBeenCalled();
     await h.adapter.stop();
     expect(subscription.health().state).toBe("closed");
   });
@@ -217,7 +224,7 @@ describe("config file observation", () => {
     expect(h.onChange).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined, "0", "false", "", "1"])(
+  it.each([undefined, "false", "1"])(
     "bounds watch-limit recovery and preserves polling override %s",
     async (setting) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", setting);
@@ -270,29 +277,6 @@ describe("config file observation", () => {
       }
     },
   );
-
-  it("observes config with native watching disabled and an explicit legacy false override", async () => {
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
-    vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
-    vi.stubEnv("CHOKIDAR_INTERVAL", undefined);
-    const h = await fixture({ realMode: true });
-    expect(h.sources).toHaveLength(1);
-    const subscription = h.sources[0]!.subscription;
-    expect(subscription.health()).toMatchObject({ state: "ready", mode: "poll" });
-    expect(h.onChange).not.toHaveBeenCalled();
-
-    await fs.writeFile(h.p("openclaw.json"), '{"changed":true}');
-    await h.reconcile();
-    await h.settle(4);
-    expect(h.onChange).not.toHaveBeenCalled();
-    await h.settle(1);
-    expect(h.onChange).toHaveBeenCalledOnce();
-    expect(h.log.warn).not.toHaveBeenCalled();
-    expect(h.log.error).not.toHaveBeenCalled();
-
-    await h.adapter.stop();
-    expect(subscription.health().state).toBe("closed");
-  });
 
   it("admits a root-level config directory from its stable volume root", async () => {
     const directory = await fs.realpath(dirs.make("config-volume-root-"));

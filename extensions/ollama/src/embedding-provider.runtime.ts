@@ -228,18 +228,17 @@ function resolveOllamaEmbeddingBaseUrl(params: {
 }
 
 function normalizeOllamaHostKey(baseUrl: string): string | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    let hostname = parsed.hostname.toLowerCase();
-    if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
-      hostname = "127.0.0.1";
-    }
-    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-    const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
-    return `${parsed.protocol}//${hostname}:${port}${path}`;
-  } catch {
+  const parsed = URL.parse(baseUrl);
+  if (!parsed) {
     return undefined;
   }
+  let hostname = parsed.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
+    hostname = "127.0.0.1";
+  }
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
+  return `${parsed.protocol}//${hostname}:${port}${path}`;
 }
 
 function areOllamaHostsEquivalent(a: string, b: string): boolean {

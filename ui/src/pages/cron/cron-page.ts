@@ -13,6 +13,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -126,7 +127,22 @@ class CronPage extends OpenClawLightDomElement {
       }
     },
   });
-  private readonly observeAgentScope = watchAgentScope((scopeId) => {
+  private readonly observeAgentScope = watchAgentScope((scopeId, intentChanged) => {
+    if (!intentChanged) {
+      // Hello and roster hydration refine the filter, not the operator's route
+      // or draft. Keep its state owner and supersede reads for the previous scope.
+      this.cron.cronAgentId = scopeId;
+      void this.refreshCron({ tableFilters: true });
+      void this.loadModelSuggestions(this.cron);
+      if (
+        (this.cron.cronEditingJob || this.cron.cronCreateOpen) &&
+        !this.cron.cronForm.agentId.trim()
+      ) {
+        void this.deliveryDirectory.load();
+      }
+      this.requestUpdate();
+      return;
+    }
     this.pendingRouteData = null;
     // Replace the mutable request state so responses started for the old
     // scope cannot populate the newly selected agent's page.
@@ -321,6 +337,12 @@ class CronPage extends OpenClawLightDomElement {
   private async loadModelSuggestions(cronState: CronState) {
     const client = cronState.client;
     const agentId = this.context.agentSelection.state.selectedId;
+    // Last-good suggestions belong to one agent, including when its successor has no catalog.
+    if (this.modelSuggestionsRequest?.agentId !== agentId) {
+      this.modelSuggestionsRequest = null;
+      this.cronModelSuggestions = [];
+      this.modelSuggestionsError = null;
+    }
     if (!client || !cronState.connected || !agentId) {
       return;
     }
@@ -337,7 +359,7 @@ class CronPage extends OpenClawLightDomElement {
       if (isCurrent()) {
         this.cronModelSuggestions = result.models
           .filter((entry) => entry.manualSelectionAllowed !== false)
-          .map((entry) => entry.id);
+          .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
         this.modelSuggestionsError = modelCatalogRefreshError(result);
       }
     } catch (error) {

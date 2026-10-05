@@ -52,8 +52,6 @@ function fixture(overrides: Partial<TranscriptSourceProvider> = {}) {
       config: { plugins: { allow: ["transcript-test-fixture"] }, transcripts: { enabled: true } },
       stateDir,
       agentId,
-      agentChannel: origin?.channel,
-      agentAccountId: origin?.accountId,
       caller: origin
         ? { kind: "channel", ...origin, senderId: "test-sender", roleIds: [] }
         : { kind: "operator", source: "local" },

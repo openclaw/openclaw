@@ -154,10 +154,7 @@ function primeSuccessfulPluginPersistence(pluginId = "demo") {
   pluginCliConfigMock.mockReturnValue(cfg);
   enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
   recordPluginInstallMock.mockReturnValue(enabledCfg);
-  applyExclusiveSlotSelectionMock.mockReturnValue({
-    config: enabledCfg,
-    warnings: [],
-  });
+  applyExclusiveSlotSelectionMock.mockReturnValue(enabledCfg);
 
   return { cfg, enabledCfg };
 }

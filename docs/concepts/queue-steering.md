@@ -16,16 +16,16 @@ An older followup does not disable steering for later input. OpenClaw tries each
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. The OpenClaw runtime checks at tool-launch boundaries as well as model boundaries:
+Steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
 
 1. The assistant asks for tool calls.
-2. In sequential mode, OpenClaw checks immediately before each call starts, including after asynchronous resolution, validation, and pre-execution hooks.
+2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
 3. A running call finishes. If a steer is waiting afterward, the unstarted sequential tail is skipped.
-4. In parallel mode, OpenClaw prepares calls first, then checks once immediately before launching the prepared calls. Calls that have crossed that checkpoint continue together.
+4. In parallel mode, OpenClaw prepares and launches calls together without a steering checkpoint. Waiting steering never skips a parallel batch.
 5. Every skipped call receives paired tool start/end events and a synthetic result (`Skipped to process an incoming message.`), in assistant source order. The result tells the model that the tool did not run, and the Control UI labels it **Skipped**.
-6. OpenClaw appends the exact drained steering message before the next LLM call.
+6. After either kind of batch settles, OpenClaw checks steering before stop hooks or the next model call. It appends the exact drained steering messages after the tool results, before the next LLM call.
 
-This keeps every requested tool call paired with a result while ensuring accepted steering is model-visible before any later tool can start.
+This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
 
@@ -42,16 +42,20 @@ Codex review and manual compaction turns reject same-turn steering. When a runti
 
 On Codex installs without native hook admission, another person's message queues as a follow-up instead of steering the active turn when native sub-agent spawning is available. If the thread's policy already disables native spawning, including ChatGPT token sharing and report-only delegation, other people can still steer the running turn.
 
-Once an OpenClaw turn has finished or handed off, new prompts wait for the next turn even while cleanup is still running. Retries and compaction within the current turn can still receive steering.
+Once an OpenClaw turn has finished or handed off, new prompts wait for the next turn even while cleanup is still running. Retries and compaction within the current turn can still receive steering. When a model request fails while a steered message is still waiting, that message does not take over the turn: OpenClaw retries or falls back for the original message, and the steered message runs as its own turn afterwards.
 
 ## Tool launch boundaries
 
-OpenClaw distinguishes started work from requested work:
+OpenClaw tracks whether a tool has actually started across the whole assistant message:
 
-- A sequential call that is already running completes. Later calls have not started, so OpenClaw returns synthetic skipped results for them and lets the model reconsider with the steer visible.
-- A parallel batch has one atomic launch checkpoint. A steer present before it suppresses all prepared calls; a steer arriving after it does not recall any of them.
-- Validation or policy outcomes finalized before the parallel checkpoint remain truthful. Only executable calls that did not start receive the steering skip result.
+- Before any tool in the assistant message has started, steering cannot skip a sequential call. Validation or policy rejection alone does not count as execution starting.
+- A sequential call that is already running completes. Waiting steering can skip the unstarted sequential tail and let the model reconsider with the steer visible.
+- Parallel batches never skip calls for steering. Prepared calls launch together, and steering is checked after the batch settles.
+- Streamed tool batches and any remaining calls at the end of the same assistant message share this started state. A later sequential batch can be skipped after an earlier call started; a later parallel batch still runs.
 - The transcript stays append-only and structurally paired: assistant tool calls, real or synthetic tool results, then the steering user message.
+
+A tool skipped for steering does not trigger a failure warning. A genuine tool
+failure remains reportable even if a later call is skipped.
 
 Stopping already-running work is a different intent from redirecting future work. Use `/queue interrupt` (or `/stop`) when the newest message should abort the active run instead of steering it.
 
@@ -125,6 +129,10 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
+A steer sent while a turn is creating its worktree or preparing its runtime stays
+pending for that turn. Once the runtime is ready, OpenClaw checks whether it can
+accept the input. If the turn ends or cannot accept it, the message stays queued
+for a followup.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.

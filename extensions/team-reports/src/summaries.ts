@@ -24,7 +24,6 @@ type SummaryOptions = {
 type SummaryResult = {
   report: ReportDocument;
   summary: SummaryDocument;
-  reused: boolean;
 };
 
 const MAX_RESPONSE_CHARS = 128 * 1024;
@@ -295,7 +294,6 @@ function fallbackResult(
     ],
   ];
   return {
-    reused: false,
     summary: {
       source: "fallback",
       ...(warning ? { warnings: [warning] } : {}),
@@ -352,7 +350,6 @@ export async function generateSummaries(params: {
           })),
         },
         summary: previous.summary,
-        reused: true,
       };
     }
   }
@@ -393,7 +390,6 @@ export async function generateSummaries(params: {
       const parsed = parseResponse(result.text, report);
       const summaries = new Map(parsed.members.map((member) => [member.login, member]));
       return {
-        reused: false,
         summary: {
           source: "model",
           model: `${result.provider}/${result.model}`,

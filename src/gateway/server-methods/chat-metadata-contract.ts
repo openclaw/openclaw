@@ -8,7 +8,6 @@ export const chatMetadataSessionFields = [
   "sessionId",
   "lifecycleRevision",
   "sessionStartedAt",
-  "acp",
   "agentHarnessId",
   "agentRuntimeOverride",
   "modelSelectionLocked",
@@ -29,6 +28,7 @@ export type ChatMetadataSessionEntry = Partial<
 
 export type ChatMetadataReadParams = {
   agentId: string;
+  includeModels?: boolean;
   sessionKey?: string;
   storePath?: string;
   requesterProfileId?: string;

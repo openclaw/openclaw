@@ -1,9 +1,9 @@
 /** One-run rollback for agent-selected session models. */
 import {
   appendTranscriptMessage,
-  loadSessionEntry,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   createAgentPatchedSessionModelFallback,
   type AgentPatchedSessionModelFallback,
@@ -125,22 +125,25 @@ async function reconcileAgentPatchedSessionModel(params: {
   }
 }
 
-export function createAgentPatchedSessionModelRunGuard(params: {
+export async function createAgentPatchedSessionModelRunGuard(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
   sessionKey: string | undefined;
   storePath: string | undefined;
+  assertReadCurrent?: () => void;
   onError?: (error: unknown) => void;
 }) {
   let markerTs: number | undefined;
   let validatedFallback: AgentPatchedSessionModelFallback | undefined;
   if (params.sessionKey) {
+    params.assertReadCurrent?.();
     try {
-      const entry = loadSessionEntry({
+      const entry = await readSessionEntryInWorker({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
       });
+      params.assertReadCurrent?.();
       const marker = entry?.modelFallback;
       markerTs = marker?.source === "agent-patch" ? marker.ts : undefined;
       if (entry && markerTs !== undefined) {
@@ -153,6 +156,7 @@ export function createAgentPatchedSessionModelRunGuard(params: {
         });
       }
     } catch {
+      params.assertReadCurrent?.();
       markerTs = undefined;
     }
   }
@@ -203,8 +207,6 @@ export function createAgentPatchedSessionModelRunGuard(params: {
       captureFailure(error, reason);
       await reconcile(false);
     },
-    async finish(success: boolean) {
-      await reconcile(success);
-    },
+    finish: reconcile,
   };
 }

@@ -10,19 +10,20 @@ import {
   tryResolveAgentOperationAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
-import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { readConfigFileSnapshotForWrite, type OpenClawConfig } from "../../config/config.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
+import { describeBinding } from "../agents.binding-format.js";
+import { applyAgentBindings } from "../agents.bindings.js";
 import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { withCommandPluginMetadata } from "../config-validation.js";
 import type { ChannelChoice } from "../onboard-types.js";
-import { applyAccountName } from "./add-mutators.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 
 type InitialWizardChannelTarget =
@@ -143,8 +144,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   await prompter.intro("Channel setup");
   let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.initialChannel ? { initialSelection: [params.initialChannel] } : {}),
-    ...(params.initialChannel ? { finishAfterInitialSelection: true } : {}),
+    ...(params.initialChannel
+      ? { initialSelection: [params.initialChannel], finishAfterInitialSelection: true }
+      : {}),
     allowDisable: false,
     allowIMessageInstall: true,
     allowSignalInstall: true,
@@ -155,7 +157,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       ? { assertPersistentEffectCurrent: params.assertPersistentEffectCurrent }
       : {}),
     ...(params.deferDeviceLinkToClient ? { deferDeviceLinkToClient: true } : {}),
-    onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+    onPostWriteHook: channelSetup.onPostWriteHook,
     promptAccountIds: true,
     deferStatusUntilSelection: true,
     skipStatusNote: true,
@@ -179,7 +181,6 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       runtime,
     });
     await channelSetup.runPostWriteHooks(committed.path);
-    return committed.nextConfig;
   };
   if (selection.length === 0) {
     if (nextConfig !== cfg) {
@@ -218,32 +219,27 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
             initialValue: existingName,
           });
           if (name?.trim()) {
-            nextConfig = applyAccountName({
-              cfg: nextConfig,
-              channel,
-              accountId,
-              name,
-              plugin,
-            });
+            const namingPlugin = plugin ?? getChannelPlugin(channel);
+            const apply = namingPlugin
+              ? resolveChannelSetupExecutionAdapter(namingPlugin)?.applyAccountName
+              : undefined;
+            if (apply) {
+              nextConfig = apply({
+                cfg: nextConfig,
+                accountId: normalizeAccountId(accountId),
+                name,
+              });
+            }
           }
         }
       },
     );
   }
 
-  const bindTargets = selection
-    .map((channel) => ({
-      channel,
-      accountId: accountIds[channel]?.trim(),
-    }))
-    .filter(
-      (
-        value,
-      ): value is {
-        channel: ChannelChoice;
-        accountId: string;
-      } => Boolean(value.accountId),
-    );
+  const bindTargets = selection.flatMap((channel) => {
+    const accountId = accountIds[channel]?.trim();
+    return accountId ? [{ channel, accountId }] : [];
+  });
   if (bindTargets.length > 0) {
     const agentSummaries = await buildAgentSummaries(nextConfig);
     const bindNow =

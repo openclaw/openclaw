@@ -8,7 +8,6 @@ import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gatewa
 import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
 import { buildNetworkHints, resolveTargets, sanitizeSshTarget } from "./gateway-status/helpers.js";
 import {
@@ -18,10 +17,6 @@ import {
   writeGatewayStatusText,
 } from "./gateway-status/output.js";
 import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
-
-const loadSshConfigModule = createLazyPromise(() => import("../infra/ssh-config.js"));
-const loadSshTunnelModule = createLazyPromise(() => import("../infra/ssh-tunnel.js"));
-const loadGatewayTlsModule = createLazyPromise(() => import("../infra/tls/gateway.js"));
 
 /** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
@@ -81,8 +76,6 @@ export async function gatewayStatusCommand(
       rawTarget: sshTarget,
       identity: sshIdentity,
       overallTimeoutMs,
-      loadSshConfigModule,
-      loadSshTunnelModule,
     });
     if (resolved) {
       sshTarget = resolved.target;
@@ -94,7 +87,7 @@ export async function gatewayStatusCommand(
 
   const localCertificate =
     cfg.gateway?.tls?.enabled === true
-      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+      ? await import("../infra/tls/gateway.js").then(({ inspectGatewayTlsCertificate }) =>
           inspectGatewayTlsCertificate(cfg.gateway?.tls),
         )
       : undefined;
@@ -135,7 +128,6 @@ export async function gatewayStatusCommand(
             sshTarget,
             sshRouteTarget,
             sshIdentity,
-            loadSshTunnelModule,
             localTlsFingerprint: localCertificate?.ok
               ? localCertificate.value.fingerprintSha256
               : undefined,

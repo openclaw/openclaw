@@ -9,7 +9,8 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { isTranscriptMessageAppendCurrentTail } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
-import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { prepareTranscriptMessageAppendForWorker } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
 import {
   assertSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
@@ -22,35 +23,65 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import type { Message } from "../../llm/types.js";
+import { readLoggingConfig } from "../../logging/config.js";
+import { getSecretRedactionRegistryRevision } from "../../logging/secret-redaction-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
-import type { CustomMessage } from "./messages.js";
+import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { SessionTranscriptMessageCommittedError } from "./session-manager-message-error.js";
-import type { SessionMetadataWorkerOperations } from "./session-manager-metadata.worker.js";
 
 const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionManagerMetadata);
 
-/** The existing session domain owns the transaction; only committed facts return to its caller. */
-export async function appendSessionTranscriptMessage(input: {
+type TranscriptAppendMessage = Message | CustomMessage | BashExecutionMessage;
+type TranscriptAppendInput<TMessage> = {
   target: SessionTranscriptTargetBinding & SessionTranscriptWriteScope;
   candidate: SessionStoreReadCandidate;
-  message: CustomMessage;
+  message: TMessage;
   config?: OpenClawConfig;
   cwd: string;
   assertCurrent: () => void;
-}): Promise<
-  Pick<TranscriptMessageAppendResult<CustomMessage>, "messageId" | "message" | "appended"> & {
-    currentTail: boolean;
-  }
-> {
-  const message = redactTranscriptMessageForStorage(input.message, input);
-  const preparedJson = JSON.stringify(message);
+};
+export type SessionTranscriptAppendResult<TMessage> = Pick<
+  TranscriptMessageAppendResult<TMessage>,
+  "messageId" | "message" | "appended"
+> & {
+  currentTail: boolean;
+};
+
+export function appendSessionTranscriptMessage(
+  input: TranscriptAppendInput<CustomMessage>,
+): Promise<SessionTranscriptAppendResult<CustomMessage>>;
+export function appendSessionTranscriptMessage(
+  input: TranscriptAppendInput<TranscriptAppendMessage>,
+): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>>;
+/** The existing session domain owns the transaction; only committed facts return to its caller. */
+export async function appendSessionTranscriptMessage(
+  input: TranscriptAppendInput<TranscriptAppendMessage>,
+): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
+  const readRedactPatterns = () =>
+    input.config?.logging?.redactPatterns ?? readLoggingConfig()?.redactPatterns;
+  let redactionRevision = getSecretRedactionRegistryRevision();
+  let redactPatterns = readRedactPatterns()?.slice();
+  const prepared = prepareTranscriptMessageAppendForWorker(input);
+  Object.freeze(prepared.persistedMessage);
   const assertPrepared = () => {
     input.assertCurrent();
-    if (JSON.stringify(redactTranscriptMessageForStorage(input.message, input)) !== preparedJson) {
-      throw new Error("Transcript message redaction changed before persistence");
+    const revision = getSecretRedactionRegistryRevision();
+    const patterns = readRedactPatterns();
+    if (
+      revision !== redactionRevision ||
+      patterns?.length !== redactPatterns?.length ||
+      patterns?.some((pattern, index) => pattern !== redactPatterns?.[index])
+    ) {
+      if (prepareTranscriptMessageAppendForWorker(input).messageJson !== prepared.messageJson) {
+        throw new Error("Transcript message redaction changed before persistence");
+      }
+      redactionRevision = revision;
+      redactPatterns = patterns?.slice();
     }
   };
   assertPrepared();
@@ -62,6 +93,7 @@ export async function appendSessionTranscriptMessage(input: {
     assertSessionStoreReadCandidate(databasePath, [input.candidate]);
   };
   assertCurrent();
+  const admission = captureSessionMessageAdmission(assertCurrent);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   const { env: _env, ...writeTarget } = input.target;
   let worker:
@@ -72,7 +104,7 @@ export async function appendSessionTranscriptMessage(input: {
   let committed:
     | {
         messageId: string;
-        message: CustomMessage;
+        message: TranscriptAppendMessage;
         appended: boolean;
         currentTail: boolean;
         version: SessionTranscriptContextVersion;
@@ -84,15 +116,16 @@ export async function appendSessionTranscriptMessage(input: {
     worker = await openOpenClawAgentSqliteWorkerStore<SessionMetadataWorkerOperations>(
       options,
       { execution },
-      { moduleUrl, input: undefined },
+      { moduleUrl, input: undefined, assertAdmission: admission.assertAdmission },
     );
     await worker.run(async (scope) => {
       const reply = await scope.execute({
         type: "session.transcript.appendMessage",
         input: {
           scope: { ...writeTarget, storePath: execution.path },
-          message,
+          messageJson: prepared.messageJson,
           cwd: input.cwd,
+          ...admission.control,
         },
       });
       if (!reply.ok) {
@@ -107,12 +140,13 @@ export async function appendSessionTranscriptMessage(input: {
       }
       committed = {
         messageId: snapshot.value.result.messageId,
-        message: snapshot.value.result.message,
+        message: snapshot.value.result.message ?? prepared.persistedMessage,
         appended: snapshot.value.result.appended,
         currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
         version: snapshot.value.after,
         lifecycleRevision: snapshot.value.lifecycleRevision,
       };
+      admission.publish(reply.value.pendingInputReceipt);
       assertCurrent();
       if (reply.value.projectionNeedsReconcile) {
         startSessionTranscriptIndexReconcile({

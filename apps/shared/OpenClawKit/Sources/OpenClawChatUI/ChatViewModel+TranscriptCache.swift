@@ -48,9 +48,8 @@ extension OpenClawChatViewModel {
         let transcriptCache = self.transcriptCache
         let outbox = self.outbox
         let scope = self.outboxBranchScope(for: session)
-        let tip = messages.reversed().compactMap { message -> String? in
-            let entryID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return entryID?.isEmpty == false ? entryID : nil
+        let tip = messages.reversed().compactMap {
+            ChatPayloadDecoding.trimmedNonEmptyString($0.transcriptMessageID)
         }.first
         guard transcriptCache != nil || (outbox != nil && scope != nil && tip != nil) else { return }
         let branchStateTask: Task<OpenClawChatOutboxBranchState?, Never>? = if let outbox, let scope {
@@ -151,7 +150,6 @@ extension OpenClawChatViewModel {
 
     static func transcriptCacheAgentID(sessionKey: String, agentID: String?) -> String? {
         guard OpenClawChatSessionKey.agentID(from: sessionKey) == nil else { return nil }
-        let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
     }
 }

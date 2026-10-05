@@ -9,7 +9,7 @@ import {
 } from "../../lib/chat/message-visibility.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { isChatRunStartupPhase, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
@@ -172,6 +172,22 @@ export function applyHistoryRun(params: {
       return;
     }
     const localRunId = state.chatRunId?.trim();
+    if (
+      localRunId &&
+      sessionInfo.lastRunId !== localRunId &&
+      historyRun &&
+      !state.chatQueue.some(
+        (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== localRunId,
+      ) &&
+      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply) &&
+      reconcileChatRunFromSessionRow(state, sessionInfo, {
+        publishRunStatus: false,
+        historyRun,
+      })
+    ) {
+      // Idle history retires the observed run without borrowing a later run's outcome.
+      return;
+    }
     const terminalRunId =
       sessionInfo.lastRunId ??
       (localRunId && hasExactHistoryTerminal(state, localRunId) ? localRunId : undefined);
@@ -346,22 +362,12 @@ export function applyHistoryRun(params: {
     (event) => event.runId === inFlightRunId && event.stream === "run_status",
   );
   const startupPhase = startup?.data.phase;
-  const hasStartupStatus =
-    startupPhase === "waiting_for_state" ||
-    startupPhase === "preparing_workspace" ||
-    startupPhase === "naming_worktree" ||
-    startupPhase === "creating_worktree" ||
-    startupPhase === "running_setup" ||
-    startupPhase === "provisioning_environment" ||
-    startupPhase === "preparing_context" ||
-    startupPhase === "memory_flushing" ||
-    startupPhase === "starting_model";
   if (
     run.text &&
     !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
   ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
-  } else if (startup && hasStartupStatus) {
+  } else if (startup && isChatRunStartupPhase(startupPhase)) {
     reconcileChatRunStartup(state, {
       state: "status",
       runId: inFlightRunId,

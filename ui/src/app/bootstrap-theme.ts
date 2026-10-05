@@ -2,6 +2,7 @@ import {
   BUILTIN_THEMES,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
+import { registerListener } from "../../../src/shared/listeners.js";
 import type {
   ApplicationGateway,
   ApplicationTheme,
@@ -19,7 +20,6 @@ import {
 } from "./settings.ts";
 import { setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
-import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
 import {
   applyChatFontSmoothing,
@@ -269,24 +269,13 @@ export function createApplicationTheme(
       publish();
     },
     setMode(mode: ThemeMode) {
-      const currentTheme = resolveTheme(settings.theme, settings.themeMode);
-      const nextTheme = resolveTheme(settings.theme, mode);
-      startThemeTransition({
-        nextTheme,
-        currentTheme,
-        applyTheme: () => {
-          patchSettings({ themeMode: mode });
-        },
-      });
+      patchSettings({ themeMode: mode });
     },
     refresh,
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
       catalog?.dispose();

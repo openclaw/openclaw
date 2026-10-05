@@ -69,13 +69,8 @@ export async function ensureNodeHostPluginRegistry(params: {
 /** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
-  options: { includeDuplex?: boolean; commandAllowlist?: ReadonlySet<string> } = {},
-): {
-  caps: string[];
-  commands: string[];
-  computerUse?: ComputerUseCapabilityDescriptor;
-  nodePluginTools: NodePluginToolDescriptor[];
-} {
+  options: { commandAllowlist?: ReadonlySet<string> } = {},
+) {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
@@ -84,9 +79,6 @@ export function listRegisteredNodeHostCapsAndCommands(
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (options.commandAllowlist && !options.commandAllowlist.has(entry.command.command)) {
-        continue;
-      }
-      if (entry.command.duplex === true && options.includeDuplex === false) {
         continue;
       }
       // Availability belongs to the node-local plugin. Gateway policy still keeps

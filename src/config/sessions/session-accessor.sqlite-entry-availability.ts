@@ -7,6 +7,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { prepareSqliteSessionEntryRowDecoder } from "./session-accessor.sqlite-entry-read.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
@@ -121,12 +122,7 @@ export function readSessionIdentityEvidenceInDatabase(
   const db = getSessionKysely(database.db);
   const rowsByKey = new Map<string, SessionIdentityEvidenceRow>();
   const readChunks = (values: readonly string[], column: "current_session_id" | "session_key") => {
-    for (
-      let offset = 0;
-      offset < values.length;
-      offset += SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = values.slice(offset, offset + SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE);
+    for (const chunk of chunkItems(values, SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE)) {
       const rows = executeSqliteQuerySync(
         database.db,
         db

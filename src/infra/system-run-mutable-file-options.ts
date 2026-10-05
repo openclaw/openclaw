@@ -112,6 +112,3 @@ export const NODE_OPTIONS_WITH_FILE_VALUE = new Set([
   "--loader",
   "--require",
 ]);
-
-export const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
-export const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);

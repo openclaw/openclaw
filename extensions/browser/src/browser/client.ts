@@ -16,9 +16,11 @@ import type {
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
+import type { RoleSnapshotResult } from "./pw-role-snapshot.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 import type {
   ImportSystemProfileResult as BrowserImportProfileResult,
+  ImportSystemProfileParams,
   SystemProfileInfo,
 } from "./system-profiles.js";
 
@@ -62,19 +64,6 @@ async function sendProfilePost(
   });
 }
 
-async function sendTabCloseRequest(
-  baseUrl: BrowserClientTarget,
-  path: string,
-  opts: BrowserClientProfileOptions | undefined,
-): Promise<{ ok: true; targetId?: string }> {
-  return await requestBrowserJson(baseUrl, path, {
-    profile: opts?.profile,
-    method: "DELETE",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
-    signal: opts?.signal,
-  });
-}
-
 export type BrowserResetProfileResult = {
   ok: true;
   moved: boolean;
@@ -82,32 +71,24 @@ export type BrowserResetProfileResult = {
   to?: string;
 };
 
-export type SnapshotResult =
+export type SnapshotResult = {
+  ok: true;
+  targetId: string;
+  url: string;
+  truncated?: boolean;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
+} & (
   | {
-      ok: true;
       format: "aria";
-      targetId: string;
-      url: string;
       nodes: SnapshotAriaNode[];
-      truncated?: boolean;
-      blockedByDialog?: boolean;
-      browserState?: unknown;
     }
   | {
-      ok: true;
       format: "ai";
-      targetId: string;
-      url: string;
-      snapshot: string;
-      truncated?: boolean;
-      newElements?: number;
-      refs?: Record<string, { role: string; name?: string; nth?: number }>;
-      stats?: {
-        lines: number;
-        chars: number;
-        refs: number;
-        interactive: number;
-      };
+      snapshot: RoleSnapshotResult["snapshot"];
+      newElements?: RoleSnapshotResult["newElements"];
+      refs?: RoleSnapshotResult["refs"];
+      stats?: RoleSnapshotResult["stats"];
       labels?: boolean;
       labelsCount?: number;
       labelsSkipped?: number;
@@ -118,9 +99,8 @@ export type SnapshotResult =
       annotations?: AnnotationItem[];
       imagePath?: string;
       imageType?: "png" | "jpeg";
-      blockedByDialog?: boolean;
-      browserState?: unknown;
-    };
+    }
+);
 
 export async function browserStatus(
   baseUrl?: BrowserClientTarget,
@@ -178,11 +158,7 @@ export async function browserSystemProfiles(
 
 export async function browserImportProfile(
   baseUrl: BrowserClientTarget,
-  opts: {
-    browser?: string;
-    systemProfile?: string;
-    into?: string;
-    domains?: string[];
+  opts: Omit<ImportSystemProfileParams, "makeDefault"> & {
     signal?: AbortSignal;
   },
 ): Promise<BrowserImportProfileResult> {
@@ -298,17 +274,12 @@ export async function browserCloseTab(
   opts?: BrowserClientProfileOptions,
 ): Promise<{ ok: true; targetId?: string }> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
-  return await sendTabCloseRequest(baseUrl, path, opts);
-}
-
-/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
-export async function browserCloseTabByRawTargetId(
-  baseUrl: BrowserClientTarget,
-  targetId: string,
-  opts?: BrowserClientProfileOptions,
-): Promise<void> {
-  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
-  await sendTabCloseRequest(baseUrl, path, opts);
+  return await requestBrowserJson(baseUrl, path, {
+    profile: opts?.profile,
+    method: "DELETE",
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
+    signal: opts?.signal,
+  });
 }
 
 export async function browserSnapshot(
@@ -332,51 +303,29 @@ export async function browserSnapshot(
     signal?: AbortSignal;
   },
 ): Promise<SnapshotResult> {
-  const q: Record<string, string | number | boolean | undefined> = {};
-  if (opts.format) {
-    q.format = opts.format;
-  }
-  if (opts.targetId) {
-    q.targetId = opts.targetId;
-  }
-  if (typeof opts.limit === "number") {
-    q.limit = opts.limit;
-  }
-  if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
-    q.maxChars = opts.maxChars;
-  }
-  if (opts.refs === "aria" || opts.refs === "role") {
-    q.refs = opts.refs;
-  }
-  if (typeof opts.interactive === "boolean") {
-    q.interactive = opts.interactive;
-  }
-  if (typeof opts.compact === "boolean") {
-    q.compact = opts.compact;
-  }
-  if (typeof opts.depth === "number" && Number.isFinite(opts.depth)) {
-    q.depth = opts.depth;
-  }
-  if (opts.selector?.trim()) {
-    q.selector = opts.selector.trim();
-  }
-  if (opts.frame?.trim()) {
-    q.frame = opts.frame.trim();
-  }
-  if (opts.labels === true) {
-    q.labels = "1";
-  }
-  if (opts.urls === true) {
-    q.urls = "1";
-  }
-  if (opts.mode) {
-    q.mode = opts.mode;
-  }
   const resolvedTimeoutMs =
     clampPositiveTimerTimeoutMs(opts.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
-  q.timeoutMs = resolvedTimeoutMs;
   return await requestBrowserJson<SnapshotResult>(baseUrl, "/snapshot", {
-    query: q,
+    query: {
+      ...(opts.format ? { format: opts.format } : {}),
+      ...(opts.targetId ? { targetId: opts.targetId } : {}),
+      ...(typeof opts.limit === "number" ? { limit: opts.limit } : {}),
+      ...(typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)
+        ? { maxChars: opts.maxChars }
+        : {}),
+      ...(opts.refs === "aria" || opts.refs === "role" ? { refs: opts.refs } : {}),
+      ...(typeof opts.interactive === "boolean" ? { interactive: opts.interactive } : {}),
+      ...(typeof opts.compact === "boolean" ? { compact: opts.compact } : {}),
+      ...(typeof opts.depth === "number" && Number.isFinite(opts.depth)
+        ? { depth: opts.depth }
+        : {}),
+      ...(opts.selector?.trim() ? { selector: opts.selector.trim() } : {}),
+      ...(opts.frame?.trim() ? { frame: opts.frame.trim() } : {}),
+      ...(opts.labels === true ? { labels: "1" } : {}),
+      ...(opts.urls === true ? { urls: "1" } : {}),
+      ...(opts.mode ? { mode: opts.mode } : {}),
+      timeoutMs: resolvedTimeoutMs,
+    },
     profile: opts.profile,
     timeoutMs: resolvedTimeoutMs,
     signal: opts.signal,

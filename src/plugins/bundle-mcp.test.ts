@@ -157,6 +157,35 @@ describe("loadEnabledBundleMcpConfig", () => {
     });
   });
 
+  it("keeps file-backed HTTP bundle servers free of implicit stdio fields", async () => {
+    await withBundleFixture(async ({ homeDir, workspaceDir }) => {
+      const pluginRoot = await writeClaudeBundleManifest({
+        homeDir,
+        pluginId: "remote-bundle",
+        manifest: { name: "remote-bundle" },
+      });
+      await writeBundleTextFiles(pluginRoot, {
+        ".mcp.json": JSON.stringify({
+          mcpServers: {
+            http: { type: "http", url: "https://example.test/mcp" },
+            sse: { type: "sse", url: "https://example.test/sse" },
+          },
+        }),
+      });
+
+      const loaded = loadEnabledBundleMcpConfig({
+        workspaceDir,
+        cfg: createEnabledBundleConfig(["remote-bundle"]),
+      });
+
+      expectNoDiagnostics(loaded.diagnostics);
+      expect(loaded.config.mcpServers).toEqual({
+        http: { transport: "streamable-http", url: "https://example.test/mcp" },
+        sse: { transport: "sse", url: "https://example.test/sse" },
+      });
+    });
+  });
+
   it("uses a provided manifest registry instead of rediscovering bundle plugins", async () => {
     const homeDir = await tempHarness.createTempDir("openclaw-bundle-mcp-home-");
     const workspaceDir = await tempHarness.createTempDir("openclaw-bundle-mcp-workspace-");
@@ -217,6 +246,8 @@ describe("loadEnabledBundleMcpConfig", () => {
                 command: "node",
                 args: ["./mcp-server.js"],
               },
+              remote: { transport: "streamable-http", url: "https://example.test/mcp" },
+              events: { transport: "sse", url: "https://example.test/sse" },
             },
           },
         ],
@@ -229,6 +260,14 @@ describe("loadEnabledBundleMcpConfig", () => {
       command: "node",
       args: [path.join(pluginRoot, "mcp-server.js")],
       cwd: pluginRoot,
+    });
+    expect(loaded.config.mcpServers.remote).toEqual({
+      transport: "streamable-http",
+      url: "https://example.test/mcp",
+    });
+    expect(loaded.config.mcpServers.events).toEqual({
+      transport: "sse",
+      url: "https://example.test/sse",
     });
   });
 
@@ -262,20 +301,37 @@ describe("loadEnabledBundleMcpConfig", () => {
     expect(loaded.config.mcpServers).toStrictEqual({});
   });
 
-  it("merges inline bundle MCP servers and skips disabled bundles", async () => {
+  it("normalizes file and inline bundle transports and skips disabled bundles", async () => {
     await withBundleFixture(async ({ homeDir, workspaceDir }) => {
-      await writeClaudeBundleManifest({
+      const pluginRoot = await writeClaudeBundleManifest({
         homeDir,
         pluginId: "inline-enabled",
         manifest: {
           name: "inline-enabled",
           mcpServers: {
             enabledProbe: {
+              type: " StDiO ",
               command: "node",
               args: ["./enabled.mjs"],
             },
+            inlineHttp: { type: "http", url: "https://example.test/inline" },
+            canonical: { type: "http", transport: "sse", url: "https://example.test/canonical" },
+            unsupported: { type: " CuStOm ", url: "https://example.test/unsupported" },
+            explicitTransport: {
+              type: "custom",
+              transport: "sse",
+              url: "https://example.test/explicit",
+            },
           },
         },
+      });
+      await writeBundleTextFiles(pluginRoot, {
+        ".mcp.json": JSON.stringify({
+          mcpServers: {
+            fileHttp: { type: "http", url: "https://example.test/file" },
+            fileSse: { type: " SsE ", url: "https://example.test/sse" },
+          },
+        }),
       });
       await writeClaudeBundleManifest({
         homeDir,
@@ -312,6 +368,31 @@ describe("loadEnabledBundleMcpConfig", () => {
         throw new Error("expected inline MCP enabledProbe args to include enabled.mjs");
       }
       expect(enabledArgs[0]).toContain("enabled.mjs");
+      for (const [name, transport] of [
+        ["enabledProbe", "stdio"],
+        ["inlineHttp", "streamable-http"],
+        ["canonical", "sse"],
+        ["fileHttp", "streamable-http"],
+        ["fileSse", "sse"],
+      ] as const) {
+        expect(loaded.config.mcpServers[name]).toMatchObject({ transport });
+        expect(loaded.config.mcpServers[name]).not.toHaveProperty("type");
+      }
+      expect(loaded.config.mcpServers.unsupported).toMatchObject({
+        type: " CuStOm ",
+        transport: "custom",
+      });
+      expect(loaded.config.mcpServers.explicitTransport).toMatchObject({
+        type: "custom",
+        transport: "sse",
+      });
+      const support = inspectBundleMcpRuntimeSupport({
+        pluginId: "inline-enabled",
+        rootDir: pluginRoot,
+        bundleFormat: "claude",
+      });
+      expect(support.unsupportedServerNames).toEqual(["unsupported"]);
+      expect(support.supportedServerNames).toContain("explicitTransport");
       expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
     });
   });
@@ -523,7 +604,6 @@ describe("loadEnabledBundleMcpConfig", () => {
           bundleFormat: "agent",
         }),
       ).toMatchObject({
-        hasSupportedStdioServer: true,
         supportedServerNames: ["local", "remote", "legacy"],
         stdioServerNames: ["local"],
         unsupportedServerNames: [],

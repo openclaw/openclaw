@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   acquireGatewayLock,
@@ -22,7 +22,7 @@ const fixtureRootTracker = createSuiteTempRootTracker({
 });
 let fixtureRoot = "";
 
-async function holdLifecycleCoordinator() {
+async function holdLifecycleCoordinator(signal: AbortSignal) {
   const stateDir = await fixtureRootTracker.make("lifecycle-handoff");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
@@ -48,8 +48,12 @@ async function holdLifecycleCoordinator() {
     ],
     { stdio: ["ignore", "ignore", "inherit", "ipc"] },
   );
-  lifecycleChildren.set(child, once(child, "close"));
-  await withTestTimeout(once(child, "message"), 5_000, "coordinator fixture did not start");
+  const closed = once(child, "close");
+  lifecycleChildren.set(child, closed);
+  await withinTest(
+    awaitGateBeforeSettlement(once(child, "message"), closed, "coordinator fixture did not start"),
+    signal,
+  );
   return {
     child,
     options: { env, allowInTests: true, lockDir: path.join(stateDir, "__locks") },
@@ -80,8 +84,8 @@ describe("Gateway lock roles", () => {
     lifecycleDatabases.clear();
   });
 
-  it("acquires when the predecessor releases during the startup wait", async () => {
-    const { child, options } = await holdLifecycleCoordinator();
+  it("acquires when the predecessor releases during the startup wait", async ({ signal }) => {
+    const { child, options } = await holdLifecycleCoordinator(signal);
     const lock = await acquireGatewayLock({
       ...options,
       sleep: async () => {
@@ -93,8 +97,8 @@ describe("Gateway lock roles", () => {
     await lock?.release();
   });
 
-  it("bounds a live owner's wait at five minutes and names state ownership", async () => {
-    const { options } = await holdLifecycleCoordinator();
+  it("bounds a live owner's wait at five minutes and names state ownership", async ({ signal }) => {
+    const { options } = await holdLifecycleCoordinator(signal);
     let elapsedMs = 0;
     const sleep = vi.fn(async (ms: number) => {
       elapsedMs += ms;
@@ -204,58 +208,72 @@ describe("Gateway lock roles", () => {
     }
   });
 
-  it("keeps agent-embedded ownership distinct from a running Gateway", async () => {
-    const stateDir = await fixtureRootTracker.make("agent-embedded-role");
-    const lockDir = path.join(fixtureRoot, "__locks");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}", "utf8");
-    const env = {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const readProcessCmdline = () => ["openclaw", "agent", "--local", "--message", "hello"];
-    const lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      lockDir,
-      platform: "darwin",
-      port: 28789,
-      readProcessCmdline,
-      readProcessStartTime: () => null,
-      role: "agent-embedded",
-      timeoutMs: 30,
-    });
-    expect(lock).not.toBeNull();
-    if (!lock) {
-      throw new Error("Expected embedded agent Gateway lock");
-    }
+  it.each([undefined, 28789])(
+    "observes embedded custody with port %s only when requested",
+    async (port) => {
+      const stateDir = await fixtureRootTracker.make("agent-embedded-role");
+      const lockDir = path.join(fixtureRoot, "__locks");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.writeFile(configPath, "{}", "utf8");
+      const env = {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      const readProcessCmdline = () => ["openclaw", "agent", "--local", "--message", "hello"];
+      const lock = await acquireGatewayLock({
+        allowInTests: true,
+        env,
+        lockDir,
+        platform: "darwin",
+        port,
+        readProcessCmdline,
+        readProcessStartTime: () => null,
+        role: "agent-embedded",
+        timeoutMs: 30,
+      });
+      expect(lock).not.toBeNull();
+      if (!lock) {
+        throw new Error("Expected embedded agent Gateway lock");
+      }
 
-    try {
-      await expect(
-        readActiveGatewayLockIdentity({
-          env,
-          lockDir,
-          platform: "darwin",
-          readProcessCmdline,
-          readProcessStartTime: () => null,
-        }),
-      ).resolves.toBeUndefined();
-      await expect(
-        acquireGatewayLock({
-          allowInTests: true,
-          env,
-          lockDir,
-          platform: "darwin",
-          pollIntervalMs: 2,
-          readProcessCmdline,
-          readProcessStartTime: () => null,
-          sleep: nativeSleep,
-          timeoutMs: 15,
-        }),
-      ).rejects.toThrow("failed to acquire gateway state ownership");
-    } finally {
-      await lock.release();
-    }
-  });
+      try {
+        await expect(
+          readActiveGatewayLockIdentity({
+            env,
+            lockDir,
+            platform: "darwin",
+            readProcessCmdline,
+            readProcessStartTime: () => null,
+          }),
+        ).resolves.toBeUndefined();
+        await expect(
+          readActiveGatewayLockIdentity({
+            env,
+            lockDir,
+            platform: "darwin",
+            readProcessCmdline,
+            readProcessStartTime: () => null,
+            includeEmbedded: true,
+            requireInspection: true,
+          }),
+        ).resolves.toMatchObject({ pid: process.pid, port });
+        await expect(
+          acquireGatewayLock({
+            allowInTests: true,
+            env,
+            lockDir,
+            platform: "darwin",
+            pollIntervalMs: 2,
+            readProcessCmdline,
+            readProcessStartTime: () => null,
+            sleep: nativeSleep,
+            timeoutMs: 15,
+          }),
+        ).rejects.toThrow("failed to acquire gateway state ownership");
+      } finally {
+        await lock.release();
+      }
+    },
+  );
 });

@@ -303,7 +303,7 @@ describe("modelsAliasesAddCommand", () => {
 
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
     const written = replaceParams?.sourceConfig as OpenClawConfig;
-    const persisted = stampConfigWriteMetadata(written, "2026-07-18T00:00:00.000Z", "test", cfg);
+    const persisted = stampConfigWriteMetadata(written, "test", cfg);
     const policy = createModelVisibilityPolicy({
       cfg: persisted,
       catalog: [],

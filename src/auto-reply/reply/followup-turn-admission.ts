@@ -275,10 +275,10 @@ export async function admitFollowupTurn(params: {
           source.originatingChatType ?? source.run.chatType ?? entry?.chatType,
         ),
       });
-    const currentInboundContext =
-      params.defaults.opts?.isHeartbeat === true
-        ? queued.currentInboundContext
-        : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
+    const currentInboundContext = refreshActiveGoalContext(
+      queued.currentInboundContext,
+      activeEntry,
+    );
     // Preallocate the one lifecycle identity passed as opts.runId; canonical
     // execution owns registration and cleanup under this same id.
     const turn: AdmittedFollowupTurn = {
@@ -292,10 +292,10 @@ export async function admitFollowupTurn(params: {
       preflightCompactionApplied: false,
     };
     const refreshTurnSessionState = (entry: SessionEntry | undefined) => {
-      const refreshedInboundContext =
-        params.defaults.opts?.isHeartbeat === true
-          ? params.queued.currentInboundContext
-          : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
+      const refreshedInboundContext = refreshActiveGoalContext(
+        params.queued.currentInboundContext,
+        entry,
+      );
       turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
       turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
     };
@@ -380,7 +380,7 @@ export async function admitFollowupTurn(params: {
         sessionStore,
         sessionKey: replySessionKey,
         storePath: params.defaults.storePath,
-        isHeartbeat: params.defaults.opts?.isHeartbeat === true,
+        isHeartbeat: false,
         abortSignal: operation.abortSignal,
         onCompactionStart: () => operation.setPhase("preflight_compacting"),
         onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),

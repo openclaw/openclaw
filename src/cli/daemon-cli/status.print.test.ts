@@ -159,6 +159,13 @@ describe("printDaemonStatus", () => {
 
   it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
     const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };
+    const extraService: ExtraGatewayService = {
+      platform: "linux",
+      label: "sibling.service",
+      detail: "unit: /etc/systemd/system/sibling.service",
+      sourcePath: "/etc/systemd/system/sibling.service",
+      scope: "system",
+    };
     const command: GatewayServiceCommandConfig = {
       programArguments: ["node"],
       environment: {
@@ -175,12 +182,21 @@ describe("printDaemonStatus", () => {
     };
     const original = structuredClone(command);
     printDaemonStatus(
-      { service: { command }, rpc: { ok: true, server } },
+      { service: { command }, rpc: { ok: true, server }, extraServices: [extraService] },
       { json: true, deep: true },
     );
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     const payload = runtime.writeJson.mock.calls[0]?.[0];
     expect(payload).toHaveProperty("rpc.server", server);
+    expect(payload).toHaveProperty("extraServices", [
+      {
+        platform: "linux",
+        label: "sibling.service",
+        detail: "unit: /etc/systemd/system/sibling.service",
+        scope: "system",
+      },
+    ]);
+    expect(extraService.sourcePath).toBe("/etc/systemd/system/sibling.service");
     expect(payload).not.toHaveProperty("service.command.managedDefinition");
     expect(payload).not.toHaveProperty("service.command.managedOverrides");
     expect(payload).not.toHaveProperty("service.command.definitionPaths");
@@ -422,6 +438,34 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
+  it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      printDaemonStatus({
+        service: {
+          label: "Scheduled Task",
+          loadedText: "registered",
+          notLoadedText: "not registered",
+          runtime: { status: "stopped", state: "Disabled" },
+          command: {
+            programArguments: [],
+            environment: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway" },
+          },
+        },
+      });
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = output(runtime.error);
+    expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
+    expect(errors).toContain("openclaw gateway start");
+    expect(errors).toContain("openclaw doctor --fix");
+    expect(errors).toContain("to re-enable it");
+    expect(errors).toContain('schtasks /Query /TN "OpenClaw Custom Gateway"');
+    expect(errors).not.toContain("likely exited immediately");
+  });
+
   it("prints GUI-session recovery guidance for the service profile", () => {
     printDaemonStatus({
       service: {
@@ -443,9 +487,10 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
   });
 
-  it("prints successful connectivity and capability separately", () => {
+  it("prints connectivity and capability without a service config summary", () => {
     printDaemonStatus({
       service: runningService,
+      config: { cli: { path: "/tmp/openclaw.json", exists: true, valid: true } },
       gateway,
       rpc: { ok: true, kind: "connect", capability: "write_capable", url: gateway.probeUrl },
     });
@@ -453,6 +498,7 @@ describe("printDaemonStatus", () => {
     expect(
       runtime.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("Capability:")),
     ).toEqual(["Capability: write-capable"]);
+    expect(output(runtime.error)).not.toContain("doctor --fix");
   });
 
   it("passes daemon TLS state to dashboard link rendering", () => {

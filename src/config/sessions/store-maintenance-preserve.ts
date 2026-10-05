@@ -4,6 +4,7 @@ import {
   collectActiveSessionWorkAdmissions,
   collectActiveSessionLifecycleMutationIdentities,
 } from "../../sessions/session-lifecycle-admission.js";
+import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
 import {
   addSessionMaintenancePreserveKeys,
   collectSessionWorkAdmissionKeysFromSnapshot,
@@ -109,7 +110,9 @@ export async function prepareSessionMaintenancePreservation(storePath: string): 
         ([provider, registration]) => preserveKeysProviders.get(provider) !== registration,
       )
     ) {
-      throw new Error("Session maintenance providers changed during preparation");
+      throw new SessionMaintenancePreservationConflictError(
+        "Session maintenance providers changed during preparation",
+      );
     }
   };
   try {

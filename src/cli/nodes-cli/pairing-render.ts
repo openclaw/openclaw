@@ -10,16 +10,14 @@ export function renderPendingPairingRequestsTable(params: {
   tableWidth: number;
   theme: {
     heading: (text: string) => string;
-    warn: (text: string) => string;
     muted: (text: string) => string;
   };
 }) {
   const { pending, now, tableWidth, theme } = params;
   const rows = pending.map((r) => {
-    const nodeLabel = r.displayName?.trim() ? r.displayName.trim() : r.nodeId;
     return {
       Request: sanitizeTerminalText(r.requestId),
-      Node: sanitizeTerminalText(nodeLabel),
+      Node: sanitizeTerminalText(r.displayName?.trim() || r.nodeId),
       IP: sanitizeTerminalText(r.remoteIp ?? ""),
       Requested:
         typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),

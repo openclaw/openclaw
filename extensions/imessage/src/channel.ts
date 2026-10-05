@@ -1,6 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -136,43 +135,6 @@ const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
   () => import("./question-reactions.js"),
 );
 
-async function prepareForwardedIMessageApprovalPayload(params: {
-  payload: Parameters<NonNullable<ChannelOutboundAdapter["beforeDeliverPayload"]>>[0]["payload"];
-  approvalKind: ChannelApprovalKind;
-}): Promise<void> {
-  const prepared = (
-    await loadIMessageApprovalReactionsModule()
-  ).addIMessageApprovalReactionHintToStructuredPayload(params);
-  if (prepared) {
-    Object.assign(params.payload, prepared);
-  }
-}
-
-async function registerDeliveredIMessageApprovalPayload(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
-): Promise<void> {
-  const accountId = resolveIMessageAccount({
-    cfg: params.cfg,
-    accountId: params.target.accountId,
-  }).accountId;
-  (
-    await loadIMessageQuestionReactionsModule()
-  ).registerIMessageQuestionReactionTargetForDeliveredPayload({
-    accountId,
-    target: params.target,
-    payload: params.payload,
-    results: params.results,
-  });
-  await (
-    await loadIMessageApprovalReactionsModule()
-  ).registerIMessageApprovalReactionTargetForDeliveredPayload({
-    accountId,
-    target: params.target,
-    payload: params.payload,
-    results: params.results,
-  });
-}
-
 const imessageMessageAdapter = defineChannelMessageAdapter({
   id: "imessage",
   durableFinal: {
@@ -287,8 +249,8 @@ function resolveIMessageOutboundSessionRoute(params: {
   };
 }
 
-export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe> =
-  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe>({
+export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2> =
+  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2>({
     base: {
       ...createIMessagePluginBase({
         setupWizard: imessageSetupWizard,
@@ -402,6 +364,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
       }),
       gateway: {
+        apiVersion: 2,
         startAccount: async (ctx) => {
           const conversationBindings = createIMessageConversationBindingManager({
             cfg: ctx.cfg,
@@ -481,15 +444,28 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           if (hint?.kind !== "approval-pending") {
             return;
           }
-          await prepareForwardedIMessageApprovalPayload({
+          const prepared = (
+            await loadIMessageApprovalReactionsModule()
+          ).addIMessageApprovalReactionHintToStructuredPayload({
             payload,
             approvalKind: hint.approvalKind,
           });
+          if (prepared) {
+            Object.assign(payload, prepared);
+          }
         },
         renderPresentation: ({ payload, presentation }) =>
           questionGatewayRuntime.prepareReactionPayloadForDelivery({ payload, presentation }),
-        afterDeliverPayload: async (params) =>
-          await registerDeliveredIMessageApprovalPayload(params),
+        afterDeliverPayload: async ({ cfg, target, payload, results }) => {
+          const accountId = resolveIMessageAccount({ cfg, accountId: target.accountId }).accountId;
+          const delivery = { accountId, target, payload, results };
+          (
+            await loadIMessageQuestionReactionsModule()
+          ).registerIMessageQuestionReactionTargetForDeliveredPayload(delivery);
+          await (
+            await loadIMessageApprovalReactionsModule()
+          ).registerIMessageApprovalReactionTargetForDeliveredPayload(delivery);
+        },
         deliveryCapabilities: {
           durableFinal: {
             text: true,

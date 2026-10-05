@@ -5,7 +5,7 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { isInterSessionGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 
@@ -97,35 +97,27 @@ export function latestTranscriptAnnouncement(
         }
         continue;
       }
-      const groups =
-        part.kind === "group"
-          ? [part]
-          : part.kind === "work-group" || part.kind === "activity-run"
-            ? part.groups.toReversed()
-            : [];
-      for (const group of groups) {
+      for (const group of chatItemGroups(part).toReversed()) {
         if (isInterSessionGroup(group)) {
           const count = group.messages.reduce(
             (total, entry) => total + (entry.duplicateCount ?? 1),
             0,
           );
           const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
-          const label = source
-            ? t(
-                count === 1
-                  ? "chat.messages.interSessionUpdateFrom"
-                  : "chat.messages.interSessionUpdatesFrom",
-                { count: String(count) },
-              ) +
-              " " +
-              source
-            : t(
-                count === 1
-                  ? "chat.messages.interSessionUpdate"
-                  : "chat.messages.interSessionUpdates",
-                { count: String(count) },
-              );
-          return announcement(group.messages.at(-1)?.key ?? group.key, label);
+          const label = t(
+            source
+              ? count === 1
+                ? "chat.messages.interSessionUpdateFrom"
+                : "chat.messages.interSessionUpdatesFrom"
+              : count === 1
+                ? "chat.messages.interSessionUpdate"
+                : "chat.messages.interSessionUpdates",
+            { count: String(count) },
+          );
+          return announcement(
+            group.messages.at(-1)?.key ?? group.key,
+            source ? `${label} ${source}` : label,
+          );
         }
         const source = assistantGroupAnnouncementSource(group, messageText);
         if (source) {

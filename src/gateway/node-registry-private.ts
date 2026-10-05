@@ -113,10 +113,6 @@ type GenerationBoundPendingInvoke = {
   controller: AbortController;
 };
 
-type NodeRunnerInventoryUpdateResult = {
-  changed: boolean;
-};
-
 type NodeRegistryPrivateState = {
   context: NodeRegistryPrivateContext;
   runnerInventoryByConn: Map<string, NodeRunnerInventoryRecord>;
@@ -134,67 +130,6 @@ function requireNodeRegistryPrivateState(nodeRegistry: object): NodeRegistryPriv
     throw new Error("node registry private runtime was not initialized");
   }
   return state;
-}
-
-function updateWorkerRunnerInventory(
-  state: NodeRegistryPrivateState,
-  params: {
-    nodeId: string;
-    connId: string | undefined;
-    declaration: NodeRunnerInventoryDeclaration;
-  },
-): NodeRunnerInventoryUpdateResult | null {
-  const node = state.context.getNode(params.nodeId);
-  const publishesRunnerDialect = params.declaration.protocolFeatures.length === 1;
-  if (
-    !node ||
-    node.client.invalidated === true ||
-    node.connId !== params.connId ||
-    !isNodeWorkerHostClientId(node.clientId) ||
-    node.clientMode !== "node"
-  ) {
-    return null;
-  }
-  const previous = state.runnerInventoryByConn.get(node.connId);
-  if (!publishesRunnerDialect) {
-    const inventoryChanged = state.runnerInventoryByConn.delete(node.connId);
-    const statusChanged = state.bundleStatusByConn.delete(node.connId);
-    const changed = inventoryChanged || statusChanged;
-    if (changed) {
-      state.context.publishActiveNodeContext();
-      state.runnerState.reconcile(node.nodeId, true);
-    }
-    return { changed };
-  }
-  const workerHost = "workerHost" in params.declaration ? params.declaration.workerHost : undefined;
-  const next: NodeRunnerInventoryRecord = {
-    nodeId: node.nodeId,
-    connId: node.connId,
-    pairingIdentity: node.pairingIdentity,
-    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
-    clientId: node.clientId,
-    clientMode: "node",
-    protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
-  };
-  const statusCleared =
-    next.workerHost?.enabled !== true ||
-    next.workerHost.bundleRetention === undefined ||
-    next.workerHost.bundleStatus === undefined
-      ? state.bundleStatusByConn.delete(node.connId)
-      : false;
-  const changed =
-    !previous ||
-    previous.pairingGeneration !== next.pairingGeneration ||
-    !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !isDeepStrictEqual(previous.workerHost, next.workerHost) ||
-    statusCleared;
-  if (changed) {
-    state.runnerInventoryByConn.set(node.connId, next);
-    state.context.publishActiveNodeContext();
-    state.runnerState.reconcile(node.nodeId, true);
-  }
-  return { changed };
 }
 
 async function invokeNodeRegistryCore(
@@ -631,9 +566,62 @@ export function updateNodeRunnerInventory(params: {
   nodeId: string;
   connId: string | undefined;
   declaration: NodeRunnerInventoryDeclaration;
-}): NodeRunnerInventoryUpdateResult | null {
+}): { changed: boolean } | null {
   const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
-  return state ? updateWorkerRunnerInventory(state, params) : null;
+  if (!state) {
+    return null;
+  }
+  const node = state.context.getNode(params.nodeId);
+  const publishesRunnerDialect = params.declaration.protocolFeatures.length === 1;
+  if (
+    !node ||
+    node.client.invalidated === true ||
+    node.connId !== params.connId ||
+    !isNodeWorkerHostClientId(node.clientId) ||
+    node.clientMode !== "node"
+  ) {
+    return null;
+  }
+  const previous = state.runnerInventoryByConn.get(node.connId);
+  if (!publishesRunnerDialect) {
+    const inventoryChanged = state.runnerInventoryByConn.delete(node.connId);
+    const statusChanged = state.bundleStatusByConn.delete(node.connId);
+    const changed = inventoryChanged || statusChanged;
+    if (changed) {
+      state.context.publishActiveNodeContext();
+      state.runnerState.reconcile(node.nodeId, true);
+    }
+    return { changed };
+  }
+  const workerHost = "workerHost" in params.declaration ? params.declaration.workerHost : undefined;
+  const next: NodeRunnerInventoryRecord = {
+    nodeId: node.nodeId,
+    connId: node.connId,
+    pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
+    clientId: node.clientId,
+    clientMode: "node",
+    protocolFeatures: [...params.declaration.protocolFeatures],
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
+  };
+  const statusCleared =
+    next.workerHost?.enabled !== true ||
+    next.workerHost.bundleRetention === undefined ||
+    next.workerHost.bundleStatus === undefined
+      ? state.bundleStatusByConn.delete(node.connId)
+      : false;
+  const changed =
+    !previous ||
+    previous.pairingGeneration !== next.pairingGeneration ||
+    !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
+    !isDeepStrictEqual(previous.workerHost, next.workerHost) ||
+    statusCleared;
+  if (changed) {
+    state.runnerInventoryByConn.set(node.connId, next);
+    state.context.publishActiveNodeContext();
+    state.runnerState.reconcile(node.nodeId, true);
+  }
+  return { changed };
 }
 
 export function forgetNodeRunnerInventory(nodeRegistry: object, connId: string): void {

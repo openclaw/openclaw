@@ -97,6 +97,15 @@ type PendingOffer = {
   timer: NodeJS.Timeout;
 };
 
+export type OpenAIQuicksilverBrowserSessionBroker = {
+  capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
+  createBrowserSession: (
+    request: OpenAIQuicksilverSessionRequest,
+    auth: OpenAIQuicksilverAuth,
+  ) => Promise<RealtimeVoiceBrowserSession>;
+  cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
+};
+
 export function createOpenAIQuicksilverBrowserSessionBroker(
   params: {
     getConfig: () => OpenClawConfig | undefined;
@@ -106,24 +115,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     onCleanupComplete?: () => void;
   },
   context: OpenAIRealtimeHost,
-): {
-  broker: {
-    capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
-    createBrowserSession: (
-      request: OpenAIQuicksilverSessionRequest,
-      auth: OpenAIQuicksilverAuth,
-    ) => Promise<RealtimeVoiceBrowserSession>;
-    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
-  };
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  cleanup: () => Promise<void>;
-  getSessionCounts: () => {
-    pending: number;
-    inFlight: number;
-    active: number;
-    reservations: number;
-  };
-} {
+) {
   const pendingOffers = new Map<string, PendingOffer>();
   const inFlightOffers = new Map<
     string,
@@ -203,7 +195,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     }
   };
 
-  const broker = {
+  const broker: OpenAIQuicksilverBrowserSessionBroker = {
     capabilities: OPENAI_QUICKSILVER_CAPABILITIES,
     createBrowserSession: async (
       request: OpenAIQuicksilverSessionRequest,

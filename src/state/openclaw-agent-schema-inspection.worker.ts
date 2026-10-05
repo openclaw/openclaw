@@ -10,7 +10,10 @@ import {
   inspectAgentDatabaseSchema,
   type AgentSchemaInspectionInput,
 } from "./openclaw-agent-schema-inspection.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
+import {
+  canReuseOpenClawAgentIntegrityVerification,
+  readOpenClawAgentIntegrityVerification,
+} from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 if (!process.send || !process.disconnect) {
@@ -63,7 +66,13 @@ process.on(
         });
         readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
       } else {
-        inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
+        inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
+          allowClosedWal: canReuseOpenClawAgentIntegrityVerification(
+            input.pathname,
+            readVerification(),
+            false,
+          ),
+        })?.value;
       }
       send({
         requestId,

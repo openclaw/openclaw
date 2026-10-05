@@ -157,7 +157,9 @@ export function formatRawProviderLabel(provider: string): string {
 
 /** Brand display name for a (normalized, lowercase) provider id. */
 export function providerDisplayLabel(provider: string): string {
-  return PROVIDER_DISPLAY_LABELS[provider] ?? formatRawProviderLabel(provider);
+  return Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)
+    ? PROVIDER_DISPLAY_LABELS[provider]!
+    : formatRawProviderLabel(provider);
 }
 
 /** Provider id from a canonical `provider/model` reference, or null when absent. */

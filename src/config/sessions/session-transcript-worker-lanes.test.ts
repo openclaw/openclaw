@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
+import type {
+  WorkerTaskOptions,
+  WorkerTaskPoolOptions,
+} from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   historyLane,
@@ -30,10 +33,13 @@ const observed = vi.hoisted(() => ({
   closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
+  replaceWorkers: [] as Array<() => () => Promise<void>>,
 }));
 
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/bun-sqlite-library.js")>()),
+  ensureSqliteLibrarySelected: () => ({ source: "runtime" }),
+  captureSqliteWorkerClosePolicy: () => observed.explicitSqliteCloseReleasesNativeResources,
   getSqliteRuntimeCapabilities: () => ({
     explicitSqliteCloseReleasesNativeResources: observed.explicitSqliteCloseReleasesNativeResources,
     reason: "test policy",
@@ -52,12 +58,33 @@ vi.mock("node:diagnostics_channel", async (importOriginal) => {
 
 vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-pool.js")>()),
-  createOwnedWorkerTaskPool: () => ({
-    run: (prepare: () => unknown, options: WorkerTaskOptions<unknown>) =>
-      observed.run(prepare(), options),
-    rotate: observed.rotate,
-    closeResources: observed.closeResources,
-  }),
+  createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
+    let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
+    observed.replaceWorkers.push(() => {
+      const previous = worker;
+      worker = poolOptions.prepareWorker?.();
+      return async () => previous?.releaseResources?.();
+    });
+    return {
+      async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
+        const preparedInput = prepare();
+        worker ??= poolOptions.prepareWorker?.();
+        return await observed.run(preparedInput, options);
+      },
+      async rotate() {
+        const previous = worker;
+        worker = undefined;
+        try {
+          await observed.rotate();
+          await previous?.releaseResources?.();
+        } catch (error) {
+          void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
+          throw error;
+        }
+      },
+      closeResources: observed.closeResources,
+    };
+  },
 }));
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
@@ -107,6 +134,9 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
+  await Promise.all(
+    [historyLane, projectionLane, maintenanceLane].map((lane) => rotateDatabaseWorkers(lane)),
+  );
 });
 afterAll(() => {
   vi.useRealTimers();
@@ -264,6 +294,41 @@ it.each([
     expect(observed.unregister).toHaveBeenCalledTimes(1);
   },
 );
+
+it("binds native-close policy to each worker generation before replies", async () => {
+  const read = async (lane: typeof historyLane) => {
+    const request = input();
+    observed.run.mockResolvedValueOnce({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(
+      request.database,
+      (owner) => owner.readEntryPresence(request.scope),
+      lane,
+    );
+    const resource = observed.resources.at(-1);
+    assert(resource?.agentId);
+    return resource;
+  };
+  observed.explicitSqliteCloseReleasesNativeResources = false;
+  const early = await read(historyLane);
+  observed.explicitSqliteCloseReleasesNativeResources = true;
+  const otherLane = await read(maintenanceLane);
+  // A completed host decision cannot upgrade a worker born before admission.
+  await early.close();
+  expect(observed.rotate).toHaveBeenCalledOnce();
+  await otherLane.close();
+  expect(observed.closeResources).toHaveBeenCalledOnce();
+
+  const predecessor = await read(historyLane);
+  const releasePredecessor = observed.replaceWorkers[0]!();
+  // Replacement captures its own policy without waiting for a task result.
+  await predecessor.close();
+  expect(observed.closeResources).toHaveBeenCalledTimes(2);
+  const successor = await read(historyLane);
+  await releasePredecessor();
+  await successor.close();
+  expect(observed.closeResources).toHaveBeenCalledTimes(3);
+  expect(observed.rotate).toHaveBeenCalledOnce();
+});
 
 it.each([false, true])("retains reads dispatched after cleanup (capable=%s)", async (capable) => {
   observed.explicitSqliteCloseReleasesNativeResources = capable;

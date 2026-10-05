@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { inflateRawSync } from "node:zlib";
+import { crc32, inflateRawSync } from "node:zlib";
 
 const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
 const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -258,17 +258,6 @@ function findEndOfCentralDirectory(bytes) {
   );
 }
 
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
 function normalizeArchivePolicy(policy) {
   if (!policy || typeof policy !== "object") {
     throw new Error("Actions artifact ZIP policy is required.");
@@ -324,7 +313,6 @@ function normalizeArchivePolicy(policy) {
   }
   return {
     expectedEntries,
-    expectedEntrySet: expectedEntries ? new Set(expectedEntries) : undefined,
     maxArchiveBytes,
     maxEntries,
     maxExpandedBytes,

@@ -8,8 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { confirm, select } from "./configure.shared.js";
-import { guardCancel } from "./onboard-helpers.js";
+import { createConfigurePrompts } from "./configure.prompts.js";
 
 type ConfiguredChannelRemovalChoice = {
   id: string;
@@ -57,12 +56,12 @@ function compareChannelRemovalChoices(
   );
 }
 
-/** Prompt for configured channel sections to remove from openclaw.json. */
 export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<OpenClawConfig> {
   const next = { ...cfg };
+  const prompts = createConfigurePrompts(runtime);
 
   while (true) {
     const configured = listConfiguredChannelRemovalChoices(next);
@@ -77,21 +76,17 @@ export async function removeChannelConfigWizard(
       return next;
     }
 
-    const choice = guardCancel(
-      await select<ChannelRemovalSelectValue>({
-        message: "Remove which channel config?",
-        options: [
-          ...configured.map((meta) => ({
-            value: { kind: "channel" as const, id: meta.id },
-            label: meta.label,
-            hint: "Deletes tokens + settings from config (credentials stay on disk)",
-          })),
-          { value: { kind: "done" }, label: "Done" },
-        ],
-      }),
-      runtime,
-      1,
-    );
+    const choice = await prompts.select<ChannelRemovalSelectValue>({
+      message: "Remove which channel config?",
+      options: [
+        ...configured.map((meta) => ({
+          value: { kind: "channel" as const, id: meta.id },
+          label: meta.label,
+          hint: "Deletes tokens + settings from config (credentials stay on disk)",
+        })),
+        { value: { kind: "done" }, label: "Done" },
+      ],
+    });
 
     if (choice.kind === "done") {
       return next;
@@ -99,14 +94,10 @@ export async function removeChannelConfigWizard(
 
     const channel = choice.id;
     const label = configured.find((entry) => entry.id === channel)?.label ?? channel;
-    const confirmed = guardCancel(
-      await confirm({
-        message: `Delete ${label} configuration from ${shortenHomePath(CONFIG_PATH)}?`,
-        initialValue: false,
-      }),
-      runtime,
-      1,
-    );
+    const confirmed = await prompts.confirm({
+      message: `Delete ${label} configuration from ${shortenHomePath(CONFIG_PATH)}?`,
+      initialValue: false,
+    });
     if (!confirmed) {
       continue;
     }

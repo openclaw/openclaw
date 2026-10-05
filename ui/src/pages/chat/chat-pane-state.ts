@@ -87,13 +87,8 @@ export class SessionParticipationTracker {
   }
 }
 
-export function dismissChatError(state: {
-  chatError?: string | null;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-}) {
+export function dismissChatError(state: { chatError?: string | null; lastError: string | null }) {
   state.lastError = null;
-  state.lastErrorCode = null;
   state.chatError = null;
 }
 

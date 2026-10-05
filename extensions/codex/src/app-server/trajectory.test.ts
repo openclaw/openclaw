@@ -4,18 +4,14 @@ import path from "node:path";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
+  useSessionStoreTempDirs,
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryRuntimeRecorderForTest,
   exportTrajectoryBundleForTest,
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeEventForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspaceSync,
-  type TempWorkspaceSync,
-} from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
@@ -23,17 +19,11 @@ import {
   type CodexTrajectoryRecorder,
 } from "./trajectory.js";
 
-let testWorkspace: TempWorkspaceSync;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-trajectory-");
+let tempDir: string;
 
 beforeEach(() => {
-  testWorkspace = tempWorkspaceSync({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-codex-trajectory-",
-  });
-});
-
-afterEach(() => {
-  testWorkspace.cleanup();
+  tempDir = sessionDirs.make();
 });
 
 function expectTrajectoryRecorder(
@@ -96,7 +86,7 @@ describe("Codex trajectory recorder", () => {
   it("stores SQLite-backed captures for the canonical session-key target", async () => {
     // Regression: the host stopped emitting legacy `sqlite:` session-file
     // markers, so any marker re-derivation here drops every Codex capture.
-    const tmpDir = testWorkspace.dir;
+    const tmpDir = tempDir;
     const storePath = path.join(tmpDir, "sessions", "sessions.json");
     await upsertSessionEntry({
       agentId: "main",
@@ -157,7 +147,7 @@ describe("Codex trajectory recorder", () => {
   });
 
   it("lets the host bound oversized Codex events without losing terminal facts", async () => {
-    const tmpDir = testWorkspace.dir;
+    const tmpDir = tempDir;
     const storePath = path.join(tmpDir, "sessions", "sessions.json");
     const sessionTarget = {
       agentId: "main",
@@ -190,7 +180,7 @@ describe("Codex trajectory recorder", () => {
       reasoningTokens: 2_038,
       total: 724_402,
     };
-    const hostRecorder = createTrajectoryRuntimeRecorderForTest({
+    const hostRecorder = await createTrajectoryRuntimeRecorderForTest({
       sessionId: sessionTarget.sessionId,
       sessionKey: sessionTarget.sessionKey,
       sessionTarget,

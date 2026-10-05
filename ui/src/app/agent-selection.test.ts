@@ -321,6 +321,69 @@ describe("agent selection", () => {
     expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", null);
   });
 
+  it("reconciles a saved agent against a roster that excludes the Gateway default", () => {
+    const gateway = createGateway("main");
+    const roster = createRoster();
+    const persistence = { load: () => "private", save: vi.fn() };
+    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster, persistence);
+
+    expect(selection.state).toEqual({ selectedId: "private", scopeId: "private" });
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "shared" }, { id: "research" }],
+    });
+    expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+    expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", null);
+
+    selection.set("research");
+    gateway.publish({ client: null, assistantAgentId: "private" });
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+    selection.set("private");
+    expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+    selection.dispose();
+  });
+
+  it.each(["chip", "roster"] as const)(
+    "clears selection and remembered %s scope when the loaded roster becomes empty",
+    (mode) => {
+      const gateway = createGateway("main");
+      const roster = createRoster();
+      const preferences = createPreferences();
+      const selection = createAgentSelectionCapability(
+        gateway.gateway,
+        roster.roster,
+        preferences.persistence,
+        preferences,
+      );
+      const result: AgentsListResult = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "shared" }],
+      };
+      roster.publish(result);
+      selection.set("shared");
+      preferences.setMode(mode);
+
+      roster.publish(null);
+      expect(selection.state.selectedId).toBe("shared");
+      roster.publish({ ...result, agents: [] });
+      expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+      expect(loadSettings().selectedAgentId).toBeUndefined();
+      preferences.setMode("chip");
+      expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+
+      gateway.publish({ client: null, assistantAgentId: "private" });
+      selection.set("main");
+      expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+      roster.publish(result);
+      expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+      selection.dispose();
+    },
+  );
+
   it("restores selection independently when the Gateway changes", () => {
     const harness = createGateway("Dummy");
     const persistence = {
@@ -391,6 +454,36 @@ describe("agent selection", () => {
 
     expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
   });
+
+  it.each(["filter", "sidebar mode"])(
+    "publishes %s intent before notifying scope observers",
+    (action) => {
+      const gateway = createGateway(null);
+      const roster = createRoster();
+      const preferences = createPreferences();
+      const selection = createAgentSelectionCapability(
+        gateway.gateway,
+        roster.roster,
+        undefined,
+        preferences,
+      );
+      const observed = vi.fn(() => selection.intentRevision);
+      selection.subscribe(observed);
+      const revision = selection.intentRevision;
+      gateway.publish({ client: null, assistantAgentId: "main" });
+      expect(observed.mock.results.at(-1)?.value).toBe(revision);
+
+      if (action === "filter") {
+        selection.setScope("research");
+      } else {
+        preferences.setMode("roster");
+      }
+      expect(observed.mock.results.at(-1)?.value).toBe(revision + 1);
+      roster.publish(agentRoster("main", ["main", "research"]));
+      expect(selection.intentRevision).toBe(revision + 1);
+      selection.dispose();
+    },
+  );
 
   it("adopts the hello default published by the same gateway client", () => {
     const gateway = createGateway(null);

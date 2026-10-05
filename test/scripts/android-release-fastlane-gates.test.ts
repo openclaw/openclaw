@@ -51,25 +51,35 @@ const rubyFastlaneHarness = String.raw`
 require "json"
 require "open3"
 require "fileutils"
-$LOADED_FEATURES << "supply.rb"
-module FastlaneCore
-  module Interface
-    class FastlaneError < StandardError; end
+if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
+  require "fastlane"
+  require "supply"
+  Fastlane.load_actions
+  $supply_commit = Supply::Client.instance_method(:commit_current_edit!)
+else
+  $LOADED_FEATURES << "supply.rb"
+  module FastlaneCore
+    class Interface
+      class FastlaneError < StandardError; end
+    end
   end
 end
-module UI
-  def self.user_error!(message); raise FastlaneCore::Interface::FastlaneError, message; end
+module TestUI
+  def self.user_error!(message); raise FastlaneCore::Interface::FastlaneError.new, message; end
   def self.success(message); end
   def self.message(message); end
   def self.important(message); end
+  def self.header(message); end
 end
-def default_platform(name); end
-def platform(name); yield; end
-def desc(text); end
-$lanes = {}
-def lane(name, &block); $lanes[name] = block; end
-def screenshots; $lanes.fetch(:screenshots).call; end
-def sh(command)
+class FastfileFixture
+  UI = TestUI
+  def parsing_binding; binding; end
+  def default_platform(name); end
+  def platform(name); yield; end
+  def desc(text); end
+  def lane(name, &block); define_singleton_method(name) { |options = {}| block.call(options) }; end
+end
+def fixture_sh(command)
   args = Shellwords.split(command)
   ref_script = args.index { |arg| arg.end_with?("mobile-release-ref.ts") }
   if ref_script
@@ -82,19 +92,37 @@ def sh(command)
   end
 end
 module AndroidPublisher
-  LocalizedText = Struct.new(:language, :text, keyword_init: true)
-  TrackRelease = Struct.new(:name, :status, :version_codes, :release_notes, keyword_init: true)
-  Track = Struct.new(:track, :releases, keyword_init: true)
+  LocalizedText = Struct.new(:language, :text, keyword_init: true) unless const_defined?(:LocalizedText)
+  TrackRelease = Struct.new(:name, :status, :version_codes, :release_notes, keyword_init: true) unless const_defined?(:TrackRelease)
+  Track = Struct.new(:track, :releases, keyword_init: true) unless const_defined?(:Track)
 end
 module Supply
-  AVAILABLE_METADATA_FIELDS = []
-  SCREENSHOT_TYPES = []
+  AVAILABLE_METADATA_FIELDS = ["title"] unless const_defined?(:AVAILABLE_METADATA_FIELDS)
+  IMAGES_TYPES = ["icon"] unless const_defined?(:IMAGES_TYPES)
+  SCREENSHOT_TYPES = %w(phoneScreenshots wearScreenshots) unless const_defined?(:SCREENSHOT_TYPES)
   def self.config; @config; end
   def self.config=(value); @config = value; end
   class Client
     attr_reader :current_edit
+    def initialize
+      return unless $supply_commit
+
+      self.client = AndroidPublisher::AndroidPublisherService.new
+      client.define_singleton_method(:execute_or_queue_command) do |command, &block|
+        $committed_query = command.query
+        if $tracks.key?("internal") && command.query.key?("changesNotSentForReview")
+          raise "Changes are sent for review automatically. The query parameter changesNotSentForReview must not be set."
+        end
+        AndroidPublisher::AppEdit.new(id: "synthetic-edit")
+      end
+    end
     def self.make_from_config(params:); $client; end
-    def begin_edit(package_name:); $events << "begin"; $edits += 1; @current_edit = true; end
+    def begin_edit(package_name:)
+      $events << "begin"
+      $edits += 1
+      @current_edit = Struct.new(:id).new("synthetic-edit")
+      @current_package_name = package_name
+    end
     def aab_version_codes
       $events << "bundles"
       raise "Play inventory unavailable" if $scenario == "inventory-failure"
@@ -116,9 +144,24 @@ module Supply
       file.include?("wear-release") ? 2026080255 : 2026080254
     end
     def update_track(name, track)
-      $tracks[name] = track.releases.map { |release| { codes: release.version_codes, notes: release.release_notes.map(&:to_h) } }
+      $tracks[name] = track.releases.map { |release| { codes: release.version_codes, status: release.status, notes: release.release_notes.map(&:to_h) } }
     end
-    def commit_current_edit!; $events << "commit"; @current_edit = nil; end
+    def listing_for_language(language)
+      Struct.new(:title) do
+        def save; $events << "listing"; end
+      end.new
+    end
+    def upload_image(**); $events << "image"; end
+    def clear_screenshots(**); $events << "screenshots"; end
+    def commit_current_edit!
+      $events << "commit"
+      $committed_config = Supply.config
+      if $supply_commit
+        $supply_commit.bind(self).call
+      else
+        @current_edit = nil
+      end
+    end
     def validate_current_edit!; $events << "validate-edit"; end
     def abort_current_edit; $events << "abort"; @current_edit = nil; end
   end
@@ -142,23 +185,44 @@ module Open3
   end
 end
 ENV["GOOGLE_PLAY_JSON_KEY_DATA"] = "synthetic"
-%w(MATCH_PASSWORD GOOGLE_PLAY_TRACK GOOGLE_PLAY_RELEASE_STATUS GOOGLE_PLAY_VALIDATE_ONLY OPENCLAW_ANDROID_RELEASE_PLAN).each { |key| ENV.delete(key) }
-load ARGV.fetch(0)
+%w(MATCH_PASSWORD GOOGLE_PLAY_TRACK GOOGLE_PLAY_RELEASE_STATUS GOOGLE_PLAY_VALIDATE_ONLY OPENCLAW_ANDROID_RELEASE_PLAN SUPPLY_UPLOAD_METADATA SUPPLY_UPLOAD_SCREENSHOTS SUPPLY_UPLOAD_IMAGES SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW).each { |key| ENV.delete(key) }
+if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
+  FastlaneCore::UI.ui_object = TestUI
+  fastfile = Fastlane::FastFile.new(ARGV.fetch(0))
+  $run_lane = ->(name, options = {}) { fastfile.runner.execute(name, :android, options) }
+else
+  fastfile = FastfileFixture.new
+  eval(File.read(ARGV.fetch(0)), fastfile.parsing_binding, ARGV.fetch(0))
+  $run_lane = ->(name, options = {}) { fastfile.public_send(name, options) }
+end
 $root = ARGV.fetch(1)
-def repo_root; $root; end
-def android_root; File.join($root, "apps", "android"); end
-def play_metadata_path; File.join(android_root, "fastlane", "metadata", "android"); end
 def track(name, status, *codes)
   release = AndroidPublisher::TrackRelease.new(status: status, version_codes: codes, name: "Editable label, not a version")
   AndroidPublisher::Track.new(track: name, releases: [release])
 end
+fastfile.instance_eval do
+def sh(command); fixture_sh(command); end
+def repo_root; $root; end
+def android_root; File.join($root, "apps", "android"); end
+def play_metadata_path; File.join(android_root, "fastlane", "metadata", "android"); end
 `;
 
 function runRuby(fixtureRoot: string, source: string): unknown {
+  const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
+  const rubyArgs = [
+    "-e",
+    rubyFastlaneHarness + "\n" + source + "\nend",
+    path.join(fixtureRoot, "Fastfile"),
+    fixtureRoot,
+  ];
   const result = spawnSync(
-    "ruby",
-    ["-e", rubyFastlaneHarness + "\n" + source, path.join(fixtureRoot, "Fastfile"), fixtureRoot],
-    { encoding: "utf8", cwd: rootDir },
+    useBundle ? "bundle" : "ruby",
+    useBundle ? ["_4.0.21_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+    {
+      encoding: "utf8",
+      cwd: rootDir,
+      env: { ...process.env, BUNDLE_GEMFILE: path.join(rootDir, "apps/android/Gemfile") },
+    },
   );
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
@@ -170,6 +234,8 @@ type LaneResult = {
   tracks: unknown;
   pinned_notes?: string;
   wear_code?: string;
+  committed_config?: Record<string, boolean | null>;
+  committed_query?: Record<string, boolean>;
   plan?: {
     schemaVersion: number;
     version: string;
@@ -195,24 +261,55 @@ FileUtils.mkdir_p(File.join(android_root, "build", "release-artifacts"))
 play_release_artifact_paths("2026.9.20").each { |file| File.write(file, "synthetic signed bundle") }
 notes_path = File.join(play_metadata_path, "en-US", "release_notes.txt")
 File.write(notes_path, "Pinned archive notes stay unchanged.\n")
+File.write(File.join(play_metadata_path, "en-US", "title.txt"), "Store listing title")
+File.write(File.join(play_metadata_path, "en-US", "images", "icon.png"), "synthetic icon")
 plan_path = File.join($root, "recovery", "android-plan.json")
 $scenario, $events, $edits, $client = "plan", [], 0, Supply::Client.new
-$lanes.fetch(:release_plan).call(output_path: plan_path)
+$run_lane.call(:release_plan, output_path: plan_path)
 ENV["OPENCLAW_ANDROID_RELEASE_PLAN"] = plan_path
-results = %w(invalid-notes changed-baseline changed-code initialize-failure validate-only upload).map do |scenario|
-  $scenario, $events, $tracks, $edits, $client = scenario, [], {}, 0, Supply::Client.new
+results = %w(invalid-destination invalid-notes changed-baseline changed-code initialize-failure validate-only upload closed-testing internal).map do |scenario|
+  $scenario, $events, $tracks, $edits, $client, $committed_config = scenario, [], {}, 0, Supply::Client.new, nil
+  $committed_query = nil
+  ENV["SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
+  ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "false"
+  ENV["GOOGLE_PLAY_TRACK"] = scenario == "closed-testing" ? "beta" : "internal"
   scenario == "validate-only" ? ENV["GOOGLE_PLAY_VALIDATE_ONLY"] = "1" : ENV.delete("GOOGLE_PLAY_VALIDATE_ONLY")
+  if scenario == "internal"
+    ENV["GOOGLE_PLAY_TRACK"] = "production"
+    ENV["GOOGLE_PLAY_RELEASE_STATUS"] = "draft"
+    %w(METADATA SCREENSHOTS IMAGES).each { |kind| ENV["SUPPLY_UPLOAD_#{kind}"] = "1" }
+    ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
+    FileUtils.rm_rf(File.join(play_metadata_path, "en-US", "images"))
+  end
   begin
-    $lanes.fetch(:release_upload).call
-    { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }
+    options = case scenario
+              when "internal" then { destination: "internal" }
+              when "invalid-destination" then { destination: "production" }
+              else {}
+              end
+    $run_lane.call(:release_upload, options)
+    { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
   rescue => error
     { error: error.message, events: $events, tracks: $tracks }
   end
 end
-puts JSON.generate(results)
+STDOUT.puts JSON.generate(results)
 `,
     ) as LaneResult[];
-    const [rejected, changedBaseline, changedCode, failedInitialize, validated, uploaded] = results;
+    const [
+      invalidDestination,
+      rejected,
+      changedBaseline,
+      changedCode,
+      failedInitialize,
+      validated,
+      uploaded,
+      closedTesting,
+      internal,
+    ] = results;
+    expect(internal?.error).toBeUndefined();
+    expect(invalidDestination?.error).toContain("destination must be play-store or internal");
+    expect(invalidDestination?.events).toEqual([]);
     expect(rejected?.error).toContain("Saved release notes do not match source/build");
     expect(rejected?.events).toEqual([]);
     for (const rejectedPlan of [changedBaseline, changedCode]) {
@@ -233,10 +330,18 @@ puts JSON.generate(results)
     expect(uploaded?.error).toBeUndefined();
     expect(uploaded?.tracks).toEqual({
       internal: [
-        { codes: [2026080254], notes: [{ language: "en-US", text: "Phone chat improvements." }] },
+        {
+          codes: [2026080254],
+          status: "completed",
+          notes: [{ language: "en-US", text: "Phone chat improvements." }],
+        },
       ],
       "wear:internal": [
-        { codes: [2026080255], notes: [{ language: "en-US", text: "Wear voice fixes." }] },
+        {
+          codes: [2026080255],
+          status: "completed",
+          notes: [{ language: "en-US", text: "Wear voice fixes." }],
+        },
       ],
     });
     const events = uploaded!.events;
@@ -259,6 +364,40 @@ puts JSON.generate(results)
     );
     expect(uploaded?.wear_code).toBe("2026080255");
     expect(uploaded?.pinned_notes).toBe("Pinned archive notes stay unchanged.\n");
+    expect(events).toContain("listing");
+    expect(events).toContain("screenshots");
+    expect(internal?.tracks).toEqual(uploaded?.tracks);
+    expect(internal?.events.filter((event) => event === "upload")).toHaveLength(2);
+    expect(internal?.events.filter((event) => event === "commit")).toHaveLength(1);
+    expect(internal?.events.at(-1)).toBe("ref:record");
+    expect(internal?.events.some((event) => event.includes("android-screenshots.sh"))).toBe(false);
+    expect(internal?.events).not.toContain("listing");
+    expect(internal?.events).not.toContain("screenshots");
+    expect(internal?.events).not.toContain("image");
+    expect(internal?.pinned_notes).toBe("Pinned archive notes stay unchanged.\n");
+    expect(uploaded?.committed_config).toMatchObject({
+      changes_not_sent_for_review: null,
+      rescue_changes_not_sent_for_review: false,
+    });
+    expect(internal?.committed_config).toMatchObject({
+      changes_not_sent_for_review: null,
+      rescue_changes_not_sent_for_review: false,
+    });
+    expect(closedTesting?.error).toBeUndefined();
+    expect(closedTesting?.tracks).toMatchObject({
+      beta: [{ codes: [2026080254] }],
+      "wear:beta": [{ codes: [2026080255] }],
+    });
+    expect(closedTesting?.committed_config).toMatchObject({
+      changes_not_sent_for_review: true,
+      rescue_changes_not_sent_for_review: false,
+    });
+    expect(closedTesting?.events.at(-1)).toBe("ref:record");
+    if (process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1") {
+      expect(uploaded?.committed_query).toEqual({});
+      expect(internal?.committed_query).toEqual({});
+      expect(closedTesting?.committed_query).toEqual({ changesNotSentForReview: true });
+    }
   });
 
   it("passes both artifact inventories and public tracks to the planner and aborts read edits on every outcome", () => {
@@ -276,13 +415,13 @@ results = cases.each_with_index.map do |(scenario, tracks), index|
   $scenario, $public_tracks, $events, $edits, $client = scenario, tracks, [], 0, Supply::Client.new
   output = File.join($root, "recovery", "plan-#{index}.json")
   begin
-    $lanes.fetch(:release_plan).call(output_path: output)
+    $run_lane.call(:release_plan, output_path: output)
     { plan: JSON.parse(File.read(output)), events: $events }
   rescue => error
     { error: error.message, output_exists: File.exist?(output), events: $events }
   end
 end
-puts JSON.generate(results)
+STDOUT.puts JSON.generate(results)
 `,
     ) as LaneResult[];
     expect(results[0]?.error).toBeUndefined();

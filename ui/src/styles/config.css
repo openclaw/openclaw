@@ -8,10 +8,6 @@
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
-/* ===========================================
-   Lead column (toolbar / banner / nav above the form)
-   =========================================== */
-
 /* Mirrors the .settings-page column so config chrome lines up with it. */
 .config-lead {
   width: 100%;
@@ -59,7 +55,7 @@
 .config-action-spinner svg {
   width: 14px;
   height: 14px;
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -202,10 +198,6 @@
   flex: 1 1 420px;
 }
 
-/* ===========================================
-   Appearance custom pickers (theme + text scale)
-   =========================================== */
-
 .settings-theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -258,8 +250,6 @@
 .settings-theme-card__icon svg {
   width: 18px;
   height: 18px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .settings-theme-card__label {
@@ -611,8 +601,6 @@
 .settings-theme-import__external svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   flex: 0 0 auto;
 }
 
@@ -634,7 +622,7 @@
 
 .settings-theme-import__label,
 .settings-theme-import__meta-label {
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -742,7 +730,7 @@
 
 .settings-text-scale__label {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   line-height: 1.2;
 }
 
@@ -781,18 +769,8 @@
   border: 2.5px solid var(--border);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ===========================================
-   Form specifics layered on settings rows
-   =========================================== */
 
 /* Inline validation/unsupported-node message inside a settings-row. */
 .cfg-field__error {

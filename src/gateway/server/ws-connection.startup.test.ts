@@ -2,6 +2,7 @@
  * WebSocket connection startup regression tests.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildDeviceAuthPayload } from "../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -59,7 +60,6 @@ import {
   createGatewayAuthRateLimiter,
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
-import { buildDeviceAuthPayload } from "../device-auth.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
 import { createWorkerNodeEnrollmentManager } from "../worker-environments/node-enrollment.js";

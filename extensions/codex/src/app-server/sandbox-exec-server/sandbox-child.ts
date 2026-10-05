@@ -8,6 +8,7 @@ import {
   type TerminalPtyHandle,
 } from "openclaw/plugin-sdk/process-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 const SANDBOX_CHILD_TERM_GRACE_MS = 1_000;
 // Covers the post-TERM tree kill plus Windows taskkill completion before failure is reported.
@@ -163,10 +164,12 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
             escalation = setTimeout(() => signalLocal("SIGKILL"), SANDBOX_CHILD_TERM_GRACE_MS);
             escalation.unref?.();
           }
-          const reaped = await Promise.race([
+          const reaped = await raceWithTimeout(
             closed.promise.then(() => true),
-            delay(SANDBOX_CHILD_REAP_TIMEOUT_MS).then(() => false),
-          ]).finally(() => clearTimeout(escalation));
+            SANDBOX_CHILD_REAP_TIMEOUT_MS,
+            () => false,
+            { ref: false },
+          ).finally(() => clearTimeout(escalation));
           await Promise.all(localSignals);
           if (!reaped) {
             throw new Error(
@@ -209,12 +212,12 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
         if (await interruptRemote(remainingMs)) {
           return;
         }
-        await Promise.race([
-          delay(
-            Math.min(SANDBOX_CHILD_INTERRUPT_POLL_MS, Math.max(0, deadline - performance.now())),
-          ),
+        await raceWithTimeout(
           exited.promise,
-        ]);
+          Math.min(SANDBOX_CHILD_INTERRUPT_POLL_MS, Math.max(0, deadline - performance.now())),
+          () => undefined,
+          { ref: false },
+        );
       }
     })();
     interruptions.add(interruption);
@@ -271,11 +274,4 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
     startupPending = false;
     ready.resolve();
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
 }

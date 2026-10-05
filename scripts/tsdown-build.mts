@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -39,6 +40,7 @@ import {
 } from "./lib/tsdown-config-groups.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
+  TSDOWN_PACKAGES_CACHE_INPUT,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
 
@@ -71,21 +73,6 @@ export const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
-const TSDOWN_SOURCE_EXTENSIONS = [
-  ".cjs",
-  ".cts",
-  ".js",
-  ".json",
-  ".json5",
-  ".mjs",
-  ".mts",
-  ".sql",
-  ".ts",
-  ".tsx",
-  ".yaml",
-  ".yml",
-];
-
 export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
@@ -115,11 +102,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/tsdown-output-roots.mts",
 ];
-export const TSDOWN_PACKAGES_CACHE_INPUT = {
-  path: "packages",
-  extensions: TSDOWN_SOURCE_EXTENSIONS,
-  excludeDirectories: ["dist", "node_modules"],
-};
+export { TSDOWN_PACKAGES_CACHE_INPUT };
 export const TSDOWN_UNIFIED_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
   ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
@@ -838,6 +821,7 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 
   function scanLines(text: string) {
     const combined = pendingLine + text;
+    hasIneffectiveDynamicImport ||= combined.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER);
     const lines = combined.split(/\r?\n/u);
     pendingLine = lines.pop() ?? "";
     for (const line of lines) {
@@ -848,9 +832,6 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
   return {
     append(chunk: unknown) {
       const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      if (text.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER)) {
-        hasIneffectiveDynamicImport = true;
-      }
       scanLines(text);
       captured += text;
       if (captured.length > maxCaptureBytes) {
@@ -1258,12 +1239,16 @@ export async function runTsdownBuildInvocation(
         }, timeoutMs).unref()
       : null;
 
+  function stopObserving() {
+    settled = true;
+    cleanupParentSignalHandlers();
+    clearInterval(heartbeat ?? undefined);
+    clearTimeout(timeout ?? undefined);
+  }
+
   return new Promise<TsdownBuildResult>((resolve) => {
     child.once("error", (error) => {
-      settled = true;
-      cleanupParentSignalHandlers();
-      clearInterval(heartbeat ?? undefined);
-      clearTimeout(timeout ?? undefined);
+      stopObserving();
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
       resolve({
         status: 1,
@@ -1293,10 +1278,7 @@ export async function runTsdownBuildInvocation(
         );
       };
       function finish() {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
         const finalStatus = parentSignal ? signalExitCode(parentSignal) : exitStatus;
         if (finalStatus !== 0 || timedOut) {
           reportFailure(finalStatus);
@@ -1328,10 +1310,7 @@ export async function runTsdownBuildInvocation(
         }
         finish();
       })().catch((error: unknown) => {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
         reportFailure(1);
         resolve({
           status: 1,
@@ -1475,6 +1454,7 @@ export async function runTsdownBuild(
     console.error(fence.message);
     return 1;
   }
+  await ensureKyselyTypes(options.cwd ?? process.cwd());
   let code: number;
   if (options.executeBuild) {
     code = await options.executeBuild(args.forwardedArgs);

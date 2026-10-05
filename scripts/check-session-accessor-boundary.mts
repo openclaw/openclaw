@@ -73,16 +73,6 @@ const materializingSessionEntryAccessorNames = new Set([
   "loadSessionEntry",
 ]);
 
-// Shipped beta.5 official plugins import these deprecated helpers during
-// doctor migrations. Remove this ratchet with the compatibility bridge once
-// beta.5 is outside the supported upgrade window; do not add runtime callers.
-const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
-  "loadSessionStore",
-  "resolveSessionFilePath",
-  "resolveSessionStoreEntry",
-  "updateSessionStore",
-]);
-
 const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-abort.ts",
   "src/gateway/server-methods/sessions-compact.ts",
@@ -204,7 +194,6 @@ const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/commands-session-store.ts",
   "src/auto-reply/reply/directive-handling.impl.ts",
   "src/auto-reply/reply/directive-handling.persist.ts",
-  "src/auto-reply/reply/dispatch-from-config.runtime.ts",
   "src/auto-reply/reply/followup-runner.ts",
   "src/auto-reply/reply/get-reply.ts",
   "src/auto-reply/reply/model-selection.ts",
@@ -446,19 +435,10 @@ export function findSessionStoreRuntimeFileBackedCompatExportViolations(
   sourceFile: ts.SourceFile,
 ) {
   const exports = collectSessionStoreRuntimeFileBackedCompatExports(content, fileName, sourceFile);
-  const violations: BoundaryViolation[] = [];
-  for (const [exportedName, exported] of exports) {
-    if (
-      exportedName !== exported.sourceName ||
-      !allowedSessionStoreRuntimeFileBackedCompatExports.has(exportedName)
-    ) {
-      violations.push({
-        line: exported.line,
-        reason: `exports unratcheted file-backed SDK session helper "${exported.sourceName}"`,
-      });
-    }
-  }
-  return violations;
+  return Array.from(exports.values(), (exported) => ({
+    line: exported.line,
+    reason: `exports retired file-backed SDK session helper "${exported.sourceName}"`,
+  }));
 }
 
 export function findSessionAccessorBoundaryViolations(

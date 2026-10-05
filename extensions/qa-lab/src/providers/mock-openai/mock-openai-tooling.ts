@@ -1,6 +1,7 @@
 // QA Lab mock provider tool planning and memory fixtures.
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readQaNativeWorkspaceBehaviorFromPrompt } from "../../native-workspace-behavior.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import {
   type MockToolCallItem,
@@ -146,16 +147,15 @@ export function buildCustomToolCallEventsWithInput(
 }
 
 export function extractRememberedFact(userTexts: string[]) {
-  for (const text of userTexts) {
-    const qaCanaryMatch = /\bqa canary code is\s+([A-Za-z0-9-]+)/i.exec(text);
-    if (qaCanaryMatch?.[1]) {
-      return qaCanaryMatch[1];
-    }
-  }
-  for (const text of userTexts) {
-    const match = /remember(?: this fact for later)?:\s*([A-Za-z0-9-]+)/i.exec(text);
-    if (match?.[1]) {
-      return match[1];
+  for (const pattern of [
+    /\bqa canary code is\s+([A-Za-z0-9-]+)/i,
+    /remember(?: this fact for later)?:\s*([A-Za-z0-9-]+)/i,
+  ]) {
+    for (const text of userTexts) {
+      const fact = pattern.exec(text)?.[1];
+      if (fact) {
+        return fact;
+      }
     }
   }
   return null;
@@ -180,7 +180,8 @@ export function extractActiveMemorySummary(text: string) {
 }
 
 export function extractToolSearchTarget(text: string): string | null {
-  const match = /\btarget=([A-Za-z0-9_.:-]+)\b/.exec(text);
+  // Tool descriptions also contain target= arguments; only the QA marker selects a tool.
+  const match = /\btool search qa (?:check|failure)\s+target=([A-Za-z0-9_.:-]+)\b/i.exec(text);
   return match?.[1]?.trim() || null;
 }
 
@@ -202,7 +203,7 @@ export function toolSearchOutputHasCandidate(output: unknown, targetTool: string
 /** Stand-in for an API key an owner pastes into chat. */
 const QA_OWNER_CHAT_SECRET = "qa-owner-remote-token-5c1e8f2a9b7d";
 const RUNTIME_TOOL_SUCCESS_ARGS: Record<string, Record<string, unknown>> = {
-  exec: { command: "echo runtime-tool-fixture", timeout: 5 },
+  exec: { command: "echo runtime-tool-fixture", timeoutSeconds: 5 },
   read: { path: "QA_KICKOFF_TASK.md" },
   write: { path: "runtime-tool-fixture-write.txt", content: "runtime tool fixture\n" },
   edit: {
@@ -251,6 +252,12 @@ export function buildQaToolSearchArgs(
   failureMode: boolean,
   prompt = "",
 ): Record<string, unknown> {
+  const nativeWorkspaceBehavior = readQaNativeWorkspaceBehaviorFromPrompt(prompt);
+  if (nativeWorkspaceBehavior?.providerToolName === targetTool) {
+    return structuredClone(
+      failureMode ? nativeWorkspaceBehavior.failureArgs : nativeWorkspaceBehavior.happyArgs,
+    );
+  }
   if (targetTool === "ls") {
     return { path: failureMode ? "runtime-tool-fixture-missing-directory" : "." };
   }

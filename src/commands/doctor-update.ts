@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-run-timeouts.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -44,6 +45,11 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
   handled?: boolean;
   reason?: "gateway-readiness-unverified" | "still-starting";
 }> {
+  const installOwner = await readInstallOwner(params.root);
+  if (installOwner) {
+    note(formatInstallOwnerMessage(installOwner), "Update");
+    return { updated: false };
+  }
   const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
   const canOfferUpdate =
     !updateInProgress &&

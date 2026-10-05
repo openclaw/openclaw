@@ -46,16 +46,13 @@ export class MockProvider implements VoiceCallProvider {
     try {
       const payload = JSON.parse(ctx.rawBody);
       const events: NormalizedEvent[] = [];
-
-      if (Array.isArray(payload.events)) {
-        for (const evt of payload.events) {
-          const normalized = this.normalizeEvent(evt);
-          if (normalized) {
-            events.push(normalized);
-          }
-        }
-      } else if (payload.event) {
-        const normalized = this.normalizeEvent(payload.event);
+      const candidates = Array.isArray(payload.events)
+        ? payload.events
+        : payload.event
+          ? [payload.event]
+          : [];
+      for (const evt of candidates) {
+        const normalized = this.normalizeEvent(evt);
         if (normalized) {
           events.push(normalized);
         }
@@ -161,25 +158,15 @@ export class MockProvider implements VoiceCallProvider {
     };
   }
 
-  async hangupCall(_input: HangupCallInput): Promise<void> {
-    // No-op for mock
-  }
+  async hangupCall(_input: HangupCallInput): Promise<void> {}
 
-  async playTts(_input: PlayTtsInput): Promise<void> {
-    // No-op for mock
-  }
+  async playTts(_input: PlayTtsInput): Promise<void> {}
 
-  async sendDtmf(_input: SendDtmfInput): Promise<void> {
-    // No-op for mock
-  }
+  async sendDtmf(_input: SendDtmfInput): Promise<void> {}
 
-  async startListening(_input: StartListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async startListening(_input: StartListeningInput): Promise<void> {}
 
-  async stopListening(_input: StopListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async stopListening(_input: StopListeningInput): Promise<void> {}
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     const id = normalizeLowercaseStringOrEmpty(input.providerCallId);

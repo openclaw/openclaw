@@ -18,7 +18,7 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/manifest-registry.js")>()),
   loadPluginManifestRegistryCore: manifests,
 }));
-let sessionUtils: typeof import("./session-utils.js");
+let sessionRows: typeof import("./session-utils-row.js");
 const model = "custom-provider/custom-legacy-model";
 const cfg: OpenClawConfig = { agents: { defaults: { model: { primary: model } } } };
 
@@ -28,7 +28,7 @@ describe("gateway session list plugin runtime normalization", () => {
     const { createPluginMetadataSnapshotFixture } =
       await import("../plugins/plugin-metadata.test-support.js");
     metadata.mockReturnValue(createPluginMetadataSnapshotFixture());
-    sessionUtils = await import("./session-utils.js");
+    sessionRows = await import("./session-utils-row.js");
   });
   beforeEach(() => {
     normalize
@@ -58,7 +58,7 @@ describe("gateway session list plugin runtime normalization", () => {
         updatedAt: 2,
         parentSessionKey: "agent:main:parent",
       };
-      const row = sessionUtils.buildGatewaySessionRow({
+      const row = sessionRows.buildGatewaySessionRow({
         cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
         agentId: "main",
         storePath: "",
@@ -79,7 +79,7 @@ describe("gateway session list plugin runtime normalization", () => {
   );
 
   it("keeps provider runtime normalization for raw detail rows", () => {
-    const row = sessionUtils.buildGatewaySessionRow({
+    const row = sessionRows.buildGatewaySessionRow({
       cfg,
       agentId: "main",
       storePath: "",

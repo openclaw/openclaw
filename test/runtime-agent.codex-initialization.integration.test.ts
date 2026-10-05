@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexSessionInitializationFixtureForTest } from "../extensions/codex/test-api.js";
@@ -10,6 +11,7 @@ import {
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -208,6 +210,7 @@ describe("Codex initialization through the registered session deletion owner", (
         });
         let successorBinding: Awaited<ReturnType<typeof bindingStore.read>>;
         let successorLink: ReturnType<typeof readSessionUpstreamLink>;
+        let rollbackCommitRefused = false;
         if (failure === "native cleanup") {
           native.archiveThread.mockRejectedValue(new Error("injected archive failure"));
           native.control.retireConnection = vi.fn();
@@ -250,8 +253,24 @@ describe("Codex initialization through the registered session deletion owner", (
             successorLink = readSessionUpstreamLink(params.targetKey, "main");
           }
           if (failure === "rollback commit") {
-            openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected rollback failure'); END",
+            // A host TEMP trigger cannot reach the deletion worker's connection.
+            const createAdmission = sqliteAdmission.createSqliteWorkerOperationAdmission;
+            vi.spyOn(sqliteAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+              (admit, attachment) =>
+                createAdmission((request, grant) => {
+                  const publication = isRecord(request.facts)
+                    ? request.facts.publication
+                    : undefined;
+                  if (
+                    request.stage === "commit" &&
+                    isRecord(publication) &&
+                    publication.kind === "session-native-binding"
+                  ) {
+                    rollbackCommitRefused = true;
+                    throw new Error("injected rollback failure");
+                  }
+                  admit(request, grant);
+                }, attachment),
             );
           }
           if (
@@ -291,6 +310,9 @@ describe("Codex initialization through the registered session deletion owner", (
           flow === "fork" ? invokeFork : fixture.adopt,
         );
 
+        if (failure === "rollback commit") {
+          expect(rollbackCommitRefused).toBe(true);
+        }
         expect(result).toMatchObject({ status: "failed" });
         const identity = {
           kind: "session" as const,

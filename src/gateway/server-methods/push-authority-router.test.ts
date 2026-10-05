@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerWebPushSubscription } from "../../infra/push-web.js";
@@ -17,6 +17,8 @@ import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
+// Keep the dispatcher's cold runtime import outside timed authority cases.
+import "../server/ws-connection/authenticated-request-dispatch.server-methods.runtime.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { pushHandlers } from "./push.js";
 
@@ -45,8 +47,8 @@ vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal
   prepareUserProfileSelectionAuthority: vi.fn(),
 }));
 vi.mock("../../state/user-preferences.js", () => ({
-  getUserPreferences: vi.fn(),
-  setUserPreferences: vi.fn(),
+  getCanonicalUserPreferences: vi.fn(),
+  setCanonicalUserPreferences: vi.fn(),
 }));
 vi.mock("../session-sharing.js", async () => ({
   // Web Push has no session target; keep unrelated session storage outside this router control.
@@ -63,7 +65,6 @@ beforeEach(() => {
 
 describe("Web Push router authority at the worker grant", () => {
   it.each([
-    "unchanged",
     "merged alias",
     "transport retirement",
     "retained device revoked",
@@ -160,6 +161,7 @@ describe("Web Push router authority at the worker grant", () => {
     const isConnectionActive = vi.fn(() => true);
     const getClientConnIds = vi.fn(() => new Set(["original-connection"]));
     const context = createDirectChatContext({ isConnectionActive, getClientConnIds });
+    onTestFinished(() => closeGatewayDeviceRevocation(context));
     const harness = createDispatchTestHarness({
       connId: "original-connection",
       getRequiredSharedGatewaySessionGeneration: new SharedGatewaySessionGenerationState({

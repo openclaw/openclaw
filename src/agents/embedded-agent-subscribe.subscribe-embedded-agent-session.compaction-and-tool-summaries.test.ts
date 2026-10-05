@@ -277,6 +277,7 @@ describe("compaction accounting", () => {
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "compaction",
+      transcriptStart: null,
       data: expect.objectContaining({ phase: "end", completed: false, reason: failure }),
     });
   });

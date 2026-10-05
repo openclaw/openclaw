@@ -81,7 +81,8 @@ vi.mock("../../infra/github-issue.js", async () => {
     ) => actual.reconcileGithubIssue(issue, mocks.runGh, hooks),
   };
 });
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   refreshLatestUpdateRestartSentinel: mocks.sentinel,
 }));
 

@@ -3,11 +3,14 @@ import type { ReactiveControllerHost } from "lit";
 import type {
   SessionCatalog,
   SessionsCatalogArchiveParams,
+  SessionsCatalogImportParams,
+  SessionsCatalogImportResult,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
   buildCatalogSessionKey,
   type CatalogSessionContinuedDetail,
@@ -66,7 +69,6 @@ export interface SessionCatalogDataOwner {
   sessionCatalogRevision: number;
   readonly sessionCatalogPageDepths: Map<string, number>;
   readonly sessionCatalogRevisions: Map<string, number>;
-  expandedAgentId(): string;
   sessionCatalogGatewayClient(): GatewayBrowserClient | null;
   synchronizeSessionScope(): void;
   requestSessionDataUpdate(): void;
@@ -88,8 +90,11 @@ export function areSessionCatalogsSettled(
   const status = owner.sessionCatalogRefreshStatus;
   return (
     !status.error &&
-    (isGatewayMethodAdvertised(owner.context?.gateway.snapshot ?? {}, "sessions.catalog.list") !==
-      true ||
+    (!canCallGatewayMethod(
+      owner.context?.gateway.snapshot,
+      "sessions.catalog.list",
+      "operator.read",
+    ) ||
       (status.hasLoaded &&
         !status.awaitingGateway &&
         owner.sessionCatalogLive.requestGeneration === null &&
@@ -130,17 +135,14 @@ function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Pro
   );
 }
 
-export function resolveSessionCatalogAgentId(
-  owner: SessionCatalogDataOwner,
-  candidateAgentId: string | null | undefined = owner.expandedAgentId(),
-): string | null {
+export function resolveSessionCatalogAgentId(owner: SessionCatalogDataOwner): string | null {
   const context = owner.context;
   const gateway = context?.gateway.snapshot;
   // Only an authoritative connected hello can revoke catalog ownership; a
   // transient reconnect still preserves its rows until the replacement lands.
   if (
     gateway?.phase === "connected" &&
-    isGatewayMethodAdvertised(gateway, "sessions.catalog.list") === false
+    !canCallGatewayMethod(gateway, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }
@@ -152,14 +154,11 @@ export function resolveSessionCatalogAgentId(
     agentsState.client === gateway.client
       ? agentsState.agentsList
       : null;
+  const rawSelected = context?.agentSelection.state.selectedId;
+  const selected = rawSelected?.trim() ? normalizeAgentId(rawSelected) : null;
   if (agentsList) {
-    const rawSelectedId = context ? context.agentSelection.state.selectedId : candidateAgentId;
-    const selectedId = rawSelectedId?.trim() ? normalizeAgentId(rawSelectedId) : null;
-    if (
-      selectedId &&
-      agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
-    ) {
-      return selectedId;
+    if (selected && agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selected)) {
+      return selected;
     }
     const defaultId = normalizeAgentId(agentsList.defaultId);
     return agentsList.agents.some((agent) => normalizeAgentId(agent.id) === defaultId)
@@ -170,15 +169,13 @@ export function resolveSessionCatalogAgentId(
     return null;
   }
   const helloDefault = normalizeAgentId(gateway.assistantAgentId);
-  const rawSelected = context?.agentSelection.state.selectedId;
-  const selected = rawSelected?.trim() ? normalizeAgentId(rawSelected) : null;
   // An explicit pre-roster selection may target an agent hello knows nothing about;
   // defer until the roster can validate it instead of fetching the default's catalog.
   return selected && selected !== helloDefault ? null : helloDefault;
 }
 
 export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
-  if (document.visibilityState === "hidden") {
+  if (!visibleSessionCatalogClient(owner)) {
     owner.sessionCatalogLive.cancelScheduledRefreshes();
     return;
   }
@@ -382,6 +379,7 @@ export async function loadMoreSessionCatalog(
   hostIds?: readonly string[],
   discovering = false,
 ): Promise<void> {
+  owner.synchronizeSessionScope();
   if (owner.loadingMoreSessionCatalogIds.has(catalogId)) {
     return;
   }
@@ -396,7 +394,7 @@ export async function loadMoreSessionCatalog(
   if (!catalog || Object.keys(cursors).length === 0) {
     return;
   }
-  const client = owner.context?.gateway.snapshot.client;
+  const client = owner.sessionCatalogGatewayClient();
   const agentId = resolveSessionCatalogAgentId(owner);
   if (
     !client ||
@@ -544,4 +542,36 @@ export async function archiveSessionCatalog(
       owner.requestSessionDataUpdate();
     }
   }
+}
+
+export async function importSessionCatalog(
+  owner: SessionCatalogDataOwner & {
+    isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
+    refreshSidebarSessions(agentId?: string): Promise<void>;
+  },
+  scope: SidebarCatalogSessionMutationScope,
+  params: SessionsCatalogImportParams,
+): Promise<SessionsCatalogImportResult | null> {
+  const isCurrent = () =>
+    scope.catalogGeneration === owner.sessionScopeGeneration &&
+    owner.isSessionMutationScopeCurrent(scope);
+  if (!isCurrent()) {
+    return null;
+  }
+  const access = readSessionMethodScopeAccess(scope.gateway.snapshot.hello?.auth, {
+    method: "sessions.catalog.import",
+    requiredScope: "operator.write",
+  });
+  if (!access.allowed) {
+    throw new Error(access.reason);
+  }
+  const result = await scope.client.request<SessionsCatalogImportResult>(
+    "sessions.catalog.import",
+    params,
+  );
+  if (!isCurrent()) {
+    return null;
+  }
+  void owner.refreshSidebarSessions(params.agentId);
+  return result;
 }

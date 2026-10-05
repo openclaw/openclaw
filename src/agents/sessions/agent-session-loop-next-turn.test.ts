@@ -78,9 +78,13 @@ function mockAbortableQueuedRun() {
 }
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
-  it.each(["apply", "dispose", "replace"] as const)(
-    "guards first-model preparation after a delayed SDK prompt override: %s",
-    async (closure) => {
+  it.each(
+    (["apply", "dispose", "replace"] as const).flatMap((closure) =>
+      (["preparation", "admission"] as const).map((phase) => ({ closure, phase })),
+    ),
+  )(
+    "guards first-model $phase after a delayed SDK prompt override: $closure",
+    async ({ closure, phase }) => {
       const hookEntered = createDeferredCore();
       const hookRelease = createDeferredCore();
       const preparationEntered = createDeferredCore();
@@ -122,10 +126,24 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       const settled = Promise.allSettled([prompt]);
       await hookEntered.promise;
       session[agentSessionSetPromptPreparation](async () => {
-        preparationEntered.resolve();
-        await preparationRelease.promise;
-        session.setActiveToolsByName(["read_policy"]);
-        session.agent.state.systemPrompt += "\nPermission change: read-only";
+        const waitForUpdate = async () => {
+          preparationEntered.resolve();
+          await preparationRelease.promise;
+        };
+        const update = () => {
+          session.setActiveToolsByName(["read_policy"]);
+          session.agent.state.systemPrompt += "\nPermission change: read-only";
+        };
+        if (phase === "preparation") {
+          await waitForUpdate();
+          update();
+          return undefined;
+        }
+        return async (onAdmitted) => {
+          await waitForUpdate();
+          onAdmitted(update);
+          expect(session.agent.state.isStreaming).toBe(true);
+        };
       });
       hookRelease.resolve();
       // A missing preparation boundary completes the request instead of entering the barrier.
@@ -153,6 +171,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
           reason: { message: "Session prompt preparation is stale after replacement or disposal." },
         });
         expect(requests).toEqual([]);
+        if (phase === "admission") {
+          expect(session.agent.state.systemPrompt).not.toContain("Permission change: read-only");
+        }
       }
     },
   );
@@ -676,6 +697,52 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
     expect(requests).toHaveLength(1);
     expect(session.getSteeringMessages()).toEqual([]);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
+  });
+
+  it("does not answer a steer in place of a failed request", async () => {
+    const requests: Context[] = [];
+    const requestStarted = createDeferredCore();
+    const steerAccepted = createDeferredCore();
+    let failInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        failInitialResponse = () => {
+          const message = {
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "Unknown error (no error details in response)",
+          };
+          stream.push({ type: "error", reason: "error", error: message });
+          stream.end();
+        };
+        requestStarted.resolve();
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "answered only the steer" }]),
+      );
+    });
+    const { session } = await createTestSession();
+    const prompt = session.prompt("first question");
+    await requestStarted.promise;
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(session, "second question", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      onQueueAccepted: () => steerAccepted.resolve(),
+    });
+    await steerAccepted.promise;
+    expect(session.getSteeringMessages()).toEqual(["second question"]);
+
+    failInitialResponse?.();
+    // The run owner retries the failed request; the caller re-queues the steer.
+    await expect(delivery).rejects.toThrow(
+      "active session ended before queued steering message was committed",
+    );
+    await prompt;
+
+    expect(requests).toHaveLength(1);
     expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 

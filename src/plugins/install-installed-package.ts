@@ -9,7 +9,6 @@ import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import {
   buildDirectoryInstallResult,
   defaultLogger,
-  emitSuccessfulPluginInstallSecurityEvent,
   ensureOpenClawExtensions,
   formatUnresolvedOpenClawPeerLinkError,
   loadPluginInstallRuntime,
@@ -18,6 +17,7 @@ import {
   sourceFamilyForInstallPolicyKind,
   sourceFamilyForInstallPolicySource,
   validateOpenClawPackageInstallCompatibility,
+  type PluginInstallRuntime,
 } from "./install-shared.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -32,7 +32,6 @@ import { validatePackageExtensionEntriesForInstall } from "./package-entry-resol
 import { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } from "./plugin-peer-link.js";
 
 type ValidatedPackagePlugin = {
-  manifest: PackageManifest;
   pluginId: string;
   manifestName?: string;
   version?: string;
@@ -43,7 +42,7 @@ type ValidatedPackagePlugin = {
 };
 
 export async function validatePackagePluginInstallSource(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  runtime: PluginInstallRuntime;
   packageDir: string;
   manifest?: PackageManifest;
   expectedPluginId?: string;
@@ -129,11 +128,7 @@ export async function validatePackagePluginInstallSource(params: {
     manifest,
   });
   if (!extensionsResult.ok) {
-    return {
-      ok: false,
-      error: extensionsResult.error,
-      code: extensionsResult.code,
-    };
+    return extensionsResult;
   }
   const extensions = extensionsResult.entries;
 
@@ -188,7 +183,6 @@ export async function validatePackagePluginInstallSource(params: {
   return {
     ok: true,
     plugin: {
-      manifest,
       pluginId,
       manifestName: pkgName || undefined,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
@@ -203,7 +197,7 @@ export async function validatePackagePluginInstallSource(params: {
 }
 
 export async function scanAndLinkInstalledPackage(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  runtime: PluginInstallRuntime;
   installedDir: string;
   additionalDependencyPackageDirs?: string[];
   dependencyScanRootDir?: string;
@@ -267,7 +261,6 @@ export async function scanAndLinkInstalledPackage(params: {
 export async function installPluginFromInstalledPackageDir(
   params: {
     additionalDependencyPackageDirs?: string[];
-    emitSuccessSecurityEvent?: boolean;
     packageDir: string;
     dependencyScanRootDir?: string;
   } & PackageInstallCommonParams,
@@ -311,24 +304,8 @@ export async function installPluginFromInstalledPackageDir(
   if (postInstallError) {
     return postInstallError;
   }
-  const result = buildDirectoryInstallResult({
-    pluginId: validated.plugin.pluginId,
+  return buildDirectoryInstallResult({
+    ...validated.plugin,
     targetDir: params.packageDir,
-    manifestName: validated.plugin.manifestName,
-    version: validated.plugin.version,
-    extensions: validated.plugin.extensions,
-    setup: validated.plugin.setup,
   });
-  if (params.emitSuccessSecurityEvent !== false) {
-    emitSuccessfulPluginInstallSecurityEvent(result, {
-      dryRun: params.dryRun,
-      mode: params.mode ?? "install",
-      sourceFamily: sourceFamilyForInstallPolicyKind(
-        params.installPolicyRequest?.kind,
-        "installed-package",
-      ),
-      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    });
-  }
-  return result;
 }

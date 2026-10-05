@@ -114,15 +114,18 @@ export async function countPendingDescendantRuns(
   return count;
 }
 
-/** Resolves the requester session and normalized origin for a child subagent session. */
-export function resolveRequesterForChildSession(childSessionKey: string): {
+export function resolveRequesterForChildSession(
+  childSessionKey: string,
+  childAgentId?: string,
+): {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
 } | null {
   const resolved = resolveRequesterForChildSessionFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
+    childAgentId,
   );
   if (!resolved) {
     return null;
@@ -134,22 +137,33 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   };
 }
 
-export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
+export function shouldIgnorePostCompletionAnnounceForSession(
+  childSessionKey: string,
+  childAgentId?: string,
+): boolean {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
+    childAgentId,
   );
 }
 
 /** True when the process-local registry still owns an active run for the child session. */
-export function isSubagentSessionRunActive(childSessionKey: string): boolean {
+export function isSubagentSessionRunActive(
+  childSessionKey: string,
+  childAgentId?: string,
+): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
   return isSubagentRunLive(
-    getLatestSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey),
+    getLatestSubagentRunByChildSessionKeyFromRuns(
+      subagentRuns,
+      childSessionKey,
+      undefined,
+      childAgentId,
+    ),
   );
 }
 
-/** Lists process-local runs requested by one session key. */
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
   options?: Parameters<typeof listRunsForRequesterFromRuns>[2],
@@ -158,31 +172,27 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
-/** Returns the preferred child-session run from its scoped readable snapshot. */
-export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
+export function getSubagentRunByChildSessionKey(
+  childSessionKey: string,
+  childAgentId?: string,
+): SubagentRunRecord | null {
   return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-    key,
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+    childSessionKey,
+    childAgentId,
   );
 }
 
-/** Returns the most recently created run for a child session from readable registry state. */
 export function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
+  childAgentId?: string,
 ): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-      key,
+      getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+      childSessionKey,
+      undefined,
+      childAgentId,
     ) ?? null
   );
 }
@@ -196,17 +206,16 @@ export function getLatestSubagentRunByChildSessionKey(
 export function getLatestLiveSubagentRunByChildSessionKey(
   childSessionKey: string,
   matches?: (entry: SubagentRunRecord) => boolean,
+  childAgentId?: string,
 ): SubagentRunRecord | null {
   const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
   // Mutation ownership is process-local; persisted rows can be stale after a replacement.
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsForChildSession(key),
+      getSubagentRunsForChildSession(key, childAgentId),
       key,
       matches,
+      childAgentId,
     ) ?? null
   );
 }

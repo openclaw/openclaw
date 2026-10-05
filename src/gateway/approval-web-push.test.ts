@@ -948,6 +948,7 @@ describe("approval Web Push delivery", () => {
       "profile-policy",
       null,
       tightenedConfig,
+      null,
     );
     expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
   });

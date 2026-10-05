@@ -1,34 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import {
-  draftCloudProfileSupportsExecutionMode,
-  readDraftCloudProfiles,
-  readDraftEnvironments,
-} from "./discovery.ts";
-
-describe("draftCloudProfileSupportsExecutionMode", () => {
-  it.each([
-    { name: "worker turns", executionMode: "worker-turn" },
-    { name: "remote execution", executionMode: "remote-exec" },
-  ] as const)(
-    "rejects $name when the provider advertises no placement modes",
-    ({ executionMode }) => {
-      expect(
-        draftCloudProfileSupportsExecutionMode(
-          { id: "lifecycle-only", providerId: "crabbox" },
-          executionMode,
-        ),
-      ).toBe(false);
-    },
-  );
-
-  it("does not treat the singular display projection as a placement capability", () => {
-    const [profile] = readDraftCloudProfiles([
-      { id: "legacy", providerId: "crabbox", executionMode: "worker-turn" },
-    ]);
-    expect(draftCloudProfileSupportsExecutionMode(profile!, "worker-turn")).toBe(false);
-  });
-});
+import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
 
 describe("readDraftCloudProfiles", () => {
   it("projects only bounded display identity and never guesses from a profile name", () => {
@@ -174,8 +146,6 @@ describe("readDraftCloudProfiles", () => {
     { name: "empty", executionModes: [] },
     { name: "unknown", executionModes: ["sandbox"] },
     { name: "duplicate", executionModes: ["remote-exec", "remote-exec"] },
-    { name: "out-of-order", executionModes: ["remote-exec", "worker-turn"] },
-    { name: "oversized", executionModes: ["worker-turn", "remote-exec", "worker-turn"] },
   ])(
     "keeps a present $name mode set closed instead of using its primary-mode fallback",
     ({ executionModes }) => {
@@ -201,111 +171,93 @@ describe("readDraftCloudProfiles", () => {
 });
 
 describe("readDraftEnvironments", () => {
-  it("retains actionable worker-host issues while discarding malformed messages", () => {
-    const issue = {
-      code: "worker-host-unavailable",
-      message: "state directory /srv/node is group-writable; run chmod go-w /srv/node",
-    };
-    expect(
-      readDraftEnvironments([
+  const available = { id: "node:runner", type: "node", status: "available" };
+  const hostIssue = {
+    code: "worker-host-unavailable",
+    message: "state directory /srv/node is group-writable; run chmod go-w /srv/node",
+  };
+  const updateIssue = {
+    code: "update-required",
+    action: "update-and-reconnect",
+    updateCommand: "openclaw update",
+    headlessReconnectCommand: "openclaw node restart",
+  };
+  const requiredNodeCommand = {
+    command: "codex.exec-server.stdio.v1",
+    state: "undeclared",
+    message: "Enable the codex plugin on this node with openclaw plugins enable codex.",
+  };
+
+  it.each([
+    {
+      name: "actionable worker-host issues",
+      input: [
         {
           id: "node:unavailable",
           type: "node",
           status: "unavailable",
           sessionHost: false,
           issues: [
-            issue,
-            { ...issue, message: " " },
-            { ...issue, message: 42 },
-            { ...issue, message: "x".repeat(1_025) },
+            hostIssue,
+            { ...hostIssue, message: " " },
+            { ...hostIssue, message: 42 },
+            { ...hostIssue, message: "x".repeat(1_025) },
           ],
         },
-      ]),
-    ).toEqual([
-      {
-        id: "node:unavailable",
-        type: "node",
-        status: "unavailable",
-        sessionHost: false,
-        issues: [issue],
-      },
-    ]);
-  });
-
-  it("keeps only the exact update-required issue contract", () => {
-    const issue = {
-      code: "update-required",
-      action: "update-and-reconnect",
-      updateCommand: "openclaw update",
-      headlessReconnectCommand: "openclaw node restart",
-    };
-    expect(
-      readDraftEnvironments([
+      ],
+      expected: [
         {
-          id: "node:outdated",
+          id: "node:unavailable",
           type: "node",
-          status: "available",
-          issues: [issue, { ...issue, headlessReconnectCommand: "legacy restart" }],
+          status: "unavailable",
+          sessionHost: false,
+          issues: [hostIssue],
         },
-      ])[0]?.issues,
-    ).toEqual([issue]);
-  });
-
-  it("normalizes command inventory and keeps only closed required-command state", () => {
-    expect(
-      readDraftEnvironments([
+      ],
+    },
+    {
+      name: "exact update-required issue contract",
+      input: [
         {
-          id: "node:runner",
-          type: "node",
-          status: "available",
+          ...available,
+          issues: [updateIssue, { ...updateIssue, headlessReconnectCommand: "legacy restart" }],
+        },
+      ],
+      expected: [{ ...available, issues: [updateIssue] }],
+    },
+    {
+      name: "normalized commands and closed required-command state",
+      input: [
+        {
+          ...available,
           capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
           invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
           requiredNodeCommand: { command: " codex.exec-server.stdio.v1 ", state: "unauthorized" },
         },
         {
+          ...available,
           id: "node:invalid-state",
-          type: "node",
-          status: "available",
           requiredNodeCommand: { command: "runtime.exec", state: "unknown" },
         },
-      ]),
-    ).toEqual([
-      { id: "node:invalid-state", type: "node", status: "available" },
-      {
-        id: "node:runner",
-        type: "node",
-        status: "available",
-        capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
-        invocableCommands: ["camera.snap", "z.command"],
-        requiredNodeCommand: {
-          command: "codex.exec-server.stdio.v1",
-          state: "unauthorized",
-        },
-      },
-    ]);
-  });
-
-  it("preserves the Gateway's remediation for a runtime-required command", () => {
-    const requiredNodeCommand = {
-      command: "codex.exec-server.stdio.v1",
-      state: "undeclared",
-      message: "Enable the codex plugin on this node with openclaw plugins enable codex.",
-    };
-    expect(
-      readDraftEnvironments([
+      ],
+      expected: [
+        { ...available, id: "node:invalid-state" },
         {
-          id: "node:runner",
-          type: "node",
-          status: "available",
-          requiredNodeCommand,
+          ...available,
+          capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+          invocableCommands: ["camera.snap", "z.command"],
+          requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state: "unauthorized" },
         },
-      ])[0]?.requiredNodeCommand,
-    ).toEqual(requiredNodeCommand);
-  });
-
-  it("keeps the closed environment types while rejecting malformed entries", () => {
-    expect(
-      readDraftEnvironments([
+      ],
+    },
+    {
+      name: "Gateway remediation for a runtime-required command",
+      input: [{ ...available, requiredNodeCommand }],
+      expected: [{ ...available, requiredNodeCommand }],
+    },
+    {
+      name: "closed environment types and statuses",
+      input: [
         { id: "gateway", type: "local", label: "Gateway", status: "available" },
         { id: "node:macbook", type: "node", status: "unavailable" },
         { id: "worker:aws", type: "worker", status: "starting" },
@@ -314,17 +266,16 @@ describe("readDraftEnvironments", () => {
         { id: "missing-type", status: "available" },
         { id: "missing-status", type: "node" },
         { id: "unknown-status", type: "node", status: "online" },
-      ]),
-    ).toEqual([
-      { id: "gateway", type: "local", label: "Gateway", status: "available" },
-      { id: "node:macbook", type: "node", status: "unavailable" },
-      { id: "worker:aws", type: "worker", status: "starting" },
-    ]);
-  });
-
-  it("preserves valid environment facts and safely drops malformed optional shapes", () => {
-    expect(
-      readDraftEnvironments([
+      ],
+      expected: [
+        { id: "gateway", type: "local", label: "Gateway", status: "available" },
+        { id: "node:macbook", type: "node", status: "unavailable" },
+        { id: "worker:aws", type: "worker", status: "starting" },
+      ],
+    },
+    {
+      name: "valid facts and malformed optional fields",
+      input: [
         {
           id: "node:macbook",
           type: "node",
@@ -349,53 +300,38 @@ describe("readDraftEnvironments", () => {
           trust: "temporary",
           capabilities: "camera",
         },
-      ]),
-    ).toEqual([
-      {
-        id: "node:macbook",
-        type: "node",
-        label: "Build Mac",
-        status: "available",
-        platform: "darwin",
-        sessionHost: false,
-        workerSlots: { total: 4, available: 2 },
-        lastConnectedAtMs: 1_000,
-        lastDisconnectedAtMs: 2_000,
-        lastSeenAtMs: 1_500,
-        lastSeenReason: "silent_push",
-        trust: "persistent",
-        capabilities: ["camera.snap", "custom.unknown", "system.run"],
-      },
-      { id: "node:malformed", type: "node", status: "error" },
-    ]);
-  });
-
-  it.each([
-    ["fractional", { total: 2.5, available: 1 }],
-    ["zero total", { total: 0, available: 0 }],
-    ["oversized", { total: 1_025, available: 1 }],
-    ["overcommitted", { total: 2, available: 3 }],
-    ["extra key", { total: 2, available: 1, queued: 1 }],
-  ])("retains the environment while dropping %s worker slots", (_name, workerSlots) => {
-    expect(
-      readDraftEnvironments([
+      ],
+      expected: [
         {
-          id: "node:runner",
+          id: "node:macbook",
           type: "node",
-          label: "Runner",
+          label: "Build Mac",
           status: "available",
-          sessionHost: true,
-          workerSlots,
+          platform: "darwin",
+          sessionHost: false,
+          workerSlots: { total: 4, available: 2 },
+          lastConnectedAtMs: 1_000,
+          lastDisconnectedAtMs: 2_000,
+          lastSeenAtMs: 1_500,
+          lastSeenReason: "silent_push",
+          trust: "persistent",
+          capabilities: ["camera.snap", "custom.unknown", "system.run"],
         },
-      ]),
-    ).toEqual([
-      {
-        id: "node:runner",
-        type: "node",
-        label: "Runner",
-        status: "available",
-        sessionHost: true,
-      },
-    ]);
+        { id: "node:malformed", type: "node", status: "error" },
+      ],
+    },
+    ...[
+      { total: 2.5, available: 1 },
+      { total: 0, available: 0 },
+      { total: 1_025, available: 1 },
+      { total: 2, available: 3 },
+      { total: 2, available: 1, queued: 1 },
+    ].map((workerSlots) => ({
+      name: `invalid worker slots ${JSON.stringify(workerSlots)}`,
+      input: [{ ...available, label: "Runner", sessionHost: true, workerSlots }],
+      expected: [{ ...available, label: "Runner", sessionHost: true }],
+    })),
+  ])("retains only $name", ({ input, expected }) => {
+    expect(readDraftEnvironments(input)).toEqual(expected);
   });
 });

@@ -10,9 +10,41 @@ import {
   supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
   supportsClaudeFastMode,
+  supportsClaudeInHistorySystemMessages,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "./anthropic.js";
+
+describe("supportsClaudeInHistorySystemMessages", () => {
+  it.each([
+    ["claude-opus-5", true],
+    ["claude-opus-5-5", true],
+    ["claude-opus-4-8", true],
+    ["claude-sonnet-5", true],
+    ["claude-sonnet-5-5", true],
+    ["claude-fable-5", true],
+    ["claude-fable-5-1", true],
+    ["claude-mythos-5", true],
+    ["claude-mythos-5-1", true],
+    ["opus", true],
+    ["sonnet", true],
+    ["anthropic/claude-opus-4.8", true],
+    ["claude-opus-4-7", false],
+    ["claude-sonnet-4-6", false],
+    ["claude-haiku-4-5", false],
+    ["claude-mythos-preview", false],
+    ["claude-opus-50", false],
+    ["", false],
+  ])("resolves the in-history protocol for %s to %s", (id, expected) => {
+    expect(supportsClaudeInHistorySystemMessages({ id })).toBe(expected);
+    expect(
+      supportsClaudeInHistorySystemMessages({
+        id: "deployment",
+        params: { canonicalModelId: id },
+      }),
+    ).toBe(expected);
+  });
+});
 
 describe("bindsClaudeThinkingPrefix", () => {
   it.each([

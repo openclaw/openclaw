@@ -1,3 +1,7 @@
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -22,7 +26,7 @@ import {
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
+import { CHAT_OUTBOX_RETRY_DEFAULT_MS, retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   clearPendingQueueItemsForRun,
@@ -190,10 +194,14 @@ export async function readCurrentStoredChatHistory(
         : {}),
     };
     try {
-      history = await client.request<ChatHistoryResult>("chat.history", {
-        ...request,
-        limit: 1000,
-      });
+      history = await client.request<ChatHistoryResult>(
+        "chat.history",
+        {
+          ...request,
+          limit: 1000,
+        },
+        { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+      );
       // Custody receipts are exact but display pages contain only twenty inputs.
       // Follow their bounded cursor instead of stranding an older accepted head.
       while (
@@ -206,14 +214,23 @@ export async function readCurrentStoredChatHistory(
           return "blocked";
         }
         pendingBefore = history.pendingInputs.nextBefore;
-        history = await client.request<ChatHistoryResult>("chat.history", {
-          ...request,
-          limit: 20,
-          pendingBefore,
-        });
+        history = await client.request<ChatHistoryResult>(
+          "chat.history",
+          {
+            ...request,
+            limit: 20,
+            pendingBefore,
+          },
+          { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+        );
       }
     } catch (err) {
-      const retryDelayMs = retryableGatewayDelayMs(err);
+      // A receipt read is safe to retry. Its deadline says nothing about whether
+      // the original send arrived, and must not leave the FIFO lane stranded.
+      const retryDelayMs =
+        err instanceof GatewayProtocolRequestTimeoutError
+          ? CHAT_OUTBOX_RETRY_DEFAULT_MS
+          : retryableGatewayDelayMs(err);
       if (retryDelayMs !== null) {
         if (isCurrent()) {
           scheduleRetry(retryDelayMs);

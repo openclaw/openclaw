@@ -176,9 +176,9 @@ function selectConfigMutationSecrets(
 
   // Inspect only surviving values, never discarded batch assignments. Registry-owned
   // fields above also preserve explicit sibling-ref precedence over inline fallbacks.
-  const visit = (value: unknown, rootPath: string[]): void => {
+  for (const rootPath of paths) {
     visitConfigValueTree(
-      value,
+      getAtPath(config, rootPath).value,
       (candidate, path) => {
         if (ownedPaths.some((ownedPath) => pathContains(ownedPath, path))) {
           return false;
@@ -192,9 +192,6 @@ function selectConfigMutationSecrets(
       },
       rootPath,
     );
-  };
-  for (const path of paths) {
-    visit(getAtPath(config, path).value, path);
   }
   const refs = [...refsByKey.values()];
   return {
@@ -247,20 +244,6 @@ function collectDryRunStaticErrorsForSkippedExecRefs(params: {
     }
     return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
   });
-}
-
-function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {
-  refsToResolve: SecretRef[];
-  skippedExecRefs: SecretRef[];
-} {
-  const refsToResolve: SecretRef[] = [];
-  const skippedExecRefs: SecretRef[] = [];
-  for (const ref of params.refs) {
-    (ref.source === "exec" && !params.allowExecInDryRun ? skippedExecRefs : refsToResolve).push(
-      ref,
-    );
-  }
-  return { refsToResolve, skippedExecRefs };
 }
 
 function collectStrictConfigErrors(
@@ -429,10 +412,11 @@ export async function validateConfigMutation(params: {
       ((operation.inputMode === "json" || operation.inputMode === "builder") &&
         operation.schemaValidated !== true),
   );
-  const { refsToResolve, skippedExecRefs } = selectDryRunRefsForResolution({
-    refs: checksRefs ? selection.refs : [],
-    allowExecInDryRun: Boolean(options.allowExec),
-  });
+  const refsToResolve: SecretRef[] = [];
+  const skippedExecRefs: SecretRef[] = [];
+  for (const ref of checksRefs ? selection.refs : []) {
+    (ref.source === "exec" && !options.allowExec ? skippedExecRefs : refsToResolve).push(ref);
+  }
   const errors: ConfigSetDryRunError[] = modelCheck.errors.map((message) => ({
     kind: "model",
     message,

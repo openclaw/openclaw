@@ -74,6 +74,10 @@ Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
+Candidate commands keep the qualified Node first among Node providers on `PATH`,
+while preserving launcher-only prefixes such as scoped pnpm shims ahead of it.
+This also applies when the selected Node directory was already on `PATH`; its
+package-manager executables do not displace those scoped launchers.
 
 Before activating a package or Git update, the updater also checks discoverable
 managed Gateways that share the physical installation. An observed live sibling
@@ -395,8 +399,9 @@ the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
 The packaged lifecycle restores the matching precompiled fs-safe dependency
 when that retry omitted it. It uses the version declared by the installed
-fs-safe package and does not run dependency build scripts. A working native
-binding needs no extra download. Unsupported hosts or failed downloads produce
+fs-safe package and does not run dependency build scripts. Repair works on Node
+and Bun and preserves any existing native package. A working native binding
+needs no extra download. Unsupported hosts or failed downloads produce
 a warning and allow installation to finish; explicitly disabling fs-safe native
 support also skips this repair.
 

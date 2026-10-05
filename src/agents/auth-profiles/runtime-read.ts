@@ -157,6 +157,30 @@ type PreparedAuthProfileStoreReads = {
   assertCurrent: () => void;
 };
 
+function captureReadOptions(
+  options: LoadAuthProfileStoreOptions | undefined,
+): LoadAuthProfileStoreOptions {
+  const discovery = options?.externalCli;
+  return {
+    ...options,
+    readOnly: true,
+    externalCli:
+      discovery?.mode === "scoped"
+        ? {
+            ...discovery,
+            ...(discovery.providerIds ? { providerIds: [...discovery.providerIds] } : {}),
+            ...(discovery.profileIds ? { profileIds: [...discovery.profileIds] } : {}),
+          }
+        : discovery,
+    ...(options?.externalCliProviderIds
+      ? { externalCliProviderIds: [...options.externalCliProviderIds] }
+      : {}),
+    ...(options?.externalCliProfileIds
+      ? { externalCliProfileIds: [...options.externalCliProfileIds] }
+      : {}),
+  };
+}
+
 /** Bind to the canonical store scope; this reader owns no mutable runtime or lifecycle state. */
 export function createAuthProfileStoreRuntimeReader({
   isEnvOnlyAuthProfileRuntime,
@@ -167,18 +191,6 @@ export function createAuthProfileStoreRuntimeReader({
   loadRuntimeAuthProfileStore,
   captureScope,
 }: RuntimeReadHost) {
-  /**
-   * Synchronous SDK compatibility. Runtime callers should await loadAuthProfileStoreForRuntimeAsync;
-   * transaction-bound SDK callers retain this entrypoint until their own async cutover.
-   */
-  function loadAuthProfileStoreForRuntime(
-    agentDir?: string,
-    options?: LoadAuthProfileStoreOptions,
-    env?: NodeJS.ProcessEnv,
-  ): AuthProfileStore {
-    return loadRuntimeAuthProfileStore(agentDir, options, env);
-  }
-
   /** Capture sources once; the store owner decides which persisted facts it needs. */
   function withPreparedAuthProfileStoreReads(
     agentDir: string | undefined,
@@ -218,26 +230,10 @@ export function createAuthProfileStoreRuntimeReader({
     const inheritedAuthDir = inheritedDir
       ? path.dirname(resolveAgentAuthPath(inheritedDir))
       : undefined;
-    const externalCli = scopedOptions?.externalCli;
-    const capturedOptions: LoadAuthProfileStoreOptions = {
+    const capturedOptions = captureReadOptions({
       ...scopedOptions,
       inheritedAuthDir,
-      readOnly: true,
-      externalCli:
-        externalCli?.mode === "scoped"
-          ? {
-              ...externalCli,
-              ...(externalCli.providerIds ? { providerIds: [...externalCli.providerIds] } : {}),
-              ...(externalCli.profileIds ? { profileIds: [...externalCli.profileIds] } : {}),
-            }
-          : externalCli,
-      ...(scopedOptions?.externalCliProviderIds
-        ? { externalCliProviderIds: [...scopedOptions.externalCliProviderIds] }
-        : {}),
-      ...(scopedOptions?.externalCliProfileIds
-        ? { externalCliProfileIds: [...scopedOptions.externalCliProfileIds] }
-        : {}),
-    };
+    });
     const profileId = capturedOptions.profileId;
     const localMutationOwner: RuntimeAuthProfileStoreMutationOwner | undefined = selectedAgentPath
       ? {
@@ -477,25 +473,7 @@ export function createAuthProfileStoreRuntimeReader({
       const scopedRequest = inCapturedScope(() =>
         resolveRuntimeAuthProfileLoadOptions(requestOptions),
       );
-      const discovery = scopedRequest?.externalCli;
-      const requestedOptions: LoadAuthProfileStoreOptions = {
-        ...scopedRequest,
-        readOnly: true,
-        externalCli:
-          discovery?.mode === "scoped"
-            ? {
-                ...discovery,
-                ...(discovery.providerIds ? { providerIds: [...discovery.providerIds] } : {}),
-                ...(discovery.profileIds ? { profileIds: [...discovery.profileIds] } : {}),
-              }
-            : discovery,
-        ...(scopedRequest?.externalCliProviderIds
-          ? { externalCliProviderIds: [...scopedRequest.externalCliProviderIds] }
-          : {}),
-        ...(scopedRequest?.externalCliProfileIds
-          ? { externalCliProfileIds: [...scopedRequest.externalCliProfileIds] }
-          : {}),
-      };
+      const requestedOptions = captureReadOptions(scopedRequest);
       let databasePath: string;
       let reader:
         | Pick<ReturnType<typeof prepareAgentAuthProfileRowsRead>, "read" | "assertCurrent">
@@ -677,7 +655,12 @@ export function createAuthProfileStoreRuntimeReader({
   }
 
   return {
-    loadAuthProfileStoreForRuntime,
+    // Transaction-bound SDK callers retain the synchronous owner until their async cutover.
+    loadAuthProfileStoreForRuntime: (
+      agentDir?: string,
+      options?: LoadAuthProfileStoreOptions,
+      env?: NodeJS.ProcessEnv,
+    ): AuthProfileStore => loadRuntimeAuthProfileStore(agentDir, options, env),
     loadAuthProfileStoreForRuntimeAsync,
     withPreparedAuthProfileStoreReads,
   };

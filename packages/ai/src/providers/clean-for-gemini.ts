@@ -1,3 +1,4 @@
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import { evaluateSchemaWalk, type SchemaWalk } from "./schema-walk.js";
@@ -49,27 +50,18 @@ function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknow
 
 // Google requires enum entries as strings even when the declared schema type is numeric or
 // boolean. Keep the type intact so tool argument generation and runtime validation still agree.
-function stringifyGeminiEnumValue(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return String(value);
-  }
-  return undefined;
-}
-
 function cleanGeminiEnumValues(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const values = value.flatMap((entry) => {
-    const stringified = stringifyGeminiEnumValue(entry);
-    return stringified === undefined ? [] : [stringified];
-  });
+  const values = value
+    .filter(
+      (entry) =>
+        typeof entry === "string" ||
+        typeof entry === "boolean" ||
+        (typeof entry === "number" && Number.isFinite(entry)),
+    )
+    .map(String);
   const unique = [...new Set(values)];
   return unique.length > 0 ? unique : undefined;
 }
@@ -150,7 +142,7 @@ function extendSchemaDefs(
     return defs;
   }
 
-  const next = defs ? new Map(defs) : new Map<string, unknown>();
+  const next = new Map(defs);
   if (defsEntry) {
     for (const [key, value] of Object.entries(defsEntry)) {
       next.set(key, value);
@@ -164,20 +156,13 @@ function extendSchemaDefs(
   return next;
 }
 
-function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
-}
-
 function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
   if (!defs) {
     return undefined;
   }
-  const match = ref.match(/^#\/(?:\$defs|definitions)\/(.+)$/);
-  if (!match) {
-    return undefined;
-  }
-  const name = decodeJsonPointerSegment(match[1] ?? "");
-  if (!name) {
+  const tokens = parseLocalSchemaRefPointer(ref);
+  const [table, name] = tokens ?? [];
+  if (tokens?.length !== 2 || (table !== "$defs" && table !== "definitions") || !name) {
     return undefined;
   }
   return defs.get(name);
@@ -296,7 +281,7 @@ function* cleanSchemaForGeminiWithDefs(
 
       const resolved = tryResolveLocalRef(refValue, nextDefs);
       if (resolved) {
-        const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+        const nextRefStack = new Set(refStack);
         nextRefStack.add(refValue);
 
         // Reference strings own expansion cycles; raw descent starts a new segment.
@@ -322,35 +307,24 @@ function* cleanSchemaForGeminiWithDefs(
       return result;
     }
 
-    const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
-    const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
-    let cleanedAnyOf: unknown[] | undefined;
-    if (hasAnyOf) {
-      const variants = obj.anyOf as unknown[];
-      cleanedAnyOf = [];
-      yield cleanSchemaArray(variants, nextDefs, refStack, ancestors, cleanedAnyOf);
-    }
-    let cleanedOneOf: unknown[] | undefined;
-    if (hasOneOf) {
-      const variants = obj.oneOf as unknown[];
-      cleanedOneOf = [];
-      yield cleanSchemaArray(variants, nextDefs, refStack, ancestors, cleanedOneOf);
-    }
-
-    if (hasAnyOf) {
-      const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf ?? [] });
-      if (simplified.kind === "simplified") {
-        return simplified.value;
+    const unions: { anyOf?: unknown[]; oneOf?: unknown[] } = {};
+    for (const key of ["anyOf", "oneOf"] as const) {
+      const variants = obj[key];
+      if (Array.isArray(variants)) {
+        const cleaned: unknown[] = [];
+        yield cleanSchemaArray(variants, nextDefs, refStack, ancestors, cleaned);
+        unions[key] = cleaned;
       }
-      cleanedAnyOf = simplified.value;
     }
-
-    if (hasOneOf) {
-      const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf ?? [] });
-      if (simplified.kind === "simplified") {
-        return simplified.value;
+    for (const key of ["anyOf", "oneOf"] as const) {
+      const variants = unions[key];
+      if (variants) {
+        const simplified = simplifyUnionVariants({ obj, variants });
+        if (simplified.kind === "simplified") {
+          return simplified.value;
+        }
+        unions[key] = simplified.value;
       }
-      cleanedOneOf = simplified.value;
     }
 
     const cleaned: Record<string, unknown> = {};
@@ -373,7 +347,7 @@ function* cleanSchemaForGeminiWithDefs(
         continue;
       }
 
-      if (key === "type" && (hasAnyOf || hasOneOf)) {
+      if (key === "type" && (unions.anyOf || unions.oneOf)) {
         continue;
       }
       if (
@@ -407,10 +381,8 @@ function* cleanSchemaForGeminiWithDefs(
         } else {
           cleaned[key] = value;
         }
-      } else if (key === "anyOf" && Array.isArray(value)) {
-        cleaned[key] = cleanedAnyOf;
-      } else if (key === "oneOf" && Array.isArray(value)) {
-        cleaned[key] = cleanedOneOf;
+      } else if ((key === "anyOf" || key === "oneOf") && Array.isArray(value)) {
+        cleaned[key] = unions[key];
       } else if (key === "allOf" && Array.isArray(value)) {
         const result: unknown[] = [];
         yield cleanSchemaArray(value, nextDefs, refStack, ancestors, result);

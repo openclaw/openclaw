@@ -9,15 +9,13 @@ import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
 
-type ProviderEndpointClass = string;
-type ProviderRequestCapabilities = AiProviderRequestCapabilities;
 type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
   modelId?: string;
   baseUrl?: string;
-  endpointClass: ProviderEndpointClass;
+  endpointClass: string;
   knownProviderFamily: string;
   supportsNativeStreamingUsageCompat?: boolean;
   supportsOpenAICompletionsStreamingUsageCompat?: boolean;
@@ -42,7 +40,7 @@ type OpenAICompletionsCompatDefaults = {
 };
 
 type DetectedOpenAICompletionsCompat = {
-  capabilities: ProviderRequestCapabilities;
+  capabilities: AiProviderRequestCapabilities;
   defaults: OpenAICompletionsCompatDefaults;
 };
 
@@ -94,28 +92,21 @@ export function isOpenAICodexResponsesModel(model: {
 
 function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
   const trimmed = typeof baseUrl === "string" ? baseUrl.trim() : "";
-  if (!trimmed) {
+  const url = URL.parse(trimmed);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return false;
   }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return false;
-    }
-    if (url.hostname.toLowerCase() !== "chatgpt.com") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
-    return [
-      "/backend-api",
-      "/backend-api/v1",
-      "/backend-api/codex",
-      "/backend-api/codex/v1",
-      "/backend-api/codex/responses",
-    ].includes(pathname);
-  } catch {
+  if (url.hostname.toLowerCase() !== "chatgpt.com") {
     return false;
   }
+  const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
+  return [
+    "/backend-api",
+    "/backend-api/v1",
+    "/backend-api/codex",
+    "/backend-api/codex/v1",
+    "/backend-api/codex/responses",
+  ].includes(pathname);
 }
 
 export function usesNativeOpenAICodexResponsesBackend(model: {
@@ -265,7 +256,7 @@ export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
     compat?: { supportsStore?: boolean } | null;
   },
-  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
 ): DetectedOpenAICompletionsCompat {
   const capabilities = (
     resolveCapabilities ?? ((input) => resolveModelProviderRequestCapabilities(input, model))
@@ -312,7 +303,7 @@ function resolveSessionAffinity(
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat">,
-  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
   const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);
   const configured = model.compat;

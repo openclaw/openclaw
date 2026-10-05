@@ -1,9 +1,7 @@
 // Covers command-session resolution for a yielded parent whose children complete
 // after its transcript was admitted: the parent generation must survive.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   appendTranscriptEvent,
@@ -11,26 +9,18 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSession } from "./session.js";
 
 describe("resolveSession with a yielded running parent", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-yielded-parent-");
   let stateDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-yielded-parent-"));
+    stateDir = sessionDirs.make();
     storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("keeps the parent session generation across sibling completions", async () => {
@@ -83,7 +73,7 @@ describe("resolveSession with a yielded running parent", () => {
       },
     );
 
-    const first = resolveSession({ cfg, sessionKey, agentId });
+    const first = await resolveSession({ cfg, sessionKey, agentId });
     expect(first.sessionId).toBe(parentSessionId);
 
     // The first completion's prompt admission lands after the registry row.
@@ -96,7 +86,7 @@ describe("resolveSession with a yielded running parent", () => {
       endedAt: yieldedAt,
     });
 
-    const second = resolveSession({ cfg, sessionKey, agentId });
+    const second = await resolveSession({ cfg, sessionKey, agentId });
     expect(second.sessionId).toBe(parentSessionId);
     expect(second.isNewSession).toBe(false);
     expect(second.previousSessionId).toBeUndefined();

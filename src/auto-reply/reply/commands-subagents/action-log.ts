@@ -1,16 +1,15 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { stripToolMessages } from "../../../agents/tools/chat-history-text.js";
+import {
+  extractStoredAssistantText,
+  stripToolMessages,
+} from "../../../agents/tools/chat-history-text.js";
 import { bindAgentToolGatewayRequest } from "../../../agents/tools/in-process-gateway.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-import {
-  type ChatMessage,
-  type SubagentsCommandContext,
-  formatLogLines,
-  resolveSubagentEntryForToken,
-} from "./shared.js";
+import { type SubagentsCommandContext, resolveSubagentEntryForToken } from "./shared.js";
 
 export async function handleSubagentsLogAction(
   ctx: SubagentsCommandContext,
@@ -43,7 +42,17 @@ export async function handleSubagentsLogAction(
   });
   const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
   const filtered = includeTools ? rawMessages : stripToolMessages(rawMessages);
-  const lines = formatLogLines(filtered as ChatMessage[]);
+  const lines: string[] = [];
+  for (const message of filtered as Array<{ role?: unknown; content?: unknown }>) {
+    const assistant = message.role === "assistant";
+    const text = extractTextFromChatContent(
+      assistant ? extractStoredAssistantText(message) : message.content,
+    );
+    if (!text) {
+      continue;
+    }
+    lines.push(`${assistant ? "Assistant" : "User"}: ${text}`);
+  }
   const header = `📜 Subagent log: ${formatRunLabel(targetResolution.entry)}`;
   if (lines.length === 0) {
     return commandReply(`${header}\n(no messages)`);

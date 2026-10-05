@@ -1,4 +1,3 @@
-/** Session awareness and transcript mirroring for direct cron delivery. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -86,22 +85,17 @@ export function isSameSessionKey(left: string | undefined, right: string | undef
 }
 
 export function resolveCronAwarenessText(params: {
-  outputText?: string;
-  synthesizedText?: string;
-  deliveryPayloads?: ReplyPayload[];
-  outboundPayloads?: NormalizedOutboundPayload[];
+  deliveryPayloads: ReplyPayload[];
+  outboundPayloads: NormalizedOutboundPayload[];
 }): string | undefined {
-  if (params.outboundPayloads?.length) {
+  if (params.outboundPayloads.length) {
     const projection = projectDeliveredDirectCronPayloadsForMirror(params.outboundPayloads);
     const projectedText = resolveDirectCronTranscriptMirrorText(projection);
     if (projectedText) {
       return projectedText;
     }
   }
-  return params.deliveryPayloads
-    ? pickLastNonEmptyTextFromPayloads(params.deliveryPayloads)
-    : (normalizeOptionalString(params.outputText) ??
-        normalizeOptionalString(params.synthesizedText));
+  return pickLastNonEmptyTextFromPayloads(params.deliveryPayloads);
 }
 
 export function formatTargetCronDeliveryFailureAwarenessText(params: {
@@ -395,7 +389,6 @@ function resolveCronMessageToolAwarenessTarget(params: {
   };
 }
 
-/** Queues target-session context awareness for cron deliveries made via message tool. */
 export async function queueCronMessageToolDeliveryAwareness(params: {
   cfg: OpenClawConfig;
   runSessionKey: string;
@@ -507,7 +500,7 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
   try {
     const storePath = params.mirror.storePath;
     const initial = storePath
-      ? loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
+      ? await loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
       : undefined;
     const expectedSessionId = params.mirror.expectedSessionId ?? initial?.sessionId;
     const expectedLifecycleRevision =
@@ -534,8 +527,9 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
           : undefined,
       ],
       signal: params.abortSignal,
-      assertAllowed: () => {
-        const latest = loadCronSessionEntryLatest(storePath, params.mirror.sessionKey);
+      assertAllowed: async (signal) => {
+        const latest = await loadCronSessionEntryLatest(storePath, params.mirror.sessionKey);
+        signal.throwIfAborted();
         if (
           latest?.sessionId !== expectedSessionId ||
           (expectedLifecycleRevision !== undefined &&

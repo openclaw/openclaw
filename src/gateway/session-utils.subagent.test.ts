@@ -7,10 +7,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import * as subagentRegistryState from "../agents/subagents/registry/subagent-registry-state.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { canonicalSubagentRunFixtures } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunFixture } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -61,16 +63,16 @@ describe("session list subagent metadata", () => {
   afterEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
     await closeOpenClawStateDatabaseAsync();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   const cfg = {
     session: { mainKey: "main" },
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   } as OpenClawConfig;
 
   function listSubagentSessions(
@@ -173,16 +175,17 @@ describe("session list subagent metadata", () => {
             generation: 2,
             requesterSessionKey: key("unrelated"),
           };
-          subagentRegistryState.persistSubagentRunsToDiskOrThrow(
-            new Map([[replacement.runId, replacement]]),
-            [replacement.runId],
-          );
+          persistRegistryFixture(new Map([[replacement.runId, replacement]]), [replacement.runId]);
           expect((await read(child)).hasActiveSubagentRun).toBe(false);
           expect((await read(movedRoot)).childSessions).toBeUndefined();
           expect((await read(navigation)).childSessions).toBeUndefined();
 
-          moved.execution.endedAt = now - 29 * 60_000;
-          subagentRuns.commitOwnership(moved);
+          const recent = {
+            ...moved,
+            execution: { ...moved.execution, endedAt: now - 29 * 60_000 },
+          };
+          subagentRuns.set(recent.runId, recent);
+          subagentRuns.commitOwnership(recent);
           expect((await read(movedRoot)).childSessions).toEqual([child]);
           expect((await read(movedRoot, now + 2 * 60_000)).childSessions).toBeUndefined();
           await deleteSessionEntryLifecycle({
@@ -224,7 +227,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-controlled-child-dual-owner",
       childSessionKey,
       controllerSessionKey: controlParentKey,
@@ -267,7 +270,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-followup-new",
       childSessionKey: "agent:main:subagent:followup",
       controllerSessionKey: "agent:main:main",
@@ -304,7 +307,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-stale-active",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -312,7 +315,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 4_500,
       model: "openai/gpt-5.4",
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-current-ended",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -404,7 +407,7 @@ describe("session list subagent metadata", () => {
   });
 
   test("does not reattach stale terminal store-only child links", async () => {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     const now = Date.now();
     const staleAt = now - 2 * 60 * 60_000;
     const store: Record<string, SessionEntry> = {
@@ -432,7 +435,7 @@ describe("session list subagent metadata", () => {
   });
 
   test("does not reattach stale orphan store-only child links without lifecycle fields", async () => {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     const now = Date.now();
     const staleAt = now - 2 * 60 * 60_000;
     const store: Record<string, SessionEntry> = {
@@ -467,7 +470,7 @@ describe("session list subagent metadata", () => {
         [parentKey]: { sessionId: "parent", updatedAt: now },
         [childKey]: { sessionId: "child", updatedAt: now - 1 },
       };
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: "retained-child",
         childSessionKey: childKey,
         requesterSessionKey: parentKey,
@@ -505,7 +508,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-timeout",
       childSessionKey: "agent:main:subagent:timeout",
       controllerSessionKey: "agent:main:main",

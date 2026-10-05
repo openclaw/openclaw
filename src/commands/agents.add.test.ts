@@ -160,7 +160,7 @@ describe("agents add command", () => {
     hasTerminal.mockReset().mockReturnValue(true);
     prepareAuth.mockReset();
     persistAuth.mockReset().mockImplementation(persistAuthProfileBatch);
-    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+    setConfigSnapshot({ agents: { entries: { main: {} } } });
   });
 
   async function withState(
@@ -317,7 +317,7 @@ describe("agents add command", () => {
   });
 
   it("keeps guided JSON stdout isolated while wizard logs and UI use stderr", async () => {
-    const config = { agents: { entries: { work: { id: "work" } } } };
+    const config = { agents: { entries: { work: {} } } };
     setConfigSnapshot(config);
     useWizard(["/tmp/workspace-work"], [true, false]);
     setupChannels.mockImplementationOnce(async (nextConfig, wizardRuntime, _prompter, options) => {
@@ -359,7 +359,7 @@ describe("agents add command", () => {
   });
 
   it("surfaces the canonical main gate before guided auth or workspace side effects", async () => {
-    setConfigSnapshot({ agents: { entries: { robby: { id: "robby" } } } });
+    setConfigSnapshot({ agents: { entries: { robby: {} } } });
     const prompter = useWizard();
     creationGate.mockResolvedValueOnce({
       status: "error",
@@ -555,7 +555,7 @@ describe("agents add command", () => {
     async (failurePoint) => {
       await withState("auth-existing", async ({ workspaceDir, agentDir }) => {
         setConfigSnapshot({
-          agents: { entries: { work: { id: "work", workspace: workspaceDir, agentDir } } },
+          agents: { entries: { work: { workspace: workspaceDir, agentDir } } },
         });
         const wizard = useWizard([workspaceDir], [true, true]);
         stageGuidedAuth();
@@ -580,7 +580,7 @@ describe("agents add command", () => {
 
   it("passes canonical created config to fresh-agent post-write hooks", async () => {
     const persistedConfig = {
-      agents: { entries: { work: { id: "work", workspace: "/tmp/canonical-workspace" } } },
+      agents: { entries: { work: { workspace: "/tmp/canonical-workspace" } } },
       plugins: { installs: {} },
     };
     const hook = vi.fn(async () => {});
@@ -622,7 +622,7 @@ describe("agents add command", () => {
   });
 
   it("does not commit an existing-agent update when workspace provisioning fails", async () => {
-    const config = { agents: { entries: { work: { id: "work" } } } };
+    const config = { agents: { entries: { work: {} } } };
     setConfigSnapshot(config);
     useWizard(["/tmp/workspace-work"], [true, false]);
     ensureWorkspace.mockRejectedValueOnce(new Error("controlled mkdir failure"));

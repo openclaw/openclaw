@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -10,6 +9,7 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery/main-session-recovery-admission.js";
@@ -24,7 +24,7 @@ vi.mock("./main-session-recovery/main-session-recovery-owner-release.js", () => 
     recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-command-owner-");
 const sessionKey = "agent:main:main";
 
 afterEach(() => {
@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe("agent command restart recovery ownership", () => {
   function createTarget() {
-    const storePath = path.join(tempDirs.make("openclaw-agent-command-owner-"), "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     return {
       sessionAgentId: "main",
       isNewSession: false,
@@ -327,9 +327,16 @@ describe("agent command restart recovery ownership", () => {
     }
   });
 
-  it.each(["before preparation", "during claim"] as const)(
-    "keeps requester settlement pending when recovery starts %s",
-    async (timing) => {
+  it.each([
+    ["subagent_settle", "before preparation", false],
+    ["subagent_settle", "during claim", false],
+    ["subagent_announce", "before preparation", false],
+    ["subagent_announce", "during claim", false],
+    ["subagent_settle", "before preparation", true],
+    ["subagent_announce", "before preparation", true],
+  ] as const)(
+    "keeps a requester %s turn pending when recovery starts %s (same source: %s)",
+    async (sourceTool, timing, sameSource) => {
       const target = createTarget();
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       await write(target, {
@@ -383,7 +390,7 @@ describe("agent command restart recovery ownership", () => {
         mode: "claim",
         opts: {
           runId: "settle-turn",
-          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+          inputProvenance: { kind: "inter_session", sourceTool },
         } as AgentCommandOpts,
         prepare,
         run,
@@ -398,13 +405,23 @@ describe("agent command restart recovery ownership", () => {
           settled: false,
           executions: 0,
         });
-        await write(target, { sessionId: target.sessionId, updatedAt: 300, status: "done" });
+        await write(target, {
+          sessionId: target.sessionId,
+          updatedAt: 300,
+          status: "done",
+          restartRecoveryTerminalRunIds: [sameSource ? "settle-turn" : "another-source"],
+        });
         owner!.release();
-        await expect(wake).resolves.toBe("consolidated final");
-        expect(run).toHaveBeenCalledOnce();
-        expect(run).toHaveBeenCalledWith(
-          expect.objectContaining({ sessionEntry: expect.objectContaining({ status: "done" }) }),
-        );
+        if (sameSource) {
+          await expect(wake).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+          expect(run).not.toHaveBeenCalled();
+        } else {
+          await expect(wake).resolves.toBe("consolidated final");
+          expect(run).toHaveBeenCalledOnce();
+          expect(run).toHaveBeenCalledWith(
+            expect.objectContaining({ sessionEntry: expect.objectContaining({ status: "done" }) }),
+          );
+        }
         for (const result of prepare.mock.results) {
           expect((await result.value).runLease.release).toHaveBeenCalledOnce();
         }
@@ -415,16 +432,58 @@ describe("agent command restart recovery ownership", () => {
     },
   );
 
-  it.each([
-    "cancelled",
-    "cancelled during refresh",
-    "cancelled during claim",
-    "replaced",
-    "rerouted",
-    "tombstoned",
-    "ownerless",
-    "generation rotated",
-  ] as const)("does not execute a %s requester settle turn", async (outcome) => {
+  it("rejects an ordinary claim while a live recovery owner holds the requester", async () => {
+    const target = createTarget();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await write(target, {
+      sessionId: target.sessionId,
+      updatedAt: 200,
+      status: "running",
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },
+    });
+    const owner = await beginSessionWorkAdmission({
+      scope: target.storePath,
+      identities: [sessionKey, target.sessionId],
+      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+      assertAllowed: () => {},
+    });
+    const run = vi.fn();
+    try {
+      await expect(
+        runWithAgentCommandRecoveryOwner({
+          lifecycleGeneration,
+          mode: "claim",
+          opts: { runId: "ordinary-turn" } as AgentCommandOpts,
+          prepare: async () => ({ ...target, runLease: { release: vi.fn(async () => {}) } }),
+          run,
+        }),
+      ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      owner.release();
+    }
+  });
+
+  it.each(
+    (
+      [
+        "cancelled",
+        "cancelled during refresh",
+        "cancelled during claim",
+        "replaced",
+        "rerouted",
+        "tombstoned",
+        "ownerless",
+        "generation rotated",
+      ] as const
+    ).flatMap((outcome) =>
+      (["subagent_settle", "subagent_announce"] as const).map(
+        (sourceTool) => [outcome, sourceTool] as const,
+      ),
+    ),
+  )("does not execute a %s requester %s turn", async (outcome, sourceTool) => {
     const target = createTarget();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const entry: SessionEntry = {
@@ -469,7 +528,7 @@ describe("agent command restart recovery ownership", () => {
       opts: {
         runId: "settle-turn",
         abortSignal: controller.signal,
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        inputProvenance: { kind: "inter_session", sourceTool },
       } as AgentCommandOpts,
       prepare: async () => {
         preparationCount += 1;

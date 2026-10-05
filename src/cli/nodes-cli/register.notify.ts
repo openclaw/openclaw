@@ -11,7 +11,6 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node notification command. */
 export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
     nodes

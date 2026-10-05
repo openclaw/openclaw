@@ -10,6 +10,7 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
+import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
@@ -61,7 +62,6 @@ import {
   loadAgentFileContent,
   overwriteAgentFile,
   reloadAgentFile,
-  retainAgentFileDrafts,
   resetAgentFile,
   resetAgentFiles,
   saveAgentFile,
@@ -72,7 +72,6 @@ import {
   saveIdentityDraft,
   selectIdentityAvatar,
   setIdentityDraftField,
-  togglePinnedAgent,
 } from "./identity-actions.ts";
 import { createAgentModelActions } from "./model-config.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
@@ -82,12 +81,11 @@ import {
   syncAgentsCanonicalLocation,
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
+import { AgentSelectionDrafts } from "./selection-drafts.ts";
 import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 import { renderAgents, renderAgentsPageHeader } from "./view.ts";
 
-type AgentsRequestSources = Partial<
-  Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
->;
+type AgentsRequestSources = Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>;
 
 class AgentsPage
   extends OpenClawLightDomElement
@@ -126,9 +124,11 @@ class AgentsPage
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
   readonly agentFileWriteRevisions = new Map<string, number>();
-  private readonly retainedFileDrafts = new Map<string, RetainedAgentFileDrafts>();
   @state() agentIdentityLoading = false;
   @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
+  private readonly selectionDrafts = new AgentSelectionDrafts(this, () =>
+    this.resetSelectionState(),
+  );
   private readonly identityAvatarLoader = new IdentityAvatarController(this);
   @state() identitySaving = false;
   @state() identityError: string | null = null;
@@ -169,7 +169,8 @@ class AgentsPage
       this.invalidateTransientRequests();
       this.resetModelCatalog();
     },
-    onSnapshot: ({ becameAvailable, becameConnected }) => {
+    onSnapshot: ({ snapshot: gatewaySnapshot, becameAvailable, becameConnected }) => {
+      this.selectionDrafts.observeGateway(gatewaySnapshot);
       this.syncGatewayState();
       if (becameAvailable && !becameConnected) {
         const subscription = this.chatModelCatalogSubscription;
@@ -370,26 +371,13 @@ class AgentsPage
   }
 
   private syncSettingsSelection() {
-    const selectedId = this.context.settingsAgentSelection.state.selectedId;
-    if (selectedId !== this.agentsSelectedId) {
-      if (this.agentsSelectedId) {
-        const drafts = retainAgentFileDrafts(this);
-        if (drafts) {
-          this.retainedFileDrafts.set(this.agentsSelectedId, drafts);
-        }
-      }
-      this.agentsSelectedId = selectedId;
-      this.resetSelectionState();
-      const retained = selectedId ? this.retainedFileDrafts.get(selectedId) : undefined;
-      if (retained && selectedId) {
-        this.retainedFileDrafts.delete(selectedId);
-        this.agentFileDrafts = retained.drafts;
-        this.agentFileVersions = retained.versions;
-        this.agentFileActive = retained.active;
-        this.agentFileConflict = retained.conflict;
-        // Loaded bases stay empty: returning must read disk while retaining the draft's ancestry.
-      }
-    }
+    const selection = this.context.settingsAgentSelection;
+    this.selectionDrafts.select({
+      selectedId: selection.state.selectedId,
+      intentRevision: selection.intentRevision,
+      awaitingRoster: !selection.state.selectedId && !this.context.agents.state.agentsList,
+      profileId: this.context.gateway.snapshot.selfUser?.id ?? null,
+    });
   }
 
   private syncCurrentAgentFiles(agents = this.context.agents) {
@@ -418,7 +406,7 @@ class AgentsPage
   }
 
   private resetForSourceChange() {
-    this.retainedFileDrafts.clear();
+    this.selectionDrafts.clear();
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.resetSelectionState();
@@ -524,8 +512,8 @@ class AgentsPage
   private isCurrentRequest(
     client: GatewayBrowserClient,
     generation: number,
-    agentId?: string,
-    sources: AgentsRequestSources = {},
+    agentId: string | undefined,
+    sources: AgentsRequestSources,
   ): boolean {
     return (
       this.client === client &&
@@ -533,7 +521,6 @@ class AgentsPage
       this.requestGeneration === generation &&
       (!sources.agents || this.context.agents === sources.agents) &&
       (!sources.agentIdentity || this.context.agentIdentity === sources.agentIdentity) &&
-      (!sources.sessions || this.context.sessions === sources.sessions) &&
       (!agentId || this.agentsSelectedId === agentId)
     );
   }

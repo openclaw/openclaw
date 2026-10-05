@@ -255,23 +255,18 @@ export function readAcpSessionIdFromRow(row: Record<string, unknown> | undefined
 async function sendChat(
   client: GatewayClient,
   text: string,
-  options: { sessionKey?: string; withOrigin?: boolean } = {},
+  sessionKey = CONTROL_SESSION_KEY,
 ): Promise<string> {
   const startedAt = Date.now();
   while (true) {
     try {
-      const withOrigin = options.withOrigin !== false;
       const started = await client.request<{ runId?: string; status?: string }>("chat.send", {
-        sessionKey: options.sessionKey ?? CONTROL_SESSION_KEY,
+        sessionKey,
         message: text,
         idempotencyKey: `proof-${text}-${randomUUID()}`,
-        ...(withOrigin
-          ? {
-              originatingChannel: PROOF_CHANNEL,
-              originatingTo: PROOF_CONVERSATION_ID,
-              originatingAccountId: PROOF_ACCOUNT_ID,
-            }
-          : {}),
+        originatingChannel: PROOF_CHANNEL,
+        originatingTo: PROOF_CONVERSATION_ID,
+        originatingAccountId: PROOF_ACCOUNT_ID,
       });
       assert(started.status === "started" && typeof started.runId === "string", "chat.send failed");
       return started.runId;
@@ -479,7 +474,7 @@ async function sendAndObserveTurn(params: {
   const runId = await sendChat(
     params.client,
     params.text,
-    params.directToAcpSession ? { sessionKey: params.acpSessionKey } : {},
+    params.directToAcpSession ? params.acpSessionKey : CONTROL_SESSION_KEY,
   );
   await logDriverEvent(params.scenarioDir, "turn_requested", {
     sourceSessionKey: CONTROL_SESSION_KEY,

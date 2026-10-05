@@ -31,13 +31,6 @@ export function parseConfigureWizardSections(raw: unknown): {
   return { sections, invalid };
 }
 
-export type ChannelsWizardMode = "configure" | "remove";
-
-export type ConfigureWizardParams = {
-  command: "configure" | "update";
-  sections?: WizardSection[];
-};
-
 export const CONFIGURE_SECTION_OPTIONS = [
   { value: "workspace", label: "Workspace", hint: "Set workspace + sessions" },
   { value: "model", label: "Model", hint: "Pick provider + credentials" },
@@ -65,11 +58,8 @@ export const CONFIGURE_SECTION_OPTIONS = [
 export type WizardSection = (typeof CONFIGURE_SECTION_OPTIONS)[number]["value"];
 export const CONFIGURE_WIZARD_SECTIONS = CONFIGURE_SECTION_OPTIONS.map((option) => option.value);
 
-/** Styled configure wizard intro wrapper. */
 export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-/** Styled configure wizard outro wrapper. */
 export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
-/** Styled text prompt wrapper. */
 export const text = (params: Parameters<typeof clackText>[0]): ReturnType<typeof clackText> =>
   clackText({
     ...params,
@@ -83,7 +73,6 @@ export const password = (
     ...params,
     message: stylePromptMessage(params.message),
   });
-/** Styled confirm prompt wrapper. */
 export const confirm = (
   params: Parameters<typeof clackConfirm>[0],
 ): ReturnType<typeof clackConfirm> =>

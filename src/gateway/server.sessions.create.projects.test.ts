@@ -2,8 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, test, vi } from "vitest";
-import { waitForFile } from "../../test/helpers/process-wait.js";
+import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
@@ -19,11 +24,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
+import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
@@ -45,7 +51,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+const projectCloneMocks = vi.hoisted(() => ({
+  assertSelected: vi.fn(),
+  materialize: vi.fn(),
+  prepareIdentity: vi.fn(),
+}));
 const titleMocks = vi.hoisted(() => ({ generate: vi.fn() }));
 
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -56,13 +66,42 @@ vi.mock("../projects/project-clone.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../projects/project-clone.js")>();
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
+vi.mock("./project-github-identity.js", () => ({
+  prepareGatewayProjectGitHubIdentity: projectCloneMocks.prepareIdentity,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+async function setupStartedBeforeSettlement(
+  marker: string,
+  operation: PromiseLike<void> | undefined,
+): Promise<void> {
+  // The fixture writes the attempt marker before notifying. Admission release can
+  // beat socket delivery, so the durable marker decides that race.
+  const settled = Promise.resolve(operation).then(async () => {
+    await fs.access(marker).catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        throw new Error(`timeout waiting for ${marker}`);
+      }
+      throw error;
+    });
+  });
+  await Promise.race([receipts.waitFor(marker, "started"), settled]);
+}
 
 afterEach(async () => {
   titleMocks.generate.mockReset();
   projectCloneMocks.materialize.mockReset();
+  projectCloneMocks.prepareIdentity.mockReset();
+  projectCloneMocks.assertSelected.mockReset();
   dispatchInboundMessageMock.mockReset();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -97,6 +136,8 @@ test.each([
 ])(
   "sessions.create admits remote project work (worktree=$worktree, base=$baseRef, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
   async ({ worktree, sandboxed, image, baseRef }) => {
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
     const root = tempDirs.make("openclaw-session-remote-project-startup-");
     const workspace = await initializeRepository(root, "workspace");
     const projectRoot = await initializeRepository(sandboxed ? workspace : root, "project");
@@ -105,6 +146,10 @@ test.each([
     testState.agentConfig = { workspace: alias, sandbox: { mode: sandboxed ? "all" : "off" } };
     const { storePath } = await createSessionStoreDir();
     const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+    projectCloneMocks.prepareIdentity.mockResolvedValue({
+      token: "protected-native-token",
+      assertSelected: projectCloneMocks.assertSelected,
+    });
     const materialization = createDeferredCore<typeof project>();
     projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
     dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
@@ -163,7 +208,10 @@ test.each([
       await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
       expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
         expect.objectContaining({ gitUrl: "https://github.com/openclaw/openclaw.git" }),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+          token: "protected-native-token",
+        }),
       );
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -174,7 +222,7 @@ test.each([
       );
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       const transcriptScope = { agentId: "main", sessionKey: key, sessionId, storePath };
-      const pending = listSessionPendingInputs(transcriptScope);
+      const pending = await listSessionPendingInputs(transcriptScope);
       if (image) {
         expect(
           loadTranscriptEventsSync(transcriptScope).filter(
@@ -206,6 +254,7 @@ test.each([
 
       materialization.resolve(project);
       await settleWorkspaceRuns(context, storePath, key);
+      expect(projectCloneMocks.assertSelected).toHaveBeenCalled();
       const error = broadcast.mock.calls.find(
         ([event, payload]) => event === "chat" && payload.state === "error",
       );
@@ -216,7 +265,7 @@ test.each([
         transcript.filter((event) => asNullableRecord(event?.message)?.role === "user"),
       ).toHaveLength(1);
       expect(transcript.at(-1)).toMatchObject({ message: { idempotencyKey: `${runId}:user` } });
-      expect(listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
+      expect(await listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
       if (image) {
         expect(transcript.at(-1)?.id).toBe(pending.items[0]?.id);
         const persistedMessage = expectDefined(
@@ -460,9 +509,9 @@ test("sessions.create retries a failed remote project worktree in the same sessi
   }
 });
 
-test.each([false, true])(
+test.for([false, true])(
   "concurrent sends retain one bound worktree after deferred setup (abort first=%s)",
-  async (abortFirst) => {
+  async (abortFirst, { signal }) => {
     const root = tempDirs.make("openclaw-session-worktree-concurrent-");
     const workspace = await initializeRepository(root, "workspace");
     testState.agentConfig = { workspace };
@@ -474,8 +523,23 @@ test.each([false, true])(
     const starts = path.join(setup, "starts");
     const release = path.join(setup, "release");
     await fs.writeFile(
+      path.join(setup, "setup-started.mjs"),
+      `${fixtureReceiptClientSource(receipts.endpoint)}
+sendReceipt(process.argv[2], "started");
+`,
+    );
+    await fs.writeFile(
       path.join(setup, "worktree-setup.sh"),
-      '#!/bin/sh\necho started >> "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/starts"\nif [ -f "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/first-started" ]; then touch "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/second-started"; else touch "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/first-started"; fi\nwhile [ ! -f "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/release" ]; do sleep 0.05; done\n',
+      [
+        "#!/bin/sh",
+        'echo started >> "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/starts"',
+        'if [ -f "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/first-started" ]; then attempt=second; else attempt=first; fi',
+        'marker="$OPENCLAW_SOURCE_TREE_PATH/.openclaw/$attempt-started"',
+        'touch "$marker"',
+        `${JSON.stringify(process.execPath)} "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/setup-started.mjs" "$marker"`,
+        'while [ ! -f "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/release" ]; do sleep 0.05; done',
+        "",
+      ].join("\n"),
       { mode: 0o755 },
     );
     const context = {
@@ -505,7 +569,13 @@ test.each([false, true])(
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload?.runStarted).toBe(true);
       key = created.payload!.key;
-      await waitForFile(firstStarted, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      await withinTest(
+        setupStartedBeforeSettlement(
+          firstStarted,
+          getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] }),
+        ),
+        signal,
+      );
       expect(await fs.readFile(starts, "utf8")).toBe("started\n");
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(
@@ -529,7 +599,13 @@ test.each([false, true])(
           options,
         );
         expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
-        await waitForFile(secondStarted, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+        await withinTest(
+          setupStartedBeforeSettlement(
+            secondStarted,
+            getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] }),
+          ),
+          signal,
+        );
         expect(await fs.readFile(starts, "utf8")).toBe("started\nstarted\n");
       }
       await fs.writeFile(release, "ready\n");

@@ -1,10 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
-import { waitForChildClose, waitForPidFile } from "../../test/helpers/process-wait.js";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import {
@@ -30,7 +34,8 @@ const holderScript = `
 $ErrorActionPreference = 'Stop'
 $handle = [IO.File]::Open($env:CONFIG_HOLDER_TARGET, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
 try {
-  [IO.File]::WriteAllText($env:CONFIG_HOLDER_READY, [string]$PID)
+  [Console]::Out.WriteLine([string]$PID)
+  [Console]::Out.Flush()
   $deadline = [DateTime]::UtcNow.AddSeconds(60)
   while (-not [IO.File]::Exists($env:CONFIG_HOLDER_RELEASE)) {
     if ([DateTime]::UtcNow -gt $deadline) { throw 'Sharing holder was not released' }
@@ -43,10 +48,10 @@ try {
 
 async function withNativeSharingViolation<T>(
   target: string,
+  signal: AbortSignal,
   run: (io: typeof fs) => Promise<T>,
 ): Promise<T> {
   const control = dirs.make("config-windows-sharing-");
-  const ready = path.join(control, "ready");
   const release = path.join(control, "release");
   const closed = path.join(control, "closed");
   const output = createBoundedChildOutput(4096);
@@ -54,29 +59,38 @@ async function withNativeSharingViolation<T>(
     env: {
       ...process.env,
       CONFIG_HOLDER_TARGET: target,
-      CONFIG_HOLDER_READY: ready,
       CONFIG_HOLDER_RELEASE: release,
       CONFIG_HOLDER_CLOSED: closed,
     },
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  const ready = createDeferred<number>();
+  const lines = createInterface({ input: child.stdout });
+  lines.once("line", (line) => ready.resolve(Number.parseInt(line, 10)));
   child.stderr.on("data", output.append);
   let spawnError: Error | undefined;
   child.once("error", (error) => {
     spawnError = error;
   });
-  const completion = waitForChildClose(child, 2 * handshakeTimeout);
-  // Attach immediately; the synchronous filesystem call below temporarily owns this thread.
-  void completion.catch(() => undefined);
+  // Retain the physical close event before synchronous publication can occupy this thread.
+  const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => {
+      child.once("close", (code, closeSignal) => resolve({ code, signal: closeSignal }));
+    },
+  );
   let nativeFailures = 0;
   try {
-    const pid = await Promise.race([
-      waitForPidFile(ready, handshakeTimeout),
-      completion.then(() => {
-        throw spawnError ?? new Error(`Sharing holder exited before readiness: ${output.text()}`);
-      }),
-    ]);
+    const pid = await withinTest(
+      awaitGateBeforeSettlement(
+        ready.promise,
+        completion.then(() => {
+          throw spawnError ?? new Error(`Sharing holder exited before readiness: ${output.text()}`);
+        }),
+        "Sharing holder exited before readiness",
+      ),
+      signal,
+    );
     expect(pid).toBe(child.pid);
     const result = await run({
       ...fs,
@@ -114,9 +128,16 @@ async function withNativeSharingViolation<T>(
   } finally {
     fs.writeFileSync(release, "release");
     try {
-      expect(await completion, output.text()).toEqual({ code: 0, signal: null });
+      expect(await withinTest(completion, signal), output.text()).toEqual({
+        code: 0,
+        signal: null,
+      });
     } finally {
-      await stopChildProcess(child, 1000, { force: true });
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await completion;
+      lines.close();
     }
   }
 }
@@ -183,10 +204,10 @@ function identity(target: string) {
 describe.runIf(process.platform === "win32")("native Windows config fallback effects", () => {
   it(
     "publishes and conditionally rolls back through real sharing failures",
-    async () => {
+    async ({ signal }) => {
       const f = fixture();
       const beforeAcl = acl(f.target);
-      const rollbackProof = await withNativeSharingViolation(f.target, async (io) => {
+      const rollbackProof = await withNativeSharingViolation(f.target, signal, async (io) => {
         const { prepared, guarded } = await prepare(f, io);
         try {
           expect(prepared.publish().method).toBe("copy-fallback");
@@ -199,7 +220,7 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
       expect(fs.readFileSync(f.target, "utf8")).toBe(content);
       expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
       expect(acl(f.target)).toBe(beforeAcl);
-      await withNativeSharingViolation(f.target, async (io) => {
+      await withNativeSharingViolation(f.target, signal, async (io) => {
         await expect(
           rollbackConfigFileWriteIfUnchanged({
             configPath: f.target,
@@ -221,9 +242,10 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
     testTimeout,
   );
 
-  it.each(["publication", "rollback"] as const)(
+  it.for(["publication", "rollback"] as const)(
     "stops %s after authority is revoked during a native fallback partial write",
-    async (phase) => {
+    { timeout: testTimeout },
+    async (phase, { signal }) => {
       const f = fixture();
       const initial = await prepare(f);
       try {
@@ -235,7 +257,7 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
       }
       let observed: ReturnType<typeof identity> | undefined;
       let writes = 0;
-      await withNativeSharingViolation(f.target, async (io) => {
+      await withNativeSharingViolation(f.target, signal, async (io) => {
         let destinationFd: number | undefined;
         const instrumented: typeof fs = {
           ...io,
@@ -292,12 +314,12 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
       expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
       expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     },
-    testTimeout,
   );
 
-  it(
-    "preserves the open rollback destination when Windows denies a parent-directory move",
-    async () => {
+  it.for(["parent-directory", "same-byte-file"] as const)(
+    "does not write the open rollback destination after a %s replacement attempt",
+    { timeout: testTimeout },
+    async (replacement, { signal }) => {
       const f = fixture();
       const { prepared, guarded } = await prepare(f);
       try {
@@ -310,7 +332,7 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
       const movedParent = `${f.dir}-owned`;
       let observed: ReturnType<typeof identity> | undefined;
       let destinationWrites = 0;
-      await withNativeSharingViolation(f.target, async (io) => {
+      await withNativeSharingViolation(f.target, signal, async (io) => {
         let destinationFd: number | undefined;
         const instrumented: typeof fs = {
           ...io,
@@ -323,97 +345,16 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
                 flags & fs.constants.O_EXCL
               ) {
                 destinationFd = fd;
-                observed = identity(f.target);
-                // Windows denies this move while the atomic stage/destination is open.
-                // The cross-platform effect matrix separately proves the parent guard.
-                fs.renameSync(f.dir, movedParent);
-              }
-              return fd;
-            } catch (error) {
-              // The production adapter cannot adopt the descriptor until this call returns.
-              try {
-                fs.closeSync(fd);
-              } catch (closeError) {
-                throw new AggregateError(
-                  [error, closeError],
-                  "Native parent-move injection and descriptor close failed",
-                  { cause: closeError },
-                );
-              }
-              throw error;
-            }
-          },
-          writeSync: new Proxy(fs.writeSync, {
-            apply(fn, self, args) {
-              if (args[0] === destinationFd) {
-                destinationWrites++;
-              }
-              return Reflect.apply(fn, self, args);
-            },
-          }),
-        };
-        await expect(
-          rollbackConfigFileWriteIfUnchanged({
-            configPath: f.target,
-            previousSnapshot: f.options.snapshot,
-            committedHash: hashConfigRaw(content),
-            fsModule: instrumented,
-            ...rollbackProof,
-            durable: true,
-            destinationHardlinks: "reject",
-          }),
-        ).rejects.toMatchObject({
-          code: "EPERM",
-          syscall: "rename",
-          path: f.dir,
-          dest: movedParent,
-        });
-      });
-      expect(observed).toBeDefined();
-      expect(observed?.raw).toBe("");
-      expect(destinationWrites).toBe(0);
-      expect(identity(f.target)).toEqual(observed);
-      expect(fs.lstatSync(f.dir, { bigint: true })).toMatchObject({
-        dev: parentBefore.dev,
-        ino: parentBefore.ino,
-      });
-      expect(fs.existsSync(movedParent)).toBe(false);
-      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-    },
-    testTimeout,
-  );
-
-  it(
-    "does not write a same-byte-file replacement after opening its native rollback destination",
-    async () => {
-      const f = fixture();
-      const { prepared, guarded } = await prepare(f);
-      try {
-        prepared.publish();
-      } finally {
-        await prepared[Symbol.asyncDispose]();
-      }
-      const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
-      let observed: ReturnType<typeof identity> | undefined;
-      let replacementWrites = 0;
-      await withNativeSharingViolation(f.target, async (io) => {
-        let destinationFd: number | undefined;
-        const instrumented: typeof fs = {
-          ...io,
-          openSync(name, flags, mode) {
-            const fd = fs.openSync(name, flags, mode);
-            try {
-              if (
-                String(name) === f.target &&
-                typeof flags === "number" &&
-                flags & fs.constants.O_EXCL
-              ) {
-                destinationFd = fd;
-                const raw = fs.readFileSync(f.target, "utf8");
-                fs.renameSync(f.target, `${f.target}.owned`);
-                fs.writeFileSync(f.target, raw);
-                observed = identity(f.target);
+                if (replacement === "parent-directory") {
+                  observed = identity(f.target);
+                  // Windows denies this move while the atomic stage/destination is open.
+                  fs.renameSync(f.dir, movedParent);
+                } else {
+                  const raw = fs.readFileSync(f.target, "utf8");
+                  fs.renameSync(f.target, `${f.target}.owned`);
+                  fs.writeFileSync(f.target, raw);
+                  observed = identity(f.target);
+                }
               }
               return fd;
             } catch (error) {
@@ -433,30 +374,45 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
           writeSync: new Proxy(fs.writeSync, {
             apply(fn, self, args) {
               if (args[0] === destinationFd) {
-                replacementWrites++;
+                destinationWrites++;
               }
               return Reflect.apply(fn, self, args);
             },
           }),
         };
-        await expect(
-          rollbackConfigFileWriteIfUnchanged({
-            configPath: f.target,
-            previousSnapshot: f.options.snapshot,
-            committedHash: hashConfigRaw(content),
-            fsModule: instrumented,
-            ...rollbackProof,
-            durable: true,
-            destinationHardlinks: "reject",
-          }),
-        ).rejects.toThrow(/changed/u);
+        const rollback = rollbackConfigFileWriteIfUnchanged({
+          configPath: f.target,
+          previousSnapshot: f.options.snapshot,
+          committedHash: hashConfigRaw(content),
+          fsModule: instrumented,
+          ...rollbackProof,
+          durable: true,
+          destinationHardlinks: "reject",
+        });
+        if (replacement === "parent-directory") {
+          await expect(rollback).rejects.toMatchObject({
+            code: "EPERM",
+            syscall: "rename",
+            path: f.dir,
+            dest: movedParent,
+          });
+        } else {
+          await expect(rollback).rejects.toThrow(/changed/u);
+        }
       });
       expect(observed).toBeDefined();
-      expect(replacementWrites).toBe(0);
+      expect(destinationWrites).toBe(0);
       expect(identity(f.target)).toEqual(observed);
+      if (replacement === "parent-directory") {
+        expect(observed?.raw).toBe("");
+        expect(fs.lstatSync(f.dir, { bigint: true })).toMatchObject({
+          dev: parentBefore.dev,
+          ino: parentBefore.ino,
+        });
+        expect(fs.existsSync(movedParent)).toBe(false);
+      }
       expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
       expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     },
-    testTimeout,
   );
 });

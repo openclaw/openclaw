@@ -10,7 +10,8 @@ import {
 } from "../../../sessions/input-provenance.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type UserTranscriptContext = {
@@ -96,7 +97,7 @@ export function resolveUserTranscriptMessages(
   // Reserve object-identity matches before structural fallback so duplicate
   // timestamp/text turns cannot consume a later message's exact pairing.
   for (const [index, message] of messages.entries()) {
-    if (message.role !== "user") {
+    if (message.role !== "user" || message.operatorMessage) {
       continue;
     }
     const context = byRuntimeMessage.get(message)?.shift();
@@ -124,7 +125,7 @@ export function resolveUserTranscriptMessages(
   }
   const activeUserMessageIndex = findActiveUserMessageIndex(messages);
   for (const [index, message] of messages.entries()) {
-    if (message.role !== "user" || resolved[index]) {
+    if (message.role !== "user" || message.operatorMessage || resolved[index]) {
       continue;
     }
     const timestamp = message.timestamp;
@@ -286,7 +287,7 @@ export function projectPersistedSenderContext(
 ): AgentMessage[] {
   let changed = false;
   const nextMessages = messages.map((message, index) => {
-    if (message.role !== "user") {
+    if (message.role !== "user" || message.operatorMessage) {
       return message;
     }
     const transcriptMessage = transcriptMessages?.[index] ?? message;
@@ -323,7 +324,7 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
     if (!message) {
       continue;
     }
-    if (message.role === "user") {
+    if (message.role === "user" && !message.operatorMessage) {
       return index;
     }
     if (
@@ -339,16 +340,6 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
 type AttemptRuntimeModelContext = NonNullable<
   Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0]
 >;
-
-/**
- * Adapts the RuntimePlan model context to the legacy provider-runtime model
- * shape used by transcript-policy fallbacks.
- */
-function asProviderRuntimeModel(
-  model: AttemptRuntimeModelContext["model"],
-): ProviderRuntimeModel | undefined {
-  return typeof model?.id === "string" ? (model as ProviderRuntimeModel) : undefined;
-}
 
 /**
  * Resolves the transcript policy for an embedded attempt. RuntimePlan owns the
@@ -367,12 +358,16 @@ export function resolveAttemptTranscriptPolicy(params: {
     params.runtimePlan?.transcript.resolvePolicy(params.runtimePlanModelContext) ??
     resolveTranscriptPolicy({
       modelApi: params.runtimePlanModelContext.modelApi,
+      directApiKey: params.runtimePlanModelContext.directApiKey,
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,
       workspaceDir: params.runtimePlanModelContext.workspaceDir,
       env: params.env ?? process.env,
-      model: asProviderRuntimeModel(params.runtimePlanModelContext.model),
+      model:
+        typeof params.runtimePlanModelContext.model?.id === "string"
+          ? (params.runtimePlanModelContext.model as ProviderRuntimeModel)
+          : undefined,
     })
   );
 }

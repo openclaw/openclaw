@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
@@ -705,11 +706,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   }, 60_000);
 
   it.each([
-    { platform: "linux", deadlineMs: 45_000, probeTimeoutMs: 10_000, healthTimeoutMs: 10_000 },
-    { platform: "win32", deadlineMs: 90_000, probeTimeoutMs: 15_000, healthTimeoutMs: 90_000 },
+    { platform: "linux", healthTimeoutMs: 10_000 },
+    { platform: "win32", healthTimeoutMs: 90_000 },
   ] as const)(
     "uses managed daemon health timing on $platform",
-    async ({ platform, deadlineMs, probeTimeoutMs, healthTimeoutMs }) => {
+    async ({ platform, healthTimeoutMs }) => {
       await withStateDir("state-local-daemon-health-", async (stateDir) => {
         const captured = createOnboardGatewayTimeoutCapture();
         gatewayReachableState.mock = captured.mock;
@@ -725,8 +726,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         expect(cfg?.gateway?.mode).toBe("local");
         expect(cfg?.gateway?.bind).toBe("loopback");
         expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
-        expect(captured.deadlineMs).toBe(deadlineMs);
-        expect(captured.probeTimeoutMs).toBe(probeTimeoutMs);
+        const timing = resolveGatewayStartupTiming(platform);
+        expect(captured.deadlineMs).toBe(timing.deadlineMs);
+        expect(captured.probeTimeoutMs).toBe(timing.probeTimeoutMs);
         expect(healthCommandMock).toHaveBeenCalledWith(
           expect.objectContaining({ timeoutMs: healthTimeoutMs }),
           expect.anything(),

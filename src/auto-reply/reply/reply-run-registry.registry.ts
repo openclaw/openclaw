@@ -10,6 +10,7 @@ import {
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
 import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -91,19 +92,7 @@ export async function waitForReplyOperationOwnerSettlement(
   if (!settlement) {
     return true;
   }
-  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 100, 100);
-  let timer: NodeJS.Timeout | undefined;
-  const settled = await Promise.race([
-    settlement.then(() => true),
-    new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), resolvedTimeoutMs);
-      timer.unref?.();
-    }),
-  ]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  return settled;
+  return settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
 }
 
 export function expireStaleReplyRunBySessionId(
@@ -144,9 +133,7 @@ function allowsDirectMessageInjectionOwner(sessionKey: string): boolean {
 }
 
 export const replyRunRegistry: ReplyRunRegistry = {
-  begin(params) {
-    return createReplyOperation(params);
-  },
+  begin: createReplyOperation,
   get(sessionKey) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
@@ -203,9 +190,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
         resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),
         recordAccepted: (options) => {
           operation.recordActivity();
-          if (options?.inboundAudio) {
-            operation.markAcceptedSteeredInboundAudio();
-          }
+          operation.markSteeredInputAccepted({ inboundAudio: options?.inboundAudio === true });
         },
         abort: () => operation.abortByUser(),
       },
@@ -218,11 +203,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return operation ? { [replyRunInterruptTargetOperation]: operation } : undefined;
   },
   abort(sessionKey) {
-    const operation = this.get(sessionKey);
-    if (!operation) {
-      return false;
-    }
-    return operation.abortByUser();
+    return this.get(sessionKey)?.abortByUser() ?? false;
   },
   waitForIdle(sessionKey, timeoutMs, opts) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -328,11 +309,7 @@ export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
 }
 
 export function abortReplyRunBySessionId(sessionId: string): boolean {
-  const operation = resolveReplyRunForCurrentSessionId(sessionId);
-  if (!operation) {
-    return false;
-  }
-  return operation.abortByUser();
+  return resolveReplyRunForCurrentSessionId(sessionId)?.abortByUser() ?? false;
 }
 
 export { resolveReplyRunForCurrentSessionId as resolveActiveReplyOperationForSessionId };
@@ -363,10 +340,7 @@ export function waitForReplyRunEndBySessionId(
   timeoutMs?: number | null,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
-  if (!waitKey) {
-    return Promise.resolve(true);
-  }
-  return replyRunRegistry.waitForIdle(waitKey, timeoutMs);
+  return waitKey ? replyRunRegistry.waitForIdle(waitKey, timeoutMs) : Promise.resolve(true);
 }
 
 async function waitForReplyRunAdmissionBarrier(params: {
@@ -398,25 +372,19 @@ async function waitForReplyRunAdmissionBarrier(params: {
     let abortHandler: (() => void) | undefined;
     const outcome = await Promise.race([
       barrier.settled.then(() => true),
-      ...(remainingMs !== undefined
-        ? [
-            new Promise<boolean>((resolve) => {
-              timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
-              timer.unref?.();
-            }),
-          ]
-        : []),
-      ...(params.signal
-        ? [
-            new Promise<boolean>((resolve) => {
-              abortHandler = () => resolve(false);
-              params.signal?.addEventListener("abort", abortHandler, { once: true });
-              if (params.signal?.aborted) {
-                abortHandler();
-              }
-            }),
-          ]
-        : []),
+      new Promise<false>((resolve) => {
+        if (remainingMs !== undefined) {
+          timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
+          timer.unref?.();
+        }
+        if (params.signal) {
+          abortHandler = () => resolve(false);
+          params.signal.addEventListener("abort", abortHandler, { once: true });
+          if (params.signal.aborted) {
+            abortHandler();
+          }
+        }
+      }),
     ]);
     if (timer) {
       clearTimeout(timer);

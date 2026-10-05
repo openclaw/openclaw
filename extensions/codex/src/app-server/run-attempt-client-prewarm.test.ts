@@ -29,6 +29,7 @@ function createInput(params?: {
     authBindingFingerprint: "auth-fingerprint",
     connection: {
       assertCurrent: vi.fn(),
+      assertLegacyCurrent: vi.fn(),
       agentDir: "/tmp/openclaw-agent",
       appServer: {
         requestTimeoutMs: 12_345,
@@ -61,7 +62,7 @@ describe("Codex attempt client prewarm", () => {
     prewarmCodexAttemptClient(input);
 
     expect(mocks.getSharedCodexAppServerClient).toHaveBeenCalledWith({
-      assertCurrent: input.connection.assertCurrent,
+      assertCurrent: input.connection.assertLegacyCurrent,
       startOptions: { command: "codex", args: ["app-server"] },
       pluginConfig: { appServer: { enabled: true } },
       authProfileId: "profile-1",

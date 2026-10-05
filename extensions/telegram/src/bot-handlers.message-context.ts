@@ -10,7 +10,6 @@ import {
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -38,7 +37,6 @@ import {
 } from "./group-history-window.js";
 import { isTelegramHistoryNodeAllowed, readTelegramHistoryWindow } from "./history-policy.js";
 import {
-  isTelegramMessageFromCurrentBot,
   resolveProviderObservedTelegramThreadSpec,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
@@ -53,22 +51,6 @@ import {
   createTelegramMessageCache,
 } from "./message-cache.js";
 import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
-
-function legacyAssistantTextKey(node: TelegramCachedMessageNode, botUserId?: number) {
-  if (node.promptContextProjectionMarker) {
-    return undefined;
-  }
-  const timestamp = (
-    node.sourceMessage as Message & { openclaw_prompt_context_timestamp_ms?: unknown }
-  ).openclaw_prompt_context_timestamp_ms;
-  const legacySelf =
-    isTelegramMessageFromCurrentBot(node.sourceMessage, botUserId) ||
-    (node.sourceMessage.from?.id === 0 && node.sourceMessage.from.is_bot);
-  const body = stripInlineDirectiveTagsForDelivery(node.body ?? "").text.trim();
-  return legacySelf && typeof timestamp === "number" && body
-    ? `text:${timestamp}:${body}`
-    : undefined;
-}
 
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
@@ -542,10 +524,6 @@ export function createTelegramMessageContextRuntime({
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );
-    const legacyAssistantTextKeys = cacheEntries.flatMap(({ node }) => {
-      const key = legacyAssistantTextKey(node, ctx.me?.id ?? opts.botInfo?.id);
-      return key ? [key] : [];
-    });
     const messages = cacheEntries.map((entry) => entry.message);
     return messages.length > 0
       ? [
@@ -555,9 +533,6 @@ export function createTelegramMessageContextRuntime({
             type: "chat_window",
             ...(completeProjectionIds.size > 0
               ? { sessionTranscriptDedupeMessageIds: [...completeProjectionIds] }
-              : {}),
-            ...(legacyAssistantTextKeys.length > 0
-              ? { sessionTranscriptAssistantTextDedupeKeys: legacyAssistantTextKeys }
               : {}),
             payload: {
               order: "chronological",

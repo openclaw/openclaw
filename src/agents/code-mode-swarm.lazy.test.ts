@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
@@ -23,7 +24,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   const wait = vi.fn<typeof import("./tools/agents-wait-tool.js").waitForCollectorCompletion>();
   const subscribe =
     vi.fn<
-      typeof import("./subagents/registry/subagent-registry-state.js").onSubagentRegistryPersisted
+      typeof import("./subagents/registry/subagent-registry-publication.js").subscribeSubagentRunChanges
     >();
   const emit =
     vi.fn<typeof import("../sessions/session-lifecycle-events.js").emitSessionLifecycleEvent>();
@@ -46,11 +47,19 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     wait.mockImplementation(actual.waitForCollectorCompletion);
     return { ...actual, waitForCollectorCompletion: wait };
   });
-  vi.doMock("./subagents/registry/subagent-registry-state.js", async (importOriginal) => {
+  vi.doMock("./subagents/registry/subagent-registry-publication.js", async (importOriginal) => {
     const actual =
-      await importOriginal<typeof import("./subagents/registry/subagent-registry-state.js")>();
-    subscribe.mockImplementation(actual.onSubagentRegistryPersisted);
-    return { ...actual, onSubagentRegistryPersisted: subscribe };
+      await importOriginal<
+        typeof import("./subagents/registry/subagent-registry-publication.js")
+      >();
+    subscribe.mockImplementation(actual.subscribeSubagentRunChanges);
+    return {
+      ...actual,
+      subscribeSubagentRunChanges: ((phase, listener) =>
+        phase === "projection"
+          ? actual.subscribeSubagentRunChanges(phase, listener)
+          : subscribe(phase, listener)) satisfies typeof actual.subscribeSubagentRunChanges,
+    };
   });
   vi.doMock("../sessions/session-lifecycle-events.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../sessions/session-lifecycle-events.js")>();
@@ -73,7 +82,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       bridgeCalls.push(call);
       return call;
     });
-    const { createCodeModeRunOwner, createPendingBridgeStates } =
+    const { createCodeModeRunOwner, createPendingBridgeStates, waitForPendingBridgeSettlement } =
       await import("./code-mode-state.js");
     const spawn = vi.fn(async () => ({
       content: [],
@@ -167,7 +176,10 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         run.ctx.toolExecutionAllow = ["skill_workshop"];
       }
       const pending = run.dispatch();
-      await Promise.all(pending.map((entry) => entry.promise));
+      await waitForPendingBridgeSettlement(pending, {
+        kind: "draining",
+        requiredRequestIds: pending.map((entry) => entry.id),
+      });
       expect(pending.every((entry) => !entry.reply.take().ok)).toBe(true);
       expect(load).not.toHaveBeenCalled();
     }
@@ -194,7 +206,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       if (kind === "owner" || kind === "catalog") {
         expect(run.owner.signal.aborted).toBe(true);
         for (const entry of pending) {
-          expect(await entry.promise).toBeUndefined();
+          await waitForPendingBridgeSettlement([entry], { kind: "awaiting" });
           expect(() => entry.reply.take()).toThrow("unavailable");
         }
       }
@@ -203,7 +215,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     // The cancellation race settles first; join the original work before checking effects.
     for (const { kind, pending } of closedRuns) {
       for (const entry of pending) {
-        await entry.promise;
+        await waitForPendingBridgeSettlement([entry], { kind: "awaiting" });
         if (kind === "owner" || kind === "catalog") {
           expect(() => entry.reply.take()).toThrow("unavailable");
         } else {
@@ -211,7 +223,10 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         }
       }
     }
-    await Promise.all(live.map((entry) => entry.promise));
+    await waitForPendingBridgeSettlement(live, {
+      kind: "draining",
+      requiredRequestIds: live.map((entry) => entry.id),
+    });
     expect(live.map((entry) => entry.reply.take())).toEqual([
       { id: "live-note", ok: true, json: JSON.stringify({ ok: true }) },
     ]);
@@ -241,7 +256,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     vi.restoreAllMocks();
     vi.doUnmock("./code-mode-swarm.runtime.js");
     vi.doUnmock("./subagents/registry/subagent-registry.js");
-    vi.doUnmock("./subagents/registry/subagent-registry-state.js");
+    vi.doUnmock("./subagents/registry/subagent-registry-publication.js");
     vi.doUnmock("./tools/agents-wait-tool.js");
     vi.doUnmock("../sessions/session-lifecycle-events.js");
     vi.resetModules();

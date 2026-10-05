@@ -178,11 +178,6 @@ function scheduleStandaloneCleanupRetry(cleanup: ManagedStandaloneCleanup): void
   cleanup.retryTimer.unref?.();
 }
 
-function retainStandaloneCleanup(cleanup: ManagedStandaloneCleanup): void {
-  pendingStandaloneCleanups.set(cleanup.authDir, cleanup);
-  scheduleStandaloneCleanupRetry(cleanup);
-}
-
 async function finishStandaloneCleanupOrThrow(
   cleanup: ManagedStandaloneCleanup,
   operationError?: unknown,
@@ -190,7 +185,8 @@ async function finishStandaloneCleanupOrThrow(
   try {
     await runStandaloneCleanup(cleanup);
   } catch (cleanupError) {
-    retainStandaloneCleanup(cleanup);
+    pendingStandaloneCleanups.set(cleanup.authDir, cleanup);
+    scheduleStandaloneCleanupRetry(cleanup);
     const cause =
       operationError === undefined
         ? cleanupError
@@ -216,12 +212,7 @@ async function finishPriorStandaloneCleanup(authDir: string): Promise<void> {
   if (!cleanup) {
     return;
   }
-  try {
-    await runStandaloneCleanup(cleanup);
-  } catch (error) {
-    scheduleStandaloneCleanupRetry(cleanup);
-    throw cleanupUnavailable(error);
-  }
+  await finishStandaloneCleanupOrThrow(cleanup);
 }
 
 async function listGroupsThroughStandaloneOwner(

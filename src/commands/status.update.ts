@@ -2,6 +2,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
+import { formatInstallOwnerMessage } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   normalizeUpdateChannel,
@@ -92,6 +93,15 @@ type UpdateAvailability = {
 };
 
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
+  if (update.installKind === "host" || update.installKind === "immutable") {
+    return {
+      available: false,
+      hasGitUpdate: false,
+      hasRegistryUpdate: false,
+      latestVersion: null,
+      gitBehind: null,
+    };
+  }
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
   const hasRegistryUpdate = !update.error && registryCmp != null && registryCmp < 0;
@@ -130,8 +140,17 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 }
 
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
+  if (update.installKind === "host" && update.installOwner) {
+    return `Update: ${formatInstallOwnerMessage(update.installOwner)}`;
+  }
   if (update.error) {
     return `Update: update status ${update.error.status}: ${update.error.message}; run ${formatCliCommand("openclaw update status")}`;
+  }
+  if (update.installKind === "immutable") {
+    const install = update.immutable;
+    return install
+      ? `Update: immutable ${install.currentSha.slice(0, 12)}${install.prepared ? ` · prepared ${install.prepared.sha.slice(0, 12)}` : ""} · activation unavailable`
+      : "Update: immutable · installation facts unavailable";
   }
   const parts: string[] = [];
 

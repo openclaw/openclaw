@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import * as wal from "../infra/sqlite-wal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as permissions from "./openclaw-agent-db-permissions.js";
@@ -67,7 +68,7 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
       const prepare = database.prepare.bind(database);
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check('sqlite_schema');") {
+        if (sql === "PRAGMA integrity_check;") {
           const all = statement.all.bind(statement);
           vi.spyOn(statement, "all").mockImplementation((...parameters) => {
             try {
@@ -125,6 +126,41 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
 }
 
 describe("agent database open timings", () => {
+  it("includes synchronous WAL recovery in the deferred integrity gate", () => {
+    const { options, pathname, advance } = createTimedOpen(0);
+    const database = openOpenClawAgentDatabase(options);
+    vi.spyOn(database.db, "prepare").mockRestore();
+    const prepare = database.db.prepare.bind(database.db);
+    vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql === "PRAGMA wal_checkpoint(PASSIVE)") {
+        const get = statement.get.bind(statement);
+        vi.spyOn(statement, "get").mockImplementation((...parameters) => {
+          const result = get(...parameters);
+          advance(2_400);
+          return result;
+        });
+      }
+      return statement;
+    });
+    const diagnostics: SqliteIntegrityDiagnostics = {};
+    const admission = schema.agentDatabaseIntegrityBeforeMutationSteps(
+      database.db,
+      options.agentId,
+      pathname,
+      diagnostics,
+      undefined,
+      false,
+      true,
+    );
+    expect(admission.next()).toEqual({ done: true, value: false });
+    expect(diagnostics).toMatchObject({
+      integrityGateReason: "process-death",
+      integrityGateMode: "deferred",
+      integrityGateMs: 2_400,
+    });
+  });
+
   it("reports completed phases at the slow threshold and skips live cache hits", () => {
     const { options, pathname, advance } = createTimedOpen(690);
     const database = openOpenClawAgentDatabase(options);
@@ -241,14 +277,7 @@ describe("agent database open timings", () => {
       integrityGateMs: 1_120,
       integrityGateOutcome: "healthy",
       integrityGateReason: "revoked",
-      integrityGateMode: "tables",
-      integrityTableTimings: expect.arrayContaining([
-        { table: "sqlite_schema", check: "integrity_check", elapsedMs: 120 },
-      ]),
-      integrityTableTotals: {
-        integrity_check: { tableCount: expect.any(Number), elapsedMs: 120 },
-        quick_check: { tableCount: 1, elapsedMs: 0 },
-      },
+      integrityGateMode: "full",
       integrityCheckSyncMs: 120,
       integrityOutsideCheckMs: 1_000,
       canonicalIndexMs: 0,
@@ -318,12 +347,7 @@ describe("agent database open timings", () => {
         integrityGateMs: 1_000,
         integrityGateOutcome: "healthy",
         integrityGateReason: "revoked",
-        integrityGateMode: "tables",
-        integrityTableTimings: expect.any(Array),
-        integrityTableTotals: {
-          integrity_check: { tableCount: expect.any(Number), elapsedMs: expect.any(Number) },
-          quick_check: { tableCount: 1, elapsedMs: expect.any(Number) },
-        },
+        integrityGateMode: "full",
         integrityWorkerCheckMs: expect.any(Number),
         integrityWorkerLifetimeMs: 0,
         integrityOutsideWorkerMs: 1_000,

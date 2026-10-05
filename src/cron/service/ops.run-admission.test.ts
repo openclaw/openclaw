@@ -14,6 +14,10 @@ import {
 } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadCronStoreFromDatabase } from "../store/load.kernel.js";
@@ -187,13 +191,19 @@ describe("cron service run admission", () => {
     let peakActive = 0;
     const completed = new Set<string>();
     const releaseRunners = createDeferred();
+    const firstWaveStarted = createDeferred();
+    const clock = createGatewaySchedulerClock(dueAt);
     const state = createCronRegressionState({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       testAdmissionLimit: 4,
       nowMs: () => dueAt,
       runIsolatedAgentJob: vi.fn(async ({ job }: { job: { id: string } }) => {
         active += 1;
         peakActive = Math.max(peakActive, active);
+        if (active === 4) {
+          firstWaveStarted.resolve();
+        }
         await releaseRunners.promise;
         active -= 1;
         completed.add(job.id);
@@ -203,9 +213,16 @@ describe("cron service run admission", () => {
 
     const timer = onTimer(state);
     try {
-      await vi.waitFor(() => expect(active).toBe(4));
+      await firstWaveStarted.promise;
       releaseRunners.resolve();
       await timer;
+      for (let wave = 0; completed.size < jobs.length && wave < jobs.length; wave += 1) {
+        const capacityTick = clock.advanceBy(0);
+        if (!capacityTick) {
+          throw new Error("Expected a capacity wake while scheduled jobs remain");
+        }
+        await capacityTick;
+      }
 
       expect(completed).toEqual(new Set(jobs.map((job) => job.id)));
       expect(peakActive).toBe(4);
@@ -219,6 +236,7 @@ describe("cron service run admission", () => {
       stop(state);
       releaseRunners.resolve();
       await timer;
+      await state.schedulerDrain;
     }
   });
 

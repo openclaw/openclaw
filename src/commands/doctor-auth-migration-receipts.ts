@@ -303,23 +303,16 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
   }
 }
 
+/** Finalize while the migration owner holds the source-file lock. */
 export function finalizeAuthProfileMigrationSource(
   receipt: AuthProfileMigrationSourceReceipt,
   status: "completed" | "archived-unparsed" = "completed",
-  options: { sourceLocked?: boolean } = {},
 ): void {
   receipt.completionStatus = status;
-  const release = options.sourceLocked
-    ? undefined
-    : acquireFileLockSyncWithRetry(receipt.sourcePath);
-  try {
-    recordAuthProfileMigrationImported(receipt);
-    verifyAuthProfileMigrationTarget(receipt);
-    archiveAuthProfileMigrationSource(receipt);
-    recordAuthProfileMigrationCompleted(receipt, Date.now(), status);
-  } finally {
-    release?.();
-  }
+  recordAuthProfileMigrationImported(receipt);
+  verifyAuthProfileMigrationTarget(receipt);
+  archiveAuthProfileMigrationSource(receipt);
+  recordAuthProfileMigrationCompleted(receipt, Date.now(), status);
 }
 
 export function resumePendingAuthProfileMigrationArchives(

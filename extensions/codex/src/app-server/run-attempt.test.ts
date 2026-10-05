@@ -22,6 +22,7 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
@@ -36,17 +37,14 @@ import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
-import {
-  consumeCodexAppServerLiveThread,
-  releaseCodexAppServerLiveThread,
-  retainCodexAppServerLiveThread,
-} from "./client-runtime.js";
+import { releaseCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError, CodexAppServerClient } from "./client.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   buildDynamicTools,
   shouldEnableCodexAppServerNativeToolSurface,
@@ -73,6 +71,12 @@ import {
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
+import {
+  advanceAttemptRetryBackoff,
+  expectRetainedSuccessfulThread,
+  observeAttemptProjectionReady,
+  startClockControlledAttempt,
+} from "./run-attempt-lifecycle.test-support.js";
 import { registerCodexMemoryInstructionTests } from "./run-attempt-memory.test-support.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import {
@@ -111,8 +115,6 @@ import {
   resetCodexTestBindingStore,
   type CodexAppServerBindingIdentity,
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
-  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
@@ -123,17 +125,16 @@ import {
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
 import { createCodexTestModel, createCodexTestOAuthProfile } from "./test-support.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
-  buildDeveloperInstructions,
-  buildTurnStartParams,
-  codexDynamicToolsFingerprint,
-  startOrResumeThread as startOrResumeThreadImpl,
-} from "./thread-lifecycle.js";
-import {
+  startOrResumeAttemptThread as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
   createCodexLifecycleHarness,
   createLeasedCodexLifecycleHarness,
 } from "./thread-lifecycle.test-fixtures.js";
+import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { buildThreadStartParams } from "./thread-requests.js";
+import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
 
@@ -144,17 +145,6 @@ const testing = {
   resolveCodexDynamicToolDirectNames,
   shouldEnableCodexAppServerNativeToolSurface,
 };
-
-function startOrResumeThread(
-  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
-) {
-  registerCodexTestSessionIdentity(
-    params.params.sessionFile,
-    params.params.sessionId,
-    params.params.sessionKey,
-  );
-  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
-}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -210,7 +200,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   return {
     ...createBaseAppServerOptions(),
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -265,7 +254,19 @@ async function buildCodexTurnContextForTest(
     tools: toolBridge.availableSpecs,
     ringZeroActive: false,
   });
-  const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
+  const threadDeveloperInstructions = buildThreadStartParams(params, {
+    cwd: workspaceDir,
+    dynamicTools,
+    appServer: resolveCodexAppServerRuntimeOptions({}),
+    developerInstructions: testing.buildDeveloperInstructions(params, { dynamicTools }),
+    refreshableInstructions: [
+      workspaceBootstrapContext.personaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  }).developerInstructions;
+  assert(typeof threadDeveloperInstructions === "string");
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -279,8 +280,6 @@ async function buildCodexTurnContextForTest(
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
     promptText: codexTurnPromptText,
-    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-    memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
   });
   const collaborationInstructions =
     turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
@@ -289,7 +288,10 @@ async function buildCodexTurnContextForTest(
     attempt: params,
     sessionKey: params.sessionKey ?? params.sessionId,
     workspaceDir,
-    developerInstructions: [threadDeveloperInstructions, collaborationInstructions].join("\n\n"),
+    developerInstructions: joinPresentSections(
+      threadDeveloperInstructions,
+      collaborationInstructions,
+    ),
     workspaceBootstrapContext,
     skillsPrompt: "",
     tools: dynamicTools,
@@ -459,13 +461,6 @@ function openRunSession(sessionFile: string) {
 function createRunParams() {
   const { sessionFile, workspaceDir } = createRunPaths();
   return createParams(sessionFile, workspaceDir);
-}
-
-function startClockControlledAttempt(params: EmbeddedRunAttemptParams) {
-  // Cold transcript workers must not consume a success scenario's execution budget.
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const run = runCodexAppServerAttempt(params);
-  return { run, started: run.waitForTurnAccepted() };
 }
 
 const GOOGLE_CALENDAR_PLUGIN_CONFIG = {
@@ -720,35 +715,15 @@ async function runSharedClientRestartTest(
         config: {},
       }),
   );
-  const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-  const readyClient = await Promise.race([
-    turnStarted.promise,
-    run.then(() => {
-      throw new Error("Codex startup retry ended before turn/start");
-    }),
-  ]);
+  advanceAttemptRetryBackoff();
+  const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
+  const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",
     params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed", items: [] } },
   });
   const result = await run;
   return { result, requests, client: readyClient.client };
-}
-
-async function expectRetainedSuccessfulThread(client: CodexAppServerClient, threadId: string) {
-  const ownership = await consumeCodexAppServerLiveThread(client, threadId);
-  expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
-  // Restore the exact branded owner so this assertion itself cannot orphan
-  // the persistent subscription or alter later cleanup in the same test.
-  await expect(
-    retainCodexAppServerLiveThread(
-      client,
-      threadId,
-      ownership?.release,
-      ownership?.configFingerprint,
-      ownership?.serviceTier,
-    ),
-  ).resolves.toBe(true);
 }
 
 async function startFastAutoProgressTest(
@@ -1324,29 +1299,30 @@ describe("runCodexAppServerAttempt", () => {
       const params = createParams(sessionFile, workspaceDir);
       await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
       params.prompt = "external channel prompt";
-      const onUserMessagePersisted = vi.fn();
+      const userMessagePersisted = createDeferred<void>();
+      const onUserMessagePersisted = vi.fn(() => userMessagePersisted.resolve());
       params.onUserMessagePersisted = onUserMessagePersisted;
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await vi.waitFor(async () => {
-        expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
-          expect.objectContaining({
-            role: "user",
-            content: "external channel prompt",
-            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-          }),
-        );
-      });
-      await vi.waitFor(() => {
-        expect(onUserMessagePersisted).toHaveBeenCalledWith(
-          expect.objectContaining({
-            role: "user",
-            content: "external channel prompt",
-            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-          }),
-        );
-      });
+      const waitForProjectionReady = observeAttemptProjectionReady();
+      const { run, started } = startClockControlledAttempt(params);
+      await started;
+      await awaitGateBeforeSettlement(
+        userMessagePersisted.promise,
+        run,
+        "Codex attempt settled before persisting its user prompt",
+      );
+      await awaitGateBeforeSettlement(
+        waitForProjectionReady(),
+        run,
+        "Codex attempt settled before its transcript projection was ready",
+      );
       const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
+      const expectedUserMessage = expect.objectContaining({
+        role: "user",
+        content: "external channel prompt",
+        idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+      });
+      expect(messagesBeforeCompletion).toContainEqual(expectedUserMessage);
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(expectedUserMessage);
       expect(messagesBeforeCompletion.some((message) => message.role === "assistant")).toBe(false);
       const commentary = {
         type: "agentMessage",
@@ -3162,39 +3138,36 @@ describe("runCodexAppServerAttempt", () => {
       systemPromptReport,
       threadDeveloperInstructions,
     } = await buildCodexTurnContextForTest(params, workspaceDir);
-    expect(threadDeveloperInstructions).not.toContain(soulGuidance);
-    expect(threadDeveloperInstructions).not.toContain(identityGuidance);
-    expect(threadDeveloperInstructions).not.toContain(userProfile);
+    expect(threadDeveloperInstructions).toContain(soulGuidance);
+    expect(threadDeveloperInstructions).toContain(identityGuidance);
+    expect(threadDeveloperInstructions).toContain(userProfile);
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
     expect(threadDeveloperInstructions).not.toContain(agentsGuidance);
-    expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
-    expect(collaborationInstructions).toContain("request_user_input availability");
-    expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
-    expect(collaborationInstructions).toContain("<AGENT_SOUL>");
-    expect(collaborationInstructions).toContain("</AGENT_SOUL>");
-    expect(collaborationInstructions).toContain(soulGuidance);
-    expect(collaborationInstructions).toContain(identityGuidance);
-    expect(collaborationInstructions).toContain(userProfile);
-    expect(collaborationInstructions).toContain("## Memory Recall");
-    expect(collaborationInstructions).toContain("MEMORY.md + memory/*.md");
-    expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
-    expect(collaborationInstructions).toContain(
+    expect(collaborationInstructions).toBe("");
+    expect(threadDeveloperInstructions).toContain("OpenClaw Agent Soul");
+    expect(threadDeveloperInstructions).toContain("<AGENT_SOUL>");
+    expect(threadDeveloperInstructions).toContain("</AGENT_SOUL>");
+    expect(threadDeveloperInstructions).toContain(soulGuidance);
+    expect(threadDeveloperInstructions).toContain(identityGuidance);
+    expect(threadDeveloperInstructions).toContain(userProfile);
+    expect(threadDeveloperInstructions).toContain("## Memory Recall");
+    expect(threadDeveloperInstructions).toContain("MEMORY.md + memory/*.md");
+    expect(threadDeveloperInstructions).toContain("OpenClaw Workspace Memory");
+    expect(threadDeveloperInstructions).toContain(
       "MEMORY.md exists in the active agent workspace as a memory file, not an instruction file",
     );
-    expect(collaborationInstructions).toContain("memory_search");
-    expect(collaborationInstructions).toContain("memory_get");
-    expect(collaborationInstructions).toContain(
+    expect(threadDeveloperInstructions).toContain("memory_search");
+    expect(threadDeveloperInstructions).toContain("memory_get");
+    expect(threadDeveloperInstructions).toContain(
       "When the memory guidance above calls for memory recall, use an already-loaded memory tool directly.",
     );
-    expect(collaborationInstructions).toContain(
+    expect(threadDeveloperInstructions).toContain(
       "If the needed memory tool is deferred and not currently callable, use `tool_search` to load it, then call that memory tool.",
     );
-    expect(collaborationInstructions).not.toContain(memorySummary);
+    expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(inputText).toBe("hello");
-    expect(systemPromptReport.systemPrompt.chars).toBe(
-      [threadDeveloperInstructions, collaborationInstructions].join("\n\n").length,
-    );
+    expect(systemPromptReport.systemPrompt.chars).toBe(threadDeveloperInstructions.length);
     const fileStats = new Map(
       systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),
     );
@@ -3428,7 +3401,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("reports hook-supplied bootstrap files with unverified delivery on an external connection", async () => {
+  it("delivers and reports hook-supplied bootstrap files on an external connection", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const soulPath = path.join(workspaceDir, "SOUL.md");
     const soulGuidance = "Hook supplied soul guidance.";
@@ -3459,12 +3432,15 @@ describe("runCodexAppServerAttempt", () => {
         path: soulPath,
         rawChars: soulGuidance.length,
         missing: false,
-        injectionStatus: "native_unverified",
-        injectedChars: null,
-        truncated: null,
+        injectedChars: soulGuidance.length,
+        truncated: false,
       }),
     ]);
-    expect(result.systemPromptReport?.source).toBe("estimate");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    expect(
+      (threadStart?.params as { developerInstructions?: string } | undefined)
+        ?.developerInstructions,
+    ).toContain(soulGuidance);
   });
   it.each([{ name: "non-empty legacy HEARTBEAT.md", contents: "Heartbeat checklist goes here." }])(
     "keeps $name out of Codex heartbeat context",
@@ -3702,10 +3678,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.terminal).toEqual({ kind: "ok" });
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
-      text: "📖 Read: `from README.md`",
+      text: "Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read\n```txt\nfile contents\n```",
+      text: "Read\n```txt\nfile contents\n```",
     });
   });
 

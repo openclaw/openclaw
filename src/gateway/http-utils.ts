@@ -84,14 +84,16 @@ export function isAgentSelectionRequiredError(err: unknown): err is AgentSelecti
   return err instanceof AgentSelectionRequiredError;
 }
 
-export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
-  return err instanceof InvalidGatewayModelError;
+export function isGatewayAgentRequestError(err: unknown): err is Error {
+  return (
+    isAgentSelectionRequiredError(err) ||
+    err instanceof InvalidGatewayModelError ||
+    isUnknownGatewayAgentError(err)
+  );
 }
 
-export function isGatewaySessionKeyOverrideError(
-  err: unknown,
-): err is GatewaySessionKeyOverrideError {
-  return err instanceof GatewaySessionKeyOverrideError;
+export function isGatewayRequestContextError(err: unknown): err is Error {
+  return isGatewayAgentRequestError(err) || err instanceof GatewaySessionKeyOverrideError;
 }
 
 function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
@@ -284,8 +286,6 @@ export function resolveGatewayRequestContext(params: {
   model: string | undefined;
   user?: string | undefined;
   sessionPrefix: string;
-  defaultMessageChannel: string;
-  useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
@@ -295,10 +295,8 @@ export function resolveGatewayRequestContext(params: {
     prefix: params.sessionPrefix,
   });
 
-  const messageChannel = params.useMessageChannelHeader
-    ? (normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ??
-      params.defaultMessageChannel)
-    : params.defaultMessageChannel;
+  const messageChannel =
+    normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ?? "webchat";
 
   return { agentId, sessionKey, messageChannel };
 }

@@ -19,12 +19,13 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
-import type { DevUpdateTarget } from "./update-dev-target.js";
+import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
+import { runClassifiedGitStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -112,7 +113,7 @@ export async function withGitTargetInspectionRoot<T>(
     runCommand: CommandRunner;
     timeoutMs: number;
     work?: { timeoutMs?: number };
-    onWarning: (step: UpdateStepResult) => void;
+    onWarning: (step: UpdateStepResult) => void | Promise<void>;
     retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
@@ -342,9 +343,7 @@ export async function prepareGitMutation(params: {
   beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
 }): Promise<void> {
   const target = await readGitTargetSchemaVersions(params);
-  const sha = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(params.revision)
-    ? params.revision.toLowerCase()
-    : undefined;
+  const sha = isFullGitObjectId(params.revision) ? params.revision.toLowerCase() : undefined;
   await params.beforeGitMutation({
     ...(sha ? { sha } : {}),
     ...(target.status === "ok"
@@ -398,25 +397,8 @@ async function resolveChannelTag(
   const result = await runCommand(["git", "-C", root, "tag", "--list", "v*", "--sort=-v:refname"], {
     timeoutMs,
   }).catch(() => null);
-  const tags = result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
+  const tags = result?.code === 0 ? result.stdout.split("\n") : [];
   return selectChannelTag(tags, channel);
-}
-
-/**
- * Picks the single remote release tags are force-fetched from. The checkout's
- * retained tracking remote (`branch.<main>.remote`) wins when it is still
- * declared, because a detached release checkout keeps that config and a fork
- * `origin` can be tag-less; otherwise the clone's canonical `origin`, then the
- * only declared remote. Multiple non-origin remotes need explicit tracking.
- */
-function resolveReleaseTagRemote(
-  remotes: readonly string[],
-  trackedUpdateRemote: string,
-): string | undefined {
-  if (trackedUpdateRemote && remotes.includes(trackedUpdateRemote)) {
-    return trackedUpdateRemote;
-  }
-  return remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : undefined;
 }
 
 export async function fetchGitUpdateTarget(params: {
@@ -431,6 +413,44 @@ export async function fetchGitUpdateTarget(params: {
   const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
   const refreshedRemotes: string[] = [];
   const result = (ok: boolean) => ({ ok, refreshedRemotes });
+  if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
+    // A pinned commit needs no remote freshness. Probe privately without allowing
+    // promised-object hydration; the normal candidate/transfer owners still verify its contents.
+    const options = targetStep(
+      "git-resolve-target",
+      [
+        "git",
+        "-C",
+        root,
+        "--no-lazy-fetch",
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
+      ],
+      root,
+    );
+    const cachedTarget = await runClassifiedGitStep(
+      { ...options, input: `${devTarget.ref}\n` },
+      (cached) => {
+        const interrupted =
+          cached.termination === "signal" || cached.exitCode === 130 || cached.exitCode === 143;
+        const available =
+          !isFailedUpdateStep(cached) &&
+          !cached.signal &&
+          !interrupted &&
+          cached.stdoutTail?.trim() === `${devTarget.ref.toLowerCase()} commit`;
+        if (!interrupted && isFailedUpdateStep(cached)) {
+          cached.advisory = {
+            kind: "recoverable-maintenance",
+            message: `Could not inspect the cached target; continuing remote discovery. ${cached.stderrTail ?? ""}`,
+          };
+        }
+        return { interrupted, available };
+      },
+    );
+    if (cachedTarget.interrupted || cachedTarget.available) {
+      return result(cachedTarget.available);
+    }
+  }
   const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
   if (remote.exitCode !== 0) {
     return result(false);
@@ -459,7 +479,16 @@ export async function fetchGitUpdateTarget(params: {
         .toSorted((left, right) => right.length - left.length)
         .find((candidate) => remoteRef.startsWith(`${candidate}/`))
     : undefined;
-  const tagRemote = resolveReleaseTagRemote(remotes, trackedRemote);
+  // Detached release checkouts retain tracking config; a fork's origin can be tag-less.
+  // Otherwise prefer origin, then the sole remote; multiple remotes need explicit tracking.
+  const tagRemote =
+    trackedRemote && remotes.includes(trackedRemote)
+      ? trackedRemote
+      : remotes.includes("origin")
+        ? "origin"
+        : remotes.length === 1
+          ? remotes[0]
+          : undefined;
   // A configured tracking remote is authoritative even when its refs are cold.
   // Unqualified explicit branches use origin; explicit tags resolve separately.
   const authority =
@@ -484,7 +513,7 @@ export async function fetchGitUpdateTarget(params: {
     ? [authority]
     : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
       ? []
-      : targetRef && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(targetRef)
+      : targetRef && !isFullGitObjectId(targetRef)
         ? remotes.filter((candidate) => candidate === "origin")
         : remotes;
   for (const fetchRemote of fetchRemotes) {
@@ -496,32 +525,26 @@ export async function fetchGitUpdateTarget(params: {
       ["git", "-C", root, "fetch", fetchRemote, "--prune", "--no-tags", "--no-prune-tags"],
       root,
     );
-    const fetch = await runStep({
-      ...options,
-      progress: { ...options.progress, onStepComplete: undefined },
-    });
-    const interrupted =
-      fetch.termination === "signal" || fetch.exitCode === 130 || fetch.exitCode === 143;
-    const fetchedSuccessfully = fetch.exitCode === 0 && !isFailedUpdateStep(fetch);
-    if (fetchedSuccessfully && !interrupted) {
-      refreshedRemotes.push(fetchRemote);
-      if (authority && remotes.some((candidate) => candidate !== authority)) {
-        fetch.warnings = [
-          `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
-        ];
+    const fetchOutcome = await runClassifiedGitStep(options, (fetch) => {
+      const interrupted =
+        fetch.termination === "signal" || fetch.exitCode === 130 || fetch.exitCode === 143;
+      const fetchedSuccessfully = fetch.exitCode === 0 && !isFailedUpdateStep(fetch);
+      if (fetchedSuccessfully && !interrupted) {
+        refreshedRemotes.push(fetchRemote);
+        if (authority && remotes.some((candidate) => candidate !== authority)) {
+          fetch.warnings = [
+            `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
+          ];
+        }
+      } else if (!authority && !interrupted) {
+        fetch.advisory = {
+          kind: "recoverable-maintenance",
+          message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
+        };
       }
-    } else if (!authority && !interrupted) {
-      fetch.advisory = {
-        kind: "recoverable-maintenance",
-        message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
-      };
-    }
-    options.progress?.onStepComplete?.({
-      ...fetch,
-      index: options.stepIndex,
-      total: options.totalSteps,
+      return { interrupted, fetchedSuccessfully };
     });
-    if (interrupted || (!fetchedSuccessfully && authority)) {
+    if (fetchOutcome.interrupted || (!fetchOutcome.fetchedSuccessfully && authority)) {
       return result(false);
     }
   }
@@ -640,7 +663,7 @@ export async function readPreferredGitChannelTarget(params: {
         },
       );
       const sha = resolved.code === 0 ? resolved.stdout.trim() : "";
-      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(sha)) {
+      if (!isFullGitObjectId(sha)) {
         return undefined;
       }
       // Fetch preserves operator-only tags. A selected cached tag is not a fresh remote fact.

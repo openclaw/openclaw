@@ -39,11 +39,10 @@ export function isValidMemoryEmbedding(embedding: number[], dimensions?: number)
 
 export function loadMemoryEmbeddingCache(params: {
   db: DatabaseSync;
-  enabled: boolean;
   providerIdentities: MemoryIndexProviderIdentity[];
   hashes: string[];
 }): Map<string, number[]> {
-  if (!params.enabled || params.providerIdentities.length === 0 || params.hashes.length === 0) {
+  if (params.providerIdentities.length === 0 || params.hashes.length === 0) {
     return new Map();
   }
   const unresolved = new Set(params.hashes.filter(Boolean));
@@ -89,6 +88,44 @@ export function loadMemoryEmbeddingCache(params: {
     }
   }
   return out;
+}
+
+export function countMemoryEmbeddingCache(database: DatabaseSync): number {
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  const result = executeSqliteQuerySync(
+    database,
+    db.selectFrom("memory_embedding_cache").select((eb) => eb.fn.countAll<number>().as("count")),
+  );
+  return result.rows[0]!.count;
+}
+
+/** The caller holds the write transaction; another purge may have reduced the cache. */
+export function pruneMemoryEmbeddingCache(database: DatabaseSync, maxEntries: number): void {
+  const excess = countMemoryEmbeddingCache(database) - maxEntries;
+  if (excess <= 0) {
+    return;
+  }
+  deleteOldestMemoryEmbeddingCacheRows(database, Math.min(excess, 100));
+}
+
+function deleteOldestMemoryEmbeddingCacheRows(database: DatabaseSync, limit: number): void {
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  // SQLite performs eviction without materializing the full cache in JavaScript.
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("memory_embedding_cache")
+      .where(
+        "rowid",
+        "in",
+        db
+          .selectFrom("memory_embedding_cache")
+          .select("rowid")
+          .orderBy("updated_at", "asc")
+          .orderBy("rowid", "asc")
+          .limit(limit),
+      ),
+  );
 }
 
 /** Discard ambiguous vector spaces without removing unrelated provider caches or index rows. */
@@ -138,18 +175,14 @@ function prepareMemoryEmbeddingCacheUpsert(db: DatabaseSync) {
 
 export function upsertMemoryEmbeddingCache(params: {
   db: DatabaseSync;
-  enabled: boolean;
-  provider: { id: string; model: string } | null;
-  providerKey: string | null;
+  provider: { id: string; model: string };
+  providerKey: string;
   /** Stable replayable rows let staged writes retain hashes without a second vector batch. */
   entries: () => Iterable<{ hash: string; embedding: number[] }>;
   maxEntries?: number;
   now?: number;
 }): void {
   const provider = params.provider;
-  if (!params.enabled || !provider || !params.providerKey) {
-    return;
-  }
   const lastRows = new Map<string, number>();
   let row = 0;
   for (const entry of params.entries()) {
@@ -183,7 +216,7 @@ export function upsertMemoryEmbeddingCache(params: {
     if (!retained.has(row++)) {
       continue;
     }
-    const embedding = entry.embedding ?? [];
+    const embedding = entry.embedding;
     upsert({
       provider: provider.id,
       model: provider.model,
@@ -217,21 +250,11 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
         .where("hash", "in", params.hashes.slice(start, start + 400)),
     );
   }
-  // SQLite performs eviction without materializing the full cache in JavaScript.
-  executeSqliteQuerySync(
-    params.db,
-    db.deleteFrom("memory_embedding_cache").where(
-      "rowid",
-      "in",
-      db
-        .selectFrom("memory_embedding_cache")
-        .select("rowid")
-        .orderBy("updated_at", "desc")
-        .orderBy("rowid", "desc")
-        .limit(-1)
-        .offset(params.maxEntries - params.hashes.length),
-    ),
-  );
+  const retainedCapacity = params.maxEntries - params.hashes.length;
+  const excess = countMemoryEmbeddingCache(params.db) - retainedCapacity;
+  if (excess > 0) {
+    deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+  }
 }
 
 export function collectMemoryCachedEmbeddings<T extends Pick<MemoryChunk, "hash">>(params: {

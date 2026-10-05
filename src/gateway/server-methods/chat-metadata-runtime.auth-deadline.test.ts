@@ -19,7 +19,7 @@ function createAuthHarnesses(authStore: AuthProfileStore, key: string) {
     auth: { order: { acme: ["acme:primary"] } },
     agents: {
       defaults: { model: { primary: "acme/model" }, models: { "acme/model": {} } },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   };
   const owner = createChatMetadataOwner(
@@ -44,7 +44,7 @@ describe("gateway chat metadata auth deadlines", () => {
       auth: { order: { acme: ["acme:primary"] } },
       agents: {
         defaults: { model: { primary: "acme/model" }, models: { "acme/model": {} } },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     };
     const prepared = createChatMetadataOwner(
@@ -73,7 +73,6 @@ describe("gateway chat metadata auth deadlines", () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(config, {
       useDefaultProjection: true,
-      refreshOnRead: false,
       onChanged,
     });
     harness.setOwner(owner);

@@ -153,7 +153,7 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  verboseProgressActive: () => boolean;
+  verboseProgressActive: () => Promise<boolean>;
   previewLifecycle: LivePreviewLifecycle<ReplyPayload, number>;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

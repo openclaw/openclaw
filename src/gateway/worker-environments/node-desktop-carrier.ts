@@ -68,18 +68,13 @@ function isBindingCurrent(
   );
 }
 
-function invocationError(
-  result: Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>,
-): Error {
-  const message = result.error?.message?.trim();
-  return new Error(message || "worker node desktop stream closed before attachment");
-}
-
 function requireLaunchReady(
   result: Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>,
 ): void {
   if (!result.ok) {
-    throw invocationError(result);
+    throw new Error(
+      result.error?.message?.trim() || "worker node desktop stream closed before attachment",
+    );
   }
   let payload: unknown;
   try {
@@ -131,26 +126,24 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     return node;
   };
 
-  const stopLaunch = async (active: ActiveNodeDesktopLaunch): Promise<void> => {
+  const stopOperation = async (
+    active: ActiveNodeDesktopLaunch | ActiveNodeDesktopStream,
+  ): Promise<void> => {
+    if ("stream" in active) {
+      await active.stream.stop();
+      return;
+    }
     active.controller.abort(new Error("Worker environment node desktop owner stopped"));
     await active.operation.catch(() => undefined);
   };
 
   const stopOwnedOperations = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
-    const streams = [...activeStreams].filter(
+    const operations = [...activeStreams, ...activeLaunches.values()].filter(
       (active) =>
         active.binding.environmentId === environmentId &&
         (ownerEpoch === undefined || active.binding.ownerEpoch === ownerEpoch),
     );
-    const launches = [...activeLaunches.values()].filter(
-      (active) =>
-        active.binding.environmentId === environmentId &&
-        (ownerEpoch === undefined || active.binding.ownerEpoch === ownerEpoch),
-    );
-    await Promise.all([
-      ...streams.map((active) => active.stream.stop()),
-      ...launches.map(stopLaunch),
-    ]);
+    await Promise.all(operations.map(stopOperation));
   };
 
   const claimOwner = async (binding: NodeDesktopBinding): Promise<void> => {
@@ -166,21 +159,13 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     if (!advanced) {
       return;
     }
-    const staleStreams = [...activeStreams].filter(
-      (active) =>
-        active.binding.environmentId === binding.environmentId &&
-        active.binding.ownerEpoch < binding.ownerEpoch,
-    );
-    const staleLaunches = [...activeLaunches.values()].filter(
+    const staleOperations = [...activeStreams, ...activeLaunches.values()].filter(
       (active) =>
         active.binding.environmentId === binding.environmentId &&
         active.binding.ownerEpoch < binding.ownerEpoch,
     );
     await options.desktopRegistry.stopSuperseded(binding.environmentId, binding.ownerEpoch);
-    await Promise.all([
-      ...staleStreams.map((active) => active.stream.stop()),
-      ...staleLaunches.map(stopLaunch),
-    ]);
+    await Promise.all(staleOperations.map(stopOperation));
   };
 
   const observe = async (request: {

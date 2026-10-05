@@ -1,5 +1,4 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
-import { createHash } from "node:crypto";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
@@ -20,7 +19,11 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
-import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
+import {
+  findModelInCatalog,
+  modelSupportsInput,
+  prepareModelRunCapabilities,
+} from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import {
@@ -42,18 +45,17 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
+import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
-import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
+import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
-import {
-  assertCronRuntimeAuthorityCandidate,
-  prepareCronPromptRunAdmission,
-} from "./run-admission.js";
+import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
+import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
 import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
@@ -98,31 +100,6 @@ function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
 
 const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
-
-function resolveIsolatedCronPromptCacheKey(params: {
-  job: CronJob;
-  agentId: string;
-  agentSessionKey: string;
-  provider: string;
-  model: string;
-}): string | undefined {
-  if (params.job.sessionTarget !== "isolated") {
-    return undefined;
-  }
-  const material = JSON.stringify({
-    version: 1,
-    kind: "isolated-cron",
-    jobId: params.job.id,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    provider: params.provider,
-    model: params.model,
-  });
-  const digest = createHash("sha256").update(material).digest("hex").slice(0, 32);
-  // Isolated cron rotates transcript/session ids per run; keep cache affinity
-  // on stable job identity without sending raw local session labels upstream.
-  return `openclaw-cron-${digest}`;
-}
 
 /** Detects single-line cron prompts that look like shell commands or command invocations. */
 function isCommandStyleCronMessage(message: string): boolean {
@@ -239,12 +216,9 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const {
-      preparedRunAdmission,
-      messageActionTurnCapability,
-      close: closePromptAdmission,
-    } = prepareCronPromptRunAdmission({
+    const cronAdmission = prepareCronRunAdmission({
       admissionSource: params.admissionSource,
+      deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
       runId,
@@ -272,12 +246,13 @@ function createCronPromptExecutor(
         jobId: params.job.id,
         jobConfigRevision: resolveCronJobConfigRevision(params.job),
         jobName: params.job.name,
+        standingGrantAuthority: cronAdmission.standingGrantAuthority,
       });
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
     const fallbackResult = await runEmbeddedAgentEntry({
-      preparedRunAdmission,
+      preparedRunAdmission: cronAdmission.preparedRunAdmission,
       selection: {
         cfg: params.cfgWithAgentDefaults,
         provider: params.liveSelection.provider,
@@ -439,7 +414,7 @@ function createCronPromptExecutor(
         // Snapshot mutable session and transcript facts only when the runtime is invoked.
         const buildCommonRunParams = () =>
           ({
-            preparedRunAdmission,
+            preparedRunAdmission: cronAdmission.preparedRunAdmission,
             ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
             cwd: params.executionRoot ?? params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
@@ -448,7 +423,7 @@ function createCronPromptExecutor(
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            messageActionTurnCapability,
+            messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
             finalizePromptForResolvedTools,
@@ -557,10 +532,7 @@ function createCronPromptExecutor(
                     sourceReplyDeliveryMode,
                     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                   },
-                  toolsAllow: resolveCliRuntimeToolsAllow(
-                    params.agentPayload?.toolsAllow,
-                    params.agentPayload?.toolsAllowIsDefault,
-                  ),
+                  toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
                   abortSignal: cliAbortSignal,
                 });
                 const classification = runOptions.classifyResult(candidateResult);
@@ -590,7 +562,7 @@ function createCronPromptExecutor(
                 return candidateResult;
               },
               {
-                preparedRunAdmission,
+                preparedRunAdmission: cronAdmission.preparedRunAdmission,
                 abortSignal: cliAbortSignal,
                 trigger: "cron",
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
@@ -634,6 +606,12 @@ function createCronPromptExecutor(
           agentDir: params.agentDir,
           provider: providerOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
+          // Same capability the reply path and agent command prepare: harness-native effort lists
+          // (Codex `max`) reach the runtime model only through it.
+          modelThinkingCapability: prepareModelRunCapabilities(
+            [thinkingCatalog, []],
+            [providerOverride, modelOverride, candidateRuntime],
+          ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
@@ -676,7 +654,7 @@ function createCronPromptExecutor(
       })
       .finally(() => {
         unregisterCronRunExecSource();
-        closePromptAdmission();
+        cronAdmission.close();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??
@@ -720,8 +698,8 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
   registerAgentRunContext(params.runId, {
-    sessionKey: params.runSessionKey,
     sessionId: params.cronSession.sessionEntry.sessionId,
+    agentId: params.agentId,
     verboseLevel: resolvedVerboseLevel,
   });
   const runStartedAt = params.runStartedAt ?? Date.now();

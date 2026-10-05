@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -18,8 +20,8 @@ import {
 } from "./skill-library-authoring.js";
 
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -40,7 +42,7 @@ function setup() {
   return { alice, bob, request };
 }
 async function admitted(
-  capability: NonNullable<ReturnType<typeof prepareGatewaySkillAuthoring>>,
+  capability: NonNullable<Awaited<ReturnType<typeof prepareGatewaySkillAuthoring>>>,
   runId = "ordinary-turn",
 ) {
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test");
@@ -76,7 +78,7 @@ describe("human personal namespace authority", () => {
       content,
       expectedRevision: null,
     });
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     const run = await admitted(capability);
     const tool = createLibrarySkillWorkshopTool(capability);
     try {
@@ -94,7 +96,7 @@ describe("human personal namespace authority", () => {
           content: content + "Unauthorized edit.\n",
         }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
-      expect(listSkillLibrary(libraryAuthority(owner)).entries[0]?.canEdit).toBe(true);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries[0]?.canEdit).toBe(true);
       expect(await run.invoke({ action: "list" })).toMatchObject({
         entries: [expect.objectContaining({ skillId: other.entry.skillId, canEdit: false })],
       });
@@ -128,7 +130,7 @@ describe("human personal namespace authority", () => {
   it("authors for the real requester inside another person's session and rejects a retained tool after close", async () => {
     const { bob, request } = setup();
     const owner = request(bob.id);
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     const run = await admitted(capability);
     try {
       const created = await run.invoke({ action: "create", slug: "ordinary", content });
@@ -138,7 +140,7 @@ describe("human personal namespace authority", () => {
         entry: { ownerProfileId: bob.id },
         sessionActivation: "new-sessions",
       });
-      expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(1);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(1);
       run.close();
       await expect(
         run.invoke({ action: "create", slug: "after-close", content }),
@@ -151,7 +153,9 @@ describe("human personal namespace authority", () => {
     const { alice, request } = setup();
     const owner = request(alice.id);
     owner.client!.connect.scopes = ["operator.admin"];
-    const run = await admitted(prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!);
+    const run = await admitted(
+      (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
+    );
     try {
       const created = await run.invoke({
         action: "create",
@@ -195,15 +199,15 @@ describe("human personal namespace authority", () => {
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
     const { alice, bob, request } = setup();
     const owner = request(alice.id);
-    expect(prepareGatewaySkillAuthoring(owner, "agent:main:shared", false)).toBeUndefined();
+    expect(await prepareGatewaySkillAuthoring(owner, "agent:main:shared", false)).toBeUndefined();
     expect(
-      prepareGatewaySkillAuthoring(
+      await prepareGatewaySkillAuthoring(
         { ...owner, client: { ...owner.client!, internal: { syntheticClient: true } } },
         "agent:main:shared",
         true,
       ),
     ).toBeUndefined();
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     await expect(capability.invoke({ action: "list" })).rejects.toMatchObject({
       code: "AUTHORITY_EXPIRED",
     });
@@ -217,7 +221,7 @@ describe("human personal namespace authority", () => {
       await expect(run.invoke({ action: "create", slug: "ambiguous", content })).rejects.toThrow(
         "fresh attributed",
       );
-      expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(0);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
     } finally {
       run.close();
     }
@@ -236,12 +240,14 @@ describe("human personal namespace authority", () => {
         },
       },
     });
-    const run = await admitted(prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!);
+    const run = await admitted(
+      (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
+    );
     try {
       const saving = run.invoke({ action: "create", slug: "revoked", content });
       setUserProfileRole(alice.id, "reader");
       await expect(saving).rejects.toMatchObject({ code: "FORBIDDEN" });
-      expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(0);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
     } finally {
       run.close();
     }
@@ -249,7 +255,7 @@ describe("human personal namespace authority", () => {
   it("returns a whole bounded instruction or visible omission without embedding binary bundle data", async () => {
     const { alice, request } = setup();
     const owner = request(alice.id);
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     const run = await admitted(capability);
     try {
       const created = await run.invoke({
@@ -302,7 +308,11 @@ describe("human personal namespace authority", () => {
 
 it("serves worker Workshop through the same Gateway capability and rejects a lost turn claim", async () => {
   const { alice, request } = setup();
-  const capability = prepareGatewaySkillAuthoring(request(alice.id), "agent:main:shared", true)!;
+  const capability = (await prepareGatewaySkillAuthoring(
+    request(alice.id),
+    "agent:main:shared",
+    true,
+  ))!;
   const run = await admitted(capability, "worker-personal-turn");
   const { createWorkerGatewayToolRuntime } =
     await import("./worker-environments/worker-gateway-tool-runtime.js");
@@ -351,6 +361,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
     signal: new AbortController().signal,
     prepare: async () => ({
       tools: [retainedTool],
+      presentation: createToolSurfacePresentationForTest(),
       policy: {
         workspaceOnly: true,
         readOnly: false,
@@ -400,7 +411,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       ],
     });
     expect(JSON.stringify(result)).toContain(alice.id);
-    expect(listSkillLibrary(libraryAuthority(request(alice.id))).entries).toHaveLength(1);
+    expect((await listSkillLibrary(libraryAuthority(request(alice.id)))).entries).toHaveLength(1);
     expect(
       await proxy.execute("create-1", {
         action: "create",
@@ -413,7 +424,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         ],
       }),
     ).toEqual(result);
-    const entry = listSkillLibrary(libraryAuthority(request(alice.id))).entries[0]!;
+    const entry = (await listSkillLibrary(libraryAuthority(request(alice.id)))).entries[0]!;
     const readArtifact = await proxy.execute("read-helper", {
       action: "read",
       skill_id: entry.skillId,

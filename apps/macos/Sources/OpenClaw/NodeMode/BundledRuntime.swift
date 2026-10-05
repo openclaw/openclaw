@@ -1,12 +1,20 @@
 import Foundation
 import OpenClawKit
 
-/// The signed bundle owns this private runtime; general CLI/Gateway discovery never selects it.
-struct BundledRuntime {
+/// The signed bundle owns the payload; the profile's seeded copy hosts its CLI and Gateway.
+struct BundledRuntime: Sendable {
     let root: URL
     let bun: URL
     let packageRoot: URL
     let sqliteLibrary: URL
+
+    static var isBundledApp: Bool {
+        Bundle.main.bundleURL.pathExtension == "app"
+    }
+
+    var cliCommand: [String] {
+        [self.bun.path, self.packageRoot.appendingPathComponent("openclaw.mjs").path]
+    }
 
     var environment: [String: String] {
         [
@@ -15,7 +23,7 @@ struct BundledRuntime {
         ]
     }
 
-    private struct BuildInfo: Decodable {
+    struct BuildInfo: Decodable, Equatable, Sendable {
         let version: String
         let commit: String
         let builtAt: String
@@ -57,21 +65,23 @@ struct BundledRuntime {
 
     static func resolve(bundle: Bundle) throws -> Self {
         let root = bundle.bundleURL.appendingPathComponent("Contents/Resources/runtime")
-        let bun = root.appendingPathComponent("bin/bun")
-        let packageRoot = root.appendingPathComponent("lib/node_modules/openclaw")
-        let sqliteLibrary = root.appendingPathComponent("lib/libsqlite3.dylib")
+        return try self.resolve(root: root, bundle: bundle)
+    }
+
+    static func resolve(root: URL, bundle: Bundle) throws -> Self {
+        let runtime = Self(root: root)
         let info = bundle.infoDictionary ?? [:]
         let appBuild = ArtifactBuildInfo(infoDictionary: info)
         do {
             let build = try JSONDecoder().decode(
                 BuildInfo.self,
-                from: Data(contentsOf: packageRoot.appendingPathComponent("dist/build-info.json")))
+                from: Data(contentsOf: runtime.packageRoot.appendingPathComponent("dist/build-info.json")))
             guard build.version == appBuild.version,
                   build.commit == appBuild.gitCommit,
                   build.builtAt == appBuild.buildTimestamp,
                   build.buildId == info["OpenClawRuntimeBuildID"] as? String,
-                  FileManager.default.isExecutableFile(atPath: bun.path),
-                  FileManager.default.isReadableFile(atPath: sqliteLibrary.path)
+                  FileManager.default.isExecutableFile(atPath: runtime.bun.path),
+                  FileManager.default.isReadableFile(atPath: runtime.sqliteLibrary.path)
             else {
                 throw MacNodeHostWorker.WorkerError.unavailable(reason: "Private runtime build does not match this app")
             }
@@ -80,7 +90,14 @@ struct BundledRuntime {
                 reason: "The bundled runtime is missing or incompatible. Rebuild or reinstall OpenClaw.app.",
                 diagnostic: error.localizedDescription)
         }
-        return Self(root: root, bun: bun, packageRoot: packageRoot, sqliteLibrary: sqliteLibrary)
+        return runtime
+    }
+
+    init(root: URL) {
+        self.root = root
+        self.bun = root.appendingPathComponent("bin/bun")
+        self.packageRoot = root.appendingPathComponent("lib/node_modules/openclaw")
+        self.sqliteLibrary = root.appendingPathComponent("lib/libsqlite3.dylib")
     }
 
     private func command(entry: String) throws -> [String] {

@@ -1,8 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
@@ -43,37 +39,27 @@ type ParsedModelsCommand =
   | { action: "add" };
 
 function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action: "list" }> {
-  const provider = normalizeOptionalString(tokens[0]);
-
+  const provider = tokens[0];
   let page = 1;
-  let all = false;
-  for (const token of tokens.slice(1)) {
-    const lower = normalizeLowercaseStringOrEmpty(token);
-    if (lower === "all" || lower === "--all") {
-      all = true;
-      continue;
-    }
-    if (lower.startsWith("page=")) {
-      const value = parseStrictPositiveInteger(lower.slice("page=".length));
-      if (value !== undefined) {
-        page = value;
-      }
-      continue;
-    }
-    const pageToken = parseStrictPositiveInteger(lower);
-    if (pageToken !== undefined) {
-      page = pageToken;
-    }
-  }
-
   let pageSize = PAGE_SIZE_DEFAULT;
-  for (const token of tokens) {
-    const lower = normalizeLowercaseStringOrEmpty(token);
+  let all = false;
+  for (const [index, token] of tokens.entries()) {
+    const lower = token.toLowerCase();
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
-      const rawValue = lower.slice(lower.indexOf("=") + 1);
-      const value = parseStrictPositiveInteger(rawValue);
+      const value = parseStrictPositiveInteger(lower.slice(lower.indexOf("=") + 1));
       if (value !== undefined) {
         pageSize = Math.min(PAGE_SIZE_MAX, value);
+      }
+    } else if (index > 0) {
+      if (lower === "all" || lower === "--all") {
+        all = true;
+      } else {
+        const value = parseStrictPositiveInteger(
+          lower.startsWith("page=") ? lower.slice("page=".length) : lower,
+        );
+        if (value !== undefined) {
+          page = value;
+        }
       }
     }
   }
@@ -93,8 +79,8 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
     return { action: "providers" };
   }
 
-  const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const first = normalizeLowercaseStringOrEmpty(tokens[0]);
+  const tokens = trimmed.split(/\s+/g);
+  const first = tokens[0]?.toLowerCase();
   switch (first) {
     case "providers":
       return { action: "providers" };
@@ -174,16 +160,6 @@ function buildModelsMenuText(params: {
   ].join("\n");
 }
 
-function buildProviderInfos(params: {
-  providers: string[];
-  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
-}): Array<{ id: string; count: number }> {
-  return params.providers.map((provider) => ({
-    id: provider,
-    count: params.byProvider.get(provider)?.size ?? 0,
-  }));
-}
-
 type ModelsCommandReplyParams = {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
@@ -259,7 +235,10 @@ function buildModelsCommandReply(
     .join("\n");
   const withAvailability = (text: string) => [text, notice, checking].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
-  const providerInfos = buildProviderInfos({ providers, byProvider });
+  const providerInfos = providers.map((provider) => ({
+    id: provider,
+    count: byProvider.get(provider)?.size ?? 0,
+  }));
 
   const providerMenuReply = (preferMenu: boolean): ReplyPayload & { text: string } => {
     const channelData =
@@ -293,7 +272,8 @@ function buildModelsCommandReply(
     return providerMenuReply(false);
   }
 
-  if (!byProvider.has(provider)) {
+  const providerModels = byProvider.get(provider);
+  if (!providerModels) {
     return {
       text: [
         `Unknown provider: ${provider}`,
@@ -306,7 +286,7 @@ function buildModelsCommandReply(
     };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())];
+  const models = [...providerModels];
   const total = models.length;
 
   if (total === 0) {
@@ -354,7 +334,7 @@ function buildModelsCommandReply(
   }
 
   const effectivePageSize = all ? total : pageSize;
-  const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
+  const pageCount = Math.ceil(total / effectivePageSize);
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
 
   if (!all && page !== safePage) {

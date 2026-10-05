@@ -38,10 +38,8 @@ export type CreateNodeProxyAgentOptions =
 
 function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol): URL {
   const withScheme = proxyUrl.includes("://") ? proxyUrl : `${protocol}://${proxyUrl}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(withScheme);
-  } catch {
+  const parsed = URL.parse(withScheme);
+  if (!parsed) {
     // URL parse errors retain the input, which can contain proxy credentials.
     throw new Error("Invalid proxy URL. Use an HTTP or HTTPS proxy URL.");
   }
@@ -67,10 +65,8 @@ function resolveEnvNodeProxyTarget(
   targetUrl: string | URL,
   env: NodeJS.ProcessEnv = process.env,
 ): { proxyUrl: URL; protocol: NodeProxyProtocol } | undefined {
-  let target: URL;
-  try {
-    target = new URL(targetUrl instanceof URL ? targetUrl.href : targetUrl);
-  } catch {
+  const target = URL.parse(targetUrl instanceof URL ? targetUrl.href : targetUrl);
+  if (!target) {
     return undefined;
   }
   // Normalize only this request's snapshot: WebSocket bypass uses HTTP(S)
@@ -80,14 +76,10 @@ function resolveEnvNodeProxyTarget(
   } else if (target.protocol === "wss:") {
     target.protocol = "https:";
   }
-  let protocol: NodeProxyProtocol;
-  if (target.protocol === "http:") {
-    protocol = "http";
-  } else if (target.protocol === "https:") {
-    protocol = "https";
-  } else {
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
     return undefined;
   }
+  const protocol = target.protocol === "https:" ? "https" : "http";
   if (matchesNoProxy(target, env)) {
     return undefined;
   }

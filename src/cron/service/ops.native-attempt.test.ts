@@ -65,7 +65,7 @@ describe("native attempt queued automation admission", () => {
       await withOpenClawTestState({ prefix: "native-cron-admission-" }, async (state) => {
         resetCommandQueueStateForTest();
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main" }], defaults: { workspace: state.workspaceDir } },
+          agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
           cron: { enabled: false },
         };
         await state.writeConfig(cfg);
@@ -185,10 +185,13 @@ describe("native attempt queued automation admission", () => {
                   createDefaultEmbeddedSession({
                     prompt: async () => {
                       const submittedTool = tool;
+                      // The cron lane stays blocked until after this reply, so the
+                      // run cannot finish within the call; return its queued ack.
                       const ack = await submittedTool.execute("queued-automation", {
                         action: "run",
                         jobId: job.id,
                         runMode: "force",
+                        timeoutMs: 1,
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {

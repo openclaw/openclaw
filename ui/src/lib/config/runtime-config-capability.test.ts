@@ -19,9 +19,11 @@ describe("runtime config capability", () => {
         return {
           sourceConfig: {
             agents: {
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "reviewer" } },
               entries: {
                 main: {},
-                reviewer: { default: true },
+                reviewer: {},
               },
             },
           },
@@ -47,7 +49,11 @@ describe("runtime config capability", () => {
     expect(runtimeConfig.stageDefaultAgent("main")).toBe(false);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configForm).toEqual({
-      agents: { entries: { main: {}, reviewer: { default: true } } },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "reviewer" } },
+        entries: { main: {}, reviewer: {} },
+      },
     });
     runtimeConfig.dispose();
   });

@@ -12,12 +12,9 @@ export const SessionRowProjectionBinding = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionRowProjectionBinding"),
   () =>
     class {
-      readonly owner: object;
-      readonly readCommittedEntry: EntryReader;
-
-      constructor(owner: object, readCommittedEntry: EntryReader) {
-        this.owner = owner;
-        this.readCommittedEntry = readCommittedEntry;
-      }
+      constructor(
+        readonly owner: object,
+        readonly readCommittedEntry: EntryReader,
+      ) {}
     },
 );

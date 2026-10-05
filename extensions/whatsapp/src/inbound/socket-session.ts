@@ -332,6 +332,11 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
             currentSock,
             sendOperationTimeoutMs,
             {
+              assertCurrent: () => {
+                if (getCurrentSock() !== currentSock) {
+                  throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+                }
+              },
               onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
                 trackLateAcceptedSend(timedOutJid, promise);
               },
@@ -380,6 +385,13 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       return await createWhatsAppSocketOperationTimeoutAdapter(
         currentSock,
         sendOperationTimeoutMs,
+        {
+          assertCurrent: () => {
+            if (getCurrentSock() !== currentSock) {
+              throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+            }
+          },
+        },
       ).sendPresenceUpdate(presenceLocal, jid);
     },
   };

@@ -356,7 +356,7 @@ describe("Gateway repeated-request recovery", () => {
       expect(gateway.runtimeEnv.QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS).toBe(
         String(QA_RECOVERY_BOUND_MS),
       );
-      expect(gateway.runtimeEnv.OPENCLAW_QA_PARENT_PID).toBeTruthy();
+      expect(gateway.runtimeEnv.OPENCLAW_GATEWAY_HOST_LIFELINE).toBe("stdin");
 
       const baseline = await readStability(gateway);
       const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;

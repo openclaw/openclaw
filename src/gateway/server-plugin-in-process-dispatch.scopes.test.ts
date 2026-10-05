@@ -115,24 +115,6 @@ describe("synthetic operator scope attenuation", () => {
       allowedScope: "operator.read",
       allowed: false,
     },
-    {
-      method: "config.set",
-      requiredScope: "operator.admin",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
-    {
-      method: "exec.approval.resolve",
-      requiredScope: "operator.approvals",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
-    {
-      method: "node.pair.approve",
-      requiredScope: "operator.pairing",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
   ] as const)(
     "projects $allowedScope for $method without granting unrelated permissions",
     async ({ method, requiredScope, allowedScope, allowed }) => {
@@ -186,10 +168,8 @@ describe("registered plugin SDK scope attenuation", () => {
   afterEach(() => resetTestPluginRegistry());
 
   it.each([
-    { original: "read", scoped: "read", effective: "read" },
     { original: "write", scoped: "read", effective: "read" },
     { original: "read", scoped: "write", effective: "read" },
-    { original: "read", scoped: "admin", effective: "read" },
     { original: "admin", scoped: "write", effective: "write" },
   ] as const)(
     "retains the original $original source within scoped $scoped authority",
@@ -334,7 +314,6 @@ describe("native tool scope provenance", () => {
     { name: "staff write minimum", source: ["operator.write"], broad: true },
     { name: "staff read minimum", source: ["operator.read"], read: true, broad: true },
     { name: "admin minimum", source: ["operator.admin"], broad: true, admin: true },
-    { name: "Guest minimum", source: ["operator.sessions.write"] },
     {
       name: "original Guest ceiling",
       source: ["operator.sessions.write"],

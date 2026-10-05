@@ -6,7 +6,6 @@ import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logWarn } from "./logger.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "./logging/logger.js";
-import { stripRedundantSubsystemPrefixForConsole } from "./logging/subsystem.js";
 import type { RuntimeEnv } from "./runtime.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 
@@ -104,26 +103,6 @@ describe("globals", () => {
     expect(isYes()).toBe(true);
     setYes(false);
     expect(isYes()).toBe(false);
-  });
-});
-
-describe("stripRedundantSubsystemPrefixForConsole", () => {
-  it.each([
-    { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
-    { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
-    {
-      input: "[discord] connection stalled",
-      subsystem: "discord",
-      expected: "connection stalled",
-    },
-  ] as const)("drops known subsystem prefix for $input", ({ input, subsystem, expected }) => {
-    expect(stripRedundantSubsystemPrefixForConsole(input, subsystem)).toBe(expected);
-  });
-
-  it("keeps messages that do not start with the subsystem", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord")).toBe(
-      "discordant: hello",
-    );
   });
 });
 

@@ -146,11 +146,39 @@ Its id must match the plugin manifest. Register contributions through
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
+Set a navigation item's `parent` to another navigation ID in the same plugin to
+show it nested while the parent or a child destination is active; children only
+appear as top-level entries when pinned. Set `defaultVisible: false` to offer an
+item in **Customize**, and call `host.ui.pinNavigation(id)` after registering it
+to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
+already pinned ID; call it for a user action such as creation, not on every
+catalog refresh, so a later manual removal stays removed.
+
+Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
+`destructive` flag, and a `run` callback. The sidebar opens these actions on
+right-click, **Shift+F10**, or the context-menu key on the focused link, including
+nested and pinned entries. Selecting an action closes the menu; **Escape** or an
+outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
+pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+which actions to offer and own confirmation for destructive actions.
+
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget
 kinds for the current connection's scopes; a native view renders only when its
 matching backend descriptor is advertised.
+
+Use `host.ui.openPanel("editor", { sessionKey, agentId })` to open one of your
+registered panels beside a session. Omitting the session uses the currently
+selected session. The host owns navigation and sidebar presentation, including
+opening from a plugin page before the session pane has mounted. Only the same
+plugin's registered panels can be opened; retained handles expire with their
+view or activation.
+
+For a document link, use `host.navigation.pageHref(...)` to build a link to a
+registered plugin page. That page can resolve its document and call `openPanel`
+with the target session. This does not intercept ordinary file links or change
+the Files plugin's ownership.
 
 Use `host.ui.invalidate()` when plugin-owned state changes the presentation of
 an action or another contribution. Namespace custom elements and CSS with the
@@ -187,19 +215,76 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
-The host also exposes session and agent snapshots and operations, plugin page
-navigation, authenticated requests, and subscriptions. Session and agent
-`refresh()` operations fetch new snapshots and reject on failure, so a plugin
+Session-header accessories also receive `props.session`, the pane's current
+session snapshot. It can be absent while loading and does not depend on the
+filtered sidebar roster. Changes arrive through the accessory's `update`.
+
+For a standard direct link, register an accessory using the shared browser
+helper. The plugin decides when and where the link appears:
+
+```typescript
+import { createSessionHeaderLink, defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
+
+export default defineControlUiPlugin({
+  id: "example-chat",
+  activate(host) {
+    return host.ui.registerAccessory({
+      id: "conversation-origin",
+      placement: "session-header",
+      mount: createSessionHeaderLink(({ conversationLink }) =>
+        conversationLink && URL.parse(conversationLink.url)?.hostname === "chat.example.com"
+          ? conversationLink
+          : undefined,
+      ),
+    });
+  },
+});
+```
+
+The helper is bundled into the plugin's browser code. It creates an HTTP(S)
+anchor with the shared header style, opens directly in a new tab, and removes
+the link when the resolver returns `undefined` or the view is hidden/disposed.
+Without a registered accessory, saved conversation-link metadata creates no
+button. Custom accessory mounts can still render arbitrary HTML, CSS, and JavaScript.
+
+### Host capabilities
+
+Use the host for shared application behavior:
+
+| Capability              | Purpose                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`            | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`            | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
+| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+
+Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
 filtered, paginated session list. `host.sessions.refresh()` preserves that
 list's filters. Use `host.sessions.observe(query, onChange)` to maintain an
 independent session query without replacing it. The query accepts `agentId`,
 `search`, `archived` (`true`, `false`, or `"all"`), `limit`, `configuredAgentsOnly`,
-`includeGlobal`, `includeUnknown`, `includeDerivedTitles`, and
+`includeGlobal`, `includeUnknown`, `excludeDock`, `includeDerivedTitles`, and
 `includeLastMessage`. The callback receives `{ result, loading, error }`,
 starting with the current snapshot; `result` is null until data is available.
 Results contain `sessions` and the Gateway's `hasMore`, `nextOffset`, and
 `totalCount` pagination metadata.
+
+Create a conversation with `host.sessions.create({ agentId, displayName?, label?,
+surface? })`. `displayName` is a reusable display title; `label` is a unique
+session label. For a conversation owned by a plugin page's dock, pass
+`surface: "plugin-dock"`. This immutable creation-surface marker hides the
+conversation from ordinary session lists without changing its human creator,
+access, sharing, or sandbox rules. Rows expose `isDock` and `createdSurface`;
+`createdVia` retains its ordinary operator provenance.
+Independent host list queries exclude dock conversations by default; pass
+`excludeDock: false` when deliberately including them.
+The session key remains usable with `host.dock.openSession` and direct reads.
 
 The host fetches the query and keeps it current through session events,
 observer recovery, and its normal deletion handling. `observe` returns
@@ -226,6 +311,21 @@ ownership. Use `mountSelectPicker` for a list of `{ value, label, description? }
 options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
 With `searchable: true`, lists longer than eight options show a search field.
 The picker matches option labels, values, and descriptions.
+
+### Dock a conversation
+
+Check `host.dock` before offering a dock action. From a mounted view, use
+`context.host.dock.openSession({ sessionKey, agentId, label, context })` to open
+the named conversation alongside your plugin page. `label` supplies the dock
+tab title; the optional `context` is `{ page, detail? }`, where `page` can be
+your plugin page id and `detail` contains string reference fields.
+
+The host reuses the Home dock's placement controls, chat pane, drafts, and
+attachments. Page navigation keeps the conversation dock open; ending the
+plugin activation closes a dock that activation still owns. Use
+`host.subscribe(...)` to refresh your action when `host.dock.openSessionKey`
+changes. See the [dock contract](/plugins/sdk-subpaths#control-ui-conversation-dock)
+for replacement, visibility, access, and context limits.
 
 ## Build and reload
 
