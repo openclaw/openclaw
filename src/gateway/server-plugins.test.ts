@@ -32,6 +32,7 @@ import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gatewa
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
@@ -1492,7 +1493,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(registry);
     loadStartupPluginFixture();
     serverPluginsModule.setFallbackGatewayContext({
-      nodeRegistry: { sendInvokeInput: vi.fn() },
+      nodeRegistry: { sendInvokeInputWhenCurrent: vi.fn() },
     } as unknown as GatewayRequestContext);
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
       await handle();
@@ -1532,7 +1533,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(registry);
     loadStartupPluginFixture();
     serverPluginsModule.setFallbackGatewayContext({
-      nodeRegistry: { sendInvokeInput: vi.fn() },
+      nodeRegistry: { sendInvokeInputWhenCurrent: vi.fn() },
     } as unknown as GatewayRequestContext);
     const runtime = createRuntimeFromLastGatewayLoad();
     const openDuplex = () =>
@@ -1557,7 +1558,7 @@ describe("loadGatewayPlugins", () => {
       loadOpenClawPlugins.mockReturnValue(registry);
       loadStartupPluginFixture();
       const context = {
-        nodeRegistry: { sendInvokeInput: vi.fn() },
+        nodeRegistry: { sendInvokeInputWhenCurrent: vi.fn() },
       } as unknown as GatewayRequestContext;
       serverPluginsModule.setFallbackGatewayContext(context);
       handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
@@ -1602,7 +1603,7 @@ describe("loadGatewayPlugins", () => {
       loadOpenClawPlugins.mockReturnValue(registry);
       loadStartupPluginFixture();
       const context = {
-        nodeRegistry: { sendInvokeInput: vi.fn() },
+        nodeRegistry: { sendInvokeInputWhenCurrent: vi.fn() },
       } as unknown as GatewayRequestContext;
       serverPluginsModule.setFallbackGatewayContext(context);
       const requestScope = {
@@ -1639,9 +1640,9 @@ describe("loadGatewayPlugins", () => {
     const registry = createDuplexPluginRegistry();
     loadOpenClawPlugins.mockReturnValue(registry);
     loadStartupPluginFixture();
-    const sendInvokeInput = vi.fn();
+    const sendInvokeInputWhenCurrent = vi.fn();
     const context = {
-      nodeRegistry: { sendInvokeInput },
+      nodeRegistry: { sendInvokeInputWhenCurrent },
     } as unknown as GatewayRequestContext;
     serverPluginsModule.setFallbackGatewayContext(context);
     let invokeOptions: HandleGatewayRequestOptions | undefined;
@@ -1697,9 +1698,10 @@ describe("loadGatewayPlugins", () => {
     await channel.send(Uint8Array.of(1, 2, 3));
 
     expect(onMessage).toHaveBeenCalledWith(Uint8Array.of(4, 5));
-    expect(sendInvokeInput).toHaveBeenCalledWith(
+    expect(sendInvokeInputWhenCurrent).toHaveBeenCalledWith(
       "duplex-ready-invoke",
       expect.objectContaining({ kind: "data", message: 0, index: 0, data: "AQID" }),
+      expect.any(Function),
     );
     expect(stream?.idleTimeoutMs).toBe(30_000);
     finishInvoke?.();
@@ -1714,7 +1716,7 @@ describe("loadGatewayPlugins", () => {
       loadOpenClawPlugins.mockReturnValue(registry);
       loadStartupPluginFixture();
       serverPluginsModule.setFallbackGatewayContext({
-        nodeRegistry: { sendInvokeInput: vi.fn() },
+        nodeRegistry: { sendInvokeInputWhenCurrent: vi.fn() },
       } as unknown as GatewayRequestContext);
       let invokeOptions: HandleGatewayRequestOptions | undefined;
       let finishInvoke: (() => void) | undefined;
@@ -1775,14 +1777,24 @@ describe("loadGatewayPlugins", () => {
     },
   );
 
-  test("cancels a retained duplex invocation when its delegated caller authority closes", async () => {
+  test("rechecks delegated caller authority after a duplex send waits for pairing", async () => {
     const registry = createDuplexPluginRegistry();
     loadOpenClawPlugins.mockReturnValue(registry);
     loadStartupPluginFixture();
-    const sendInvokeInput = vi.fn();
+    const waiting = createDeferredCore();
+    const release = createDeferredCore();
+    const delivered = vi.fn();
+    const sendInvokeInputWhenCurrent = vi.fn(
+      async (_invokeId: string, payload: unknown, assertCurrent?: () => void) => {
+        waiting.resolve();
+        await release.promise;
+        assertCurrent?.();
+        delivered(payload);
+      },
+    );
     const validateAgentRuntimeApprovalAuthority = vi.fn(() => true);
     const context = {
-      nodeRegistry: { sendInvokeInput },
+      nodeRegistry: { sendInvokeInputWhenCurrent },
       validateAgentRuntimeApprovalAuthority,
     } as unknown as GatewayRequestContext;
     serverPluginsModule.setFallbackGatewayContext(context);
@@ -1831,11 +1843,17 @@ describe("loadGatewayPlugins", () => {
         ),
     );
 
-    validateAgentRuntimeApprovalAuthority.mockReturnValue(false);
-
-    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/authority.*no longer current/i);
+    const sending = channel.send(Uint8Array.of(1));
+    const rejectedSend = expect(sending).rejects.toThrow(/authority.*no longer current/i);
+    try {
+      await waiting.promise;
+      validateAgentRuntimeApprovalAuthority.mockReturnValue(false);
+    } finally {
+      release.resolve();
+    }
+    await rejectedSend;
     expect(invokeSignal?.aborted).toBe(true);
-    expect(sendInvokeInput).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
     await expect(channel.closed).rejects.toThrow(/authority.*no longer current/i);
     expect(() => channel.onMessage(vi.fn())).toThrow(/authority.*no longer current/i);
   });
@@ -1844,7 +1862,7 @@ describe("loadGatewayPlugins", () => {
     const registry = createDuplexPluginRegistry("plugin.duplex.v1");
     loadOpenClawPlugins.mockReturnValue(registry);
     const context = {
-      nodeRegistry: { sendInvokeInput: vi.fn() },
+      nodeRegistry: { sendInvokeInputWhenCurrent: vi.fn() },
     } as unknown as GatewayRequestContext;
     serverPluginsModule.setFallbackGatewayContext(context);
     const loaded = serverPluginsModule.loadGatewayPlugins({

@@ -31,7 +31,7 @@ export const handleNodeInvokeProgress: GatewayRequestHandler = async ({
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "progress chunk too large"));
     return;
   }
-  const accepted = context.nodeRegistry.handleInvokeProgress({
+  const accepted = await context.nodeRegistry.handleInvokeProgressWhenCurrent({
     ...progress,
     connId: client?.connId,
   });

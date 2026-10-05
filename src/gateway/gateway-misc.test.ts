@@ -922,7 +922,7 @@ describe("late-arriving invoke results", () => {
     for (const params of cases) {
       const respond = vi.fn<GatewayMethodTypes.RespondFn>();
       const context = {
-        nodeRegistry: { handleInvokeResult: () => false },
+        nodeRegistry: { handleInvokeResultWhenCurrent: async () => false },
         logGateway: { debug: vi.fn() },
       } as unknown as GatewayMethodTypes.GatewayRequestContext;
       const client = {

@@ -52,7 +52,7 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
     return;
   }
 
-  const ok = context.nodeRegistry.handleInvokeResult({
+  const ok = await context.nodeRegistry.handleInvokeResultWhenCurrent({
     id: p.id,
     nodeId: p.nodeId,
     connId: client?.connId,

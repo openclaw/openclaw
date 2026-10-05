@@ -2,6 +2,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { NodeRegistry } from "../gateway/node-registry.js";
+import {
+  createTestNodeSocket,
+  makeClient,
+  registerNodeSession,
+} from "../gateway/node-registry.test-helpers.js";
+import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -15,6 +22,8 @@ import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pair
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
+  isPairedDeviceNodeBindingCurrent,
+  withCurrentPairedDeviceNodeBinding,
 } from "./device-pairing-node-state.js";
 import { recordPairedNodeHostStats } from "./device-pairing-node.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
@@ -26,6 +35,7 @@ import {
   listDevicePairing,
   listDevicePairingReadOnly,
   removePairedDevice,
+  updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 
 let baseDir: string;
@@ -51,10 +61,11 @@ beforeEach(() => {
           deviceId: "node",
           publicKey: "synthetic-node-key",
           roles: ["node"],
+          approvedScopes: [],
           tokens: {
             node: { token: "synthetic-node-token", role: "node", scopes: [], createdAtMs: 1 },
           },
-          nodeSurface: { createdAtMs: 1, approvedAtMs: 1 },
+          nodeSurface: { createdAtMs: 1, approvedAtMs: 1, lastConnectedAtMs: 1 },
           createdAtMs: 1,
           approvedAtMs: 1,
         },
@@ -341,5 +352,314 @@ test.each(["worker commit", "external commit"] as const)(
       read.mockRestore();
       writer.mockRestore();
     }
+  },
+);
+
+// Use the real pairing owner and invocation controller; only transport bytes are captured.
+async function createStreamingNodeFixture() {
+  const device = await getPairedDevice("node", baseDir);
+  persistDevicePairingStoreState(
+    {
+      pendingById: {},
+      pairedByDeviceId: {
+        node: device!,
+        other: { ...device!, deviceId: "other", publicKey: "other-key" },
+      },
+    },
+    baseDir,
+    "paired",
+  );
+  await listDevicePairing(baseDir);
+  const binding = getPublishedPairedDeviceBinding("node", baseDir)!;
+  const registry = new NodeRegistry({
+    isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
+    withCurrentPairingState: (nodeId, effect) =>
+      withCurrentPairedDeviceNodeBinding(nodeId, effect, baseDir),
+  });
+  const frames: string[] = [];
+  const sent = createDeferredCore<string>();
+  const socket = createTestNodeSocket(frames);
+  socket.send.mockImplementation((frame: string) => {
+    frames.push(frame);
+    sent.resolve(frame);
+  });
+  registerNodeSession(
+    registry,
+    makeClient("conn", "node", frames, {
+      socket: socket as unknown as GatewayWsClient["socket"],
+    }),
+    {
+      pairingIdentity: binding.identity,
+      pairingGeneration: binding.generation,
+    },
+  );
+  const chunks: string[] = [];
+  const abort = new AbortController();
+  const invocation = registry.invoke({
+    nodeId: "node",
+    command: "debug.ping",
+    timeoutMs: 60_000,
+    signal: abort.signal,
+    onProgress: (chunk) => chunks.push(chunk),
+  });
+  const invokeId = JSON.parse(await sent.promise).payload.id as string;
+  return {
+    device: device!,
+    binding,
+    registry,
+    frames,
+    chunks,
+    abort,
+    invocation,
+    invokeId,
+    async close() {
+      registry.unregister("conn");
+      registry.unregister("replacement");
+      await invocation;
+    },
+  };
+}
+
+// Pause after the real facade has fenced publication, before its worker can commit.
+async function pauseMetadataMutation(target: string) {
+  const queued = createDeferredCore();
+  const release = createDeferredCore();
+  const original = stateWorker.runOpenClawStateWorkerOperation;
+  const writer = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementationOnce(async (...args) => {
+      queued.resolve();
+      await release.promise;
+      return original(...args);
+    });
+  const mutation = updatePairedDeviceMetadata(target, { displayName: "Updated" }, baseDir);
+  try {
+    await Promise.race([queued.promise, mutation]);
+  } catch (error) {
+    release.resolve();
+    writer.mockRestore();
+    throw error;
+  }
+  return {
+    mutation,
+    release: () => release.resolve(),
+    async close() {
+      release.resolve();
+      await Promise.allSettled([mutation]);
+      writer.mockRestore();
+    },
+  };
+}
+
+test.each(["node", "other"] as const)(
+  "waits for metadata on %s before admitting current node traffic",
+  async (target) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+      const f = await createStreamingNodeFixture();
+      const paused = await pauseMetadataMutation(target);
+      let waiting: Promise<PromiseSettledResult<unknown>[]> | undefined;
+      try {
+        expect(() => getPublishedPairedDeviceBinding("node", baseDir)).toThrow(
+          "current worker publication",
+        );
+        expect(() => f.registry.sendInvokeInput(f.invokeId, { command: "continue" })).toThrow();
+        const observed: string[] = [];
+        const current = f.registry.isConnectionCurrentPairingState("conn").then((value) => {
+          observed.push("current");
+          return value;
+        });
+        const input = f.registry
+          .sendInvokeInputWhenCurrent(f.invokeId, { command: "continue" })
+          .then(() => observed.push("input"));
+        const progress = f.registry
+          .handleInvokeProgressWhenCurrent({
+            invokeId: f.invokeId,
+            nodeId: "node",
+            connId: "conn",
+            seq: 0,
+            chunk: "working",
+          })
+          .then((value) => {
+            observed.push("progress");
+            return value;
+          });
+        const result = f.registry
+          .handleInvokeResultWhenCurrent({
+            id: f.invokeId,
+            nodeId: "node",
+            connId: "conn",
+            ok: true,
+          })
+          .then((value) => {
+            observed.push("result");
+            return value;
+          });
+        waiting = Promise.allSettled([current, input, progress, result]);
+        await Promise.resolve();
+        expect(observed).toEqual([]);
+        expect(f.frames).toHaveLength(1);
+        expect(f.chunks).toEqual([]);
+        paused.release();
+        await expect(paused.mutation).resolves.toBe(true);
+        await expect(current).resolves.toBe(true);
+        await input;
+        await expect(progress).resolves.toBe(true);
+        expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(f.binding);
+        expect(f.chunks).toEqual(["working"]);
+        expect(f.frames.map((frame) => JSON.parse(frame).event)).toEqual([
+          "node.invoke.request",
+          "node.invoke.input",
+        ]);
+        expect(JSON.parse(f.frames[1]!).payload.seq).toBe(0);
+        await expect(result).resolves.toBe(true);
+        await expect(f.invocation).resolves.toMatchObject({ ok: true });
+      } finally {
+        await paused.close();
+        await waiting;
+        await f.close();
+      }
+    });
+  },
+);
+
+test("keeps failed metadata publication unavailable until a successful recovery", async () => {
+  await listDevicePairing(baseDir);
+  const writer = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockRejectedValueOnce(new Error("synthetic worker failure"));
+  try {
+    await expect(
+      updatePairedDeviceMetadata("node", { displayName: "Updated" }, baseDir),
+    ).rejects.toThrow("synthetic worker failure");
+    expect(() => getPublishedPairedDeviceBinding("node", baseDir)).toThrow(
+      "current worker publication",
+    );
+  } finally {
+    writer.mockRestore();
+  }
+  await updatePairedDeviceMetadata("node", { displayName: "Recovered" }, baseDir);
+  expect(getPublishedPairedDeviceBinding("node", baseDir)).not.toBeNull();
+});
+
+test.each(["remove", "revoke", "rotate", "cancel", "reconnect", "effect authority"] as const)(
+  "does not send queued input after %s invalidates its authority",
+  async (change) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+      const f = await createStreamingNodeFixture();
+      const paused = await pauseMetadataMutation("other");
+      let input: Promise<{ sent: boolean; error?: unknown }> | undefined;
+      let effectAllowed = true;
+      try {
+        let inputSettled = false;
+        input = f.registry
+          .sendInvokeInputWhenCurrent(f.invokeId, { command: "sensitive work" }, () => {
+            if (!effectAllowed) {
+              throw new Error("effect authority was revoked");
+            }
+          })
+          .then(
+            () => {
+              inputSettled = true;
+              return { sent: true };
+            },
+            (error: unknown) => {
+              inputSettled = true;
+              return { sent: false, error };
+            },
+          );
+        await Promise.resolve();
+        expect(inputSettled).toBe(false);
+        expect(f.frames).toHaveLength(1);
+        if (change === "cancel") {
+          f.abort.abort();
+        } else if (change === "reconnect") {
+          f.registry.unregister("conn");
+          registerNodeSession(f.registry, makeClient("replacement", "node", f.frames), {
+            pairingIdentity: f.binding.identity,
+            pairingGeneration: f.binding.generation,
+          });
+        } else if (change === "effect authority") {
+          effectAllowed = false;
+        } else {
+          const external = new DatabaseSync(database.path);
+          try {
+            if (change === "remove") {
+              external.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
+            } else {
+              const token = f.device.tokens!.node!;
+              const replacement =
+                change === "rotate"
+                  ? { ...token, token: "external-replacement-token", rotatedAtMs: 100 }
+                  : { ...token, revokedAtMs: 100 };
+              external
+                .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+                .run(JSON.stringify({ ...f.device.tokens, node: replacement }), "node");
+            }
+          } finally {
+            external.close();
+          }
+        }
+        paused.release();
+        await expect(paused.mutation).resolves.toBe(true);
+        expect(await input).toMatchObject({ sent: false, error: expect.any(Error) });
+        if (change === "effect authority") {
+          expect(await input).toMatchObject({
+            error: { message: "effect authority was revoked" },
+          });
+        }
+        expect(f.frames.filter((frame) => JSON.parse(frame).event === "node.invoke.input")).toEqual(
+          [],
+        );
+        if (change === "remove" || change === "revoke" || change === "rotate") {
+          expect(f.frames).toHaveLength(1);
+          await expect(f.registry.isConnectionCurrentPairingState("conn")).resolves.toBe(false);
+        }
+      } finally {
+        await paused.close();
+        await input;
+        await f.close();
+      }
+    });
+  },
+);
+
+test.each(["progress", "result"] as const)(
+  "rejects %s after external removal while the cached pairing still appears current",
+  async (effect) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+      const f = await createStreamingNodeFixture();
+      try {
+        const external = new DatabaseSync(database.path);
+        try {
+          external.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
+        } finally {
+          external.close();
+        }
+        // No other effect or refresh may retire the invoke before this guard sees the deletion.
+        expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(f.binding);
+        const reply =
+          effect === "progress"
+            ? f.registry.handleInvokeProgressWhenCurrent({
+                invokeId: f.invokeId,
+                nodeId: "node",
+                connId: "conn",
+                seq: 0,
+                chunk: "revoked output",
+              })
+            : f.registry.handleInvokeResultWhenCurrent({
+                id: f.invokeId,
+                nodeId: "node",
+                connId: "conn",
+                ok: true,
+                payload: { mustNotEscape: true },
+              });
+        await expect(reply).resolves.toBe(false);
+        expect(f.chunks).toEqual([]);
+        expect(f.frames).toHaveLength(1);
+        await expect(f.invocation).resolves.toMatchObject({ ok: false });
+      } finally {
+        await f.close();
+      }
+    });
   },
 );

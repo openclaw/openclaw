@@ -8,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
+import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -33,13 +34,16 @@ vi.mock("../infra/device-pairing-node-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/device-pairing-node-state.js")>();
   return {
     ...actual,
-    resolveCurrentPairedDeviceNodeBinding: async (nodeId: string) => {
-      const current = await actual.resolveCurrentPairedDeviceNodeBinding(nodeId);
+    withCurrentPairedDeviceNodeBinding: async <T>(
+      nodeId: string,
+      effect: (binding: PairedDeviceNodeBinding | undefined) => T,
+      baseDir?: string,
+    ): Promise<T> => {
       if (pairingRead.blocked) {
         pairingRead.onBlocked?.();
         await pairingRead.blocked;
       }
-      return current;
+      return actual.withCurrentPairedDeviceNodeBinding(nodeId, effect, baseDir);
     },
   };
 });

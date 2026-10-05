@@ -145,12 +145,16 @@ it("carries authenticated session previews through the node and retires access b
     nodeConnectionRecorded.resolve(recording);
     return recording;
   });
-  const resolvePairing = nodePairing.resolveCurrentPairedDeviceNodeBinding;
+  const withCurrentPairing = nodePairing.withCurrentPairedDeviceNodeBinding;
   let pairingGate: (() => Promise<void>) | undefined;
-  vi.spyOn(nodePairing, "resolveCurrentPairedDeviceNodeBinding").mockImplementation(
-    async (...args) => {
+  vi.spyOn(nodePairing, "withCurrentPairedDeviceNodeBinding").mockImplementation(
+    async <T>(
+      nodeId: string,
+      effect: (binding: nodePairing.PairedDeviceNodeBinding | undefined) => T,
+      baseDir?: string,
+    ): Promise<T> => {
       await pairingGate?.();
-      return await resolvePairing(...args);
+      return await withCurrentPairing(nodeId, effect, baseDir);
     },
   );
 
