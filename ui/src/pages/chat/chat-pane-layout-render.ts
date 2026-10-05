@@ -333,20 +333,17 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
                 panelDefinitions,
                 subagentStop,
               )}
-              <div class="chat-session-accessories">
-                <openclaw-plugin-contributions
-                  .kind=${"session-header"}
-                  .sessionKey=${state.sessionKey}
-                  .agentId=${currentAgentId}
-                  .session=${selectedSession}
-                  .presented=${livePresentation({
-                    owner: this,
-                    isPresented: () => this.visuallyPresented,
-                    preview: () =>
-                      !this.presented && this.connectionGeneration === connectionGeneration,
-                  })}
-                ></openclaw-plugin-contributions>
-              </div>`;
+              <openclaw-plugin-contributions
+                .kind=${"session-header"}
+                .sessionKey=${state.sessionKey}
+                .agentId=${currentAgentId}
+                .presented=${livePresentation({
+                  owner: this,
+                  isPresented: () => this.visuallyPresented,
+                  preview: () =>
+                    !this.presented && this.connectionGeneration === connectionGeneration,
+                })}
+              ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
       presentationId: this.presentationId,
       conversationTab: {

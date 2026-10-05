@@ -4,7 +4,6 @@ import {
   type SessionParticipant,
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type {
-  SessionConversationLink,
   SessionCreatedActor as ProjectedSessionCreatedActor,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -128,7 +127,6 @@ export function buildSessionCreationStamp(params: {
   incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
-  conversationLink?: SessionConversationLink;
 }): {
   createdVia: SessionCreatedVia;
   createdActor?: SessionCreatedActor;
@@ -136,13 +134,11 @@ export function buildSessionCreationStamp(params: {
   sandbox?: "required";
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
-  conversationLink?: SessionConversationLink;
 } {
   return {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
-    ...(params.conversationLink ? { conversationLink: params.conversationLink } : {}),
     ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
     ...(params.via === "spawn" && !params.incognito && params.inheritedGitContributorProfileIds
       ? { inheritedGitContributorProfileIds: [...params.inheritedGitContributorProfileIds] }
@@ -167,8 +163,6 @@ export function preserveCreationStamp<
         createdVia: authoritative.createdVia,
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,
-        // A logical session keeps its launch conversation even when delivery moves or resets.
-        conversationLink: authoritative.conversationLink ?? entry.conversationLink,
         inheritedGitContributorProfileIds: authoritative.inheritedGitContributorProfileIds,
         ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
       }
@@ -205,8 +199,6 @@ export function inheritSessionCreationPolicy(
 }
 
 export type SessionEntryProvenance = {
-  /** First channel-supplied launch destination, inherited by explicitly created children. */
-  conversationLink?: SessionConversationLink;
   /** Human contributor candidates captured once by trusted delegation; not participant activity. */
   inheritedGitContributorProfileIds?: string[];
   /** Plugin id that owns this session through a trusted runtime creation seam. */

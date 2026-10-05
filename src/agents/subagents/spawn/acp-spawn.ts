@@ -486,7 +486,6 @@ export async function spawnAcpDirect(
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
         inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry),
-        conversationLink: parentEntry?.conversationLink,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch

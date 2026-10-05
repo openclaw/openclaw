@@ -502,7 +502,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
     space: entry?.space,
-    conversationLink: entry?.conversationLink,
     chatType: entry?.chatType,
     origin: storedOrigin
       ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)

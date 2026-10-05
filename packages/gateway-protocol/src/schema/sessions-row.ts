@@ -25,12 +25,6 @@ export const SessionRepositorySourceSchema = closedObject({
   ref: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
 });
 
-/** Channel-owned destination for returning to the conversation that launched a session. */
-export const SessionConversationLinkSchema = closedObject({
-  url: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https?://" }),
-  label: Type.String({ minLength: 1, maxLength: 128 }),
-});
-
 export const SessionRunStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
@@ -127,7 +121,6 @@ export const SessionRowSchema = Type.Object(
     /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
     color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
-    conversationLink: Type.Optional(SessionConversationLinkSchema),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     /** Prepared dashboard membership fact shared by list and change-event rows. */
     hasBoard: Type.Optional(Type.Boolean()),
@@ -295,7 +288,6 @@ export const SessionEventAncestorsSchema = closedObject({
 });
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
-export type SessionConversationLink = Static<typeof SessionConversationLinkSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;

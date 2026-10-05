@@ -154,7 +154,6 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
           kind: "group",
           id: post.conversation_id,
           label: thread.label,
-          link: { url: `https://x.com/${handle}/status/${post.id}`, label: "View on X" },
         },
         route: {
           agentId: route.agentId,

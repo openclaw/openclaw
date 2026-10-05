@@ -956,7 +956,6 @@ export async function createGatewaySession(
           ...initializedEntry,
           ...inheritSessionCreateParentFields({
             parent: currentParentSessionEntry,
-            existing: existingEntry,
             overrides: params,
           }),
           // Main groups dashboard roots; it must not supply their reply-time model.
