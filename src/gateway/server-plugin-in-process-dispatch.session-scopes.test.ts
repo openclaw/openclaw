@@ -131,7 +131,11 @@ async function withHostedCreation(
     const scheduled =
       source === "scheduled"
         ? prepareCronRunAdmission({
-            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+            deliveryAttemptFence: {
+              occurrenceAtMs: 0,
+              beforeAttempt: async () => {},
+              assertCurrent: () => {},
+            },
             cfg,
             runId: "scope-parent-run",
             agentId: "main",

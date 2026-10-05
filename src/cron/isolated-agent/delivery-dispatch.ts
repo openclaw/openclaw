@@ -207,13 +207,13 @@ export async function dispatchCronDelivery(
     const normalizedPayloads = payloadNormalization.payload;
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,
-      runStartedAt: params.runStartedAt,
+      occurrenceAtMs: params.runStartedAt,
       delivery,
     });
     let completedDelivery = false;
     try {
       // Recipient custody is a bounded SQLite receipt, not process-local state.
-      completedDelivery = isCompletedDirectCronDelivery(deliveryIdempotencyKey);
+      completedDelivery = await isCompletedDirectCronDelivery(deliveryIdempotencyKey);
     } catch (err) {
       if (!params.deliveryBestEffort) {
         throw err;

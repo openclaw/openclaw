@@ -440,7 +440,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
     });
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,
-      runStartedAt: params.runStartedAt,
+      occurrenceAtMs: params.runStartedAt,
       delivery: target,
     });
     const awarenessParams = {

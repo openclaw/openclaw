@@ -118,11 +118,12 @@ export async function finalizeCronCompletionAnnouncement(params: {
           },
         }),
     });
-    if (result.status === "sent") {
+    if (result.status === "sent" || result.status === "completed") {
       deliveryState.status = "delivered";
       deliveryState.delivered = true;
     } else {
-      const uncertain = result.reason === "adapter_returned_no_identity";
+      const uncertain =
+        result.status === "unknown" || result.reason === "adapter_returned_no_identity";
       deliveryState.status = uncertain ? "unknown" : "not-delivered";
       deliveryState.delivered = uncertain ? undefined : false;
       deliveryState.error = `cron delivery ${uncertain ? "outcome is unknown" : "was suppressed"}: ${result.reason}`;

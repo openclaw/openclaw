@@ -1,5 +1,6 @@
 import type { CronJobScratchWriteInput } from "../scratch-contract.js";
 import type {
+  CronDeliveryAdmission,
   CronFailureNotificationDelivery,
   CronJob,
   CronRunDiagnostics,
@@ -167,6 +168,12 @@ export type CronRuntimeMutationInputs = {
   "cron.markDeliveryStarted": {
     storeKey: string;
     handle: CronRunReceiptHandle;
+    deliveryAdmission?: CronDeliveryAdmission;
+  };
+  "cron.releaseDeliveryAdmission": {
+    storeKey: string;
+    handle: CronRunReceiptHandle;
+    admission: CronDeliveryAdmission;
   };
   "cron.finishReceipt": {
     storeKey: string;

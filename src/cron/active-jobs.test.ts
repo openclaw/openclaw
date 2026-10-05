@@ -81,7 +81,11 @@ describe("cron message action authority", () => {
       const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
       const controller = new AbortController();
       const owner = prepareCronRunAdmission({
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        deliveryAttemptFence: {
+          occurrenceAtMs: 0,
+          beforeAttempt: async () => {},
+          assertCurrent: () => {},
+        },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         agentId: "main",
         runId: "long-message-run",

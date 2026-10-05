@@ -10,14 +10,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import {
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntry,
-  type DeliveryQueueCompletionRetention,
-} from "../../infra/delivery-queue-sqlite.js";
+import type { DeliveryQueueCompletionRetention } from "../../infra/delivery-queue-sqlite.js";
 import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
+import {
+  findDeliveryIntentOwner,
+  loadPendingDelivery,
+} from "../../infra/outbound/delivery-queue-storage.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -238,12 +237,12 @@ export async function maybeApplyTtsToCronPayloads(params: {
 
 export function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
-  runStartedAt: number;
+  occurrenceAtMs: number;
   delivery: SuccessfulCronDeliveryTarget;
 }): string {
   // Include route identity, not just the cron execution id, because one run can
   // target different channels/accounts/threads across retry and fallback paths.
-  const executionId = createCronExecutionId(params.jobId, params.runStartedAt);
+  const executionId = createCronExecutionId(params.jobId, params.occurrenceAtMs);
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
@@ -259,8 +258,12 @@ export function buildDirectCronDeliveryIdempotencyKey(params: {
 }
 
 /** Receipts own recipient delivery; projections never stand in for custody. */
-export function isCompletedDirectCronDelivery(id: string): boolean {
-  return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id) === "completed";
+export async function readDirectCronDeliveryStatus(id: string) {
+  return (await findDeliveryIntentOwner(id))?.status;
+}
+
+export async function isCompletedDirectCronDelivery(id: string): Promise<boolean> {
+  return (await readDirectCronDeliveryStatus(id)) === "completed";
 }
 
 /** Wait only for an active recipient owner, never for crashed ambiguous sends. */
@@ -270,15 +273,14 @@ export async function waitForCompletedDirectCronDelivery(params: {
 }): Promise<boolean> {
   // SQLite producer leases fence cross-process sends for at most 30 seconds.
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const status = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, params.id);
+    const status = (await findDeliveryIntentOwner(params.id))?.status;
     if (status === "completed") {
       return true;
     }
-    const owner =
-      status === "pending" ? loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, params.id) : null;
+    const owner = status === "pending" ? await loadPendingDelivery(params.id) : null;
     if (!owner && status === "pending") {
-      // Completion can replace a pending row between the two indexed reads.
-      return isCompletedDirectCronDelivery(params.id);
+      // Completion can replace a pending row between the two reads.
+      return await isCompletedDirectCronDelivery(params.id);
     }
     if (
       !owner ||

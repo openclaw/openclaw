@@ -480,10 +480,11 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         },
       },
     );
-    if (result.status === "sent") {
+    if (result.status === "sent" || result.status === "completed") {
       return { kind: "settled", outcome: { delivered: true, status: "delivered" } };
     }
-    const uncertain = result.reason === "adapter_returned_no_identity";
+    const uncertain =
+      result.status === "unknown" || result.reason === "adapter_returned_no_identity";
     return {
       kind: "settled",
       outcome: {

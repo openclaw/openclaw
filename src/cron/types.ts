@@ -260,6 +260,9 @@ type CronExternalContent = {
   externalContentSource?: HookExternalContentSource;
 };
 
+/** A scheduled occurrence and the durable outbound intent that carries its announcement. */
+export type CronDeliveryAdmission = { occurrenceAtMs: number; intentId: string };
+
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 // scheduleActivatedAtMs fences catch-up to slots belonging to the active schedule;
 // edits must not invent missed work. Without activation, every computed slot is real.
@@ -279,6 +282,12 @@ export type CronJobState = Omit<
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
   runningReceiptId?: string;
+  /**
+   * Outbound intent a completion announcement admitted for one occurrence. Later
+   * runs of that occurrence reuse it and never admit another; a new occurrence
+   * replaces it.
+   */
+  deliveryAdmission?: CronDeliveryAdmission;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**

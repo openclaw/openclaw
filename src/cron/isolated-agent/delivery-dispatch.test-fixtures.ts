@@ -1,3 +1,7 @@
+import { vi } from "vitest";
+import * as deliveryQueueStorage from "../../infra/outbound/delivery-queue-storage.js";
+import type { QueuedDelivery } from "../../infra/outbound/delivery-queue-types.js";
+import { createUnmodifiedPreparedOutboundBatch } from "../../infra/outbound/prepared-batch.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronDelivery } from "../types.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
@@ -87,5 +91,35 @@ export function makeBaseParams(overrides: {
     abortSignal: undefined,
     isAborted: () => false,
     abortReason: () => "aborted",
+  };
+}
+
+const pendingIntentOwner = {
+  queueName: "outbound-prepared-v1",
+  namespace: "prepared",
+  retired: false,
+  status: "pending",
+} as const;
+
+/** Answers the next queue custody reads of a cron delivery intent, in order; null is no custody. */
+export function mockIntentCustody(...statuses: Array<"pending" | "completed" | null>) {
+  const read = vi.mocked(deliveryQueueStorage.findDeliveryIntentOwner);
+  for (const status of statuses) {
+    read.mockResolvedValueOnce(status && { ...pendingIntentOwner, status });
+  }
+}
+
+/** A cross-process producer that started its platform send at `platformSendStartedAt`. */
+export function sendingCronIntent(id: string, platformSendStartedAt: number): QueuedDelivery {
+  return {
+    id,
+    channel: "telegram",
+    to: "123456",
+    preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "cron update" }]),
+    enqueuedAt: platformSendStartedAt,
+    retryCount: 0,
+    attemptCount: 1,
+    platformSendStartedAt,
+    recoveryState: "send_attempt_started",
   };
 }

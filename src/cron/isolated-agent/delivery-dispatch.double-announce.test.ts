@@ -4,7 +4,7 @@ import { hasDescendantRunAwaitingSettleFromRuns } from "../../agents/subagents/r
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
-import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
+import * as deliveryQueueStorage from "../../infra/outbound/delivery-queue-storage.js";
 
 const directCronCompletionRetention = {
   idPrefix: "cron-direct-delivery:v1:",
@@ -207,7 +207,12 @@ import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
 } from "./delivery-dispatch.js";
-import { makeBaseParams, makeResolvedDelivery } from "./delivery-dispatch.test-fixtures.js";
+import {
+  makeBaseParams,
+  makeResolvedDelivery,
+  mockIntentCustody,
+  sendingCronIntent,
+} from "./delivery-dispatch.test-fixtures.js";
 import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import * as realFollowup from "./subagent-followup.js";
@@ -326,7 +331,7 @@ describe("dispatchCronDelivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     deliverOutboundPayloadsMock.mockReset().mockResolvedValue([{ ok: true }]);
-    vi.spyOn(deliveryQueueSqlite, "getDeliveryQueueEntryStatus").mockReturnValue(undefined);
+    vi.spyOn(deliveryQueueStorage, "findDeliveryIntentOwner").mockResolvedValue(null);
     vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -402,7 +407,7 @@ describe("dispatchCronDelivery", () => {
     expect(state.deliverySuppressionReason).toBe("channel_transform");
     expect(maybeApplyTtsToPayloadMock).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(deliveryQueueSqlite.getDeliveryQueueEntryStatus).not.toHaveBeenCalled();
+    expect(deliveryQueueStorage.findDeliveryIntentOwner).not.toHaveBeenCalled();
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
@@ -1456,23 +1461,14 @@ describe("dispatchCronDelivery", () => {
       vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
         new Error("Stable delivery intent is already queued"),
       );
-      const status = vi
-        .mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
-        .mockReturnValueOnce(undefined)
-        .mockReturnValueOnce("pending");
-      if (owner !== "stale") {
-        status.mockReturnValueOnce("completed");
-      }
-      vi.spyOn(deliveryQueueSqlite, "loadDeliveryQueueEntry").mockReturnValue(
+      mockIntentCustody(null, "pending", ...(owner === "stale" ? [] : (["completed"] as const)));
+      vi.spyOn(deliveryQueueStorage, "loadPendingDelivery").mockResolvedValue(
         owner === "disappeared"
           ? null
-          : {
-              id: "cross-process-cron-intent",
-              enqueuedAt: Date.now() - (owner === "stale" ? 60_000 : 0),
-              retryCount: 0,
-              platformSendStartedAt: Date.now() - (owner === "stale" ? 30_001 : 0),
-              recoveryState: "send_attempt_started",
-            },
+          : sendingCronIntent(
+              "cross-process-cron-intent",
+              Date.now() - (owner === "stale" ? 30_001 : 0),
+            ),
       );
       const state = await dispatchCronDelivery(
         makeBaseParams({ synthesizedText: "Cross-process cron update." }),
@@ -1481,7 +1477,7 @@ describe("dispatchCronDelivery", () => {
       expect(state.deliveryAttempted).toBe(true);
       expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
       if (owner === "stale") {
-        expect(deliveryQueueSqlite.getDeliveryQueueEntryStatus).toHaveBeenCalledTimes(2);
+        expect(deliveryQueueStorage.findDeliveryIntentOwner).toHaveBeenCalledTimes(2);
       } else {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
       }
@@ -1499,9 +1495,9 @@ describe("dispatchCronDelivery", () => {
   it.each([true, false])(
     "handles a receipt-store outage with bestEffort=%s",
     async (bestEffort) => {
-      vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mockImplementationOnce(() => {
-        throw new Error("SQLite receipt store unavailable");
-      });
+      vi.mocked(deliveryQueueStorage.findDeliveryIntentOwner).mockRejectedValueOnce(
+        new Error("SQLite receipt store unavailable"),
+      );
       const pending = dispatchCronDelivery(
         makeBaseParams({
           synthesizedText: "Storage outage update.",
@@ -1523,9 +1519,7 @@ describe("dispatchCronDelivery", () => {
   );
 
   it("keeps regenerated signed media URLs on the same durable cron intent", async () => {
-    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce("completed");
+    mockIntentCustody(null, "completed");
     const params = structuredParams(
       [
         {
@@ -1542,9 +1536,9 @@ describe("dispatchCronDelivery", () => {
     ];
     expect((await dispatchCronDelivery(params)).delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
-    const calls = vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mock.calls;
-    expect(calls[0]?.[1]).toBe("cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:");
-    expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
+    const calls = vi.mocked(deliveryQueueStorage.findDeliveryIntentOwner).mock.calls;
+    expect(calls[0]?.[0]).toBe("cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:");
+    expect(calls[1]?.[0]).toBe(calls[0]?.[0]);
   });
 
   it("keeps colon-bearing account and recipient tuples on distinct durable intents", async () => {
@@ -1998,6 +1992,8 @@ describe("dispatchCronDelivery", () => {
       harness.resolveCronDeliveryPlanMock.mockImplementation(resolveCronDeliveryPlan);
       harness.resolveDeliveryTargetMock.mockResolvedValue(makeResolvedDelivery());
       vi.mocked(deliverOutboundPayloads).mockImplementation(realDeliver);
+      // The real queue shares these reads with the receipt helpers.
+      vi.mocked(deliveryQueueStorage.findDeliveryIntentOwner).mockRestore();
       vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     });
 

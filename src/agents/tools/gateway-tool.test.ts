@@ -147,7 +147,11 @@ describe("gateway update action", () => {
     async (admissionSource) => {
       const sessionKey = "agent:main:synthetic-update";
       const admission = prepareCronRunAdmission({
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        deliveryAttemptFence: {
+          occurrenceAtMs: 0,
+          beforeAttempt: async () => {},
+          assertCurrent: () => {},
+        },
         cfg: {},
         agentId: "main",
         runId: "synthetic-run",

@@ -98,7 +98,7 @@ it.each(
       ...(policy === "captured"
         ? { toolsAllow: ["message"], scheduledToolPolicy: { version: 1, mode: "trusted" } as const }
         : {}),
-      deliveryAttemptFence: { beforeAttempt, assertCurrent: () => {} },
+      deliveryAttemptFence: { occurrenceAtMs: 0, beforeAttempt, assertCurrent: () => {} },
       abortSignal: controller.signal,
       executionIdentity: {
         ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,

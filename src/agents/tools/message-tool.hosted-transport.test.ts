@@ -333,7 +333,11 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     const resolveGatewayContext = () => context;
     promptAdmission = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       prepareCronRunAdmission({
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        deliveryAttemptFence: {
+          occurrenceAtMs: 0,
+          beforeAttempt: async () => {},
+          assertCurrent: () => {},
+        },
         cfg: configA,
         agentId: "ops",
         runId,
