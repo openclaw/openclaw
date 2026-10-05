@@ -175,10 +175,6 @@ extension OpenClawChatViewModel {
         self.thinkingPreferenceRequests.removeAll()
     }
 
-    func recordAuthoritativeInheritedThinkingPreference(_ level: String) {
-        self.confirmedThinkingPreference = PreferenceState(level: level, isExplicit: false)
-    }
-
     func updateCurrentSessionThinkingLevels(
         _ thinkingLevels: [OpenClawChatThinkingLevelOption],
         sessionKey: String,

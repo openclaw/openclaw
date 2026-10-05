@@ -590,12 +590,9 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
         try await self.requireCurrentOutboxGateway()
         let encoded = try JSONEncoder().encode(TtsSpeakParams(text: text))
-        guard let params = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
-            throw MacChatMessageSpeechError.invalidRequest
-        }
         let responseData = try await self.connection.request(
             method: "tts.speak",
-            params: params.mapValues(AnyCodable.init),
+            params: JSONDecoder().decode([String: AnyCodable].self, from: encoded),
             timeoutMs: 60000,
             ifCurrentServerLease: serverLease)
         return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
@@ -723,13 +720,10 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
 // MARK: - Window controller
 
 private enum MacChatMessageSpeechError: LocalizedError {
-    case invalidRequest
     case unsupportedTransport
 
     var errorDescription: String? {
         switch self {
-        case .invalidRequest:
-            "Failed to encode tts.speak request"
         case .unsupportedTransport:
             "Gateway TTS is unavailable for this chat transport"
         }
