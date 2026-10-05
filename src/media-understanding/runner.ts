@@ -569,6 +569,7 @@ async function runAttachmentEntries(params: {
   cache: MediaAttachmentCache;
   entries: Iterable<ResolvedMediaModelEntry> | AsyncIterable<ResolvedMediaModelEntry>;
   automaticAudio: boolean;
+  assertCurrent?: () => void;
   config?: MediaUnderstandingConfig;
   request?: MediaRequestOverrides;
 }): Promise<{
@@ -687,6 +688,7 @@ export async function runCapability(params: {
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: LazyProviderRegistry;
+  assertCurrent?: () => void;
   config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
   request?: MediaRequestOverrides;
@@ -889,6 +891,7 @@ export async function runCapability(params: {
           })
         : resolvedEntries,
       automaticAudio,
+      assertCurrent: params.assertCurrent,
       config,
     });
     if (output) {

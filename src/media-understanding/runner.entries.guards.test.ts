@@ -70,6 +70,33 @@ function missingProvider(provider: string) {
   });
 }
 
+describe("media-understanding admission guards", () => {
+  it("rechecks admission after attachment preparation and auth before provider I/O", async () => {
+    await withAudioFixture("openclaw-admission-provider", async ({ ctx, cache }) => {
+      const transcribeAudio = vi.fn(async () => ({ text: "must not upload" }));
+      const assertCurrent = vi.fn(() => {
+        throw new Error("admission expired");
+      });
+      const result = runProviderEntry({
+        capability: "audio",
+        entry: { provider: "fixture", model: "fixture-audio" },
+        cfg: { models: { providers: { fixture: { apiKey: "fixture-key" } } } },
+        ctx,
+        attachmentIndex: 0,
+        cache,
+        providerRegistry: new Map([
+          ["fixture", { id: "fixture", capabilities: ["audio"], transcribeAudio }],
+        ]),
+        assertCurrent,
+      });
+
+      await expect(result).rejects.toThrow("admission expired");
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      expect(transcribeAudio).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe("media-understanding missing provider errors", () => {
   it("includes the catalog repair hint for a media provider contract", async () => {
     await expect(missingProvider("groq")).rejects.toThrow(

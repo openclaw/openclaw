@@ -48,6 +48,28 @@ describe("provider-owned audio transcription", () => {
     });
   }
 
+  it("rechecks admission after async auth and before uploading audio", async () => {
+    useOAuth();
+    const fetchFn = vi.fn<typeof fetch>();
+    const assertCurrent = vi.fn(() => {
+      throw new Error("admission expired");
+    });
+
+    await expect(
+      openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
+        cfg: {},
+        buffer: Buffer.from("audio"),
+        fileName: "voice.wav",
+        timeoutMs: 1000,
+        fetchFn,
+        assertCurrent,
+      }),
+    ).rejects.toThrow("admission expired");
+    expect(authMocks.resolve).toHaveBeenCalledOnce();
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it.each([
     [undefined, undefined],
     ["https://api.openai.com", "gpt-4o-mini-transcribe"],

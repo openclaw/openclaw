@@ -102,14 +102,16 @@ export const transcribeOpenAiAudioWithContext: NonNullable<
     // below must throw so automatic selection cannot send the file to another provider.
     return { ok: false, error };
   }
-  const transcribe = (apiKey: string) =>
-    transcribeOpenAiAudio({
+  const transcribe = (apiKey: string) => {
+    context.assertCurrent?.();
+    return transcribeOpenAiAudio({
       ...context,
       // Official text-inference bases do not select the batch-audio endpoint.
       baseUrl: nativeEndpoint ? OPENAI_API_BASE_URL : context.baseUrl,
       apiKey,
       ...(auth.mode === "api-key" ? { auth: { kind: "api-key" as const, apiKey } } : {}),
     });
+  };
   const value =
     auth.mode === "api-key"
       ? await executeWithApiKeyRotation({

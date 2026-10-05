@@ -263,6 +263,7 @@ provider-wide rather than scoped to the audio model entry.
 - OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
+- For deliverable channels (Telegram, Discord, WhatsApp, …) the echo is sent as an outbound message before agent processing. WebChat/Control UI and the mobile apps are internal clients, not deliverable channels: there the formatted transcript is persisted as part of the user's own turn text in the session transcript, so it stays visible in `chat.history` after reload. WebChat never becomes an outbound channel for the echo.
 - CLI stdout is capped at 5MB; keep CLI output concise.
 - CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
