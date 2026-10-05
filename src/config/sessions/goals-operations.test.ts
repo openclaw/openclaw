@@ -614,7 +614,9 @@ describe("typed Goal operation persistence", () => {
       };
       let live = true;
       const assertCurrent = () => {
-        if (!live) throw new Error("Goal caller closed");
+        if (!live) {
+          throw new Error("Goal caller closed");
+        }
       };
       const create = workerAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(

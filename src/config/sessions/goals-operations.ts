@@ -331,7 +331,7 @@ export async function mutateSessionGoal(
         return native();
       }
       const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
-      const client = await import("./goals-management.js").catch(async (error) => {
+      const client = await import("./goals-management.js").catch(async (error: unknown) => {
         await execution.release();
         throw error;
       });
