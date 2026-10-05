@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-s
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { resolveOpenClawClawHubPackageFamily } from "./clawhub-package-family.mjs";
 import {
   classifyClawHubPublication,
   type ClawHubPublicationState,
@@ -90,12 +91,6 @@ const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 const CLAWHUB_RELEASE_PLAN_CONCURRENCY = 8;
 const OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY = "openclaw/openclaw";
 const OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME = "plugin-clawhub-release.yml";
-const OPENCLAW_BUNDLE_PLUGIN_PACKAGES = new Set([
-  "@openclaw/acpx",
-  "@openclaw/cloudflare",
-  "@openclaw/diffs",
-  "@openclaw/feishu",
-]);
 const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
   ".github/actions/setup-node-env",
@@ -107,6 +102,7 @@ const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/plugin-clawhub-recovery.mjs",
   "scripts/openclaw-npm-release-check.ts",
@@ -252,9 +248,7 @@ function formatClawHubPackageArtifactName(
   return `clawhub-package-${safeName}-${plugin.version}`;
 }
 
-export function resolveOpenClawClawHubPackageFamily(packageName: string): "" | "bundle-plugin" {
-  return OPENCLAW_BUNDLE_PLUGIN_PACKAGES.has(packageName) ? "bundle-plugin" : "";
-}
+export { resolveOpenClawClawHubPackageFamily };
 
 export function collectClawHubPublishablePluginPackages(
   rootDir = resolve("."),
