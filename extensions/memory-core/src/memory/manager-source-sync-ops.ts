@@ -172,7 +172,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           this.advanceSyncProgress(params.progress);
           return;
         }
-        await this.indexFile(entry, { source: "memory" });
+        await this.indexFile(entry, "memory");
         this.advanceSyncProgress(params.progress);
       });
       await runWithConcurrency(tasks, this.getIndexConcurrency());
@@ -402,7 +402,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         if (!entry) {
           return;
         }
-        await this.indexFile(entry, { source: "sessions", content: entry.content });
+        await this.indexFile(entry, "sessions");
         this.advanceSyncProgress(params.progress);
       } finally {
         await yieldAfterSessionFile();

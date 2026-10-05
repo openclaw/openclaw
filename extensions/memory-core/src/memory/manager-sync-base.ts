@@ -143,10 +143,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
-  protected abstract indexFile(
-    entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
-  ): Promise<void>;
+  protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;
   protected abstract syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
