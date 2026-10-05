@@ -90,6 +90,62 @@ export function readLegacyMigrationReceipt(
   return readLegacyMigrationReceiptFromDatabase(openOpenClawStateDatabase({ env }).db, sourceKey);
 }
 
+export function readLegacyMigrationRunFromDatabase(database: DatabaseSync, runId: string) {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    getNodeSqliteKysely<MigrationReceiptDatabase>(database)
+      .selectFrom("migration_runs")
+      .select(["status", "report_json"])
+      .where("id", "=", runId),
+  );
+  return row ? { status: row.status, reportJson: row.report_json } : null;
+}
+
+/** Inspection keeps missing runs visible instead of dropping their source receipts. */
+export function readLegacyMigrationSourceRunsFromDatabase(
+  database: DatabaseSync,
+  migrationKind: string,
+) {
+  return executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<MigrationReceiptDatabase>(database)
+      .selectFrom("migration_sources as source")
+      .leftJoin("migration_runs as run", "run.id", "source.last_run_id")
+      .select([
+        "source.source_key as sourceKey",
+        "source.source_path as sourcePath",
+        "source.target_table as targetTable",
+        "source.source_sha256 as sourceSha256",
+        "source.source_size_bytes as sourceSizeBytes",
+        "source.source_record_count as sourceRecordCount",
+        "source.status as sourceStatus",
+        "source.removed_source as removedSource",
+        "source.imported_at as importedAt",
+        "source.last_run_id as lastRunId",
+        "source.report_json as sourceReportJson",
+        "run.id as runId",
+        "run.status as runStatus",
+        "run.started_at as startedAt",
+        "run.finished_at as finishedAt",
+        "run.report_json as runReportJson",
+      ])
+      .where("source.migration_kind", "=", migrationKind),
+  ).rows;
+}
+
+export function readLegacyMigrationRunsByPrefixFromDatabase(
+  database: DatabaseSync,
+  prefix: string,
+) {
+  return executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<MigrationReceiptDatabase>(database)
+      .selectFrom("migration_runs")
+      .select(["id", "status", "started_at", "finished_at", "report_json"])
+      .where("id", "like", `${prefix}%`),
+  ).rows;
+}
+
 export function recordLegacyMigrationRun(database: DatabaseSync, run: LegacyMigrationRun): void {
   const query = getNodeSqliteKysely<MigrationReceiptDatabase>(database)
     .insertInto("migration_runs")

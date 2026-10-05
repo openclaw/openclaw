@@ -14,12 +14,12 @@ export async function ensureProfileIdForEmail(
   const context = captureOpenClawStateWorkerContext(options);
   const selected = { ...options, path: context.admission.databasePath };
   const observed = await executeExistingOpenClawStateRead(selected, {
-    type: "userProfiles.email.resolve",
-    email: normalized,
+    type: "userProfiles.authenticationAlias.resolve",
+    alias: { kind: "email", email: normalized },
   });
   context.admission.assertCurrent();
   assertCurrent?.();
-  if (observed && (!observed.ok || observed.type !== "userProfiles.email.resolve")) {
+  if (observed && (!observed.ok || observed.type !== "userProfiles.authenticationAlias.resolve")) {
     throw new Error("Unexpected profile email lookup reply");
   }
   if (observed?.profileId) {

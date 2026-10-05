@@ -25,6 +25,7 @@ import {
   requestDevicePairing,
   updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
+import { isGatewayReadonlyWork } from "../../../process/gateway-work-admission.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
@@ -159,6 +160,13 @@ export async function authorizeGatewayConnectDevice(
       reason: ConnectPairingRequiredReason,
       existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
     ) => {
+      if (isGatewayReadonlyWork()) {
+        failPairingHandshake({
+          message:
+            "Device approval cannot change during Gateway reader retirement. Reconnect to the replacement Gateway.",
+        });
+        return false;
+      }
       const pairingStateAllowsRequestedAccess = (
         pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
         requestedScopes = scopes,
@@ -533,7 +541,9 @@ export async function authorizeGatewayConnectDevice(
         pairedClientId = paired.clientId;
         pairedBrowserOrigin = paired.browserOrigin;
         hasServerApprovedDeviceTokenBaseline = true;
-        await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+        if (!isGatewayReadonlyWork()) {
+          await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+        }
       } else if (
         controlUiPairingKind === "auth-none" ||
         (skipLocalBackendSelfPairing && authMethod !== "device-token")

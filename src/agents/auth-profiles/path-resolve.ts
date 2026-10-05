@@ -45,7 +45,7 @@ class InvalidSharedAuthStoreOwnershipError extends Error {
   }
 }
 
-function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
+export function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
   if (value === undefined) {
     return { location: "legacy-main" };
   }

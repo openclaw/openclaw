@@ -175,21 +175,28 @@ export function hasPendingSharedAuthCleanup(
         if (behavior.artifactPreservingReadOnly && !tableExists(database, "migration_sources")) {
           return false;
         }
-        const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
-        const row = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("migration_sources")
-            .select("source_key")
-            .where("migration_kind", "=", SHARED_AUTH_STORE_MIGRATION_KIND)
-            .where("source_path", "=", sourcePath)
-            .where("removed_source", "=", 0)
-            .limit(1),
-        );
-        return Boolean(row);
+        return hasPendingSharedAuthCleanupFromDatabase(database, sourcePath);
       },
       { env },
     ) ?? false
+  );
+}
+
+export function hasPendingSharedAuthCleanupFromDatabase(
+  database: DatabaseSync,
+  sourcePath: string,
+): boolean {
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      database,
+      getNodeSqliteKysely<SharedAuthMigrationDatabase>(database)
+        .selectFrom("migration_sources")
+        .select("source_key")
+        .where("migration_kind", "=", SHARED_AUTH_STORE_MIGRATION_KIND)
+        .where("source_path", "=", sourcePath)
+        .where("removed_source", "=", 0)
+        .limit(1),
+    ),
   );
 }
 

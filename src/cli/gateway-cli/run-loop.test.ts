@@ -146,7 +146,7 @@ describe("runGatewayLoop", () => {
     },
   );
 
-  registerExternalHandoffShutdownTests(fixtures, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+  registerExternalHandoffShutdownTests(fixtures);
 
   it("does not grant process control to a nonexclusive embedded host", async () => {
     await withIsolatedSignals(async ({ captureSignal }) => {

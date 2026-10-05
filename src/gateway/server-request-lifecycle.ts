@@ -13,6 +13,7 @@ import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
+  isGatewayReadAdmissionAvailable,
   retainGatewayRootWorkAdmissionContinuation,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -24,11 +25,30 @@ const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.status",
   "gateway.suspend.resume",
   "gateway.suspend.handoff",
+  "gateway.suspend.reader",
 ]);
+
+// Resolution uses the same frozen, access-scoped projection as session listing.
+const SUSPENDED_READER_METHODS = new Set([
+  "users.self",
+  "chat.history",
+  "chat.startup",
+  "sessions.list",
+  "sessions.describe",
+  "sessions.resolve",
+]);
+
+export function isGatewaySuspendedReaderMethod(method: string): boolean {
+  return SUSPENDED_READER_METHODS.has(method);
+}
+
+export function isGatewaySuspendControlMethod(method: string): boolean {
+  return SUSPEND_CONTROL_METHODS.has(method);
+}
 
 export function isGatewayRootlessRequestAllowed(method: string): boolean {
   return (
-    SUSPEND_CONTROL_METHODS.has(method) ||
+    isGatewaySuspendControlMethod(method) ||
     (method === "update.runs.get" &&
       getGatewayRestartDrainSignal().aborted &&
       getGatewaySuspendAdmissionPhase() === "accepting")
@@ -139,9 +159,13 @@ export async function runWithGatewayObservationScope<T>(
     rootHold.release ??= retainGatewayRootWorkAdmissionContinuation();
   };
   const signal = AbortSignal.any(
-    [getGatewayRestartDrainSignal(), getAsyncWorkSignal(), ...requestSignals].filter(
-      (candidate): candidate is AbortSignal => candidate !== undefined,
-    ),
+    [
+      ...(isGatewaySuspendedReaderMethod(method) && isGatewayReadAdmissionAvailable()
+        ? []
+        : [getGatewayRestartDrainSignal()]),
+      getAsyncWorkSignal(),
+      ...requestSignals,
+    ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
   );
   const close = () => work.beginClose(signal.reason);
   signal.addEventListener("abort", close, { once: true });

@@ -43,15 +43,16 @@ import {
   readSessionHistorySnapshotAsync,
   SessionHistorySseState,
 } from "./session-history-state.js";
-import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
+import { resolveSessionStoreKey, resolveSessionStoreIdentity } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
   resolveTranscriptUpdatePathForComparison,
 } from "./session-transcript-path.js";
+import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -132,6 +133,7 @@ function resolveSessionHistoryHttpClient(
       scopes,
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+    preparedSessionProfile: requestAuth.preparedSessionProfile,
   };
 }
 
@@ -170,16 +172,31 @@ export async function handleSessionHistoryHttpRequest(
   }
   const { cfg, requestAuth, operatorScopes } = authResult;
 
-  let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
+  const readTarget = async (config: typeof cfg): Promise<GatewaySessionStoreTargetWithStore> => {
+    const identity = resolveSessionStoreIdentity({ cfg: config, sessionKey });
+    const facts = await prepareSessionMutationFacts({
+      cfg: config,
+      sessionKey,
+      agentId: identity.agentId,
+      allowMissing: true,
+    });
+    try {
+      const selected = facts.readCurrent(config).target;
+      return {
+        ...facts.storageTarget,
+        storeKeys: selected?.storeKeys ?? [facts.storageTarget.canonicalKey],
+        store: selected ? { [selected.storeKey]: selected.entry } : {},
+        readSource: selected?.readSource,
+        capturedReadSource: selected?.readSource,
+      };
+    } finally {
+      facts.release();
+    }
+  };
+  let target: GatewaySessionStoreTargetWithStore;
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
-    target = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key: sessionKey,
-      exactRead: true,
-      // Preserve configured-store initialization; retired and incognito targets stay read-only.
-      readOnly: false,
-    });
+    target = await readTarget(cfg);
     entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
   } catch (error) {
     if ((error as { code?: unknown })?.code !== "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
@@ -263,11 +280,16 @@ export async function handleSessionHistoryHttpRequest(
       requestedScopes,
     );
     const currentConfig = getRuntimeConfig();
-    const currentTarget = resolveSessionSharingTarget({
-      cfg: currentConfig,
-      sessionKey: target.canonicalKey,
-      agentId: target.agentId,
-    });
+    const selected = await readTarget(currentConfig);
+    const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
+      selected.store,
+      selected.storeKeys,
+    );
+    const currentTarget = currentEntry ? { ...selected, entry: currentEntry } : null;
+    requestAuth.assertCurrent();
+    if (!currentRequestAuth.requestAuth.hasCurrentClientAuthority()) {
+      return false;
+    }
     if (
       currentTarget === null ||
       currentTarget.agentId !== historyTarget.agentId ||

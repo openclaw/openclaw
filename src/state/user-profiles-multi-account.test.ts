@@ -19,6 +19,7 @@ import {
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   readUserProfileDirectory,
+  readCanonicalExistingProfileForTailscaleIdentity,
   resolveCanonicalCachedGitHubIdentity,
 } from "./user-profile-reads.js";
 import { linkEmail, setAvatar, syncGitHubIdentity } from "./user-profile-writes.worker.js";
@@ -271,7 +272,7 @@ describe("multi-account people", () => {
       expect(
         (
           await resolveCanonicalCachedGitHubIdentity(
-            { accountId: account.accountId, email: account.email },
+            { accountId: account.accountId, alias: { kind: "email", email: account.email } },
             options,
           )
         )?.profileId,
@@ -311,8 +312,40 @@ describe("multi-account people", () => {
       ),
     ).toMatchObject({ id: person.id, githubIdentity: { login: primary.canonicalLogin } });
     expect(getUserProfileDisplay(signInAlias.id, options).id).toBe(person.id);
+    const provider = ensureProfileForTailscaleIdentity({ login: "person@passkey" }, options);
     expect(
-      await resolveCanonicalCachedGitHubIdentity({ accountId: 73, email: primary.email }, options),
+      await readCanonicalExistingProfileForTailscaleIdentity({ login: "PERSON@PASSKEY" }, options),
+    ).toMatchObject({ id: provider.id, updatedAt: provider.updatedAt });
+    await expect(
+      readCanonicalExistingProfileForTailscaleIdentity({ login: "missing@passkey" }, options),
+    ).rejects.toThrow("Authenticated profile is absent");
+    await expect(
+      readCanonicalExistingProfileForTailscaleIdentity({ login: "person@github" }, options),
+    ).rejects.toThrow("verified numeric account binding");
+    const unrelated = syncTailscaleGitHubProfile(
+      { accountId: 73, canonicalLogin: "another-person", login: "another-person" },
+      options,
+    );
+    for (const [accountId, login, expectedProfileId] of [
+      [secondary.accountId, secondary.canonicalLogin, person.id],
+      [73, "another-person", unrelated.id],
+      [73, secondary.canonicalLogin, undefined],
+      [secondary.accountId, "unbound-login", undefined],
+    ] as const) {
+      expect(
+        (
+          await resolveCanonicalCachedGitHubIdentity(
+            { accountId, alias: { kind: "github-login", login } },
+            options,
+          )
+        )?.profileId,
+      ).toBe(expectedProfileId);
+    }
+    expect(
+      await resolveCanonicalCachedGitHubIdentity(
+        { accountId: 73, alias: { kind: "email", email: primary.email } },
+        options,
+      ),
     ).toBeUndefined();
     expect(
       (await resolveUserProfileGitHubAttribution([person.id, work.id], options)).get(work.id),

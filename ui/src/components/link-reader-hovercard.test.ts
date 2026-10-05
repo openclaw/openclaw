@@ -127,6 +127,30 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("scopes enterprise preview requests and cached cards to the pane session", async () => {
+    const url = "https://microsoft.ghe.com/bic/lobster/pull/16225";
+    const { anchor, provider } = createLink(url, [
+      { ...github, linkReader: { ...github.linkReader, hosts: ["microsoft.ghe.com"] } },
+    ]);
+    provider.sessionKey = "agent:main:first";
+    const request = connect(provider, vi.fn().mockResolvedValue(preview(url)));
+    await hover(anchor);
+    expect(request).toHaveBeenLastCalledWith(
+      "github.preview",
+      { url, sessionKey: "agent:main:first" },
+      expect.anything(),
+    );
+    provider.sessionKey = "agent:main:second";
+    expect(card()).toBeNull();
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "github.preview",
+      { url, sessionKey: "agent:main:second" },
+      expect.anything(),
+    );
+  });
+
   it("preserves co-author faces, missing-face counts, and accessible credit", async () => {
     const { anchor, provider } = createLink();
     const imageUrl = preview().imageUrl;

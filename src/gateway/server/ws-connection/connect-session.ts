@@ -13,6 +13,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
+import { isGatewayReadonlyWork } from "../../../process/gateway-work-admission.js";
 import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
@@ -539,7 +540,11 @@ export async function attachAuthenticatedGatewayConnect(
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
   // Ephemeral clients never page transcripts, so avoid starting an idle history worker for them.
-  if (role === "operator" && !isEphemeralGatewayClient(connectParams.client)) {
+  if (
+    !isGatewayReadonlyWork() &&
+    role === "operator" &&
+    !isEphemeralGatewayClient(connectParams.client)
+  ) {
     runDetachedConnectWork(
       async () => {
         const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
@@ -585,7 +590,7 @@ export async function attachAuthenticatedGatewayConnect(
           authenticatedUserProfile: nextClient.authenticatedUserProfile,
         });
 
-  if (presenceKey) {
+  if (presenceKey && !isGatewayReadonlyWork()) {
     const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(
       presenceKey,
@@ -718,6 +723,7 @@ export async function attachAuthenticatedGatewayConnect(
   const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
   const tailscaleProfileId = nextClient.authenticatedUserProfile?.profileId;
   if (
+    !isGatewayReadonlyWork() &&
     !nextClient.authenticatedGitHubIdentitySync &&
     tailscaleProfileId &&
     !nextClient.authenticatedUserProfile?.hasAvatar &&

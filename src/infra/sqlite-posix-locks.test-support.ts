@@ -1,5 +1,32 @@
 import { spawnSync } from "node:child_process";
 
+/** Keep artifact reads outside the writer process; descriptor close can release its locks. */
+export function readSqliteArtifactBytesFromChild(pathname: string): unknown {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+const facts = ['', '-wal', '-shm', '-journal'].map(suffix => {
+  const file = process.argv[1] + suffix;
+  try { const bytes = fs.readFileSync(file); return {suffix, size:bytes.length, sha256:createHash('sha256').update(bytes).digest('hex')}; }
+  catch(error) { if(error.code === 'ENOENT') return {suffix, missing:true}; throw error; }
+});
+process.stdout.write(JSON.stringify(facts));
+`,
+      pathname,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr || "SQLite artifact observation failed");
+  }
+  return JSON.parse(result.stdout);
+}
+
 type PosixLock = {
   length: number;
   pid: number;

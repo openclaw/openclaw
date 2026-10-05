@@ -1,11 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
@@ -24,13 +22,18 @@ import { createSessionProjectionDrain, yieldSessionListWork } from "./session-pr
 import * as rowMembership from "./session-row-membership-read.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import { createSessionRowAcquisition } from "./session-row-projection-acquisition.js";
 import * as rowRelations from "./session-row-projection-ancestors.js";
 import {
   createSessionRowProjectionArchive,
   isColdArchivedSessionRow as isCold,
 } from "./session-row-projection-archive.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
-import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
+import {
+  createSessionRowProjectionRetirement,
+  createFrozenSessionRowProjectionConfig,
+  createSessionRowProjectionCatalog,
+} from "./session-row-projection-catalog.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 import { createSessionRowGenerationObservations } from "./session-row-projection-generation.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
@@ -53,7 +56,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     await subagents.prepare();
   }
   let cfg = params.getConfig?.() ?? params.cfg;
-  const getPolicyConfig = () => params.getPolicyConfig?.() ?? cfg;
+  const frozen = createFrozenSessionRowProjectionConfig(
+    () => cfg,
+    () => params.getPolicyConfig?.() ?? cfg,
+  );
+  const getPolicyConfig = frozen.policy;
   const rows = new Map<string, records.Row>();
   const creators = createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
@@ -76,7 +83,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     runAsOwner: inOwnerContext,
   });
   const prepareRegistryFacts = (): Promise<void> | undefined =>
-    disposed
+    disposed || frozen.captured
       ? undefined
       : !inOwnerContext(subagents.snapshotIdentity)
         ? inOwnerContext(subagents.prepare)
@@ -91,11 +98,10 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   let preparingTopology: Promise<void> | undefined;
   let databaseRevision = 0;
   const revisions = createSessionRowProjectionRevisions(rows, byKey);
-  let materializedCount = 0;
   let scope: ReturnType<typeof rowScope.prepareSessionRowScopes>;
   const ensureMaterialized = createSessionProjectionDrain({
     beforeEnsure() {
-      if (!disposed && !catalog.needsInitialRead) {
+      if (!disposed && !frozen.active && !catalog.needsInitialRead) {
         void inOwnerContext(() => catalog.refresh());
       }
     },
@@ -111,6 +117,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     getModelCatalog: params.getModelCatalog,
     onInvalidated: () => mark({ all: true, scope: "catalog" }),
     onRefreshed(changed) {
+      if (frozen.active) {
+        return;
+      }
       if (changed) {
         // Rows served during renewal need new materializations only when their model facts changed.
         epoch++;
@@ -127,7 +136,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
     current: (row) => !topologyDirty && archive.isCurrentMaterialization(row) && isCurrent(row),
-    publish: (row, fields) => revisions.publishTranscript(row, fields, cfg, metadata.current),
+    publish: (row, fields) => {
+      if (!frozen.active) {
+        revisions.publishTranscript(row, fields, cfg, metadata.current);
+      }
+    },
   });
   const archive = createSessionRowProjectionArchive({
     rows,
@@ -138,7 +151,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     referenced,
     enqueue: (id, change) => backfill.enqueue(id, change),
     release(id) {
-      transcriptUpdates.remove(id);
+      transcripts.remove(id);
       backfill.remove(id);
       dirty.delete(id);
     },
@@ -151,7 +164,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     archive.markRelated(row, indexes, includeChildren);
   function remove(id: string) {
     archive.forget(id);
-    transcriptUpdates.remove(id);
+    transcripts.remove(id);
     const row = rows.get(id);
     if (row) {
       rowFacts.track(row, undefined);
@@ -177,7 +190,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     creators.update(previous, row);
     if (previous) {
       if (previous.generation !== row.generation) {
-        transcriptUpdates.remove(records.identity(row));
+        transcripts.remove(records.identity(row));
       }
       records.index(previous, indexes, true);
     }
@@ -191,7 +204,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     revisions.replace(previous, row);
   }
   function acquireEntry(row: records.Row, storedEntry: SessionEntry | undefined) {
-    if (storedEntry?.archivedAt !== undefined) {
+    if (storedEntry?.archivedAt !== undefined && !frozen.captured) {
       inOwnerContext(() => metadata.prepare(epoch, cfg, matching, put, referenced));
     }
     return records.acquireSessionRowEntry({
@@ -293,6 +306,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     original: SessionRowChange,
     prepared?: ReturnType<typeof readPreparedSessionEntryChange>,
   ) {
+    if (frozen.active) {
+      return;
+    }
     if (
       isSessionStoreTopologyChange(original) &&
       isOpenClawAgentDatabaseRegistryChange(original) &&
@@ -367,7 +383,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       env,
       inOwnerContext,
       isReady: () => !disposed && !topologyDirty,
-      preparedContext: () => metadata.readPrepared(epoch),
+      preparedContext: () => (frozen.captured ? metadata.current : metadata.readPrepared(epoch)),
       lookup,
       config: () => cfg,
       rows,
@@ -377,51 +393,24 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       readEntry: readSessionRowEntry,
       acquireEntry,
     });
-  function materialize(
-    row: records.Row,
-    configuredAgentIds = new Set(listAgentIds(cfg)),
-    readRow = rowReads.readResidentSessionRow,
-    preparedDatabaseFacts?: records.PreparedSessionRowDatabaseFacts,
-    repositoryWorkspace?: Parameters<
-      typeof rowReads.readResidentSessionRow
-    >[0]["repositoryWorkspace"],
-  ) {
-    const databaseFacts = preparedDatabaseFacts ?? row.retainedDatabaseFacts;
-    if (!row.entry || (!databaseFacts && !isIncognitoSessionKey(row.key))) {
-      return false;
-    }
-    const links = readChildLinks(row, databaseFacts !== undefined);
-    if (!isIncognitoSessionKey(row.key)) {
-      row.membership = new Set(membership.membership(row.storeTarget.storePath, row.key) ?? []);
-    }
-    const prepared = readRow({
-      row: { ...row, entry: row.entry },
+  const acquisition = createSessionRowAcquisition({
+    state: () => ({
       cfg,
       modelCatalog: catalog.current,
-      configuredAgentIds,
       context: metadata.current,
       subagentInputs: metadata.subagentInputs,
       gatewayContext: params.context,
       placementFactsReader: placementFacts,
-      links,
-      readSourceEntry: (key) => readSourceEntry(row, key, databaseFacts !== undefined),
-      databaseFacts,
-      repositoryWorkspace,
-    });
-    if (!isIncognitoSessionKey(row.key) && rows.get(records.identity(row)) !== row) {
-      return false;
-    }
-    if (!isIncognitoSessionKey(row.key)) {
-      placementFacts.register(row.entry.sessionId);
-    }
-    const previousBoard = row.hasBoard;
-    Object.assign(row, prepared, {
-      materializedSequence: ++materializedCount,
-      ...metadata.materializedRevisions,
-    });
-    revisions.materialized(row, previousBoard);
-    return true;
-  }
+    }),
+    rows,
+    membership: (row) => membership.membership(row.storeTarget.storePath, row.key) ?? [],
+    readChildLinks,
+    readSourceEntry,
+    registerPlacement: (id) => placementFacts.register(id),
+    materializedRevisions: () => metadata.materializedRevisions,
+    publish: revisions.materialized,
+  });
+  const { materialize } = acquisition;
   const {
     refresh,
     refreshBatch,
@@ -440,7 +429,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       cfg,
       disposed,
       topologyDirty,
-      registryPrepared: Boolean(inOwnerContext(subagents.snapshotIdentity)),
+      registryPrepared: Boolean(
+        frozen.captured
+          ? metadata.registrySnapshotIdentity
+          : inOwnerContext(subagents.snapshotIdentity),
+      ),
     }),
     runAsOwner: inOwnerContext,
     lookup,
@@ -450,7 +443,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     placementFacts,
     membership,
     prepare: () => {
-      metadata.prepare(epoch, cfg, matching, put, referenced);
+      if (!frozen.captured) {
+        metadata.prepare(epoch, cfg, matching, put, referenced);
+      }
       return cfg;
     },
     revision: () => epoch,
@@ -472,10 +467,10 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         dirty.size > 0 ||
         membership.needsPreparation ||
         placementFacts.needsPreparation ||
-        !inOwnerContext(() => metadata.readPrepared(epoch)))
+        !inOwnerContext(() => (frozen.captured ? metadata.current : metadata.readPrepared(epoch))))
     );
   }
-  const transcriptUpdates = createSessionRowProjectionTranscriptUpdates({
+  const transcripts = createSessionRowProjectionTranscriptUpdates({
     matching,
     mark,
     read: (id) => rows.get(id),
@@ -494,7 +489,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     },
   });
   const generations = createSessionRowGenerationObservations({
-    config: () => inOwnerContext(() => params.getConfig?.() ?? cfg),
+    config: () => inOwnerContext(() => (frozen.captured ? cfg : (params.getConfig?.() ?? cfg))),
     env,
     isActive: () => !disposed,
     stores: () => stores,
@@ -507,8 +502,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     mark,
     ensureMaterialized,
   });
+  const profiles = { dispose: retainUserProfileCatalog() };
   const stop = [
-    retainUserProfileCatalog(),
     sessionChanges.subscribeFacts(membership.invalidate),
     sessionChanges.subscribeProjection(mark),
     // Participant writers publish facts before their display-only lifecycle notice.
@@ -526,7 +521,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     if (topologyDirty) {
       return false;
     }
-    metadata.prepare(epoch, cfg, matching, put, referenced);
+    if (!frozen.captured) {
+      metadata.prepare(epoch, cfg, matching, put, referenced);
+    }
     return true;
   }
   const describe = rowReads.createSessionRowDescriptionReader({
@@ -544,28 +541,28 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       metadata.preparePresentation(row, readChildLinks);
     },
   });
-  function dispose() {
-    disposed = true;
-    revisions.dispose();
-    registryRead.dispose();
-    generations.invalidate();
-    disposeRefresh();
-    metadata.dispose();
-    catalog.dispose();
-    membership.dispose();
-    placementFacts.dispose();
-    transcriptUpdates.dispose();
-    backfill.dispose();
-    for (const unsubscribe of stop) {
-      unsubscribe();
-    }
-    for (const map of [rows, stores, byStore, byAgent, byParent, byKey, dirty]) {
-      map.clear();
-    }
-    rowFacts.clear();
-    creators.dispose();
-    archive.clear();
-  }
+  const { dispose, freeze } = createSessionRowProjectionRetirement({
+    stop,
+    markDisposed: () => {
+      disposed = true;
+      revisions.dispose();
+      registryRead.dispose();
+      generations.invalidate();
+    },
+    markFrozen: frozen.begin,
+    disposeRefresh,
+    catalog,
+    resources: [profiles, metadata, catalog, membership, placementFacts, transcripts, backfill],
+    publishers: [backfill, transcripts],
+    indexes: [rows, stores, byStore, byAgent, byParent, byKey, dirty],
+    finishDisposal: () => {
+      rowFacts.clear();
+      creators.dispose();
+      archive.clear();
+    },
+    ensureMaterialized,
+    captureConfig: () => (cfg = frozen.capture()),
+  });
   const selectEntries = rowScope.createSessionRowEntrySelector({
     isActive: () => !disposed,
     runAsOwner: inOwnerContext,
@@ -615,7 +612,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     onFactsChange: revisions.onFactsChange,
     observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
-      disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
+      disposed
+        ? undefined
+        : inOwnerContext(() => (frozen.captured ? metadata.current : metadata.readPrepared(epoch))),
     readPreparedSpawnedBy,
     capture(query: records.Lookup) {
       const row = lookup(query);
@@ -671,7 +670,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     needsSelectionPreparation: selectionNeedsPreparation,
     ...membershipRead,
     get materializedCount() {
-      return materializedCount;
+      return acquisition.materializedCount;
     },
     get dirtyRowCount() {
       return dirty.size;
@@ -704,6 +703,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     snapshot: (query: records.Lookup, options: records.SnapshotOptions = {}) =>
       records.snapshot(describe(query), metadata.current, options),
     dispose,
+    freeze,
   };
   return projection;
 }

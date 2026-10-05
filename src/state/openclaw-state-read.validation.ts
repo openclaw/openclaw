@@ -296,20 +296,39 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.expected.mime === "string") ||
       (input.command.type === "userProfiles.channelIdentity.list" &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userProfiles.self" && typeof input.command.profileId === "string") ||
       (input.command.type === "userProfiles.authority.resolve" &&
         typeof input.command.profileId === "string") ||
       (input.command.type === "userProfiles.githubIdentity.cached" &&
-        ((typeof input.command.accountId === "number" && typeof input.command.email === "string") ||
-          typeof input.command.login === "string")) ||
+        (("alias" in input.command &&
+          typeof input.command.accountId === "number" &&
+          Number.isSafeInteger(input.command.accountId) &&
+          input.command.accountId > 0 &&
+          isRecord(input.command.alias) &&
+          ((input.command.alias.kind === "email" &&
+            typeof input.command.alias.email === "string") ||
+            (input.command.alias.kind === "github-login" &&
+              typeof input.command.alias.login === "string"))) ||
+          (!("alias" in input.command) &&
+            ((typeof input.command.accountId === "number" &&
+              typeof input.command.email === "string") ||
+              typeof input.command.login === "string")))) ||
       (input.command.type === "userProfiles.githubAttribution.resolve" &&
+        (input.command.host === undefined ||
+          (typeof input.command.host === "string" && input.command.host.length <= 253)) &&
         isStringArray(input.command.profileIds)) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&
         (Check(UserChannelIdentitySchema, input.command.identity) ||
           (isRecord(input.command.identity) &&
             typeof input.command.identity.authorizationId === "string" &&
             isRecord(input.command.identity.policy)))) ||
-      (input.command.type === "userProfiles.email.resolve" &&
-        typeof input.command.email === "string") ||
+      (input.command.type === "userProfiles.authenticationAlias.resolve" &&
+        isRecord(input.command.alias) &&
+        ((input.command.alias.kind === "email" && typeof input.command.alias.email === "string") ||
+          (input.command.alias.kind === "provider" &&
+            typeof input.command.alias.provider === "string" &&
+            input.command.alias.provider !== "github" &&
+            typeof input.command.alias.subject === "string"))) ||
       (input.command.type === "audit.run.inspect" &&
         isRecord(input.command.input) &&
         typeof input.command.input.now === "number" &&

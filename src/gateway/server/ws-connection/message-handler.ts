@@ -36,6 +36,7 @@ import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayReaderRootWorkAdmission,
   tryBeginGatewayRestartStartupRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -481,6 +482,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
           return;
         }
+      }
+      const readerAdmission =
+        connect && connect.params.role !== "node" && !claimsWorkerConnectionIdentity(connect.params)
+          ? tryBeginGatewayReaderRootWorkAdmission("ws:reader-connect")
+          : null;
+      if (readerAdmission) {
+        try {
+          await readerAdmission.run(() => handleMessage(data));
+        } finally {
+          readerAdmission.release();
+        }
+        return;
       }
       if (
         connect &&

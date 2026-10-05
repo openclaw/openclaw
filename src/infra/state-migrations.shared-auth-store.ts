@@ -36,7 +36,6 @@ import {
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { sha256Hex } from "./crypto-digest.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -47,10 +46,20 @@ import {
   recordLegacyMigrationRun,
   recordLegacyMigrationSource,
 } from "./state-migrations.receipts.js";
+import {
+  readSharedAuthMigrationTargetRows as readTargetRows,
+  sharedAuthMigrationRowDigest,
+  sharedAuthMigrationRunId,
+  sharedAuthMigrationRunReport,
+  sharedAuthMigrationSourceReport,
+  sharedAuthSourceMigrationKey as sourceMigrationKey,
+  SHARED_AUTH_MIGRATION_KIND as MIGRATION_KIND,
+  SHARED_AUTH_MIGRATION_TABLES,
+  type SharedAuthMigrationStage as MigrationStage,
+} from "./state-migrations.shared-auth-store-codec.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-const MIGRATION_KIND = "shared-auth-store-state-db";
 const AUTH_JSON_MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";
 const SOURCE_STORE_KEY = "primary";
 const TARGET_STORE_KEY = "shared";
@@ -64,8 +73,6 @@ type SharedAuthMigrationDatabase = Pick<
   "config_machine_state" | "migration_runs" | "migration_sources"
 >;
 
-type MigrationStage = "copied" | "ownership-flipped" | "completed";
-
 type MigrationSnapshot = {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
@@ -73,10 +80,6 @@ type MigrationSnapshot = {
   sourceRows: AuthRows;
   now: number;
 };
-
-function sourceMigrationKey(sourcePath: string, sourceTable: string): string {
-  return `shared-auth-store:${sha256Hex(`${path.resolve(sourcePath)}\0${sourceTable}`)}`;
-}
 
 async function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string }): Promise<{
   rows: AuthRows;
@@ -102,24 +105,6 @@ async function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: 
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(params.sourcePath, "read", error);
   }
-}
-
-function readTargetRows(database: DatabaseSync): AuthRows {
-  const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
-  const cells = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("config_machine_state")
-      .select(["state_key", "value_json", "updated_at_ms"])
-      .where("state_key", "in", ["authProfiles.store", "authProfiles.state"]),
-  ).rows;
-  const store = cells.find((cell) => cell.state_key === "authProfiles.store");
-  const state = cells.find((cell) => cell.state_key === "authProfiles.state");
-  // Preserve historical row shapes: persisted receipt digests include these field names.
-  return {
-    store: store ? { store_json: store.value_json, updated_at: store.updated_at_ms } : null,
-    state: state ? { state_json: state.value_json, updated_at: state.updated_at_ms } : null,
-  };
 }
 
 function rowsMatch<T extends StoreRow | StateRow>(left: T, right: T | null): boolean {
@@ -180,18 +165,14 @@ function recordMigrationLedger(
   },
 ): void {
   const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(params.database);
-  const entries = [
-    {
-      sourceTable: "auth_profile_store",
-      targetTable: "auth_profile_stores",
-      row: params.sourceRows.store,
-    },
-    {
-      sourceTable: "auth_profile_state",
-      targetTable: "auth_profile_state",
-      row: params.sourceRows.state,
-    },
-  ].map((entry) => {
+  const entries = SHARED_AUTH_MIGRATION_TABLES.map((tables) => {
+    const entry = {
+      ...tables,
+      row:
+        tables.sourceTable === "auth_profile_store"
+          ? params.sourceRows.store
+          : params.sourceRows.state,
+    };
     const sourceKey = sourceMigrationKey(params.sourcePath, entry.sourceTable);
     // A crash after source cleanup leaves only the receipt as source evidence.
     // Never replace that evidence with a digest of the richer destination.
@@ -207,23 +188,21 @@ function recordMigrationLedger(
         );
     return Object.assign(entry, {
       sourceKey,
-      sourceSha256: pending?.source_sha256 ?? sha256Hex(JSON.stringify(entry.row)),
+      sourceSha256: pending?.source_sha256 ?? sharedAuthMigrationRowDigest(entry.row),
       sourceRecordCount: pending?.source_record_count ?? Number(entry.row !== null),
       sourceSizeBytes: pending?.source_size_bytes ?? params.sourceSize,
     });
   });
-  const runId = `shared-auth-store:${sha256Hex(entries.map((entry) => entry.sourceSha256).join("")).slice(0, 24)}`;
+  const runId = sharedAuthMigrationRunId(entries.map((entry) => entry.sourceSha256));
   recordLegacyMigrationRun(params.database, {
     runId,
     startedAt: params.now,
     finishedAt: params.stage === "completed" ? params.now : null,
     status: params.stage,
-    reportJson: JSON.stringify({
-      source: MIGRATION_KIND,
-      target: "auth_profile_stores,auth_profile_state",
-      stage: params.stage,
-      importedRecordCount: entries.reduce((count, entry) => count + entry.sourceRecordCount, 0),
-    }),
+    reportJson: sharedAuthMigrationRunReport(
+      params.stage,
+      entries.reduce((count, entry) => count + entry.sourceRecordCount, 0),
+    ),
     upsert: true,
   });
   for (const entry of entries) {
@@ -238,7 +217,7 @@ function recordMigrationLedger(
       runId,
       status: params.stage,
       importedAt: params.now,
-      reportJson: JSON.stringify({
+      reportJson: sharedAuthMigrationSourceReport({
         source: entry.sourceTable,
         target: entry.targetTable,
         stage: params.stage,

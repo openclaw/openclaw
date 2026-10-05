@@ -6,6 +6,7 @@ import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -45,16 +46,32 @@ export type OpenClawAgentDatabaseReadOnlyResult<T> =
   | { found: true; value: T }
   | { found: false; reason: "database-missing" | "schema-missing" };
 
+const readCallback = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseReadCallback"),
+  (): { database?: OpenClawAgentReadOnlyDatabase } => ({}),
+);
+
+/** A live connection does not extend its caller's synchronous read admission. */
+export function isOpenClawAgentReadCallbackCurrent(
+  database: OpenClawAgentReadOnlyDatabase,
+): boolean {
+  return readCallback.database === database && database.db.isOpen;
+}
+
 export function readOpenClawAgentDatabase<T>(
   database: OpenClawAgentReadOnlyDatabase,
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
 ): { found: true; value: T } {
+  const previous = readCallback.database;
+  readCallback.database = database;
   try {
     return { found: true, value: operation(database) };
   } catch (error) {
     throw sqlitePrimaryResultCode(error) === 1
       ? classifyOpenClawAgentDatabaseReadError(database.db, error)
       : error;
+  } finally {
+    readCallback.database = previous;
   }
 }
 

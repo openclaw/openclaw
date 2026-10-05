@@ -20,9 +20,12 @@ const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn());
 const avatarFixture = vi.hoisted(() => vi.fn());
 const createProfileAvatarReader = vi.hoisted(() => vi.fn());
+const getUserProfileAvatarDataReadOnly = vi.hoisted(() => vi.fn());
+const isGatewayReadonlyWork = vi.hoisted(() => vi.fn());
 const loadAvatarBytes = vi.hoisted(() => vi.fn());
 const profileFixture = vi.hoisted(() => vi.fn());
 const resolveHostAccountAvatar = vi.hoisted(() => vi.fn());
+const resolveVerifiedSystemNativeGitHubAccount = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterAll(async () => {
     await closeStateDatabaseForTest();
@@ -42,6 +45,14 @@ vi.mock("./http-auth-utils.js", async (importOriginal) => ({
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
 vi.mock("../state/user-profiles-avatar.js", () => ({ createProfileAvatarReader }));
+vi.mock("../state/user-profile-reads.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-reads.js")>()),
+  getUserProfileAvatarDataReadOnly,
+}));
+vi.mock("../process/gateway-work-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/gateway-work-admission.js")>()),
+  isGatewayReadonlyWork,
+}));
 
 function emailHash(email: string): string {
   return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
@@ -95,6 +106,8 @@ describe("profile avatar HTTP endpoint", () => {
   afterEach(() => vi.unstubAllGlobals());
   beforeEach(() => {
     authorizeControlUiReadRequestOrReply.mockReset();
+    getUserProfileAvatarDataReadOnly.mockReset();
+    isGatewayReadonlyWork.mockReset().mockReturnValue(false);
     avatarFixture.mockReset();
     loadAvatarBytes.mockReset().mockImplementation(async (avatar) => avatar);
     createProfileAvatarReader.mockReset().mockImplementation((id: string) => ({
@@ -122,6 +135,82 @@ describe("profile avatar HTTP endpoint", () => {
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });
   });
+
+  it.each(["saved", "head", "unchanged", "missing", "revoked"] as const)(
+    "serves only stored avatar data under frozen read admission (%s)",
+    async (outcome) => {
+      isGatewayReadonlyWork.mockReturnValue(true);
+      const reached = createDeferred();
+      const release = createDeferred();
+      let current = true;
+      authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
+        bindHttpResponseAuthority({}, res, () => current),
+      );
+      const bytes = new Uint8Array([1, 2, 3]);
+      const materialize = vi.fn(() => bytes);
+      getUserProfileAvatarDataReadOnly.mockImplementationOnce(
+        async (_id, _options, shouldLoadBytes) => {
+          reached.resolve();
+          await release.promise;
+          const metadata = { byteLength: bytes.byteLength, mime: "image/png", sha256: "saved" };
+          return {
+            profile: { id: "gateway-owner", mergedInto: null },
+            emails: ["frozen@example.test"],
+            avatar:
+              outcome === "missing"
+                ? undefined
+                : { ...metadata, bytes: shouldLoadBytes(metadata) ? materialize() : undefined },
+          };
+        },
+      );
+      const res = response();
+      const fetchImpl = vi.fn();
+      const req = request(
+        "/ignored",
+        outcome === "unchanged" ? { "if-none-match": '"saved-png"' } : {},
+      );
+      if (outcome === "head") {
+        req.method = "HEAD";
+      }
+      const handling = handleUserProfileAvatarHttpRequest(
+        req,
+        res.response,
+        "/api/users/gateway-owner/avatar",
+        { auth: {} as never, fetchImpl },
+      );
+      const settled = handling.catch((error: unknown) => error);
+      try {
+        await reached.promise;
+        if (outcome === "revoked") {
+          current = false;
+        }
+        release.resolve();
+        if (outcome === "revoked") {
+          expect(await settled).toBeInstanceOf(Error);
+          expect(res.end).not.toHaveBeenCalledWith(bytes);
+        } else {
+          expect(await settled).toBe(true);
+          if (outcome === "missing") {
+            expect(res.response.statusCode).toBe(404);
+          } else {
+            expect(res.writeHead).toHaveBeenCalledWith(
+              outcome === "unchanged" ? 304 : 200,
+              expect.any(Object),
+            );
+            expect(res.end).toHaveBeenCalledWith(outcome === "saved" ? bytes : undefined);
+            expect(materialize).toHaveBeenCalledTimes(outcome === "saved" ? 1 : 0);
+          }
+        }
+        expect(createProfileAvatarReader).not.toHaveBeenCalled();
+        expect(resolveHostAccountAvatar).not.toHaveBeenCalled();
+        expect(resolveVerifiedSystemNativeGitHubAccount).not.toHaveBeenCalled();
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await settled;
+      }
+    },
+  );
 
   it.each([
     { controlUi: { allowedOrigins: ["https://control.example"] } },

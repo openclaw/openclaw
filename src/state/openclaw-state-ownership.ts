@@ -33,6 +33,7 @@ import {
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
+import { assertGatewaySqliteWriterAdmission } from "../process/gateway-work-admission.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -288,6 +289,7 @@ export function assertOpenClawStateWriteAllowed(options: {
   // Close/reopen and replacement bootstrap a new owner before setting it again.
   schemaReady?: boolean;
 }): void {
+  assertGatewaySqliteWriterAdmission();
   const resolvedPath = path.resolve(options.databasePath);
   assertStateDatabaseAccessAllowed(resolvedPath);
   const status = inspectOpenClawStateOwnershipFromDatabase(

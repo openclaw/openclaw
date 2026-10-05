@@ -39,6 +39,7 @@ import {
   isSameSqliteReadOnlyWorkerLaunch,
   type SqliteReadOnlyWorkerLaunch,
 } from "./sqlite-readonly-worker-session.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
 
 const SLOW_HARDWARE_HEADROOM = 10;
@@ -659,12 +660,18 @@ export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: string | undefined,
   mode: "sync" | "content-version" = "sync",
+  options: { expectedSourceIdentity?: DatabaseFileIdentity; signal?: AbortSignal } = {},
 ): string {
+  options.signal?.throwIfAborted();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const started = log.isEnabled("trace") ? performance.now() : undefined;
   const result = spawnSync(
     process.execPath,
-    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }).argv,
+    sqliteReadOnlyWorkerArgv(pathname, {
+      mode,
+      stagingRoot,
+      expectedSourceIdentity: options.expectedSourceIdentity,
+    }).argv,
     {
       encoding: "utf8",
       env: resolveNodeCompileCacheEnv(),
@@ -673,6 +680,7 @@ export function runSqliteReadOnlyWorkerSync(
       killSignal: "SIGKILL",
     },
   );
+  options.signal?.throwIfAborted();
   if (started !== undefined) {
     log.trace(`SQLite read-only snapshot child durationMs=${performance.now() - started}`);
   }

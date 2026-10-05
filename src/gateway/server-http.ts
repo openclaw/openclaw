@@ -5,14 +5,12 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import type { TlsOptions } from "node:tls";
 import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -23,8 +21,6 @@ import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
 import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-protocol.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { CONTROL_UI_IMAGE_HTTP_ROUTES } from "./control-ui-image-http-routes.js";
@@ -58,15 +54,12 @@ import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
 import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
-  type GatewayIngressTransport,
-  type GatewayUnattributableProxyReporter,
 } from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
 } from "./provider-browser-auth.js";
-import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
   getControlUiModule,
   getControlUiPluginAssetsModule,
@@ -80,6 +73,7 @@ import {
   getOpenAiHttpModule,
   getOpenResponsesHttpModule,
   getSessionHistoryHttpModule,
+  resolveSuspendedReaderHttpModule,
   getSessionKillHttpModule,
   getToolsInvokeHttpModule,
   getUserProfilesHttpModule,
@@ -91,71 +85,19 @@ import {
 import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
-  type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import { handleGatewayProbeRequest } from "./server-http-probes.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
+import type { GatewayHttpServerOptions } from "./server-http.types.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
-import type { PluginHttpRequestHandler } from "./server/plugins-http.js";
-import {
-  resolvePluginRoutePathContext,
-  type PluginRoutePathContext,
-} from "./server/plugins-http/path-context.js";
-import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import {
-  handleArtifactTransferHttpRequest,
-  type ArtifactTransferHttpCallback,
-} from "./worker-environments/artifact-transfer-http.js";
-import {
-  handleNodeWorkspaceTransferHttpRequest,
-  type NodeWorkspaceTransferHttpCallback,
-} from "./worker-environments/node-workspace-transfer-http.js";
-
-type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+import { handleArtifactTransferHttpRequest } from "./worker-environments/artifact-transfer-http.js";
+import { handleNodeWorkspaceTransferHttpRequest } from "./worker-environments/node-workspace-transfer-http.js";
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
-export function createGatewayHttpServer(opts: {
-  /** Pre-bound listener supplied by the internal test transport. */
-  testListener?: HttpServer;
-  clients: Set<GatewayWsClient>;
-  controlUiEnabled?: boolean;
-  controlUiBasePath: string;
-  controlUiRoot?: ControlUiRootState;
-  openAiChatCompletionsEnabled?: boolean;
-  openResponsesEnabled?: boolean;
-  handleHooksRequest: HooksRequestHandler;
-  handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
-  handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
-  handlePluginRequest?: PluginHttpRequestHandler;
-  shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
-  isPluginAuthenticatedRoute?: (pathContext: PluginRoutePathContext) => boolean;
-  resolvePluginNodeCapabilityRoute?: ResolvePluginNodeCapabilityRoute;
-  resolvedAuth: ResolvedGatewayAuth;
-  getResolvedAuth?: () => ResolvedGatewayAuth;
-  /** Optional rate limiter for auth brute-force protection. */
-  rateLimiter?: AuthRateLimiter;
-  /** Strict limiter for the public join-code exchange, including loopback. */
-  joinRateLimiter?: AuthRateLimiter;
-  /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
-  handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
-  handleWorkerBootstrapArtifactTransferRequest?: ArtifactTransferHttpCallback;
-  /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
-  handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
-  getReadiness?: ReadinessChecker;
-  getStartup?: StartupChecker;
-  getRuntimeConfig?: () => OpenClawConfig;
-  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
-  isStartupPluginRuntimeReady?: () => boolean;
-  isTerminalEnabled?: () => boolean;
-  tlsOptions?: TlsOptions;
-  ingressTransport?: GatewayIngressTransport;
-  reportUnattributableProxy?: GatewayUnattributableProxyReporter;
-}): HttpServer {
+/** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
+export function createGatewayHttpServer(opts: GatewayHttpServerOptions): HttpServer {
   const {
     clients,
     controlUiBasePath,
@@ -379,6 +321,19 @@ export function createGatewayHttpServer(opts: {
         }
         return true;
       };
+      const readerHttp = await resolveSuspendedReaderHttpModule(scopedRequestPath);
+      if (readerHttp) {
+        await readerHttp.handleSuspendedReaderHttpRequest(
+          req,
+          res,
+          scopedRequestPath,
+          routeAuth,
+          controlUiRouteBasePath,
+          controlUiEnabled,
+          handleControlUiRequest,
+        );
+        return;
+      }
       const requestStages: GatewayHttpRequestStage[] = [
         () =>
           handleGatewayProbeRequest(

@@ -80,7 +80,8 @@ host-neutral suspension handshake:
 A draining or prepared Gateway accepts authenticated operator WebSocket
 connections, allowing a controller to reconnect and check, renew, or release
 its own lease. New node and worker connections remain fenced. A prepared
-Gateway fences every method except `gateway.suspend.*` and one exact
+Gateway retains authenticated `chat.history`, `chat.startup`, and `sessions.list`
+reads, while fencing other methods except `gateway.suspend.*` and one exact
 predecessor-bound restart. That exception requires a non-safe
 `gateway.restart.request` whose `target` matches the live Gateway lock; safe and
 untargeted restart requests remain fenced. That restart RPC exception is not
@@ -113,6 +114,30 @@ The RPC contract is:
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.handoff` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" } }`
+- `gateway.suspend.reader` — `operator.admin`; params
+  `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" }, "expiresAtMs": 123456789 }`
+
+Native hosts can convert a ready `drain: true`, `terminalPolicy: "terminate"`
+suspension into an irreversible reader. The separate reader RPC fences execution,
+joins native writers and background publishers, and retires the database owner
+heartbeat before returning a version 1 `reader-ready` receipt containing `pid`,
+`processInstanceId`, `bootId`, `frozenSourceGeneration`, `retiredAtMs`, and
+`expiresAtMs`. Authenticated personal identities use existing stored profiles for
+reconnects. Audited UI and history reads and readiness probes remain available
+during drain and native joins. Mutations, profile creation, and credential issuance
+remain fenced. The supplied absolute deadline is fixed, limited to 2940 seconds,
+and enforced with both wall and monotonic clocks. Expiry retires reads and stops
+the native host; resume cannot restore writer authority in that process.
+`frozenSourceGeneration` identifies the retired native generation; the hosting
+controller owns snapshot upload proof. Ordinary handoff behavior remains unchanged.
+
+After authenticated admission transfers a ready suspension to native reader custody,
+the current host, exact suspension and fixed deadline own its joins. A requesting
+socket timeout or disconnect does not cancel that accepted retirement. Admission
+and RPC responses still require current requester authority. An authorized retry
+with the same owner and deadline rejoins the same promise, including a failed one;
+it never starts another retirement or extends the deadline. Native failures and
+owner loss remain failures, and neither retry nor resume can restore writer access.
 
 `terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
 `"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults

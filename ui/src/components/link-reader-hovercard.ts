@@ -53,6 +53,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   static override properties = {
     client: { attribute: false, noAccessor: true },
     agentId: { attribute: false, noAccessor: true },
+    sessionKey: { attribute: false, noAccessor: true },
     readers: { attribute: false, noAccessor: true },
     previewSeeds: { attribute: false, noAccessor: true },
     pagePreviewContext: { attribute: false },
@@ -95,6 +96,19 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
 
   private gatewayClient: GatewayBrowserClient | null = null;
   private selectedAgentId: string | undefined;
+  private selectedSessionKey: string | undefined;
+
+  get sessionKey(): string | undefined {
+    return this.selectedSessionKey;
+  }
+  set sessionKey(value: string | undefined) {
+    if (value === this.selectedSessionKey) {
+      return;
+    }
+    this.invalidatePreviewContext();
+    this.selectedSessionKey = value;
+    this.dispatchEvent(new Event("link-reader-capabilities-changed"));
+  }
   private readerDescriptors: readonly ControlUiLinkReaderDescriptor[] = EMPTY_LINK_READERS;
 
   get readers(): readonly ControlUiLinkReaderDescriptor[] {
@@ -428,9 +442,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     this.scheduleIntentClose();
   };
 
-  private readonly handleClick = () => {
-    this.close();
-  };
+  private readonly handleClick = () => this.close();
 
   activateFromBootstrap(
     anchor: HTMLAnchorElement,
@@ -455,11 +467,8 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     }
     this.activate(anchor, target, delay);
     this.activeTrigger = trigger;
-    if (trigger === "pointer") {
-      this.hovercard.pointerInside = true;
-    } else {
-      this.hovercard.focusInside = true;
-    }
+    const intent = trigger === "pointer" ? "pointerInside" : "focusInside";
+    this.hovercard[intent] = true;
   }
 
   private activate(anchor: HTMLAnchorElement, target: LinkReaderTarget, delay: number): void {
@@ -688,6 +697,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     const client = this.client;
     const context = this.previewContext;
     const agentId = this.agentId;
+    const sessionKey = this.sessionKey;
     const load = async (): Promise<ControlUiLinkReaderPreview> => {
       const method = target.reader.linkReader.previewMethod;
       if (!client || !method || !this.readers.includes(target.reader)) {
@@ -697,6 +707,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
         method,
         {
           ...(agentId ? { agentId } : {}),
+          ...(sessionKey ? { sessionKey } : {}),
           url: target.href,
         },
         { signal: controller.signal },
@@ -715,6 +726,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
             this.cache.get(key) === entry &&
             client === this.client &&
             agentId === this.agentId &&
+            sessionKey === this.sessionKey &&
             client &&
             previewContextFor(client, agentId) === context
           ) {

@@ -327,31 +327,37 @@ export function acquireGatewayOwnerLease(params: {
     await heartbeat.ready;
   })();
   let released = false;
+  let releasing: Promise<void> | undefined;
   return {
     owner: identity.owner,
     ready,
-    async release() {
+    release() {
       if (released) {
-        return;
+        return Promise.resolve();
       }
-      if (constructionFailure) {
-        // Construction did not return cleanup custody; keep the physical owner held.
-        throw new Error("Gateway owner heartbeat cleanup could not be confirmed", {
-          cause: constructionFailure.error,
-        });
-      }
-      await heartbeat?.stop();
-      try {
-        // Lost custody may join its worker, but cannot mutate the recorded lease.
-        if (!custody?.signal.aborted) {
-          releaseRow();
+      return (releasing ??= (async () => {
+        if (constructionFailure) {
+          // Construction did not return cleanup custody; keep the physical owner held.
+          throw new Error("Gateway owner heartbeat cleanup could not be confirmed", {
+            cause: constructionFailure.error,
+          });
         }
-      } catch (error) {
-        if (!custody?.signal.aborted) {
-          throw error;
+        await heartbeat?.stop();
+        try {
+          // Lost custody may join its worker, but cannot mutate the recorded lease.
+          if (!custody?.signal.aborted) {
+            releaseRow();
+          }
+        } catch (error) {
+          if (!custody?.signal.aborted) {
+            throw error;
+          }
         }
-      }
-      released = true;
+        released = true;
+      })().catch((error: unknown) => {
+        releasing = undefined;
+        throw error;
+      }));
     },
   };
 }

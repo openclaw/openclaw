@@ -559,12 +559,14 @@ serveOwnedWorkerTasks(
                 ),
               };
             }
-            if (command.type === "userProfiles.email.resolve") {
+            if (command.type === "userProfiles.authenticationAlias.resolve") {
+              const profile = runSqliteDeferredTransactionSync(db, () =>
+                readUserProfileForAuthenticationAlias(db, command.alias),
+              );
               return {
                 type: command.type,
-                profileId: runSqliteDeferredTransactionSync(db, () =>
-                  readUserProfileIdForEmail(db, command.email),
-                ),
+                profileId: profile?.id,
+                ...(profile ? { updatedAt: profile.updatedAt } : {}),
               };
             }
             if (command.type === "sessionRepositoryWorkspaces.find") {

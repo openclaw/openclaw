@@ -49,8 +49,10 @@ const defaultInspectors = {
   getAgentRuns: getActiveAgentRunContextCount,
   getAcpRuns: getActiveAcpTurnCount,
   getMediaRuns: getActiveMediaGenerationRunCount,
-  getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
-  getRootRequestHolders: () => getActiveGatewayRootWorkHolders({ excludeCurrent: true }),
+  getRootRequests: () =>
+    getActiveGatewayRootWorkCount({ excludeCurrent: true, excludeReadonly: true }),
+  getRootRequestHolders: () =>
+    getActiveGatewayRootWorkHolders({ excludeCurrent: true, excludeReadonly: true }),
   getSessionAdmissions: getActiveSessionWorkAdmissionCount,
   getSessionMutations: getActiveSessionLifecycleMutationCount,
   getChatRuns: () => 0,

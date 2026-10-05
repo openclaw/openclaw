@@ -149,6 +149,27 @@ export const GatewaySuspendHandoffResultSchema = closedObject({
   expiresAtMs: CountSchema,
 });
 
+export const GatewayReaderReceiptSchema = closedObject({
+  version: Type.Literal(1),
+  status: Type.Literal("reader-ready"),
+  pid: Type.Integer({ minimum: 1 }),
+  processInstanceId: SuspensionTokenSchema,
+  bootId: SuspensionTokenSchema,
+  frozenSourceGeneration: SuspensionTokenSchema,
+  retiredAtMs: Type.Integer({ minimum: 1 }),
+  expiresAtMs: Type.Integer({ minimum: 1 }),
+});
+export type GatewayReaderReceipt = Static<typeof GatewayReaderReceiptSchema>;
+export const GatewaySuspendReaderParamsSchema = closedObject({
+  suspensionId: SuspensionTokenSchema,
+  target: closedObject({
+    pid: Type.Integer({ minimum: 1 }),
+    processInstanceId: SuspensionTokenSchema,
+  }),
+  expiresAtMs: Type.Integer({ minimum: 1 }),
+});
+export type GatewaySuspendReaderParams = Static<typeof GatewaySuspendReaderParamsSchema>;
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type GatewaySuspendBlocker = Static<typeof GatewaySuspendBlockerSchema>;

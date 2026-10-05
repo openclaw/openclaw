@@ -30,6 +30,7 @@ import {
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import * as doctor from "./state-migrations.doctor.js";
+import { verifySupportedSharedAuthArtifactInspection } from "./state-migrations.shared-auth-store-inspection.test-support.js";
 import * as migration from "./state-migrations.shared-auth-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -317,6 +318,9 @@ describe("shared auth store relocation", () => {
     ).toEqual({ value_json: JSON.stringify({ location: "state-db" }) });
   });
 
+  it("projects the whole zero-source effect without changing bytes after existing native callback admission", async () => {
+    await verifySupportedSharedAuthArtifactInspection(await createEmptyFixture(true));
+  });
   it("preserves post-relocation main-agent order state without treating it as legacy", async () => {
     const fixture = await createEmptyFixture(false);
     const mainAgentDir = path.dirname(fixture.sourcePath);

@@ -26,6 +26,8 @@ export {
   GatewaySuspendResumeResultSchema,
   GatewaySuspendHandoffParamsSchema,
   GatewaySuspendHandoffResultSchema,
+  GatewaySuspendReaderParamsSchema,
+  GatewayReaderReceiptSchema,
   HooksStatusParamsSchema,
   GATEWAY_SERVER_CAPS,
   HelloOkSchema,

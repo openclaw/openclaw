@@ -7,18 +7,10 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { beginCronReceiptAuthorityClose } from "../cron/store/receipt-authority-owner.js";
-import {
-  isDiagnosticsEnabled,
-  setDiagnosticsEnabledForProcess,
-} from "../infra/diagnostic-events.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
-import {
-  startGatewayDiagnosticHeartbeat,
-  stopGatewayDiagnosticHeartbeat,
-} from "../logging/diagnostic.js";
+import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
@@ -26,7 +18,6 @@ import {
   getGatewayContextLifetime,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   recordRemoteNodeInfo,
@@ -45,10 +36,11 @@ import { measureGatewayCloseStep } from "./restart-trace.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
+import { createGatewayDiagnostics } from "./server-lifecycle-diagnostics.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions } from "./server-public.js";
-import { resolveQaDiagnosticHeartbeatTimings } from "./server-qa-diagnostic-timings.js";
+import { createGatewayReaderTransportLifetime } from "./server-reader-transport-lifetime.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { resolveGatewayShutdownNotice, runGatewayCloseSteps } from "./server-shutdown.js";
@@ -93,7 +85,6 @@ export async function prepareGatewayLifecycle(params: {
     gatewayInstanceRuntimeRef,
     startupState,
     readinessEventLoopHealth,
-    browserAuthRateLimiter,
     chatRunState,
     chatAbortControllers,
     chatQueuedTurns,
@@ -381,6 +372,12 @@ export async function prepareGatewayLifecycle(params: {
       ?.modelAccountConnectService?.stop());
   // Connect, RPC, and maintenance refreshes share a Gateway owner, not a socket lifetime.
   const healthWork = new AsyncWorkScope();
+  const readerTransport = createGatewayReaderTransportLifetime(
+    runtime,
+    requestEntryLifetime,
+    shutdownRuntime.closeGatewayTransports,
+    () => runtimeState.tailscaleCleanup,
+  );
   const markClosePreludeStarted = (options?: GatewayCloseOptions) => {
     fenceSessionSuspensionWritesForGatewayShutdown();
     if (lifecycle.closePreludeStarted) {
@@ -389,9 +386,10 @@ export async function prepareGatewayLifecycle(params: {
     const prelude = params.pluginMetadata.beginClose();
     const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
+    readerTransport.retain(options?.retainReaderTransport === true);
     markGatewaySuspendExiting();
-    authRateLimiter.dispose();
-    browserAuthRateLimiter.dispose();
+    readerTransport.disposeAuthRateLimiter();
+    readerTransport.disposeBrowserAuthRateLimiter();
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
     if (prelude) {
@@ -403,10 +401,12 @@ export async function prepareGatewayLifecycle(params: {
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
     // disposal callbacks; startup can otherwise fail before restart marking.
-    runtime.connectionWork.beginClose(
-      notice.restartExpectedMs !== undefined ? createAgentRunRestartAbortError() : undefined,
-    );
-    requestEntryLifetime.beginClose();
+    if (!readerTransport.retained) {
+      runtime.connectionWork.beginClose(
+        notice.restartExpectedMs !== undefined ? createAgentRunRestartAbortError() : undefined,
+      );
+      requestEntryLifetime.beginClose();
+    }
     void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
@@ -518,6 +518,9 @@ export async function prepareGatewayLifecycle(params: {
   const prepareClose = async (optsValue?: GatewayCloseOptions) => {
     // Recovery and reply cancellation must precede services that join those replies.
     await markClosePreludeStarted(optsValue);
+    if (optsValue?.retainReaderTransport !== true) {
+      readerTransport.retain(false);
+    }
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
@@ -561,12 +564,13 @@ export async function prepareGatewayLifecycle(params: {
       );
       const transport = transportBridge.current();
       const contextLifetime = getGatewayContextLifetime(runtime.resolvePluginGatewayContext);
+      let processWritersRetired: boolean;
       try {
         await measureGatewayCloseStep("restart.close.portal-service", () =>
           transport?.portalService.closeAll(),
         );
       } finally {
-        await withPluginRuntimeRegistryScope(pluginRuntime.registry, () =>
+        const result = await withPluginRuntimeRegistryScope(pluginRuntime.registry, () =>
           shutdownRuntime.completeGatewayClose(
             {
               resolveGatewayContext: runtime.resolvePluginGatewayContext,
@@ -583,7 +587,7 @@ export async function prepareGatewayLifecycle(params: {
               },
               bonjourStop: kernel.swapDiscovery(null)?.stop ?? null,
               tailscaleCleanup: runtimeState.tailscaleCleanup,
-              clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
+              clearSecretsRuntimeSnapshot: readerTransport.clearSecretsRuntimeSnapshot,
               channelIds,
               stopChannel,
               pluginServices: runtimeState.pluginServices,
@@ -598,7 +602,7 @@ export async function prepareGatewayLifecycle(params: {
               lifecycleUnsub: runtimeState.lifecycleUnsub,
               chatRunState,
               clients,
-              finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
+              finishRequestEntries: readerTransport.joinEntries,
               drainSdkWork: () => params.sdkResourceHost.drainWork(),
               stopScheduler: () => runtime.scheduler.stop(),
               closeSdkResources: () => params.sdkResourceHost.close(),
@@ -621,9 +625,18 @@ export async function prepareGatewayLifecycle(params: {
             preparation,
           ),
         );
+        processWritersRetired = result.processWritersRetired;
       }
-      await requestEntryLifetime.sealAndJoin();
+      if (readerTransport.retained && !processWritersRetired) {
+        throw new Error("Gateway native writer retirement has not completed");
+      }
+      if (!readerTransport.retained) {
+        await requestEntryLifetime.sealAndJoin();
+      }
       await shutdownRuntime.waitForPluginCacheRetirement();
+      if (!readerTransport.retained) {
+        readerTransport.releaseRetainedRuntimeConfig();
+      }
     };
   };
   const closeStepOwner = {
@@ -644,40 +657,7 @@ export async function prepareGatewayLifecycle(params: {
     });
   };
 
-  stopGatewayDiagnosticHeartbeat();
-  const configureDiagnostics = (config: OpenClawConfig) => {
-    if (lifecycle.closePreludeStarted) {
-      return;
-    }
-    const enabled = isDiagnosticsEnabled(config);
-    setDiagnosticsEnabledForProcess(enabled);
-    if (!enabled) {
-      stopGatewayDiagnosticHeartbeat();
-      return;
-    }
-    // Gateway lifecycle owns both this heartbeat job and the monitor
-    // it samples, so startup failure and normal close tear them down together.
-    startGatewayDiagnosticHeartbeat(runtime.scheduler, undefined, {
-      getConfig: getRuntimeConfig,
-      startupGraceMs: 60_000,
-      testTimings: resolveQaDiagnosticHeartbeatTimings(process.env),
-      sampleLiveness: () => {
-        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
-        if (!sample || sample.degradedSinceMs == null) {
-          return null;
-        }
-        return {
-          reasons: sample.reasons,
-          intervalMs: sample.intervalMs,
-          degradedSinceMs: sample.degradedSinceMs,
-          eventLoopDelayP99Ms: sample.delayP99Ms,
-          eventLoopDelayMaxMs: sample.delayMaxMs,
-          eventLoopUtilization: sample.utilization,
-          cpuCoreRatio: sample.cpuCoreRatio,
-        };
-      },
-    });
-  };
+  const configureDiagnostics = createGatewayDiagnostics(runtime);
   configureDiagnostics(cfgAtStart);
 
   return {
@@ -704,6 +684,8 @@ export async function prepareGatewayLifecycle(params: {
     shutdownRuntime,
     lifecycle,
     cronReconciliation,
+    beginClosePrelude,
+    finishReaderTransport: readerTransport.close,
     getRuntimeSnapshot,
     startChannels,
     startChannel,

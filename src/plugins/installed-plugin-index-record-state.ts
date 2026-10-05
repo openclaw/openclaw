@@ -1,9 +1,12 @@
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   inspectPluginInstallRecordMap,
   type PluginInstallRecordMapState,
+  serializePluginInstallRecordMap,
 } from "../config/plugin-install-record-map.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import {
   readBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
@@ -12,6 +15,7 @@ import {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
   readPluginMetadataStateRowSync,
   readPluginMetadataStateRowsSync,
+  readPluginMetadataStateRowsFromDatabase,
 } from "./installed-plugin-index-row.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
@@ -140,4 +144,49 @@ export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
   return inspectPersistedInstalledPluginIndexInstallRecords(
     getPersistedInstalledPluginIndexCacheEntry(options),
   );
+}
+
+export type PluginInstallStateInspection =
+  | { status: "missing" }
+  | { status: "invalid"; rowSha256: string; updatedAtMs: number }
+  | {
+      status: "valid";
+      revision: number;
+      recordCount: number;
+      recordsSha256: string;
+      rowSha256: string;
+      updatedAtMs: number;
+    };
+
+/** Inspect this observation's install ledger without consulting or populating the runtime cache. */
+export function inspectPluginInstallStateFromDatabase(
+  database: DatabaseSync,
+): PluginInstallStateInspection {
+  const row = readPluginMetadataStateRowsFromDatabase(database, [
+    INSTALLED_PLUGIN_INDEX_STATE_KEY,
+  ])[0];
+  if (!row) {
+    return { status: "missing" };
+  }
+  const value = safeParseJson(row.value_json);
+  const entry: PersistedInstalledPluginIndexCacheEntry = { state: { status: "present", value } };
+  const records = inspectPersistedInstalledPluginIndexInstallRecords(entry);
+  const revision =
+    value && typeof value === "object" && "revision" in value ? value.revision : undefined;
+  const facts = { rowSha256: sha256Hex(row.value_json), updatedAtMs: row.updated_at_ms };
+  if (
+    records.status !== "valid" ||
+    typeof revision !== "number" ||
+    !Number.isSafeInteger(revision) ||
+    revision < 0
+  ) {
+    return { status: "invalid", ...facts };
+  }
+  return {
+    status: "valid",
+    revision,
+    recordCount: Object.keys(records.records).length,
+    recordsSha256: sha256Hex(serializePluginInstallRecordMap(records.records)),
+    ...facts,
+  };
 }

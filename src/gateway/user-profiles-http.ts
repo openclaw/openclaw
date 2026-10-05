@@ -10,10 +10,17 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { isGatewayReadonlyWork } from "../process/gateway-work-admission.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { getUserProfileAvatarDataReadOnly } from "../state/user-profile-reads.js";
 import { createProfileAvatarReader } from "../state/user-profiles-avatar.js";
 import { formatUserProfileAvatarEtag, UserProfileNotFoundError } from "../state/user-profiles.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
+import {
+  resolveTrustedFactoryGitHubAccountId,
+  resolveTrustedFactoryGitHubMetadata,
+} from "./github-user-identity.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
@@ -320,11 +327,45 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   let emails: string[];
+  let transientFailure = false;
+  const factoryAccountId = resolveTrustedFactoryGitHubAccountId({
+    authResult: { ok: true, method: authResult.authMethod, user: authResult.authenticatedUserId },
+    authConfig: cfg.gateway?.auth,
+  });
+  const serveStoredAvatar = async () => {
+    const read = await getUserProfileAvatarDataReadOnly(profileId, {}, (avatar) => {
+      authResult.assertCurrent();
+      return (
+        method !== "HEAD" &&
+        !matchesHttpIfNoneMatch(
+          req.headers["if-none-match"],
+          formatUserProfileAvatarEtag(avatar.sha256, avatar.mime),
+        )
+      );
+    });
+    authResult.assertCurrent();
+    if (read.avatar) {
+      sendAvatar(req, res, {
+        ...read.avatar,
+        byteLength: read.avatar.byteLength,
+        etag: formatUserProfileAvatarEtag(read.avatar.sha256, read.avatar.mime),
+      });
+    } else {
+      sendJson(res, 404, { ok: false, error: { type: "not_found" } });
+    }
+    return true;
+  };
   try {
+    if (isGatewayReadonlyWork()) {
+      return await serveStoredAvatar();
+    }
     const reader = createProfileAvatarReader(profileId);
     for (;;) {
       const prepared = await reader.inspect();
       authResult.assertCurrent();
+      if (isGatewayReadonlyWork()) {
+        return await serveStoredAvatar();
+      }
       const profile = prepared.profile;
       if (!profile) {
         throw new UserProfileNotFoundError(profileId);
@@ -336,6 +377,9 @@ export async function handleUserProfileAvatarHttpRequest(
           method !== "HEAD" && !matchesHttpIfNoneMatch(req.headers["if-none-match"], etag);
         const bytes = needsBytes ? await prepared.loadBytes() : undefined;
         authResult.assertCurrent();
+        if (isGatewayReadonlyWork()) {
+          return await serveStoredAvatar();
+        }
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
@@ -348,6 +392,9 @@ export async function handleUserProfileAvatarHttpRequest(
           ? await resolveHostAccountAvatar()
           : null;
       authResult.assertCurrent();
+      if (isGatewayReadonlyWork()) {
+        return await serveStoredAvatar();
+      }
       if (!prepared.isCurrent()) {
         continue;
       }
@@ -459,6 +506,9 @@ export async function handleUserProfileAvatarHttpRequest(
       );
       waiterSignal.throwIfAborted();
       authResult.assertCurrent();
+      if (isGatewayReadonlyWork()) {
+        return await serveStoredAvatar();
+      }
       if (result.kind === "hit") {
         sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;

@@ -20,8 +20,8 @@ import {
   getRuntimeAuthProfileStoreSnapshotsRevision,
   listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceOwnedRuntimeAuthProfileStoreSnapshots,
+  type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import type { OwnedRuntimeAuthProfileStoreSnapshotEntry } from "../agents/auth-profiles/runtime-snapshots.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
@@ -42,7 +42,6 @@ import { parseSecretRef, isSecretRef, type SecretRef } from "../config/types.sec
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
-import { secretRefKey } from "./ref-contract.js";
 import {
   clearActiveCredentialDegradedOwners,
   setActiveDegradedSecretOwners,
@@ -69,67 +68,10 @@ export type PreparedSecretsRuntimeSnapshot = {
   webTools: RuntimeWebToolsMetadata;
 };
 
-type LocatedSecretRef = {
-  path: Array<string | number>;
-  ref: SecretRef;
-};
-
-type SecretDefaults = Parameters<typeof parseSecretRef>[1];
-
-function listLocatedSecretRefs(
-  value: unknown,
-  defaults: SecretDefaults | undefined,
-  path: Array<string | number> = [],
-  refs: LocatedSecretRef[] = [],
-): LocatedSecretRef[] {
-  const ref = parseSecretRef(value, defaults);
-  if (ref) {
-    refs.push({ path, ref });
-    return refs;
-  }
-  if (Array.isArray(value)) {
-    for (const [index, entry] of value.entries()) {
-      listLocatedSecretRefs(entry, defaults, [...path, index], refs);
-    }
-    return refs;
-  }
-  if (isRecord(value)) {
-    for (const key of Object.keys(value).toSorted()) {
-      listLocatedSecretRefs(value[key], defaults, [...path, key], refs);
-    }
-  }
-  return refs;
-}
-
-/** Canonical store refs across config and auth profiles for one mutated team entry. */
-export function collectSecretStoreRefKeysInSnapshot(
-  snapshot: Pick<PreparedSecretsRuntimeSnapshot, "sourceConfig" | "authStores">,
-  name: string,
-): Set<string> {
-  const sources = [snapshot.sourceConfig, ...snapshot.authStores.map(({ store }) => store)];
-  return new Set(
-    listLocatedSecretRefs(sources, snapshot.sourceConfig.secrets?.defaults).flatMap(({ ref }) =>
-      ref.source === "store" && ref.id === name ? [secretRefKey(ref)] : [],
-    ),
-  );
-}
-
-/** Whether two configs resolve the same SecretRefs through the same provider contracts. */
-export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
-  return isDeepStrictEqual(
-    {
-      refs: listLocatedSecretRefs(left, left.secrets?.defaults),
-      defaults: left.secrets?.defaults,
-      providers: left.secrets?.providers,
-    },
-    {
-      refs: listLocatedSecretRefs(right, right.secrets?.defaults),
-      defaults: right.secrets?.defaults,
-      providers: right.secrets?.providers,
-    },
-  );
-}
-
+export {
+  collectSecretStoreRefKeysInSnapshot,
+  hasSameSecretReloadContract,
+} from "./runtime-secret-ref-contract.js";
 /** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
 export type SecretsRuntimeRefreshContext = {
   env: Record<string, string | undefined>;
@@ -1239,7 +1181,7 @@ export async function activateProviderAuthRuntimeSnapshot(
 /**
  * Clears active secrets runtime state and all linked config/auth/web-tool snapshots.
  */
-export function clearSecretsRuntimeSnapshotState(): void {
+export function clearSecretsRuntimeSnapshotState(options?: { retainRuntimeConfig?: true }): void {
   activeSnapshotRevision += 1;
   activeSnapshotLineageStartRevision = 0;
   activeSnapshotLineageAuthStores = [];
@@ -1250,7 +1192,9 @@ export function clearSecretsRuntimeSnapshotState(): void {
   setActiveDegradedSecretOwners([]);
   clearActiveCredentialDegradedOwners();
   setRuntimeConfigSnapshotRefreshHandler(null);
-  clearRuntimeConfigSnapshot();
+  if (!options?.retainRuntimeConfig) {
+    clearRuntimeConfigSnapshot();
+  }
   clearRuntimeAuthProfileStoreSnapshots();
   clearAuthProfileMigrationDiagnostics();
   providerAuthActivation = null;

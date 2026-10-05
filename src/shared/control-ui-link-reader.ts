@@ -14,6 +14,8 @@ export type ControlUiLinkReaderPreviewParams = {
   url: string;
   /** Selected agent hint; the receiving owner still authorizes identity selection. */
   agentId?: string;
+  /** Session hint; the Gateway must authorize its current repository before private reads. */
+  sessionKey?: string;
 };
 export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
   refresh?: boolean;

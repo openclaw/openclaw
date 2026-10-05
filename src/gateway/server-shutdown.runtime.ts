@@ -3,6 +3,7 @@ export async function prepareGatewayShutdownRuntime() {
     {
       prepareGatewayClose,
       completeGatewayClose,
+      closeGatewayTransports,
       drainActiveSessionsForShutdown,
       runGatewayClosePrelude,
     },
@@ -42,6 +43,7 @@ export async function prepareGatewayShutdownRuntime() {
   return {
     prepareGatewayClose,
     completeGatewayClose,
+    closeGatewayTransports,
     drainActiveSessionsForShutdown,
     runGatewayClosePrelude,
     runGlobalGatewayStopSafely,

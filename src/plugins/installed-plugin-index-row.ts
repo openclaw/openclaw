@@ -35,21 +35,30 @@ export function readPluginMetadataStateRowsSync(
   databaseOptions: Parameters<typeof withExistingOpenClawStateDatabaseReadOnly>[1],
   artifactPreservingReadOnly = false,
 ): { state_key: string; value_json: string }[] {
-  const read = ({ db }: { db: DatabaseSync }) => {
-    if (!tableExists(db, "config_machine_state")) {
-      return [];
-    }
-    return executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
-        .selectFrom("config_machine_state")
-        .select(["state_key", "value_json"])
-        .where("state_key", "in", stateKeys),
-    ).rows;
-  };
+  const read = ({ db }: { db: DatabaseSync }) =>
+    readPluginMetadataStateRowsFromDatabase(db, stateKeys).map(({ state_key, value_json }) => ({
+      state_key,
+      value_json,
+    }));
   return (
     (artifactPreservingReadOnly
       ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, databaseOptions)
       : withExistingOpenClawStateDatabaseReadOnly(read, databaseOptions)) ?? []
   );
+}
+
+export function readPluginMetadataStateRowsFromDatabase(
+  db: DatabaseSync,
+  stateKeys: readonly (typeof INSTALLED_PLUGIN_INDEX_STATE_KEY | "plugins.bundledDiscovery")[],
+) {
+  if (!tableExists(db, "config_machine_state")) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select(["state_key", "value_json", "updated_at_ms"])
+      .where("state_key", "in", stateKeys),
+  ).rows;
 }

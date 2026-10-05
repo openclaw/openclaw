@@ -24,6 +24,9 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "acpSessions.metadata" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
+    command.type === "githubRepository.branch" ||
+    command.type === "userProfiles.authenticationAlias.resolve" ||
+    command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "workers.placementProjection"
   ) {
     return structuredClone(command);
@@ -483,9 +486,16 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "userProfiles.githubIdentity.cached") {
     return (
       bytes +
-      ("login" in command
-        ? Buffer.byteLength(command.login, "utf8")
-        : Buffer.byteLength(command.email, "utf8") + 8)
+      ("alias" in command
+        ? Buffer.byteLength(
+            command.alias.kind === "email" ? command.alias.email : command.alias.login,
+            "utf8",
+          ) +
+          Buffer.byteLength(command.alias.kind, "utf8") +
+          8
+        : "login" in command
+          ? Buffer.byteLength(command.login, "utf8")
+          : Buffer.byteLength(command.email, "utf8") + 8)
     );
   }
   if (
@@ -495,14 +505,16 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return (
       bytes +
       stringBytes(command.profileIds) +
-      (command.type === "userPreferences.values" ? Buffer.byteLength(command.key) : 0)
+      (command.type === "userPreferences.values"
+        ? Buffer.byteLength(command.key)
+        : Buffer.byteLength(command.host ?? "", "utf8"))
     );
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return bytes + Buffer.byteLength(JSON.stringify(command.identity), "utf8");
   }
-  if (command.type === "userProfiles.email.resolve") {
-    return bytes + Buffer.byteLength(command.email, "utf8");
+  if (command.type === "userProfiles.authenticationAlias.resolve") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.alias), "utf8");
   }
   if (command.type === "workspace.snapshot") {
     return bytes + Buffer.byteLength(command.workspaceDir, "utf8");

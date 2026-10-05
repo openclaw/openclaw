@@ -50,7 +50,8 @@ vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./http-utils.js", () => ({
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
   getHeader: (req: IncomingMessage, name: string) => {
     const value = req.headers[name.toLowerCase()];
     return Array.isArray(value) ? value[0] : value;
@@ -61,6 +62,16 @@ vi.mock("./http-utils.js", () => ({
     requestAuth: {
       trustDeclaredOperatorScopes: true,
       hasCurrentClientAuthority: () => fixture.authorityCurrent,
+      assertCurrent: () => {
+        if (!fixture.authorityCurrent) {
+          throw new Error("HTTP fixture authority retired");
+        }
+      },
+      revalidate: async () => {
+        if (!fixture.authorityCurrent) {
+          throw new Error("HTTP fixture authority retired");
+        }
+      },
       ...(fixture.profile ? { authenticatedUserProfile: fixture.profile } : {}),
     },
     operatorScopes: ["operator.read"],
@@ -94,41 +105,51 @@ vi.mock("./http-utils.js", () => ({
       ok: true as const,
       requestAuth: {
         trustDeclaredOperatorScopes: true,
+        hasCurrentClientAuthority: () => fixture.authorityCurrent,
         ...(!unconfigured && fixture.profile ? { authenticatedUserProfile: fixture.profile } : {}),
       },
     };
   },
 }));
 
-vi.mock("./session-sharing.js", () => ({
+vi.mock("./session-sharing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-sharing.js")>()),
   createSessionListEntryFilter: ({ client }: { client: unknown }) =>
     client ? () => fixture.visible : undefined,
-  resolveSessionSharingTarget: () => ({
-    canonicalKey: "agent:main",
-    agentId: "main",
-    entry: {
-      sessionId: fixture.sessionId,
-      lifecycleRevision: fixture.lifecycleRevision,
-      sessionStartedAt: fixture.sessionStartedAt,
-    },
-    storePath: "/tmp",
-  }),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  resolveGatewaySessionStoreTargetWithStore: () => ({
-    storePath: "/tmp",
-    storeKeys: ["agent:main"],
-    canonicalKey: "agent:main",
-    agentId: "main",
-    store: {},
-  }),
-  resolveCanonicalSessionEntryFromStoreKeys: () => ({
-    sessionId: "session-1",
-    lifecycleRevision: fixture.lifecycleRevision,
-    sessionStartedAt: fixture.sessionStartedAt,
-    sessionFile: "/tmp/session-1.jsonl",
-  }),
+vi.mock("./session-sharing-preparation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-sharing-preparation.js")>()),
+  prepareSessionMutationFacts: async () => {
+    const target = {
+      agentId: "main",
+      canonicalKey: "agent:main:history-fixture",
+      storeKey: "agent:main:history-fixture",
+      storeKeys: ["agent:main:history-fixture"],
+      storePath: "/tmp",
+      entry: {
+        sessionId: fixture.sessionId,
+        updatedAt: 1,
+        lifecycleRevision: fixture.lifecycleRevision,
+        sessionStartedAt: fixture.sessionStartedAt,
+        sessionFile: "/tmp/session-1.jsonl",
+      },
+    };
+    return {
+      storageTarget: target,
+      bindCreation: () => {
+        throw new Error("History cannot create a session");
+      },
+      readCurrent: () => ({ target, membership: new Set<string>() }),
+      release: () => {},
+    } satisfies Awaited<
+      ReturnType<typeof import("./session-sharing-preparation.js").prepareSessionMutationFacts>
+    >;
+  },
+}));
+
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
@@ -183,7 +204,7 @@ const guestProfile = {
   hasAvatar: false,
   updatedAt: 1,
 };
-const SESSION_HISTORY_URL = "/sessions/agent%3Amain/history";
+const SESSION_HISTORY_URL = "/sessions/agent%3Amain%3Ahistory-fixture/history";
 const SESSION_FILE = "/tmp/session-1.jsonl";
 const TRUSTED_PROXY_STARTUP_OPTIONS = {
   auth: { mode: "trusted-proxy" } as never,
@@ -354,7 +375,7 @@ function emitTranscriptTextUpdate(
     target: {
       agentId: "main",
       sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:history-fixture",
       storePath: "/tmp",
     },
     lifecycleRevision: "before-reset",

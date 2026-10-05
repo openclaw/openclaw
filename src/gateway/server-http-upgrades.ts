@@ -12,6 +12,7 @@ import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   isGatewayWorkAdmissionClosed,
+  isGatewayReadAdmissionAvailable,
 } from "../process/gateway-work-admission.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
@@ -109,7 +110,8 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   if (
     isGatewayWorkAdmissionClosed() &&
     !allowsRestartStartupPreauth &&
-    (ingressName === "Worker" || !isGatewaySuspendControlAvailable())
+    (ingressName === "Worker" ||
+      (!isGatewaySuspendControlAvailable() && !isGatewayReadAdmissionAvailable()))
   ) {
     rejectGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     return;

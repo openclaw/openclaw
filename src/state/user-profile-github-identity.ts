@@ -35,6 +35,8 @@ import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   CachedGitHubIdentity,
   CachedGitHubIdentityBinding,
+  CachedGitHubIdentitySelector,
+  FactoryGitHubIdentity,
   StoredGitHubIdentity,
   ProfileDisplayRow,
   UserProfileGitHubAttribution,
@@ -180,8 +182,38 @@ export function selectProfileAccessEntries(
 
 function resolveCachedGitHubIdentityInDatabase(
   db: DatabaseSync,
-  binding: CachedGitHubIdentityBinding,
+  binding: CachedGitHubIdentityBinding | CachedGitHubIdentitySelector,
 ): CachedGitHubIdentity | undefined {
+  if ("alias" in binding) {
+    const alias: GitHubProfileAlias =
+      binding.alias.kind === "email"
+        ? { kind: "email", email: binding.alias.email.trim().toLowerCase() }
+        : { kind: "github-login", subject: githubAuthenticationSubject(binding.alias.login) };
+    if (
+      (alias.kind === "email" && !alias.email) ||
+      !Number.isSafeInteger(binding.accountId) ||
+      binding.accountId <= 0 ||
+      !tableExists(db, "user_profiles") ||
+      (alias.kind === "email" && !tableExists(db, "user_profile_emails")) ||
+      !tableExists(db, "user_profile_identities") ||
+      !readGitHubColumns(db).verifiedLogin
+    )
+      return undefined;
+    const { aliasProfileId, existingProfileId, aliasGitHubIdentity } = readGitHubIdentityBinding(
+      db,
+      alias,
+      binding.accountId,
+    );
+    if (
+      !aliasProfileId ||
+      aliasProfileId !== existingProfileId ||
+      !aliasGitHubIdentity?.accounts.some((account) => account.accountId === binding.accountId)
+    ) {
+      return undefined;
+    }
+    const profile = selectResolvedUserProfileMetadataById(db, aliasProfileId);
+    return profile ? { profileId: profile.id, updatedAt: profile.updated_at } : undefined;
+  }
   if (
     !tableExists(db, "user_profiles") ||
     !tableExists(db, "user_profile_identities") ||
@@ -408,7 +440,12 @@ function readGitHubIdentityBinding(db: DatabaseSync, alias: GitHubProfileAlias, 
     kysely
       .selectFrom("user_profile_identities")
       .leftJoin("user_profiles", "user_profiles.id", "user_profile_identities.profile_id")
-      .select(["profile_id", "canonical_login", "primary_github_account_id"])
+      .select(["profile_id", "canonical_login"])
+      .select((eb) => [
+        readGitHubColumns(db).primaryAccount
+          ? "primary_github_account_id"
+          : eb.val<number | null>(null).as("primary_github_account_id"),
+      ])
       .where("provider", "=", GITHUB_PROVIDER)
       .where("subject", "=", subject)
       .where("canonical_login", "is not", null),

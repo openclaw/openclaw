@@ -90,7 +90,7 @@ describe("personal avatar HTTP authentication", () => {
     });
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("personal-avatar-auth-"));
     cfg = {};
     auth = { mode: "token", token: "test-shared-secret", allowTailscale: false };

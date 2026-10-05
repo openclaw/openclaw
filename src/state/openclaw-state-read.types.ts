@@ -147,6 +147,8 @@ import type {
   UserChannelIdentityResult,
   CachedGitHubIdentity,
   CachedGitHubIdentityBinding,
+  CachedGitHubIdentitySelector,
+  ExistingUserProfileAuthenticationAlias,
   UserProfileGitHubAttributionRead,
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -228,9 +230,17 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | { type: "userProfiles.authority.resolve"; profileId: string }
-  | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
-  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
+  | ({ type: "userProfiles.githubIdentity.cached" } & (
+      | CachedGitHubIdentityBinding
+      | CachedGitHubIdentitySelector
+    ))
+  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[]; host?: string }
   | { type: "userProfiles.email.resolve"; email: string }
+  | { type: "userProfiles.self"; profileId: string }
+  | {
+      type: "userProfiles.authenticationAlias.resolve";
+      alias: ExistingUserProfileAuthenticationAlias;
+    }
   | { type: "userProfiles.catalog" }
   | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }

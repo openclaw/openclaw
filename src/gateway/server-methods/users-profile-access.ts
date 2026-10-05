@@ -1,8 +1,15 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isGatewayReadonlyWork } from "../../process/gateway-work-admission.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { ensureProfileIdForEmail } from "../../state/user-profile-email.js";
+import { normalizeProfileEmail } from "../../state/user-profile-email.kernel.js";
+import {
+  captureResidentUserProfileAccess,
+  prepareUserProfileCatalog,
+} from "../../state/user-profile-list.js";
+import { readCanonicalExistingProfileForEmail } from "../../state/user-profile-reads.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -13,12 +20,16 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export async function prepareAuthenticatedProfile(options: GatewayRequestHandlerOptions) {
   const { client } = options;
+  const readonly = isGatewayReadonlyWork();
   const lifetime = readGatewayRequestMutationAuthority(options);
   const profileReference = client?.authenticatedUserProfile?.profileId;
   const email = client?.authenticatedUserId;
   const sync = client?.authenticatedGitHubIdentitySync;
   const provider = client?.authenticatedUserIsTailscaleProvider;
   const connectionId = client?.connId;
+  const clientId = readonly ? client?.connect.client.id : undefined;
+  const pairedClientId = client?.pairedClientId;
+  const deviceId = client?.connect.device?.id;
   const role = client?.connect.role;
   const scopes = [...(client?.connect.scopes ?? [])];
   const assertConnection = () => {
@@ -27,6 +38,10 @@ export async function prepareAuthenticatedProfile(options: GatewayRequestHandler
     if (
       options.client !== client ||
       client?.connId !== connectionId ||
+      (readonly &&
+        (client?.connect.client.id !== clientId ||
+          client?.pairedClientId !== pairedClientId ||
+          client?.connect.device?.id !== deviceId)) ||
       client?.connect.role !== role ||
       scopes.some((scope) => !client?.connect.scopes?.includes(scope)) ||
       client?.connectionSignal?.aborted ||
@@ -41,6 +56,24 @@ export async function prepareAuthenticatedProfile(options: GatewayRequestHandler
   assertConnection();
   // Failed provider acquisition must never create an email alias for its login.
   const legacyEmail = !profileReference && !sync && !provider ? email : undefined;
+  if (readonly) {
+    const reference =
+      profileReference ??
+      (legacyEmail ? (await readCanonicalExistingProfileForEmail(legacyEmail)).id : undefined);
+    (await prepareUserProfileCatalog()).release();
+    assertConnection();
+    const access = reference ? captureResidentUserProfileAccess(reference) : undefined;
+    const profileId = access?.readCurrentFacts().profileId;
+    const assertCurrent = () => {
+      assertConnection();
+      const facts = access?.readCurrentFacts();
+      if (legacyEmail && !facts?.emails.includes(normalizeProfileEmail(legacyEmail))) {
+        throw new Error("Gateway requester profile changed");
+      }
+    };
+    assertCurrent();
+    return { profileId, assertCurrent };
+  }
   const reference =
     profileReference ??
     (legacyEmail ? await ensureProfileIdForEmail(legacyEmail, {}, assertConnection) : undefined);

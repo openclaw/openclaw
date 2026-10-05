@@ -5,6 +5,7 @@ import {
   updatePairedDeviceMetadata,
   type PairedDevice,
 } from "../../../infra/device-pairing.js";
+import { isGatewayReadonlyWork } from "../../../process/gateway-work-admission.js";
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
@@ -163,7 +164,7 @@ export async function authorizeExistingGatewayDevice(params: {
   // Metadata pinning is approval-bound. Reconnects can update access metadata
   // and same-family mobile OS version labels, but real platform/device-family
   // changes must stay on the approved pairing record.
-  if (device) {
+  if (device && !isGatewayReadonlyWork()) {
     await updatePairedDeviceMetadata(device.id, {
       ...clientAccessMetadata,
       ...(metadataPinning.refreshPairedPlatform

@@ -74,15 +74,22 @@ export function readConfigMachineStateWithMetadata<T>(
   options: OpenClawStateDatabaseOptions = {},
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): { value: T; updatedAtMs: number } | undefined {
-  const read = ({ db: database }: { db: DatabaseSync }) => {
-    const row = readConfigMachineStateRowInDatabase(database, key);
-    return row
-      ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
-      : undefined;
-  };
+  const read = ({ db: database }: { db: DatabaseSync }) =>
+    readConfigMachineStateWithMetadataInDatabase<T>(database, key);
   return behavior.artifactPreservingReadOnly
     ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, options)
     : withExistingOpenClawStateDatabaseReadOnly(read, options);
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
+export function readConfigMachineStateWithMetadataInDatabase<T>(
+  database: DatabaseSync,
+  key: string,
+): { value: T; updatedAtMs: number } | undefined {
+  const row = readConfigMachineStateRowInDatabase(database, key);
+  return row
+    ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
+    : undefined;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.

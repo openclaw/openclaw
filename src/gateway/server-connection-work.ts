@@ -8,6 +8,7 @@ export class GatewayConnectionWork extends AsyncWorkScope {
   private readonly spawnBroker = getSpawnBroker();
   private readonly runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   private readonly connections = new Set<() => void>();
+  private readonly connectionLifetimes = new AsyncWorkScope();
   private failure: { error: unknown } | undefined;
 
   override track<T>(run: () => T | Promise<T>): Promise<T> {
@@ -33,7 +34,7 @@ export class GatewayConnectionWork extends AsyncWorkScope {
   registerConnection(close: () => void): () => void {
     const closed = createDeferredCore();
     this.connections.add(close);
-    void this.track(() => closed.promise);
+    void this.connectionLifetimes.track(() => closed.promise);
     return () => {
       this.connections.delete(close);
       closed.resolve();
@@ -52,11 +53,22 @@ export class GatewayConnectionWork extends AsyncWorkScope {
         this.failure ??= { error };
       }
     }
+    // Close callbacks admit their cleanup into received work. Keep that scope
+    // open until every socket's complete lifetime has joined.
+    await this.connectionLifetimes.drain();
     await super.drain();
     if (this.failure) {
       throw new Error("Gateway connection work failed to close cleanly", {
         cause: this.failure.error,
       });
+    }
+  }
+
+  /** Joins received work without closing authenticated read transports. */
+  async drainReceivedWork(): Promise<void> {
+    await this.runWhenIdle(() => {});
+    if (this.failure) {
+      throw new Error("Gateway received cleanup did not settle", { cause: this.failure.error });
     }
   }
 }

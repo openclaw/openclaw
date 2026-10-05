@@ -3,6 +3,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { assertGatewaySqliteWriterAdmission } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   isActiveStoreWriter,
@@ -32,6 +33,7 @@ export function runOpenClawAgentWriteAdmission<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
+  assertGatewaySqliteWriterAdmission();
   const pathname = resolveOpenClawAgentSqlitePath(options);
   const identity = readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
@@ -53,6 +55,7 @@ export function runOpenClawAgentWriteAdmission<T>(
     // writer lock. Their foreground writes must queue, never reenter that owner.
     reentrant: reentrant && !admission.workers.has(storePath),
     fn: async () => {
+      assertGatewaySqliteWriterAdmission();
       assertCurrent();
       return await run(identity, assertCurrent);
     },
@@ -70,6 +73,7 @@ export function runOpenClawAgentWorkerWrite<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
+  assertGatewaySqliteWriterAdmission();
   if ("target" in options) {
     const { handle, incarnation } = options.target;
     return runQueuedStoreWrite({
@@ -78,6 +82,7 @@ export function runOpenClawAgentWorkerWrite<T>(
       label: "incognito agent database write admission",
       reentrant: false,
       fn: async () => {
+        assertGatewaySqliteWriterAdmission();
         options.assertCurrent();
         return run();
       },

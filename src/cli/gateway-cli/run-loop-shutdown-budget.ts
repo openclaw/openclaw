@@ -146,10 +146,10 @@ export function resolveGatewayShutdownDrainBudget(params: {
     drainTimeoutMs: isRestart
       ? restartDrainTimeoutMs
       : Math.max(0, budget.timeoutMs - budget.reserveMs),
-    // A supervisor SIGTERM owns the stop deadline. Its shorter drain request
-    // must not discard time still available for checkpointing and native close.
+    // An external stop retains its native or policy stop budget. A shorter drain
+    // request must not discard time available for checkpointing and native close.
     forceExitMs:
-      !isRestart || (action === "external-restart" && budget.nativeStopBudget)
+      !isRestart || action === "external-restart"
         ? budget.timeoutMs
         : restartDrainTimeoutMs === undefined
           ? undefined

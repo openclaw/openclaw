@@ -1,5 +1,6 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { isGatewayReadAdmissionAvailable } from "../../process/gateway-work-admission.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -48,6 +49,9 @@ export function createStartupChecker(
 ): StartupChecker {
   return (): StartupResult => {
     const uptimeMs = Date.now() - deps.startedAt;
+    if (isGatewayReadAdmissionAvailable()) {
+      return { ok: true, status: "started", uptimeMs };
+    }
     if (deps.getGatewayDraining?.()) {
       return { ok: false, status: "draining", uptimeMs };
     }
@@ -117,6 +121,9 @@ export function createReadinessChecker(
     const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
+    if (isGatewayReadAdmissionAvailable()) {
+      return { ready: true, failing: [], uptimeMs };
+    }
     if (startup.status === "starting") {
       return { ready: false, failing: [startup.pendingReason], uptimeMs };
     }

@@ -1,10 +1,24 @@
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import {
+  retireGatewayWriterAdmission,
+  publishGatewayReaderAdmission,
+  retireGatewayReaderAdmission,
+  isGatewayReadAdmissionAvailable,
+  runWithGatewayWriterRetirementCleanup,
+} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { getGatewayProcessInstanceId } from "./process-instance.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
-import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
+import type {
+  GatewayReaderRequest,
+  GatewayReaderReceipt,
+  GatewayServer,
+  GatewayServerOptions,
+} from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
@@ -104,31 +118,161 @@ async function startGatewayServerWithSdkHost(
   );
 
   let closePromise: Promise<void> | undefined;
+  let readerPromise: Promise<GatewayReaderReceipt> | undefined;
+  let readerRequest: GatewayReaderRequest | undefined;
+  let readerTimer: ReturnType<typeof setTimeout> | undefined;
+  const assertReaderTarget = (request: GatewayReaderRequest) => {
+    if (
+      request.target.pid !== process.pid ||
+      request.target.processInstanceId !== getGatewayProcessInstanceId()
+    ) {
+      throw new Error("Gateway reader process changed after preflight");
+    }
+    const remaining = request.expiresAtMs - Date.now();
+    if (!Number.isSafeInteger(request.expiresAtMs) || remaining <= 0 || remaining > 2940_000) {
+      throw new Error(
+        "Gateway reader deadline must fit the existing 2940-second replacement budget",
+      );
+    }
+  };
 
   return {
     startupSettled,
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
+    prepareReader: (request, assertCurrent) => {
+      assertCurrent();
+      assertReaderTarget(request);
+      if (!opts.hostLifecycle?.retireWriter || !opts.hostLifecycle.externalRestart?.retireReader) {
+        throw new Error("Gateway host cannot retire its native writer heartbeat");
+      }
+      if (readerPromise) {
+        if (!isGatewayReadAdmissionAvailable()) {
+          throw new Error("Gateway reader replacement deadline expired");
+        }
+        if (readerRequest?.expiresAtMs !== request.expiresAtMs) {
+          throw new Error("Gateway reader deadline is already fixed");
+        }
+        return readerPromise;
+      }
+      if (closePromise) {
+        throw new Error("Gateway close already owns this generation");
+      }
+      readerRequest = structuredClone(request);
+      const deadline = performance.now() + request.expiresAtMs - Date.now();
+      const assertReaderCurrent = () => {
+        assertCurrent();
+        if (Date.now() >= request.expiresAtMs || performance.now() >= deadline) {
+          throw new Error("Gateway reader replacement deadline expired");
+        }
+      };
+      retireGatewayWriterAdmission(request.expiresAtMs, deadline);
+      readerTimer = setTimeout(
+        () => {
+          retireGatewayReaderAdmission();
+          try {
+            opts.hostLifecycle!.externalRestart!.retireReader!();
+          } catch (error) {
+            log.error(formatErrorMessage(error));
+          }
+        },
+        Math.max(
+          0,
+          Math.ceil(Math.min(request.expiresAtMs - Date.now(), deadline - performance.now())),
+        ),
+      );
+      readerTimer.unref?.();
+      readerPromise = Promise.resolve().then(() =>
+        sdkResourceHost.run(async (): Promise<GatewayReaderReceipt> => {
+          await runWithGatewayWriterRetirementCleanup(async () => {
+            const closeOptions = {
+              reason: "gateway irreversible reader retirement",
+              restartExpectedMs: 0,
+              retainReaderTransport: true as const,
+            };
+            const prelude = gatewayKernel.beginClosePrelude(closeOptions);
+            releasePostReadyWork();
+            await prelude;
+            const close = await prepareClose(closeOptions);
+            await runGatewayCloseSteps({
+              owner: gatewayKernel,
+              close,
+              retainReaderTransport: true,
+              disposeTerminalSessions: () => terminalSessions.disposeAll(),
+              runStopHooks: () =>
+                shutdownRuntime.runGlobalGatewayStopSafely({
+                  registry: gatewayKernel.pluginRuntime.registry,
+                  event: { reason: closeOptions.reason },
+                  ctx: { port },
+                  onError: (error) => {
+                    throw error;
+                  },
+                }),
+              onError: (message) => log.error(message),
+            });
+            assertReaderCurrent();
+            await opts.hostLifecycle!.retireWriter!();
+            assertReaderCurrent();
+          });
+          publishGatewayReaderAdmission(request.expiresAtMs, deadline);
+          return {
+            version: 1,
+            status: "reader-ready",
+            pid: process.pid,
+            processInstanceId: getGatewayProcessInstanceId(),
+            bootId: gatewayKernel.bootId,
+            frozenSourceGeneration: randomUUID(),
+            retiredAtMs: Date.now(),
+            expiresAtMs: request.expiresAtMs,
+          };
+        }),
+      );
+      return readerPromise;
+    },
     close: (optsLocal) => {
       if (!closePromise) {
         closePromise = sdkResourceHost
           .run(async () => {
-            const preparedClose = prepareClose(optsLocal);
-            releasePostReadyWork();
-            await runGatewayCloseSteps({
-              owner: gatewayKernel,
-              close: await preparedClose,
-              disposeTerminalSessions: () => terminalSessions.disposeAll(),
-              runStopHooks: async () => {
-                await shutdownRuntime.runGlobalGatewayStopSafely({
-                  registry: gatewayKernel.pluginRuntime.registry,
-                  event: { reason: optsLocal?.reason ?? "gateway stopping" },
-                  ctx: { port },
-                  onError: (error) =>
-                    log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
-                });
-              },
-              onError: (message) => log.error(message),
-            });
+            clearTimeout(readerTimer);
+            if (readerPromise) {
+              const retired = await readerPromise.then(
+                () => true,
+                () => false,
+              );
+              retireGatewayReaderAdmission();
+              if (retired) {
+                gatewayKernel.retireFrozenReaderContext();
+                await gatewayKernel.finishReaderTransport();
+                return;
+              }
+            }
+            const closeNative = async () => {
+              const preparedClose = prepareClose(optsLocal);
+              releasePostReadyWork();
+              const close = await preparedClose;
+              await runGatewayCloseSteps({
+                owner: gatewayKernel,
+                close,
+                disposeTerminalSessions: () => terminalSessions.disposeAll(),
+                runStopHooks: async () => {
+                  await shutdownRuntime.runGlobalGatewayStopSafely({
+                    registry: gatewayKernel.pluginRuntime.registry,
+                    event: { reason: optsLocal?.reason ?? "gateway stopping" },
+                    ctx: { port },
+                    onError: (error) =>
+                      log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
+                  });
+                },
+                onError: (message) => log.error(message),
+              });
+              if (readerPromise) {
+                gatewayKernel.retireFrozenReaderContext();
+              }
+            };
+            if (readerPromise) {
+              await runWithGatewayWriterRetirementCleanup(closeNative);
+            } else {
+              await closeNative();
+            }
           })
           .catch((error: unknown) => {
             if (hasRetainedPluginRuntimeCloseError(error)) {

@@ -15,23 +15,32 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import * as workAdmission from "../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
+  ensureCanonicalUserProfileForTailscaleIdentity,
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import * as profileWrites from "../state/user-profile-writes.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayAuthResult } from "./auth.js";
+import { checkHttpCookieUserProfile } from "./http-auth-user-profile.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-auth-utils.js";
 import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import {
+  invalidateOperatorRolePolicy,
+  readOperatorRolePolicyRevision,
+} from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -153,6 +162,25 @@ describe("HTTP gateway owner profiles", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
     resetPluginRuntimeStateForTest();
+  });
+
+  it("retires retained HTTP authority when its profile store closes without a policy change", async () => {
+    await withOpenClawTestState({ label: "http-profile-owner-retirement" }, async () => {
+      const email = "retained-http@example.test";
+      await ensureCanonicalUserProfileForEmail(email);
+      const cfg = { gateway: { roles } };
+      const admitted = await authenticate("trusted-proxy", cfg, email);
+      if (!admitted.ok) {
+        throw new Error("Expected admitted HTTP profile");
+      }
+      expect(admitted.requestAuth.hasCurrentClientAuthority()).toBe(true);
+      const aliasRevision = readUserProfileAliasRevision();
+      const roleRevision = readOperatorRolePolicyRevision();
+      await closeOpenClawStateDatabaseAsync();
+      expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+      expect(readOperatorRolePolicyRevision()).toBe(roleRevision);
+      expect(admitted.requestAuth.hasCurrentClientAuthority()).toBe(false);
+    });
   });
 
   it("reuses admitted state schema across 200 HTTP profile authorizations", async () => {
@@ -433,6 +461,65 @@ describe("HTTP gateway owner profiles", () => {
         next.res.destroy();
         aliasStreaming.res.destroy();
       }
+    });
+  });
+
+  it("requires an existing personal profile for frozen HTTP reads even without roles", async () => {
+    await withOpenClawTestState({ label: "http-frozen-personal-profile" }, async () => {
+      const email = "reader@example.test";
+      const person = await ensureCanonicalUserProfileForEmail(email);
+      const identity = { login: "reader@fixture", name: "Reader fixture" };
+      const provider = await ensureCanonicalUserProfileForTailscaleIdentity(identity);
+      const readonly = vi.spyOn(workAdmission, "isGatewayReadonlyWork").mockReturnValue(true);
+      const ensureEmail = vi.spyOn(profileWrites, "ensureCanonicalUserProfileForEmail");
+      const ensureTailscale = vi.spyOn(
+        profileWrites,
+        "ensureCanonicalUserProfileForTailscaleIdentity",
+      );
+      onTestFinished(() => {
+        readonly.mockRestore();
+        ensureEmail.mockRestore();
+        ensureTailscale.mockRestore();
+      });
+      const existing = await authenticate("trusted-proxy", {}, email);
+      expect(existing).toMatchObject({
+        ok: true,
+        requestAuth: { authenticatedUserProfile: { profileId: person.id } },
+      });
+      authorize.mockResolvedValueOnce({
+        ok: true,
+        method: "tailscale",
+        user: identity.login,
+        tailscaleIdentity: identity,
+      });
+      expect(
+        await checkGatewayHttpRequestAuth({
+          req,
+          auth: { mode: "none", allowTailscale: true },
+          cfg: {},
+          getRuntimeConfig: () => ({}),
+        }),
+      ).toMatchObject({
+        ok: true,
+        requestAuth: { authenticatedUserProfile: { profileId: provider.id } },
+      });
+      for (const result of [
+        await authenticate("trusted-proxy", {}, "missing@example.test"),
+        await authenticate("token"),
+        checkHttpCookieUserProfile({}, [undefined]),
+      ]) {
+        expect(result).toMatchObject({
+          ok: false,
+          authResult: { ok: false, reason: "user_profile_unavailable" },
+        });
+      }
+      expect(checkHttpCookieUserProfile({}, [person.id])).toMatchObject({
+        ok: true,
+        profile: { authenticatedUserProfile: { profileId: person.id } },
+      });
+      expect(ensureEmail).not.toHaveBeenCalled();
+      expect(ensureTailscale).not.toHaveBeenCalled();
+      expect(ensureOwner).not.toHaveBeenCalled();
     });
   });
 

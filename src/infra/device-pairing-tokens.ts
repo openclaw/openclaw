@@ -1,9 +1,12 @@
+import { isGatewayReadonlyWork } from "../process/gateway-work-admission.js";
 // Device token operations preserve live handshake authority through worker commit.
 import type {
   RevokeDeviceTokenResult,
   RotateDeviceTokenResult,
 } from "./device-pairing-core.types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
+import { verifyDeviceTokenAgainstDevice } from "./device-pairing-token-utils.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
@@ -28,6 +31,13 @@ export async function verifyDeviceToken(params: {
   baseDir?: string;
 }): Promise<{ ok: boolean; reason?: string; issuer?: DeviceAuthToken["issuer"] }> {
   const { baseDir, ...input } = params;
+  if (isGatewayReadonlyWork()) {
+    const device = await loadPairedDevicePairingStoreRecordReadOnly(params.deviceId, baseDir);
+    const verification = verifyDeviceTokenAgainstDevice(device, params);
+    return verification.ok
+      ? { ok: true, ...(verification.entry.issuer ? { issuer: verification.entry.issuer } : {}) }
+      : verification;
+  }
   return await withDevicePairingLock(() =>
     executeDevicePairingMutation(
       { type: "devicePairing.verifyToken", input: { ...input, nowMs: Date.now() } },

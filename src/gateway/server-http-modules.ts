@@ -1,4 +1,9 @@
+import {
+  isGatewayWriterRetired,
+  isGatewayReadAdmissionAvailable,
+} from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { classifyGatewayProbePath } from "./gateway-http-route-contracts.js";
 
 export const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
 export const getControlUiPluginAssetsModule = createLazyRuntimeModule(
@@ -47,3 +52,13 @@ export const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./ht
 export const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
   () => import("./server/plugin-route-runtime-scopes.js"),
 );
+
+const getSuspendedReaderHttpModule = createLazyRuntimeModule(
+  () => import("./server-http-suspended-reader.js"),
+);
+export async function resolveSuspendedReaderHttpModule(pathname: string) {
+  return (isGatewayWriterRetired() || isGatewayReadAdmissionAvailable()) &&
+    classifyGatewayProbePath(pathname) === "outside"
+    ? getSuspendedReaderHttpModule()
+    : undefined;
+}

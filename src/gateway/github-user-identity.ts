@@ -6,9 +6,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isGatewayReadonlyWork } from "../process/gateway-work-admission.js";
 import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
-import { resolveCanonicalCachedGitHubIdentity } from "../state/user-profile-reads.js";
+import { normalizeVerifiedEmail } from "../shared/verified-email.js";
 import {
+  resolveCanonicalCachedGitHubIdentity,
+  readCanonicalExistingProfileForEmail,
+} from "../state/user-profile-reads.js";
+import {
+  ensureCanonicalFactoryGitHubProfile,
   ensureCanonicalUserProfileForEmail,
   syncCanonicalGitHubIdentity,
 } from "../state/user-profile-writes.js";
@@ -336,6 +342,19 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         throw error;
       }
       params.assertCurrent?.();
+      if (isGatewayReadonlyWork()) {
+        const cached = await resolveCanonicalCachedGitHubIdentity({
+          accountId: identity.accountId,
+          alias: { kind: "github-login", login: tailscaleLogin.subject },
+        });
+        params.assertCurrent?.();
+        if (!cached) {
+          throw new Error(
+            "Authenticated GitHub profile is absent from the frozen Gateway generation",
+          );
+        }
+        return cached;
+      }
       const profile = await syncCanonicalGitHubIdentity(
         {
           identity,
@@ -362,12 +381,31 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     );
     params.assertCurrent?.();
     const accountId = accessIdentity.accountId;
+    if (isGatewayReadonlyWork()) {
+      const cached =
+        accountId === undefined
+          ? await readCanonicalExistingProfileForEmail(access.principal)
+          : await resolveCanonicalCachedGitHubIdentity({
+              accountId,
+              alias: { kind: "email", email: access.principal },
+            });
+      params.assertCurrent?.();
+      if (!cached) {
+        throw new Error(
+          "Authenticated GitHub profile is absent from the frozen Gateway generation",
+        );
+      }
+      return "id" in cached ? { profileId: cached.id, updatedAt: cached.updatedAt } : cached;
+    }
     if (accountId === undefined) {
       const profile = await ensureCanonicalUserProfileForEmail(access.principal, options);
       params.assertCurrent?.();
       return { profileId: profile.id, updatedAt: profile.updatedAt };
     }
-    const identityBinding = { accountId, email: access.principal };
+    const identityBinding = {
+      accountId,
+      alias: { kind: "email" as const, email: access.principal },
+    };
     // Service auth raises public-data quota; Access still owns the signed-in account id.
     const token = githubApiToken(process.env, undefined, "github.com");
     let lookup: GitHubIdentityLookup;

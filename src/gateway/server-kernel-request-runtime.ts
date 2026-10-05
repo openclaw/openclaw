@@ -4,6 +4,7 @@ import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { isGatewayWriterRetired } from "../process/gateway-work-admission.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -80,15 +81,21 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       // Received mutations and their finalizers join before lifetime sidecars stop.
       // Retire this exact context too when no request ever bound its coordinator.
       retireQuestionChannelGateway(runtime.connectionWork.signal);
-      closeGatewayDeviceRevocation(gatewayRequestContext);
+      if (!isGatewayWriterRetired()) {
+        closeGatewayDeviceRevocation(gatewayRequestContext);
+      }
       await gatewayRequestContext.scopeUpgradeCoordinator?.close();
       const projection = await projectionReady.catch(() => undefined);
       await shutdownRuntime.flushPendingSessionsChangedEvents(gatewayRequestContext);
       if (projection) {
         await shutdownRuntime.drainSessionEventPublications(projection);
       }
-      projectionLifetime.detach?.();
-      projection?.dispose();
+      if (isGatewayWriterRetired()) {
+        await projection?.freeze();
+      } else {
+        projectionLifetime.detach?.();
+        projection?.dispose();
+      }
     },
   });
   const projection = await projectionReady;
@@ -156,6 +163,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   if (hostLifecycle) {
     gatewayRequestContext.hostLifecycle = {
       externalRestart: hostLifecycle.externalRestart,
+      retireWriter: hostLifecycle.retireWriter,
       getShutdownBudget: () => hostLifecycle.getShutdownBudget?.(),
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
@@ -175,7 +183,17 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     gatewayRequestContext.resolveGatewayContext,
   );
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
-  return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
+  return {
+    ...runtime,
+    chatMetadataLifecycle,
+    gatewayRequestContext,
+    gatewayInstanceRuntime,
+    retireFrozenReaderContext: () => {
+      closeGatewayDeviceRevocation(gatewayRequestContext);
+      projectionLifetime.detach?.();
+      projection?.dispose();
+    },
+  };
 }
 
 export type GatewayKernelRuntime = Awaited<ReturnType<typeof prepareGatewayKernelRequestRuntime>>;

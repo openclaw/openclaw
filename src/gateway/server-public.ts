@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { GatewayReaderReceipt } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { ConfigSnapshotPreparation } from "../config/io.snapshot-preparation.types.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
@@ -7,6 +8,12 @@ import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
+export type { GatewayReaderReceipt } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+
+export type GatewayReaderRequest = {
+  target: { pid: number; processInstanceId: string };
+  expiresAtMs: number;
+};
 
 export type GatewayCloseOptions = {
   reason?: string;
@@ -14,6 +21,8 @@ export type GatewayCloseOptions = {
   drainTimeoutMs?: number | null;
   /** Process-owning host only: exit after accepted writes and database close settle. */
   onProcessExitReady?: () => Promise<void>;
+  /** Internal native retirement; transports retain only audited authenticated reads. */
+  retainReaderTransport?: true;
 };
 
 type GatewayShutdownBudget = {
@@ -35,6 +44,8 @@ export type GatewayShutdownStatus = GatewayShutdownBudget & {
 export type GatewayHostLifecycle = {
   /** Present only when this host owns process exit; the identity never crosses RPC. */
   externalRestart?: GatewaySuspendHandoffOwner;
+  /** Retires the host's SQLite owner heartbeat/row while retaining physical process custody. */
+  retireWriter?: () => Promise<void>;
   getShutdownBudget?(): GatewayShutdownBudget | undefined;
   request(
     action: "start" | "stop" | "restart",
@@ -50,6 +61,11 @@ export type GatewayServer = {
   getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
   /** Fences WebSocket ingress and joins received work and connection cleanup before disposal. */
   close: (opts?: GatewayCloseOptions) => Promise<void>;
+  /** One-way writer retirement; a receipt requires every native publisher's joined closure. */
+  prepareReader?: (
+    request: GatewayReaderRequest,
+    assertCurrent: () => void,
+  ) => Promise<GatewayReaderReceipt>;
   /**
    * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.
    * Closing never forces settlement. Direct callers may safely ignore this pre-handled promise.

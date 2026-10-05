@@ -22,7 +22,11 @@ import {
   getCurrentPluginMetadataSnapshot,
   setGatewayPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { inspectPluginInstallStateFromDatabase } from "./installed-plugin-index-record-state.js";
+import {
+  readPersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+} from "./installed-plugin-index-records.js";
 import {
   refreshPersistedInstalledPluginIndex,
   restorePersistedInstalledPluginIndexIfCurrent,
@@ -525,6 +529,12 @@ describe("installed plugin index persistence", () => {
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
     );
     expect(row).toEqual({ value_json: persistedValueJson, updated_at_ms: 123 });
+    const inspected = runOpenClawStateWriteTransaction(
+      ({ db }) => inspectPluginInstallStateFromDatabase(db),
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(inspected).toMatchObject({ status: "invalid", updatedAtMs: 123 });
+    expect(JSON.stringify(inspected)).not.toContain("__proto__");
   });
 
   it("preserves newer shared-state schema errors while reading the index", async () => {

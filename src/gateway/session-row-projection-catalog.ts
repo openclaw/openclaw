@@ -117,5 +117,84 @@ export function createSessionRowProjectionCatalog(params: {
       disposed = true;
       unsubscribe();
     },
+    async freeze() {
+      disposed = true;
+      unsubscribe();
+      // Retain completed facts and join the exact renewal; a rejected read
+      // cannot publish or replace the already retained frozen catalog.
+      await pending?.catch(() => {});
+      catalogDirty = undefined;
+    },
+  };
+}
+
+/** Publication retirement and final disposal share this projection's retained owners. */
+export function createSessionRowProjectionRetirement(params: {
+  stop: readonly (() => void)[];
+  markDisposed: () => void;
+  markFrozen: () => void;
+  resources: readonly { dispose: () => void }[];
+  publishers: readonly { dispose: () => void }[];
+  indexes: readonly { clear: () => void }[];
+  finishDisposal: () => void;
+  catalog: { freeze: () => Promise<void> };
+  ensureMaterialized: () => Promise<void>;
+  disposeRefresh: () => void;
+  captureConfig: () => void;
+}) {
+  const stopPublication = () => {
+    for (const unsubscribe of params.stop) {
+      unsubscribe();
+    }
+  };
+  return {
+    dispose: () => {
+      params.markDisposed();
+      params.disposeRefresh();
+      for (const resource of params.resources) {
+        resource.dispose();
+      }
+      stopPublication();
+      for (const index of params.indexes) {
+        index.clear();
+      }
+      params.finishDisposal();
+    },
+    freeze: async () => {
+      stopPublication();
+      params.markFrozen();
+      for (const publisher of params.publishers) {
+        publisher.dispose();
+      }
+      await params.catalog.freeze();
+      await params.ensureMaterialized();
+      params.disposeRefresh();
+      params.captureConfig();
+    },
+  };
+}
+
+export function createFrozenSessionRowProjectionConfig(
+  config: () => import("../config/types.openclaw.js").OpenClawConfig,
+  policy: () => import("../config/types.openclaw.js").OpenClawConfig,
+) {
+  let active = false;
+  let snapshot: import("../config/types.openclaw.js").OpenClawConfig | undefined;
+  return {
+    get active() {
+      return active;
+    },
+    get captured() {
+      return snapshot !== undefined;
+    },
+    begin: () => {
+      active = true;
+    },
+    policy: () => snapshot ?? policy(),
+    capture: () => {
+      const cfg = structuredClone(config());
+      snapshot = structuredClone(policy());
+      return cfg;
+    },
   };
 }

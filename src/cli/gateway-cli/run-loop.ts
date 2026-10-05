@@ -12,8 +12,8 @@ import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordi
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runOutsideGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
@@ -38,9 +38,8 @@ import {
   createGatewayStartupOperations,
   prepareGatewayRestartIteration,
   prepareGatewayRunLoop,
-  type GatewayRunLoopStartOptions,
-  type GatewayRestartStartupFailureHandler,
 } from "./run-loop-startup.js";
+import type { GatewayRunLoopOptions } from "./run-loop.types.js";
 import {
   armShutdownHardExitWatchdog,
   type ShutdownHardExitWatchdog,
@@ -51,20 +50,7 @@ const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 type ShutdownFailure = { step: string; error: unknown };
 
-export async function runGatewayLoop(params: {
-  start: (
-    params?: GatewayRunLoopStartOptions,
-  ) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
-  runtime: RuntimeEnv;
-  /** Grants this run loop authority over the process it exclusively owns. */
-  ownsProcessLifecycle?: boolean;
-  lockPort?: number;
-  lifecycleLockDeadlineMs?: number;
-  healthHost?: string;
-  beginBoot?: (startedAtMs: number) => void | Promise<void>;
-  completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
-  onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
-}) {
+export async function runGatewayLoop(params: GatewayRunLoopOptions) {
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
   if (process.title === "openclaw") {
@@ -999,7 +985,7 @@ export async function runGatewayLoop(params: {
         gatewayLog.warn(`external restart handoff refused: ${handoff.error}`);
       } else if (handoff.value) {
         acceptedRequest.action = "external-restart";
-        acceptedRequest.restartIntent = { force: true };
+        acceptedRequest.restartIntent = { force: true, waitMs: 0 };
       }
     }
     const isRestart = acceptedRequest.action !== "stop";
@@ -1017,7 +1003,7 @@ export async function runGatewayLoop(params: {
         ["signal", signal],
         ["reason", restartReason ?? signal],
         ["force", acceptedRequest.restartIntent?.force === true],
-        ["waitMs", restartIntent?.waitMs ?? "default"],
+        ["waitMs", acceptedRequest.restartIntent?.waitMs ?? "default"],
       ]);
     }
     if (action === "stop") {
@@ -1193,6 +1179,19 @@ export async function runGatewayLoop(params: {
       startupOperations = iterationStartupOperations;
       await hostLifecycle?.retire();
       const iterationHost = createGatewayHostLifecycle({
+        prepareReader: (readerRequest, assertCurrent) => {
+          if (!server?.prepareReader) {
+            throw new Error("Gateway runtime does not support irreversible reader retirement");
+          }
+          return server.prepareReader(readerRequest, assertCurrent);
+        },
+        retireWriter: async () => {
+          if (!lock?.retireWriter) {
+            throw new Error("Gateway native writer lock is unavailable");
+          }
+          await lock.retireWriter();
+        },
+        retireReader: () => runOutsideGatewayRootWorkAdmission(() => request("stop", "SIGTERM")),
         processOwner: {
           ownsProcessLifecycle: params.ownsProcessLifecycle === true,
           supervisor: supervisorMode,

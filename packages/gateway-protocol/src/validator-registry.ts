@@ -56,6 +56,7 @@ export const validateGatewaySuspendStatusParams = compile(S.GatewaySuspendStatus
 export const validateGatewaySuspendStatusResult = compile(S.GatewaySuspendStatusResultSchema);
 export const validateGatewaySuspendResumeParams = compile(S.GatewaySuspendResumeParamsSchema);
 export const validateGatewaySuspendHandoffParams = compile(S.GatewaySuspendHandoffParamsSchema);
+export const validateGatewaySuspendReaderParams = compile(S.GatewaySuspendReaderParamsSchema);
 export const validateRequestFrame = compile(S.RequestFrameSchema);
 export const validateMessageActionParams = compile(S.MessageActionParamsSchema);
 export const validateSendParams = compile(S.SendParamsSchema);
@@ -460,6 +461,9 @@ export const validateToolsGitHubAuthorizeCancelResult = compile(
   S.ToolsGitHubAuthorizeCancelResultSchema,
 );
 export const validateSessionGitHubPublishParams = compile(S.SessionGitHubPublishParamsSchema);
+export const validateSessionGitHubPullRequestReadParams = compile(
+  S.SessionGitHubPullRequestReadParamsSchema,
+);
 export const validateSessionGitHubOptionsParams = compile(S.SessionGitHubOptionsParamsSchema);
 export const validateSessionGitHubStatusParams = compile(S.SessionGitHubStatusParamsSchema);
 export const validateSessionGitHubConfirmParams = compile(S.SessionGitHubConfirmParamsSchema);

@@ -21,6 +21,9 @@ export function createGatewayHostLifecycle(params: {
   commitExternalStop?: () => void;
   processOwner: GatewayProcessOwner;
   getShutdownBudget?: GatewayHostLifecycle["getShutdownBudget"];
+  prepareReader?: import("../../gateway/server-public.js").GatewayServer["prepareReader"];
+  retireWriter?: () => Promise<void>;
+  retireReader?: () => void;
 }) {
   const abort = new AbortController();
   const processOwner = { ...params.processOwner };
@@ -30,8 +33,42 @@ export function createGatewayHostLifecycle(params: {
   let preparationFinished: Promise<void> | undefined;
   let execution: ReturnType<HostedGatewayStop["execute"]> | undefined;
   let retirement: Promise<void> | undefined;
+  let readerPreparation:
+    | Promise<import("../../gateway/server-public.js").GatewayReaderReceipt>
+    | undefined;
   const externalRestart: GatewaySuspendHandoffOwner = {
     isCurrent: () => state === "serving" && params.isCurrent() && params.isServing(),
+    ...(params.retireReader
+      ? {
+          retireReader: () => {
+            if (!externalRestart.isCurrent() || !processOwner.ownsProcessLifecycle) {
+              throw new Error("Gateway reader host no longer owns process retirement");
+            }
+            params.retireReader!();
+          },
+        }
+      : {}),
+    ...(params.prepareReader
+      ? {
+          prepareReader: (
+            request: import("../../gateway/server-public.js").GatewayReaderRequest,
+            assertCaller: () => void,
+          ) => {
+            const assertReaderCurrent = () => {
+              if (!externalRestart.isCurrent()) {
+                throw new Error("Gateway native reader host changed");
+              }
+              assertCaller();
+            };
+            assertReaderCurrent();
+            const preparation = Promise.resolve().then(() =>
+              params.prepareReader!(request, assertReaderCurrent),
+            );
+            readerPreparation ??= preparation;
+            return preparation;
+          },
+        }
+      : {}),
   };
   const commitExternalStop = params.commitExternalStop;
   if (commitExternalStop) {
@@ -62,12 +99,22 @@ export function createGatewayHostLifecycle(params: {
       stop?.dispose(),
       preparationFinished,
       execution?.catch(() => {}),
+      readerPreparation?.catch(() => {}),
     ]).then(() => {});
     stop = undefined;
     return retirement;
   };
   const capability: GatewayHostLifecycle = {
     ...(processOwner.ownsProcessLifecycle ? { externalRestart } : {}),
+    ...(params.retireWriter
+      ? {
+          retireWriter: async () => {
+            assertCurrent();
+            await params.retireWriter!();
+            assertCurrent();
+          },
+        }
+      : {}),
     getShutdownBudget() {
       // Current shutdown facts remain readable while control authority retires.
       const budget = params.isCurrent() ? params.getShutdownBudget?.() : undefined;

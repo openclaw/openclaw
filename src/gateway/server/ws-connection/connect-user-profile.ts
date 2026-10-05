@@ -1,13 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
+import { isGatewayReadonlyWork } from "../../../process/gateway-work-admission.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import {
+  readCanonicalExistingProfileForEmail,
+  readCanonicalExistingProfileForTailscaleIdentity,
+} from "../../../state/user-profile-reads.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
   ensureCanonicalUserProfileForTailscaleIdentity,
 } from "../../../state/user-profile-writes.js";
+import { isEphemeralGatewayClient } from "../../../utils/message-channel.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import type { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
 import {
@@ -117,7 +123,7 @@ async function resolveAuthenticatedProfile(
 
 /** Role and access policies need verified identity before admission; attribution alone may defer it. */
 export async function resolveGatewayConnectProfileAdmission(params: {
-  context: Pick<GatewayConnectPhaseContext, "configSnapshot"> &
+  context: Pick<GatewayConnectPhaseContext, "configSnapshot" | "connectParams"> &
     Parameters<typeof rejectUnavailableProfileConnect>[0] & {
       handler: Pick<GatewayConnectPhaseContext["handler"], "connId" | "logWsControl">;
     };
@@ -128,17 +134,31 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   assertCurrent?: () => void;
 }): Promise<{ ok: true; prepared?: PreparedConnectProfile } | { ok: false }> {
   const { context, state, ownerProfileExpected, authenticatedUserId } = params;
+  // Private host control keeps its admitted system actor; it has no personal profile to acquire.
+  const unprofiledPrivateControl =
+    !authenticatedUserId &&
+    state.role === "operator" &&
+    state.authResult.ok &&
+    state.authResult.method === "password" &&
+    state.authMethod === "password" &&
+    isEphemeralGatewayClient(context.connectParams.client);
   const profileRequired =
+    isGatewayReadonlyWork() ||
     Boolean(context.configSnapshot.gateway?.roles) ||
     hasGatewayOperatorAccessPolicies(context.configSnapshot);
   if (
     !ownerProfileExpected &&
-    (!authenticatedUserId || (params.resolveAuthenticatedGitHubIdentity && !profileRequired))
+    (unprofiledPrivateControl ||
+      (!authenticatedUserId && !isGatewayReadonlyWork()) ||
+      (params.resolveAuthenticatedGitHubIdentity && !profileRequired))
   ) {
     return { ok: true };
   }
   try {
     params.assertCurrent?.();
+    if (isGatewayReadonlyWork() && (ownerProfileExpected || !authenticatedUserId)) {
+      throw new Error("Frozen Gateway reconnect requires an existing verified personal identity");
+    }
     const options = { assertCurrent: params.assertCurrent };
     const ownerDisplayName = ownerProfileExpected ? await resolveHostAccountName() : undefined;
     params.assertCurrent?.();
@@ -146,12 +166,18 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       ? await ensureCanonicalGatewayOwnerProfile(ownerDisplayName ?? null, options)
       : params.resolveAuthenticatedGitHubIdentity
         ? await params.resolveAuthenticatedGitHubIdentity()
-        : state.authResult.tailscaleIdentity
-          ? await ensureCanonicalUserProfileForTailscaleIdentity(
-              state.authResult.tailscaleIdentity,
-              options,
-            )
-          : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
+        : isGatewayReadonlyWork() && authenticatedUserId
+          ? state.authResult.tailscaleIdentity
+            ? await readCanonicalExistingProfileForTailscaleIdentity(
+                state.authResult.tailscaleIdentity,
+              )
+            : await readCanonicalExistingProfileForEmail(authenticatedUserId)
+          : state.authResult.tailscaleIdentity
+            ? await ensureCanonicalUserProfileForTailscaleIdentity(
+                state.authResult.tailscaleIdentity,
+                options,
+              )
+            : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
     params.assertCurrent?.();
     const prepared = await resolveAuthenticatedProfile(
       "profileId" in profile ? profile.profileId : profile.id,
@@ -168,11 +194,12 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       `user profile resolution failed conn=${context.handler.connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
     );
     if (
-      !ownerProfileExpected &&
-      profileRequired &&
-      state.role === "operator" &&
-      state.authMethod !== "token" &&
-      state.authMethod !== "password"
+      isGatewayReadonlyWork() ||
+      (!ownerProfileExpected &&
+        profileRequired &&
+        state.role === "operator" &&
+        state.authMethod !== "token" &&
+        state.authMethod !== "password")
     ) {
       await rejectUnavailableProfileConnect(context, error);
       return { ok: false };

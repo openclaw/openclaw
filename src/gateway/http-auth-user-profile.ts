@@ -6,9 +6,14 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHostAccountName } from "../infra/host-account-name.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isGatewayReadonlyWork } from "../process/gateway-work-admission.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import {
+  readCanonicalExistingProfileForEmail,
+  readCanonicalExistingProfileForTailscaleIdentity,
+} from "../state/user-profile-reads.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -36,6 +41,8 @@ const profileLog = createSubsystemLogger("gateway/user-profiles");
 
 export type AuthenticatedHttpUserProfile = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  preparedSessionProfile?: GatewayClient["preparedSessionProfile"];
+  hasCurrentProfileAuthority?: () => boolean;
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
 };
@@ -75,7 +82,8 @@ export function checkHttpCookieUserProfile(
   const profileId = profileIds[0];
   if (
     profileIds.some((candidate) => candidate !== profileId) ||
-    (!profileId && (cfg.gateway?.roles || hasGatewayOperatorAccessPolicies(cfg)))
+    (!profileId &&
+      (isGatewayReadonlyWork() || cfg.gateway?.roles || hasGatewayOperatorAccessPolicies(cfg)))
   ) {
     return failedHttpProfileAuthentication();
   }
@@ -135,6 +143,9 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   const rolesConfigured = Boolean(params.cfg.gateway?.roles);
   const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg);
   if (!authenticatedUserId) {
+    if (isGatewayReadonlyWork()) {
+      throw new Error("Frozen Gateway HTTP reads require an existing verified personal identity");
+    }
     if (
       shouldUseGatewayOwnerProfile({
         role: "operator",
@@ -166,12 +177,18 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     });
     const profile = syncGitHubIdentity
       ? await syncGitHubIdentity()
-      : params.authResult.tailscaleIdentity
-        ? await ensureCanonicalUserProfileForTailscaleIdentity(
-            params.authResult.tailscaleIdentity,
-            options,
-          )
-        : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
+      : isGatewayReadonlyWork()
+        ? params.authResult.tailscaleIdentity
+          ? await readCanonicalExistingProfileForTailscaleIdentity(
+              params.authResult.tailscaleIdentity,
+            )
+          : await readCanonicalExistingProfileForEmail(authenticatedUserId)
+        : params.authResult.tailscaleIdentity
+          ? await ensureCanonicalUserProfileForTailscaleIdentity(
+              params.authResult.tailscaleIdentity,
+              options,
+            )
+          : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
     return await prepareHttpProfile(
       profileId,
@@ -181,9 +198,9 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     );
   } catch (error) {
     assertCurrent();
-    // Attribution enriches authenticated requests; configured role/access policies
-    // make durable profile resolution a prerequisite for authorization.
-    if (rolesConfigured || accessPoliciesConfigured) {
+    // Frozen reads need a personal profile to retain session-sharing filters.
+    // Ordinary attribution stays best effort unless role/access policies require it.
+    if (isGatewayReadonlyWork() || rolesConfigured || accessPoliciesConfigured) {
       throw error;
     }
     return {};
@@ -222,7 +239,16 @@ async function prepareHttpProfile(
   if (!authority.isCurrent()) {
     throw new Error("HTTP profile authority changed during acquisition");
   }
-  return projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority);
+  return {
+    ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),
+    hasCurrentProfileAuthority: authority.isCurrent,
+    preparedSessionProfile: {
+      profileId: authority.profileId,
+      aliases: new Set(authority.aliases),
+      role: authority.role,
+      githubLogin: authority.githubLogin,
+    },
+  };
 }
 
 /** Cookie and media disclosure retain their existing synchronous final policy check. */

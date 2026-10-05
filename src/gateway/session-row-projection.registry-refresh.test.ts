@@ -8,12 +8,66 @@ import {
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("retains frozen persisted selection after native writer database retirement", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      const scope = { agentId: "main", sessionKey: "agent:main:dashboard:frozen-registry" };
+      const parent = "agent:main:dashboard:frozen-parent";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: parent },
+        { sessionId: "frozen-parent", updatedAt: 1, label: "Parent" },
+      );
+      replaceSessionEntrySync(scope, {
+        sessionId: "frozen-registry",
+        updatedAt: 1,
+        label: "Frozen",
+      });
+      const run = createSubagentRunRecord({
+        runId: "frozen-subagent",
+        childSessionKey: scope.sessionKey,
+        requesterSessionKey: parent,
+        generation: 1,
+        completion: { required: false },
+        delivery: { status: "not_required" },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      const release = retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      try {
+        await projection.ensureMaterialized();
+        await projection.freeze();
+        const before = await listProjectedSessions({ projection, opts: { limit: 2 } });
+        expect(before.sessions).toContainEqual(
+          expect.objectContaining({ key: scope.sessionKey, label: "Frozen" }),
+        );
+        expect(
+          projection.selectEntries({ parentSessionKey: parent }).map((row) => row.key),
+        ).toEqual([scope.sessionKey]);
+        await closeOpenClawStateDatabaseAsync();
+        // A pending frozen selection cannot refresh retired writers and would spin on a list.
+        expect(projection.needsSelectionPreparation()).toBe(false);
+        const result = await listProjectedSessions({ projection, opts: { limit: 2 } });
+        expect(result.sessions).toEqual(before.sessions);
+        expect(
+          projection.selectEntries({ parentSessionKey: parent }).map((row) => row.key),
+        ).toEqual([scope.sessionKey]);
+      } finally {
+        projection.dispose();
+        release();
+      }
+    },
+  );
+});
 
 it.each([false, true])(
   "keeps current row facts when the subagent snapshot changes during a list (prepared=%s)",

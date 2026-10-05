@@ -711,4 +711,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.processes.stop", "session-processes", "operator.write", "2026.9"],
   ["catalog.browse", "plugins", "operator.read", "2026.9"],
   ["catalog.searchKeywords", "plugins", "operator.read", "2026.9"],
+  ["sessions.github.pullRequest.read", "sessions-github", "operator.read", "2026.9"],
+  ["gateway.suspend.reader", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

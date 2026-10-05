@@ -11,6 +11,26 @@ doc-schema-version: 1
 
 The session control RPC family: session listing and filtering, message send and stream, run lifecycle, and session maintenance.
 
+During bounded read serving after writer retirement, authenticated `chat.history`,
+`chat.startup`, `sessions.list`, and `sessions.resolve` use the frozen session view.
+Resolution retains recipient and session access checks and returns existing,
+missing, or ambiguous targets without creating or repairing a session. Mutations
+remain unavailable, and reader expiry denies further reads.
+
+Authenticated personal-avatar GET/HEAD reads use the same physical read-only
+generation for stored image bytes and missing-image profile metadata. They do not
+initialize profile schema or open the retired writer. Current request authority
+is rechecked after the asynchronous read and before returning bytes. Core GitHub
+link chips and the configured embedded main avatar need no plugin registry;
+fresh remote preview/detail/image enrichment and PR subscriptions remain outside
+the audited frozen RPC set.
+
+The suspended-reader server regression exercises the Control UI's cold route
+loader against authenticated RPC and checks shared and agent database/WAL bytes,
+reconnect, access denial, and expiry. It covers the core history source path;
+custom plugin/widget assets and live read continuity across an upgrade need
+their own acceptance evidence.
+
 Session rows include `snapshotAt`, the Gateway's sampling time in milliseconds since the Unix epoch. Cached rows retain their original sampling time. Clients use it to order read snapshots, including runtime-only changes that do not advance persisted `updatedAt`; request order breaks equal-time ties. Read observations without sampling metadata retain request-order reconciliation. This read timestamp does not replace event ordering or session-identity checks.
 
 Once session stores are admitted, authorization for direct session targets prepares only the requested rows. A dirty target must pass canonical validation before authorization; unrelated rows continue validating in the background. Method scopes, profile bindings, and startup availability are checked again after preparation. `sessions.list` authorizes the caller's scope first and leaves row validity and visibility filtering to the session reader.

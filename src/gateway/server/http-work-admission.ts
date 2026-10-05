@@ -2,7 +2,10 @@
 import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { waitForHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
-import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  tryBeginGatewayReaderRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { getGatewayInstallationReplacement } from "../stale-install.js";
 
@@ -12,8 +15,11 @@ async function runWithGatewayBoundaryWorkAdmission(
   origin: string,
   reject: () => void,
   run: GatewayBoundaryHandler,
+  readonly = false,
 ): Promise<boolean> {
-  const admission = tryBeginGatewayRootWorkAdmission(origin);
+  const admission = readonly
+    ? tryBeginGatewayReaderRootWorkAdmission(origin)
+    : tryBeginGatewayRootWorkAdmission(origin);
   if (!admission) {
     reject();
     return true;
@@ -29,6 +35,7 @@ async function runWithGatewayBoundaryWorkAdmission(
 export async function runWithGatewayHttpWorkAdmission(
   res: ServerResponse,
   run: GatewayBoundaryHandler,
+  readonly = false,
 ): Promise<boolean> {
   return await runWithGatewayBoundaryWorkAdmission(
     "http:request",
@@ -54,6 +61,7 @@ export async function runWithGatewayHttpWorkAdmission(
         await waitForHttpRequestRejection(res.req);
       }
     },
+    readonly,
   );
 }
 

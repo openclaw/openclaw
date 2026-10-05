@@ -20,7 +20,7 @@ export function registerExternalHandoffShutdownTests(
     gatewayLog,
     isGatewayWorkAdmissionClosed,
   }: UpdateRespawnFixtures,
-  restartDeferralTimeoutMs: number,
+  _restartDeferralTimeoutMs: number,
 ): void {
   it.each([
     { fails: false, trigger: "signal" },
@@ -62,8 +62,8 @@ export function registerExternalHandoffShutdownTests(
           );
           sigterm();
           expect(host?.externalRestart?.isCurrent()).toBe(false);
-          expectRestartCloseCall(close, restartDeferralTimeoutMs);
-          expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+          expectRestartCloseCall(close, 0);
+          expect(waitForGatewayActiveWork).toHaveBeenCalledExactlyOnceWith(0, expect.any(Object));
           expect(runtime.exit).not.toHaveBeenCalled();
         } finally {
           joined.resolve();

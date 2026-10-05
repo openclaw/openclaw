@@ -81,6 +81,17 @@ describe("Gateway stop deadline independent of restart ownership", () => {
     expect(warn).not.toHaveBeenCalled();
     expect(execSystem).not.toHaveBeenCalled();
     expect(execUser).not.toHaveBeenCalled();
+    const drain = resolveGatewayShutdownDrainBudget({
+      budget,
+      action: "external-restart",
+      forceRestart: true,
+      restartWithoutSupervisor: false,
+      acceptedAtMs: performance.now(),
+      requestedRestartDrainTimeoutMs: 0,
+    });
+    expect(drain.drainTimeoutMs).toBe(0);
+    expect(drain.closeDrainTimeoutMs()).toBe(0);
+    expect(drain.forceExitMs).toBe(325_000);
   });
 });
 

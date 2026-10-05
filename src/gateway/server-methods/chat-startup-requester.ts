@@ -1,5 +1,7 @@
+import { isGatewayReadonlyWork } from "../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { readResidentUserProfileId } from "../../state/user-profile-list.js";
+import { readCanonicalExistingProfileForEmail } from "../../state/user-profile-reads.js";
 import type { GatewayClient } from "./types.js";
 
 /** Bind the requester to its source, then resolve merges when metadata is assembled. */
@@ -31,8 +33,12 @@ export async function prepareChatStartupRequester(client: GatewayClient | null) 
     }
   };
   if (!profileId && email) {
-    const { ensureProfileIdForEmail } = await import("../../state/user-profile-email.js");
-    profileId = await ensureProfileIdForEmail(email, options, assertCurrent);
+    if (isGatewayReadonlyWork()) {
+      profileId = (await readCanonicalExistingProfileForEmail(email, options)).id;
+    } else {
+      const { ensureProfileIdForEmail } = await import("../../state/user-profile-email.js");
+      profileId = await ensureProfileIdForEmail(email, options, assertCurrent);
+    }
   }
   return () => {
     assertCurrent();

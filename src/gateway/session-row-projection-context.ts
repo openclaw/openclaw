@@ -107,6 +107,9 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     get current(): SessionListRowContext {
       return current;
     },
+    get registrySnapshotIdentity(): object | undefined {
+      return registrySnapshot;
+    },
     subagentInputs,
     get materializedRevisions() {
       return { profileRevision, subagentRevision };
