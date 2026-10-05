@@ -61,8 +61,6 @@ export const HOOK_INSTALL_ERROR_CODE = {
   EMPTY_OPENCLAW_HOOKS: "empty_openclaw_hooks",
 } as const;
 
-type HookInstallErrorCode = (typeof HOOK_INSTALL_ERROR_CODE)[keyof typeof HOOK_INSTALL_ERROR_CODE];
-
 export type { HookNpmIntegrityDriftParams };
 
 const defaultLogger: HookInstallLogger = {};
@@ -187,44 +185,6 @@ export function resolveHookInstallDir(hookId: string, hooksDir?: string): string
     throw new Error(targetDirResult.error);
   }
   return targetDirResult.path;
-}
-
-function resolveOpenClawHooks(
-  manifest: HookPackageManifest,
-): { ok: true; entries: string[] } | { ok: false; error: string; code: HookInstallErrorCode } {
-  const hooks = manifest[MANIFEST_KEY]?.hooks;
-  if (!Array.isArray(hooks)) {
-    return {
-      ok: false,
-      error: "package.json missing openclaw.hooks",
-      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
-    };
-  }
-  const list = normalizeTrimmedStringList(hooks);
-  if (list.length === 0) {
-    return {
-      ok: false,
-      error: "package.json openclaw.hooks is empty",
-      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
-    };
-  }
-  return { ok: true, entries: list };
-}
-
-function resolveHookPackageKind(
-  manifest: HookPackageManifest,
-  packageKind: "plugin-capable" | undefined,
-): "hook-only" | "plugin-capable" {
-  if (packageKind) {
-    return packageKind;
-  }
-  const extensions = manifest[MANIFEST_KEY]?.extensions;
-  if (extensions === undefined) {
-    return "hook-only";
-  }
-  return Array.isArray(extensions) && normalizeTrimmedStringList(extensions).length === 0
-    ? "hook-only"
-    : "plugin-capable";
 }
 
 async function installFromResolvedHookDir(
@@ -409,15 +369,32 @@ async function installHookPackageFromDir(
     return { ok: false, error: `invalid package.json: ${String(err)}` };
   }
 
-  const hookManifest = resolveOpenClawHooks(manifest);
-  if (!hookManifest.ok) {
-    return hookManifest;
+  const hooks = manifest[MANIFEST_KEY]?.hooks;
+  if (!Array.isArray(hooks)) {
+    return {
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
+    };
   }
-  const hookEntries = hookManifest.entries;
+  const hookEntries = normalizeTrimmedStringList(hooks);
+  if (hookEntries.length === 0) {
+    return {
+      ok: false,
+      error: "package.json openclaw.hooks is empty",
+      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
+    };
+  }
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
   const hookPackId = pkgName ? unscopedPackageName(pkgName) : path.basename(params.packageDir);
-  const packageKind = resolveHookPackageKind(manifest, params.packageKind);
+  const extensions = manifest[MANIFEST_KEY]?.extensions;
+  const packageKind =
+    params.packageKind ??
+    (extensions === undefined ||
+    (Array.isArray(extensions) && normalizeTrimmedStringList(extensions).length === 0)
+      ? "hook-only"
+      : "plugin-capable");
   if (params.expectedPackageKind && packageKind !== params.expectedPackageKind) {
     return {
       ok: false,

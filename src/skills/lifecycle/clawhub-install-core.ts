@@ -119,28 +119,6 @@ export function isDefaultOfficialClawHubSkillSource(params: {
   );
 }
 
-async function fetchDefaultClawHubSkillDetailIfOfficial(params: {
-  baseUrl?: string;
-  slug: string;
-  ownerHandle?: string;
-}): Promise<ClawHubSkillDetail | undefined> {
-  if (!isDefaultClawHubBaseUrl(params.baseUrl)) {
-    return undefined;
-  }
-  try {
-    const detail = await fetchClawHubSkillDetail({
-      slug: params.slug,
-      ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-      baseUrl: params.baseUrl,
-    });
-    return isDefaultOfficialClawHubSkillSource({ baseUrl: params.baseUrl, detail })
-      ? detail
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function resolveInstallVersion(params: {
   slug: string;
   ownerHandle?: string;
@@ -236,30 +214,6 @@ async function fetchInstallVerificationLock(params: {
   }
 }
 
-function assertInstallResolutionAllowed(
-  resolution: ClawHubSkillInstallResolutionResponse,
-): Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> {
-  if (!resolution.ok) {
-    if (resolution.reason === "ambiguous_slug") {
-      const message = resolution.message ? ` ${resolution.message}` : "";
-      throw new Error(
-        `Skill "${resolution.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolution.slug}.${message}`,
-      );
-    }
-    throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
-  }
-  if (resolution.installKind !== "github") {
-    return resolution;
-  }
-  const commit = normalizeGitHubCommitSegment(resolution.github.commit)?.toLowerCase();
-  if (!commit) {
-    throw new Error(
-      `Skill "${resolution.slug}" resolved to a mutable or invalid GitHub source ref; expected a full 40-character commit SHA.`,
-    );
-  }
-  return { ...resolution, github: { ...resolution.github, commit } };
-}
-
 export async function checkClawHubSkillTrust(
   params: ClawHubInstallParams & { version: string; skipClawHubTrustCheck?: boolean },
 ): Promise<
@@ -319,15 +273,32 @@ export async function performClawHubSkillInstall(
       version = resolved.version;
       official = isDefaultOfficialClawHubSkillSource({ baseUrl: params.baseUrl, detail });
     } else {
-      resolution = assertInstallResolutionAllowed(
-        await fetchClawHubSkillInstallResolution({
-          slug: params.slug,
-          ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-          ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
-          baseUrl: params.baseUrl,
-          ...(params.forceInstall ? { forceInstall: true } : {}),
-        }),
-      );
+      const resolved = await fetchClawHubSkillInstallResolution({
+        slug: params.slug,
+        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
+        baseUrl: params.baseUrl,
+        ...(params.forceInstall ? { forceInstall: true } : {}),
+      });
+      if (!resolved.ok) {
+        if (resolved.reason === "ambiguous_slug") {
+          const message = resolved.message ? ` ${resolved.message}` : "";
+          throw new Error(
+            `Skill "${resolved.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolved.slug}.${message}`,
+          );
+        }
+        throw new Error(resolved.message || `Skill "${resolved.slug}" is not installable.`);
+      }
+      resolution = resolved;
+      if (resolution.installKind === "github") {
+        const commit = normalizeGitHubCommitSegment(resolution.github.commit)?.toLowerCase();
+        if (!commit) {
+          throw new Error(
+            `Skill "${resolution.slug}" resolved to a mutable or invalid GitHub source ref; expected a full 40-character commit SHA.`,
+          );
+        }
+        resolution = { ...resolution, github: { ...resolution.github, commit } };
+      }
       if (params.requestedReference) {
         if (
           resolution.installKind !== "github" ||
@@ -344,13 +315,24 @@ export async function performClawHubSkillInstall(
         baseUrl: params.baseUrl,
         resolution,
       });
-      detail = resolutionOfficial
-        ? undefined
-        : await fetchDefaultClawHubSkillDetailIfOfficial({
-            baseUrl: params.baseUrl,
-            slug: params.slug,
-            ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-          });
+      if (!resolutionOfficial && isDefaultClawHubBaseUrl(params.baseUrl)) {
+        const request = {
+          baseUrl: params.baseUrl,
+          slug: params.slug,
+          ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        };
+        try {
+          const candidate = await fetchClawHubSkillDetail(request);
+          detail = isDefaultOfficialClawHubSkillSource({
+            baseUrl: request.baseUrl,
+            detail: candidate,
+          })
+            ? candidate
+            : undefined;
+        } catch {
+          detail = undefined;
+        }
+      }
       official = isDefaultOfficialClawHubSkillSource({
         baseUrl: params.baseUrl,
         detail,
