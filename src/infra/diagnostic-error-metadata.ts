@@ -100,10 +100,6 @@ function normalizeProviderRequestId(value: unknown): string | undefined {
   return undefined;
 }
 
-function hashDiagnosticIdentifier(value: string): string {
-  return `sha256:${sha256HexPrefixCore(value, REQUEST_ID_HASH_PREFIX_LEN)}`;
-}
-
 function readDirectProviderRequestId(err: unknown): string | undefined {
   for (const key of PROVIDER_REQUEST_ID_KEYS) {
     const normalized = normalizeProviderRequestId(readOwnDataProperty(err, key));
@@ -206,12 +202,12 @@ export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailure
 
 /** Extracts and hashes bounded provider request ids so diagnostics never expose raw ids. */
 export function diagnosticProviderRequestIdHash(err: unknown): string | undefined {
-  const fromProperty = findDiagnosticErrorProperty(err, readDirectProviderRequestId);
-  if (fromProperty) {
-    return hashDiagnosticIdentifier(fromProperty);
-  }
-  const fromMessage = findDiagnosticErrorProperty(err, (candidate) =>
-    extractProviderRequestIdFromText(readDirectMessage(candidate)),
-  );
-  return fromMessage ? hashDiagnosticIdentifier(fromMessage) : undefined;
+  const requestId =
+    findDiagnosticErrorProperty(err, readDirectProviderRequestId) ??
+    findDiagnosticErrorProperty(err, (candidate) =>
+      extractProviderRequestIdFromText(readDirectMessage(candidate)),
+    );
+  return requestId
+    ? `sha256:${sha256HexPrefixCore(requestId, REQUEST_ID_HASH_PREFIX_LEN)}`
+    : undefined;
 }

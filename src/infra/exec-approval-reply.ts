@@ -218,16 +218,10 @@ export function buildTypedApprovalPresentation(
 }
 
 /** Build the shipped command-backed exec-approval presentation. */
-export function buildExecApprovalPresentation(params: {
-  approvalCommandId: string;
-  ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalReplyDecision[];
-}): MessagePresentation | undefined {
-  return buildApprovalButtonPresentation({
-    approvalId: params.approvalCommandId,
-    ask: params.ask,
-    allowedDecisions: params.allowedDecisions,
-  });
+export function buildExecApprovalPresentation(
+  params: BuildExecApprovalActionDescriptorsParams,
+): MessagePresentation | undefined {
+  return buildApprovalPresentationFromActionDescriptors(buildExecApprovalActionDescriptors(params));
 }
 
 export function getExecApprovalApproverDmNoticeText(): string {
