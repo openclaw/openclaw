@@ -3,10 +3,11 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { XAccountConfig } from "./config-schema.js";
+import { resolveXCostLimits } from "./cost-limits.js";
 
 const accounts = createAccountListHelpers<XAccountConfig>("x", {
   omitKeys: ["defaultAccount"],
-  nestedObjectKeys: ["guests"],
+  nestedObjectKeys: ["guests", "costLimits"],
   implicitDefaultAccount: { channelKeys: ["userId", "clientId", "refreshToken"] },
 });
 export const listXAccountIds = accounts.listAccountIds;
@@ -32,6 +33,7 @@ export function resolveXAccount(cfg: OpenClawConfig, requested?: string | null) 
   return {
     accountId,
     config,
+    costLimits: resolveXCostLimits(config.costLimits),
     enabled,
     configured,
     userId: config.userId ?? "",

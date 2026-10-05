@@ -16,9 +16,11 @@ import type {
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
+import type { RoleSnapshotResult } from "./pw-role-snapshot.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 import type {
   ImportSystemProfileResult as BrowserImportProfileResult,
+  ImportSystemProfileParams,
   SystemProfileInfo,
 } from "./system-profiles.js";
 
@@ -69,32 +71,24 @@ export type BrowserResetProfileResult = {
   to?: string;
 };
 
-export type SnapshotResult =
+export type SnapshotResult = {
+  ok: true;
+  targetId: string;
+  url: string;
+  truncated?: boolean;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
+} & (
   | {
-      ok: true;
       format: "aria";
-      targetId: string;
-      url: string;
       nodes: SnapshotAriaNode[];
-      truncated?: boolean;
-      blockedByDialog?: boolean;
-      browserState?: unknown;
     }
   | {
-      ok: true;
       format: "ai";
-      targetId: string;
-      url: string;
-      snapshot: string;
-      truncated?: boolean;
-      newElements?: number;
-      refs?: Record<string, { role: string; name?: string; nth?: number }>;
-      stats?: {
-        lines: number;
-        chars: number;
-        refs: number;
-        interactive: number;
-      };
+      snapshot: RoleSnapshotResult["snapshot"];
+      newElements?: RoleSnapshotResult["newElements"];
+      refs?: RoleSnapshotResult["refs"];
+      stats?: RoleSnapshotResult["stats"];
       labels?: boolean;
       labelsCount?: number;
       labelsSkipped?: number;
@@ -105,9 +99,8 @@ export type SnapshotResult =
       annotations?: AnnotationItem[];
       imagePath?: string;
       imageType?: "png" | "jpeg";
-      blockedByDialog?: boolean;
-      browserState?: unknown;
-    };
+    }
+);
 
 export async function browserStatus(
   baseUrl?: BrowserClientTarget,
@@ -165,11 +158,7 @@ export async function browserSystemProfiles(
 
 export async function browserImportProfile(
   baseUrl: BrowserClientTarget,
-  opts: {
-    browser?: string;
-    systemProfile?: string;
-    into?: string;
-    domains?: string[];
+  opts: Omit<ImportSystemProfileParams, "makeDefault"> & {
     signal?: AbortSignal;
   },
 ): Promise<BrowserImportProfileResult> {

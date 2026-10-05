@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/channels/inbound-event/envelope.worker.test.ts",
   "src/model-catalog/remote-refresh.test.ts",
   "src/model-catalog/remote-store.test.ts",
   "src/agents/subagents/spawn/acp-parent-stream-store.sqlite.test.ts",
@@ -183,6 +184,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt.exec-review-transcript.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.diagnostics.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.tool-search-catalog-abort.test.ts",
   "src/agents/harness/agent-end-side-effects.no-verbatim-capture.test.ts",
@@ -319,6 +321,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply.delivery-format.test.ts",
   "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.test.ts",
+  "src/auto-reply/reply/get-reply.maintenance-conflict.test.ts",
   "src/auto-reply/reply/get-reply.timeout.test.ts",
   "src/auto-reply/reply/get-reply.workspace-failure.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.test.ts",
@@ -515,6 +518,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/agent-session-models.admission.test.ts",
   "src/agents/session-tool-result-guard.transcript-events.test.ts",
   "src/agents/embedded-agent-runner/compact.delegate.test.ts",
+  "src/agents/embedded-agent-runner/compact.auth-preparation.test.ts",
   "src/agents/embedded-agent-runner/compact.delegate-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.foreground-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.hooks.test.ts",
@@ -528,6 +532,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session-boundary.orphan.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.sessions-yield.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
   "src/audit/audit-events.test.ts",

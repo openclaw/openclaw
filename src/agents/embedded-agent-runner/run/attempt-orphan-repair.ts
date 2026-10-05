@@ -1,4 +1,4 @@
-import type { UserMessage } from "../../../llm/types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import type {
   SessionEntry as SessionManagerEntry,
   SessionMessageEntry,
@@ -95,13 +95,13 @@ export async function replayTrailingEntriesForOrphanRepair(
 
 type OrphanRepairPlan = Omit<OrphanRepairCandidate, "messageEntry"> & {
   contextEnginePrompt: string;
-  messageEntry: SessionMessageEntry & { message: UserMessage };
+  messageEntry: SessionMessageEntry & { message: PersistedUserTurnMessage };
   removeLeaf: boolean;
 };
 
 function isUserSessionMessageEntry(
   entry: SessionMessageEntry,
-): entry is SessionMessageEntry & { message: UserMessage } {
+): entry is SessionMessageEntry & { message: PersistedUserTurnMessage } {
   return entry.message.role === "user";
 }
 

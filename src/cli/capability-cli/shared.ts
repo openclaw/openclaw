@@ -1,7 +1,4 @@
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import {
   resolveAgentOperationAgentId,
@@ -45,12 +42,6 @@ export function resolveTransport(opts: {
 
 function hasOwnKeys(value: unknown): boolean {
   return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
-}
-
-export function resolveSelectedProviderFromModelRef(
-  modelRef: string | undefined,
-): string | undefined {
-  return resolveModelRefOverride(modelRef).provider;
 }
 
 export function resolveCapabilityProviderAgentId(
@@ -124,20 +115,6 @@ export function requireProviderModelOverride(
   };
 }
 
-export function parseOptionalFiniteNumber(
-  raw: string | number | undefined,
-  label: string,
-): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const value = parseStrictFiniteNumber(raw);
-  if (value === undefined) {
-    throw new Error(`${label} must be a finite number`);
-  }
-  return value;
-}
-
 export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
   if (raw === undefined) {
     return undefined;
@@ -149,14 +126,11 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
   return value;
 }
 
-export function parseOptionalTimeoutMs(
-  raw: string | number | undefined,
-  flagName = "--timeout-ms",
-): number | undefined {
+export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName });
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName: "--timeout-ms" });
 }
 
 export async function resolveLocalCapabilityRuntimeConfig(params: {

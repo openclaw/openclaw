@@ -1,3 +1,4 @@
+import { isSqliteTranscriptMutationConflict } from "../../../config/sessions/session-mutation-conflict-error.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
@@ -105,7 +106,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
   } = attempt;
-  const { idleTimedOut } = projectAgentRunAttemptTerminal(terminal);
+  const { idleTimedOut, promptError } = projectAgentRunAttemptTerminal(terminal);
   const attemptAssistant = resolveCurrentAttemptAssistant(attempt);
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
@@ -159,6 +160,9 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
+  if (isSqliteTranscriptMutationConflict(promptError)) {
+    throw promptError;
+  }
   // A real mid-turn truncation rewrites the context after earlier usage observations.
   // Keep billing accumulated, but do not carry that pre-mutation context into the retry.
   const contextMutatedByMidTurnTruncation =

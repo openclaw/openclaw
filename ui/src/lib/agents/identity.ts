@@ -104,17 +104,9 @@ export function fetchAgentIdentity(
   return entry.pending;
 }
 
-export type AgentIdentityCapability = {
-  get: (agentId: string | null | undefined) => AgentIdentityResult | null;
-  entries: () => AgentIdentityResult[];
-  ensure: (agentIds: readonly (string | null | undefined)[]) => Promise<void>;
-  invalidate: (agentIds: readonly (string | null | undefined)[]) => void;
-  subscribe: (listener: () => void) => () => void;
-};
+export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapability>;
 
-export function createAgentIdentityCapability(
-  gateway: AgentIdentityGateway,
-): AgentIdentityCapability {
+export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
   let connectionGeneration = 0;
@@ -159,14 +151,14 @@ export function createAgentIdentityCapability(
   });
 
   return {
-    get(agentId) {
+    get(agentId: string | null | undefined) {
       const normalized = agentId?.trim();
       return normalized ? (identities.get(normalized) ?? null) : null;
     },
     entries() {
       return [...identities.values()];
     },
-    async ensure(agentIds) {
+    async ensure(this: void, agentIds: readonly (string | null | undefined)[]) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
@@ -218,7 +210,7 @@ export function createAgentIdentityCapability(
         publish();
       }
     },
-    invalidate(agentIds) {
+    invalidate(agentIds: readonly (string | null | undefined)[]) {
       let changed = false;
       const ids = normalizeUniqueTrimmedStringList(agentIds);
       invalidateAgentIdentityCache(cachedClient, ids);
@@ -232,6 +224,6 @@ export function createAgentIdentityCapability(
         publish();
       }
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
 }

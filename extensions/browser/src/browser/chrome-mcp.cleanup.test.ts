@@ -319,14 +319,8 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
   });
 });
 
-it.each([
-  { name: "native argument validation", command: process.execPath, args: ["\0"] },
-  {
-    name: "missing executable",
-    command: path.join(os.tmpdir(), "absent-chrome-mcp", "missing"),
-    args: [],
-  },
-])("settles cleanup after $name fails without a child", async (options) => {
+it("settles cleanup after native argument validation fails without a child", async () => {
+  const options = { command: process.execPath, args: ["\0"] };
   const owner = getChromeMcpSessionOwner("failed-spawn", options);
   const creation = createChromeMcpSession(owner, "failed-spawn", options);
   const session = await creation.promise;

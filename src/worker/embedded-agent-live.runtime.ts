@@ -154,13 +154,7 @@ export type WorkerLiveClient = {
   emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
-type WorkerLiveRuntime = {
-  handleSessionEvent: (event: AgentSessionEvent) => void;
-  enqueueRunFailure: (failure: { aborted: boolean; error: Error }) => void;
-  emitTerminal: () => Promise<void>;
-};
-
-export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
+export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   let previewEnabled = true;
   const enqueueLive = (event: WorkerLiveEvent) => {
     if (previewEnabled) {

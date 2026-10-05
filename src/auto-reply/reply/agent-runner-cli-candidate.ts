@@ -470,6 +470,7 @@ export async function runCliFallbackCandidate(
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             senderIsOwner: turn.followupRun.run.senderIsOwner,
+            conversationToolPolicy: turn.followupRun.run.conversationToolPolicy,
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,

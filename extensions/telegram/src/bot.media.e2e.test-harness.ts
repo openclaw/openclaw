@@ -332,7 +332,7 @@ vi.doMock("./bot-message-context.session.runtime.js", async () => {
   );
   return {
     ...actual,
-    readSessionUpdatedAt: () => undefined,
+    readSessionUpdatedAtAsync: async () => undefined,
     resolveStorePath: (storePath?: string) =>
       storePath ?? path.join(ensureMediaHarnessStoreRoot(), "sessions.json"),
   };

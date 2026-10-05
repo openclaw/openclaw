@@ -473,7 +473,7 @@ it.for([
           : getActiveSecretsRuntimeSnapshot();
         expect(snapshot?.authStores.some((entry) => entry.databasePath === agentPath)).toBe(false);
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
-          true,
+          false,
         );
       }
       if (agentId === "main") {

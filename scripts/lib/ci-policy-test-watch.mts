@@ -296,6 +296,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
   ].map((testFile): PolicyTestWatch => ({

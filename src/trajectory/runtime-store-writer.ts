@@ -2,15 +2,23 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadSessionEntry,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
+  resolveSqliteSessionKey,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  isNativeSessionEntryRead,
+  withSessionEntriesFromStoresInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
@@ -45,7 +53,7 @@ import {
 } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
-export function createSqliteTrajectoryRuntimeSink(params: {
+type TrajectoryRuntimeSinkParams = {
   env: NodeJS.ProcessEnv;
   maxRuntimeFileBytes: number;
   sessionFile?: string;
@@ -53,12 +61,16 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   sessionKey?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   assertCommitAllowed?: () => void;
-}): {
+};
+
+type TrajectoryRuntimeSink = {
   describeFlushState: () => string | undefined;
   flush: () => Promise<void>;
   write: (event: TrajectoryEvent, line: string) => void;
-} | null {
-  const target = params.sessionTarget
+};
+
+function captureTrajectoryTarget(params: TrajectoryRuntimeSinkParams) {
+  return params.sessionTarget
     ? {
         agentId: normalizeOptionalString(params.sessionTarget.agentId),
         sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
@@ -66,6 +78,62 @@ export function createSqliteTrajectoryRuntimeSink(params: {
         storePath: normalizeOptionalString(params.sessionTarget.storePath),
       }
     : undefined;
+}
+
+export async function createSqliteTrajectoryRuntimeSink(
+  input: TrajectoryRuntimeSinkParams,
+): Promise<TrajectoryRuntimeSink | null> {
+  const params = {
+    ...input,
+    env: { ...input.env, OPENCLAW_STATE_DIR: resolveStateDir(input.env) },
+    sessionTarget: input.sessionTarget && { ...input.sessionTarget },
+  };
+  const target = captureTrajectoryTarget(params);
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (target?.storePath && params.sessionTarget) {
+    target.storePath = path.resolve(target.storePath);
+    params.sessionTarget = { ...params.sessionTarget, storePath: target.storePath };
+  }
+  params.sessionFile = marker ? formatSqliteSessionFileMarker(marker) : params.sessionFile;
+  const scope =
+    target?.agentId && target.sessionId && target.sessionKey && target.storePath
+      ? { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath }
+      : target?.sessionKey && marker
+        ? { ...marker, sessionKey: target.sessionKey }
+        : undefined;
+  params.assertCommitAllowed?.();
+  if (!scope || isNativeSessionEntryRead({ ...scope, env: params.env }, scope.agentId)) {
+    return buildSqliteTrajectoryRuntimeSink(params, loadSessionEntry);
+  }
+  return withSessionEntriesFromStoresInWorker(
+    [
+      {
+        ...scope,
+        env: params.env,
+        sessionKeys: [resolveSqliteSessionKey(scope.sessionKey, scope.agentId)],
+        projection: "exact",
+        snapshotFields: [],
+      },
+    ],
+    ([read]) => {
+      params.assertCommitAllowed?.();
+      read!.assertCurrent();
+      return buildSqliteTrajectoryRuntimeSink(params, () => read!.result.entries[0]?.entry, {
+        agentId: read!.database.agentId,
+        path: read!.database.path,
+        env: read!.database.env,
+      });
+    },
+    { ordered: true },
+  );
+}
+
+function buildSqliteTrajectoryRuntimeSink(
+  params: TrajectoryRuntimeSinkParams,
+  readEntry: typeof loadSessionEntry,
+  preparedDatabase?: OpenClawAgentDatabaseOptions,
+): TrajectoryRuntimeSink | null {
+  const target = captureTrajectoryTarget(params);
   const legacyMarker = parseSqliteSessionFileMarker(params.sessionFile);
   const completeTarget = Boolean(
     target?.agentId && target.sessionId && target.sessionKey && target.storePath,
@@ -74,7 +142,7 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   const requestedSessionKey = normalizeOptionalString(params.sessionKey);
   const completeTargetKeyEntry =
     completeTarget && target?.agentId && target.sessionKey && target.storePath
-      ? loadSessionEntry({
+      ? readEntry({
           agentId: target.agentId,
           sessionKey: target.sessionKey,
           storePath: target.storePath,
@@ -92,7 +160,7 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   }
   const targetKeyEntry =
     target?.sessionKey && legacyMarker && !completeTarget
-      ? loadSessionEntry({
+      ? readEntry({
           agentId: legacyMarker.agentId,
           sessionKey: target.sessionKey,
           storePath: legacyMarker.storePath,
@@ -124,7 +192,8 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   }
   const env = { ...params.env };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const databaseOptions = toDatabaseOptions(resolveSqliteReadScope({ ...marker, env }));
+  const databaseOptions =
+    preparedDatabase ?? toDatabaseOptions(resolveSqliteReadScope({ ...marker, env }));
   let pendingEvents = new Map<TrajectoryEvent, number>();
   let queuedBytes = 0;
   let discardPrevious = false;

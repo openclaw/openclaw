@@ -1,6 +1,6 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
@@ -464,7 +464,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
     const promptMedia = buildTlonInboundMediaPrompt(messageText, attachments);
 
-    const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
+    const body = (await createChannelInboundEnvelopeBuilderAsync({ cfg, route }))({
       channel: "Tlon",
       from: fromLabel,
       timestamp,

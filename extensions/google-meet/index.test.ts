@@ -51,8 +51,9 @@ import {
   normalizeDialInNumber,
   prefixDtmfWait,
 } from "./src/transports/twilio.js";
-import type { GoogleMeetJoinResult, GoogleMeetSession } from "./src/transports/types.js";
 import { testing as googleMeetPluginTesting } from "./test-api.js";
+
+type GoogleMeetJoinResult = Awaited<ReturnType<ReturnType<typeof meetRuntime>["join"]>>;
 
 let meetingTestState: ReturnType<typeof useMeetingTestState>;
 
@@ -3134,7 +3135,7 @@ describe("google-meet plugin", () => {
     })) as {
       found: boolean;
       spoken: boolean;
-      session?: GoogleMeetSession;
+      session?: GoogleMeetJoinResult["session"];
     };
 
     expect(retry.found).toBe(true);

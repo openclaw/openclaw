@@ -172,7 +172,7 @@ afterEach(() => {
 });
 
 async function fixture(
-  edit?: "ExecStartPre" | "foreign-unit" | "foreign-root" | "old-installation" | "native-policy",
+  edit?: "ExecStartPre" | "foreign-unit" | "foreign-root" | "old-installation",
   layout: "direct" | "user-prefix shim" = "direct",
 ) {
   const home = await fs.realpath(dirs.make("candidate-service-repair-"));
@@ -274,16 +274,7 @@ async function fixture(
       ? path.join(home, "foreign-unit", "gateway.service")
       : resolveSystemdUnitPath(process.env);
   await fs.mkdir(path.dirname(native.source), { recursive: true, mode: 0o700 });
-  if (edit === "native-policy") {
-    plan.environment.OPENCLAW_SERVICE_VERSION = "2026.7.1-2";
-  }
   let original = buildSystemdUnit(plan).replace("KillMode=mixed\n", "");
-  if (edit === "native-policy") {
-    original = original
-      .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
-      .replace("TimeoutStopSec=330", "TimeoutStopSec=600")
-      .replace("StartLimitIntervalSec=300", "StartLimitIntervalSec=60");
-  }
   if (edit === "ExecStartPre") {
     original = original.replace("[Service]", "[Service]\nExecStartPre=/operator/private-hook");
   }
@@ -464,17 +455,10 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32").each([
-  { edit: undefined, layout: "user-prefix shim" },
-  { edit: "old-installation", layout: "direct" },
-] as const)(
-  "repairs a published-driver $layout unit from $edit through the candidate installer",
-  async ({ edit, layout }) => {
-    const f = await fixture(edit, layout);
-    const entry = path.join(native.root, "dist", "index.js");
-    if (edit) {
-      expect((await native.command()).programArguments).not.toContain(entry);
-    }
+it.skipIf(process.platform === "win32")(
+  "repairs a published-driver user-prefix shim unit through the candidate installer",
+  async () => {
+    const f = await fixture(undefined, "user-prefix shim");
     await runDaemonInstall({ force: true, json: true });
     const result = response();
     expect(result.ok, result.error).toBe(true);
@@ -488,98 +472,74 @@ it.skipIf(process.platform === "win32").each([
     const repaired = await native.command();
     expect(repaired.environment?.PATH).toBe(f.servicePath);
     expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
-    if (edit) {
-      expect(repaired.programArguments).toContain(entry);
-      expect(native.serviceRuntime).toHaveBeenCalled();
-      expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(
-        1,
-      );
-    } else {
-      expect(repaired.environment?.PATH?.split(path.delimiter)).toContain(f.cliBinDir);
-      expect(result.warnings).toContainEqual(
-        expect.stringContaining("Reconciled Gateway service definition: Service.KillMode."),
-      );
-      expect(getUpdateRun(f.runId)?.steps).toContainEqual(
-        expect.objectContaining({
-          step: expect.stringContaining("warning:managed-service-reconciliation"),
-          detail: expect.stringContaining("Service.KillMode"),
-        }),
-      );
-    }
+    expect(repaired.environment?.PATH?.split(path.delimiter)).toContain(f.cliBinDir);
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("Reconciled Gateway service definition: Service.KillMode."),
+    );
+    expect(getUpdateRun(f.runId)?.steps).toContainEqual(
+      expect.objectContaining({
+        step: expect.stringContaining("warning:managed-service-reconciliation"),
+        detail: expect.stringContaining("Service.KillMode"),
+      }),
+    );
   },
 );
 
-it.skipIf(process.platform === "win32").each(["publication ENOSPC", "activation"] as const)(
-  "restores the previous definition after candidate %s fails",
-  async (failure) => {
+it.skipIf(process.platform === "win32")(
+  "restores the previous definition after candidate publication ENOSPC",
+  async () => {
     const f = await fixture();
     const envFile = path.join(process.env.OPENCLAW_STATE_DIR!, "gateway.systemd.env");
     let injected = false;
-    if (failure === "publication ENOSPC") {
-      const buildPlan = installPlans.buildGatewayInstallPlan;
-      vi.spyOn(installPlans, "buildGatewayInstallPlan").mockImplementation(async (...args) => {
-        const plan = await buildPlan(...args);
-        return {
-          ...plan,
-          environmentValueSources: { ...plan.environmentValueSources, OPERATOR_SETTING: "file" },
-        };
-      });
-      const writeFile = fs.writeFile.bind(fs);
-      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-        const [file, contents, options] = args;
-        if (
-          typeof file === "string" &&
-          file.startsWith(`${f.source}.`) &&
-          file.endsWith(".tmp") &&
-          typeof contents === "string" &&
-          contents.includes("KillMode=mixed")
-        ) {
-          injected = true;
-          expect(await fs.readFile(envFile, "utf8")).toContain("OPERATOR_SETTING=");
-          await writeFile(file, contents.slice(0, 32), options);
-          throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
-        }
-        return writeFile(...args);
-      });
-    } else {
-      const execute = native.systemctl.getMockImplementation()!;
-      native.systemctl.mockImplementation(async (...args) =>
-        args[1][0] === "restart"
-          ? { code: 1, stdout: "", stderr: "fixture activation failed", termination: "exit" }
-          : execute(...args),
-      );
-    }
+    const buildPlan = installPlans.buildGatewayInstallPlan;
+    vi.spyOn(installPlans, "buildGatewayInstallPlan").mockImplementation(async (...args) => {
+      const plan = await buildPlan(...args);
+      return {
+        ...plan,
+        environmentValueSources: { ...plan.environmentValueSources, OPERATOR_SETTING: "file" },
+      };
+    });
+    const writeFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      const [file, contents, options] = args;
+      if (
+        typeof file === "string" &&
+        file.startsWith(`${f.source}.`) &&
+        file.endsWith(".tmp") &&
+        typeof contents === "string" &&
+        contents.includes("KillMode=mixed")
+      ) {
+        injected = true;
+        expect(await fs.readFile(envFile, "utf8")).toContain("OPERATOR_SETTING=");
+        await writeFile(file, contents.slice(0, 32), options);
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      }
+      return writeFile(...args);
+    });
     await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
     const result = response();
     expect(result.error).toContain("previous definition was restored");
     expect(result.definitionBackup).toBeUndefined();
     expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
-    const detail =
-      failure === "publication ENOSPC"
-        ? expect.stringMatching(/previous definition was (?:restored|left unchanged):.*ENOSPC/u)
-        : expect.stringContaining("previous definition was restored");
+    const detail = expect.stringMatching(
+      /previous definition was (?:restored|left unchanged):.*ENOSPC/u,
+    );
     expect(getUpdateRun(f.runId)?.steps).toContainEqual(
       expect.objectContaining({
         step: expect.stringContaining("warning:managed-service-reconciliation"),
         detail,
       }),
     );
-    if (failure === "publication ENOSPC") {
-      expect(injected).toBe(true);
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("SERVICE_DEFINITION_UNKNOWN:");
-      expect(result.error).not.toContain("UPDATE_NATIVE_AUTHORITY");
-      expect(result.warnings).toContainEqual(detail);
-      const receipt = await expectDefinitionBackups(f);
-      expect(receipt.files[0]?.after).toEqual(receipt.files[0]?.before);
-      expect(receipt.files[1]).toMatchObject({ before: null, after: null });
-      await expect(fs.stat(envFile)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
-    } else {
-      expect(
-        native.systemctl.mock.calls.filter(([, args]) => args[0] === "daemon-reload"),
-      ).toHaveLength(2);
-    }
+    expect(injected).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("SERVICE_DEFINITION_UNKNOWN:");
+    expect(result.error).not.toContain("UPDATE_NATIVE_AUTHORITY");
+    expect(result.warnings).toContainEqual(detail);
+    const receipt = await expectDefinitionBackups(f);
+    expect(receipt.files[0]?.after).toEqual(receipt.files[0]?.before);
+    expect(receipt.files[1]).toMatchObject({ before: null, after: null });
+    await expect(fs.stat(envFile)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
   },
 );
 
@@ -642,25 +602,6 @@ it.skipIf(process.platform === "win32")(
     expect(await fs.readFile(f.source, "utf8")).toBe(edited);
     expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
     expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
-  },
-);
-
-it.skipIf(process.platform === "win32")(
-  "repairs native policy through standalone Doctor with the shared backup transaction",
-  async () => {
-    const f = await fixture("native-policy");
-    await runStandaloneDoctor();
-    expect(native.runtime.error).not.toHaveBeenCalled();
-    const changed = await fs.readFile(f.source, "utf8");
-    expect(changed).toMatch(/^KillMode=mixed$/mu);
-    expect(changed).toMatch(/^TimeoutStartSec=45$/mu);
-    expect(changed).toMatch(/^TimeoutStopSec=600$/mu);
-    expect(changed).toContain("OPERATOR_SETTING=retained");
-    await expectDefinitionBackups(f);
-    expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
-    expect(native.note.mock.calls.map(([message]) => message)).toContainEqual(
-      expect.stringContaining("Reconciled Gateway service definition:"),
-    );
   },
 );
 

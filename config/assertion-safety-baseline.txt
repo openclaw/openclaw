@@ -185,7 +185,6 @@ extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
 extensions/copilot/src/event-bridge.ts	1
 extensions/copilot/src/hooks-bridge.ts	7
-extensions/copilot/src/isolated-completion.ts	1
 extensions/copilot/src/provider-bridge.ts	1
 extensions/copilot/src/sdk-loader.ts	2
 extensions/copilot/src/tool-bridge.ts	3
@@ -1470,7 +1469,7 @@ src/agents/sessions/agent-session-models.ts	1
 src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/agent-session-utils.ts	1
 src/agents/sessions/auth-storage.ts	3
-src/agents/sessions/extensions/loader.ts	7
+src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
@@ -1483,9 +1482,7 @@ src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	8
 src/agents/sessions/steering-message-identity.ts	2
-src/agents/sessions/tools/bash.ts	2
-src/agents/sessions/tools/edit.ts	10
-src/agents/sessions/tools/grep.ts	2
+src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/sessions/tools/write.ts	3
 src/agents/shell-snapshot.ts	1
@@ -1741,7 +1738,6 @@ src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	4
 src/cli/connect-cli.ts	1
 src/cli/cron-cli/list-jobs.ts	4
-src/cli/cron-cli/register.cron-add.ts	1
 src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
@@ -1759,7 +1755,7 @@ src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	2
-src/cli/nodes-cli/register.pairing.ts	4
+src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
@@ -1882,7 +1878,7 @@ src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
-src/commands/message-format.ts	17
+src/commands/message-format.ts	15
 src/commands/models/list.probe.ts	1
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3

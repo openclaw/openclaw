@@ -69,18 +69,16 @@ export type MemoryWikiCompiledClaim = {
 export type MemoryWikiImportInsightItem = NonNullable<
   ReturnType<typeof import("./import-insights.js").projectMemoryWikiImportInsight>
 >;
-export type MemoryWikiImportInsightsStatus = ReturnType<
+type MemoryWikiImportInsightsStatus = ReturnType<
   typeof import("./import-insights.js").buildMemoryWikiImportInsights
 >;
-export type MemoryWikiImportInsightCluster = MemoryWikiImportInsightsStatus["clusters"][number];
 
 export type MemoryWikiOverviewItem = ReturnType<
   typeof import("./wiki-overview.js").projectMemoryWikiOverviewItem
 >;
-export type MemoryWikiOverviewStatus = ReturnType<
+type MemoryWikiOverviewStatus = ReturnType<
   typeof import("./wiki-overview.js").buildMemoryWikiOverview
 >;
-export type MemoryWikiOverviewCluster = MemoryWikiOverviewStatus["clusters"][number];
 export type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
 
 export type MemoryWikiCompiledCacheSnapshot = {

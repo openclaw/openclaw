@@ -2,13 +2,22 @@ import { deepStrictEqual } from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -16,6 +25,7 @@ import {
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
+import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,6 +38,7 @@ afterEach(async () => {
   await flushLogger();
   setLoggerOverride(null);
   resetLogger();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -81,26 +92,88 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
   };
 }
 
-it.each(["missing", "drifted"] as const)(
-  "repairs every agent's %s index in one startup",
-  async (damage) => {
+it.for(["missing", "drifted"] as const)(
+  "defers every agent's %s index repair until startup activation and repairs it once",
+  async (damage, { signal }) => {
     const { env, config, agents, logPath, before } = await createFixture(
       ["memes", "main", "friends"],
       damage,
     );
-    const runStartup = () =>
+    const prepareStartup = () =>
       prepareGatewayStartupSessions({
         cfg: config,
+        env,
         log: { info: vi.fn(), warn: vi.fn() },
       });
-    await expect(
-      assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
-    ).resolves.toBeUndefined();
-    deepStrictEqual(
-      agents.map((agent) => fs.readFileSync(agent.path)),
-      before,
-    );
-    await runStartup();
+    for (const agent of agents) {
+      expect(readOpenClawAgentIntegrityVerification(agent.path, env)?.clean_close).toBe(1);
+    }
+    const allAdmitted = createDeferredCore();
+    const admitted = new Set<string>();
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      if (!("all" in change) || typeof change.scope !== "object" || !change.scope.topology) {
+        return;
+      }
+      const agentId = change.scope.agentId;
+      if (
+        agentId &&
+        agents.some((agent) => agent.agentId === agentId) &&
+        !listAgentDatabaseAdmissionRefusals({ env }).some((refusal) => refusal.agentId === agentId)
+      ) {
+        admitted.add(agentId);
+        if (admitted.size === agents.length) {
+          allAdmitted.resolve();
+        }
+      }
+    });
+    try {
+      await withAgentDatabaseStartupAdmission(async (admission) => {
+        await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config });
+        const owner = admission.adopt();
+        try {
+          for (const agent of agents) {
+            const refusal = readAgentDatabaseAdmissionRefusal(agent.agentId, { env });
+            expect(refusal?.code).toBe("agent-database-inspection-pending");
+            expect(createAgentDatabaseAdmissionErrorShape(refusal!)).toMatchObject({
+              code: "UNAVAILABLE",
+              retryable: true,
+            });
+            expect(() => openOpenClawAgentDatabase({ ...agent, env })).toThrow(
+              "has not completed startup inspection and preparation",
+            );
+          }
+          await expect(prepareStartup()).resolves.toEqual([]);
+          expect(
+            listAgentDatabaseAdmissionRefusals({ env })
+              .map(({ agentId }) => agentId)
+              .toSorted(),
+          ).toEqual(agents.map(({ agentId }) => agentId).toSorted());
+          deepStrictEqual(
+            agents.map((agent) => fs.readFileSync(agent.path)),
+            before,
+          );
+          const activate = admission.activate.bind(admission);
+          // Keep real worker opening and session preparation; model publication is unrelated.
+          vi.spyOn(admission, "activate").mockImplementation((activation) =>
+            activate({ ...activation, publishAgent: async () => {} }),
+          );
+          activateGatewayAgentDatabaseStartup({
+            admission,
+            preparationReady: Promise.resolve(),
+            getConfig: () => config,
+            getPluginRegistry: vi.fn(),
+            getPluginMetadataSnapshot: () => undefined,
+            isCurrent: () => true,
+            log: { info: vi.fn(), warn: vi.fn() },
+          });
+          await withinTest(allAdmitted.promise, signal);
+        } finally {
+          await owner.stop();
+        }
+      });
+    } finally {
+      unsubscribe();
+    }
     for (const agent of agents) {
       const reader = new (requireNodeSqlite().DatabaseSync)(agent.path, { readOnly: true });
       try {
@@ -142,7 +215,7 @@ it.each(["missing", "drifted"] as const)(
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-restart", config }),
     ).resolves.toBeUndefined();
-    await runStartup();
+    await prepareStartup();
     await closeOpenClawAgentDatabasesAsync();
     await flushLogger();
     expect(repairs()).toHaveLength(3);

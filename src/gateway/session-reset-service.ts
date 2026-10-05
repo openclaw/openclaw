@@ -1196,9 +1196,6 @@ export async function performGatewaySessionReset(params: {
             queueDrop: currentEntry?.queueDrop,
             ...preserveSessionLineage(currentEntry),
             completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
-            inheritedToolPolicyVersion: currentEntry?.inheritedToolPolicyVersion,
-            inheritedToolAllow: currentEntry?.inheritedToolAllow,
-            inheritedToolDeny: currentEntry?.inheritedToolDeny,
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
             spawnedCwd: params.clearSpawnedCwd
               ? undefined

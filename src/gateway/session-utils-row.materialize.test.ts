@@ -111,6 +111,7 @@ type RowFixture = {
   runs?: SubagentRunRecord[];
   transcript?: boolean;
   omitRowContext?: boolean;
+  expectedIsDock?: boolean;
   decoration?: "current" | "stale";
 };
 
@@ -219,8 +220,9 @@ function fixtures(): RowFixture[] {
     {
       name: "single-row snapshot without an explicit swarm context",
       key: "agent:main:dashboard:single",
-      entry: BASE_ENTRY,
+      entry: { ...BASE_ENTRY, createdSurface: "plugin-dock" },
       omitRowContext: true,
+      expectedIsDock: true,
     },
     {
       name: "live status and persisted running lifecycle",
@@ -552,8 +554,15 @@ test("preserves complete base rows across time and caller presentation fixtures"
       rows.forEach((row, index) => {
         expect(row.snapshotAt).toBe(TIMES[index]);
         expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
-        // Sampling metadata is additive; retain golden coverage of every existing wire field.
-        const { snapshotAt: _snapshotAt, ...previousWireFields } = row;
+        expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
+        expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
+        // Assert additive fields separately while preserving the frozen wire-byte coverage.
+        const {
+          snapshotAt: _snapshotAt,
+          createdSurface: _createdSurface,
+          isDock: _isDock,
+          ...previousWireFields
+        } = row;
         const json = JSON.stringify(previousWireFields);
         const actualHash = createHash("sha256").update(json).digest("hex");
         const hashes = GOLDEN_HASHES[fixture.name];

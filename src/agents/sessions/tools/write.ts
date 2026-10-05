@@ -38,7 +38,7 @@ import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).
  */
-export interface WriteOperations {
+interface WriteOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Write content to a file */
@@ -387,7 +387,7 @@ async function recoverSuccessfulWrite(params: {
   return successfulWriteResult(params.path, params.content, params.details);
 }
 
-export function createWriteToolDefinition(
+function createWriteToolDefinition(
   cwd: string,
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {

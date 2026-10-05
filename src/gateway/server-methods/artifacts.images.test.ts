@@ -377,7 +377,7 @@ it("keeps an admitted run on its stored main row when the public alias becomes g
       },
     });
     const admitted = expectDefined(
-      prepareAgentSession({
+      await prepareAgentSession({
         cfg: initial,
         requestedSessionKey: stored.sessionKey,
         requestedSessionId: stored.sessionId,

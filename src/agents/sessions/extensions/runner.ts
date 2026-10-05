@@ -1,15 +1,17 @@
 import type { KeyId } from "@earendil-works/pi-tui";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
 import { registerListener } from "../../../shared/listeners.js";
+import { rethrowIncognitoSessionError } from "../../../state/incognito-session-error.js";
 import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
 import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
-import { reportExtensionHandlerError } from "./handler-error.js";
 import {
   bindExtensionMetadataActions,
   bindExtensionPersistenceActions,
@@ -138,17 +140,6 @@ type RunnerEmitEvent = Exclude<
   | MessageEndEvent
   | ResourcesDiscoverEvent
   | InputEvent
->;
-
-type SessionBeforeEvent = Extract<
-  RunnerEmitEvent,
-  {
-    type:
-      | "session_before_switch"
-      | "session_before_fork"
-      | "session_before_compact"
-      | "session_before_tree";
-  }
 >;
 
 type SessionBeforeEventResult =
@@ -589,15 +580,6 @@ export class ExtensionRunner {
     } satisfies ExtensionCommandContextActions);
   }
 
-  private isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
-    return (
-      event.type === "session_before_switch" ||
-      event.type === "session_before_fork" ||
-      event.type === "session_before_compact" ||
-      event.type === "session_before_tree"
-    );
-  }
-
   private async dispatchHandlers<TResult>(
     eventType: Exclude<ExtensionEvent["type"], "tool_call">,
     invoke: (
@@ -618,7 +600,17 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
-          reportExtensionHandlerError(err, ext.path, eventType, (error) => this.emitError(error));
+          // Runtime faults must escape before another handler can run.
+          rethrowIncognitoSessionError(err);
+          if (err instanceof SessionMetadataCommittedError) {
+            throw err;
+          }
+          this.emitError({
+            extensionPath: ext.path,
+            event: eventType,
+            error: coerceErrorMessage(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
         }
       }
     }
@@ -630,7 +622,13 @@ export class ExtensionRunner {
 
     const cancelled = await this.dispatchHandlers(event.type, async (handler, ctx) => {
       const handlerResult = await handler(event, ctx);
-      if (this.isSessionBeforeEvent(event) && handlerResult) {
+      if (
+        (event.type === "session_before_switch" ||
+          event.type === "session_before_fork" ||
+          event.type === "session_before_compact" ||
+          event.type === "session_before_tree") &&
+        handlerResult
+      ) {
         result = handlerResult as SessionBeforeEventResult;
         if (result.cancel) {
           return result;

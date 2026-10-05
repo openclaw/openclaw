@@ -16,10 +16,7 @@ import {
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
-import {
-  fetchNpmPackageTargetStatus,
-  type NpmMetadataCommandRunner,
-} from "./update-check-package-target.js";
+import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
   readGitReceiptFetchTarget,
   readGitBranchFetchTarget,
@@ -554,18 +551,9 @@ async function checkDepsStatus(params: {
   };
 }
 
-export async function fetchNpmTagVersion(params: {
-  tag: string;
-  registryUrl?: string;
-  packageName?: string;
-  timeoutMs?: number;
-  spec?: string;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-  signal?: AbortSignal;
-}): Promise<NpmTagStatus> {
+export async function fetchNpmTagVersion(
+  params: Omit<Parameters<typeof fetchNpmPackageTargetStatus>[0], "target"> & { tag: string },
+): Promise<NpmTagStatus> {
   const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
     ...options,
@@ -579,17 +567,11 @@ export async function fetchNpmTagVersion(params: {
   };
 }
 
-export async function resolveNpmChannelTag(params: {
-  channel: UpdateChannel;
-  registryUrl?: string;
-  packageName?: string;
-  timeoutMs?: number;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-  signal?: AbortSignal;
-}): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
+export async function resolveNpmChannelTag(
+  params: Omit<Parameters<typeof fetchNpmTagVersion>[0], "tag" | "spec"> & {
+    channel: UpdateChannel;
+  },
+): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
   const { channel, ...options } = params;
   const channelTag = channelToNpmTag(channel);
   if (channel === "extended-stable") {

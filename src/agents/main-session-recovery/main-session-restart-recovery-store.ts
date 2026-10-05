@@ -206,7 +206,7 @@ export async function recoverStore(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ started: number; settled: number; failed: number; skipped: number }> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
-  const skip = (reason: MainSessionRecoverySkipReason) => {
+  const recordSkip = (reason: MainSessionRecoverySkipReason) => {
     result.skipped++;
     params.onSkipped?.(reason);
   };
@@ -215,7 +215,7 @@ export async function recoverStore(params: {
     if (shouldContinue()) {
       return false;
     }
-    skip("stopped");
+    recordSkip("stopped");
     return true;
   };
   const hasCurrentProcessOwner = createCurrentProcessOwnerLookup(params);
@@ -242,6 +242,12 @@ export async function recoverStore(params: {
   for (const { sessionKey, entry: loadedEntry } of entries.toSorted((a, b) =>
     a.sessionKey.localeCompare(b.sessionKey),
   )) {
+    const skip = (reason: MainSessionRecoverySkipReason) => {
+      recordSkip(reason);
+      mainSessionRecoveryLog.info(
+        `skipped interrupted main session: ${sessionKey} reason=${reason}`,
+      );
+    };
     if (stopped()) {
       return result;
     }

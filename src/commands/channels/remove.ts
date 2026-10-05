@@ -140,33 +140,24 @@ async function removeChannelAccount(
         initialValue: ids[0] ?? DEFAULT_ACCOUNT_ID,
       }),
     );
+  } else if (!rawChannel) {
+    runtime.error(
+      `Missing channel. Use ${formatCliCommand("openclaw channels remove --channel <name>")} or run ${formatCliCommand("openclaw channels status")} to inspect configured channels.`,
+    );
+    runtime.exit(1);
+    return;
+  }
 
-    const wantsDisable = await prompter.confirm({
-      message: `Disable ${channelLabel(selectedChannel)} account "${accountId}"? (keeps config)`,
+  if (useWizard || !deleteConfig) {
+    const confirm = prompter ?? createClackPrompter();
+    const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
+    const ok = await confirm.confirm({
+      message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
       initialValue: true,
     });
-    if (!wantsDisable) {
-      await prompter.outro("Cancelled.");
+    if (!ok) {
+      await prompter?.outro("Cancelled.");
       return;
-    }
-  } else {
-    if (!rawChannel) {
-      runtime.error(
-        `Missing channel. Use ${formatCliCommand("openclaw channels remove --channel <name>")} or run ${formatCliCommand("openclaw channels status")} to inspect configured channels.`,
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!deleteConfig) {
-      const confirm = createClackPrompter();
-      const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
-      const ok = await confirm.confirm({
-        message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
-        initialValue: true,
-      });
-      if (!ok) {
-        return;
-      }
     }
   }
 

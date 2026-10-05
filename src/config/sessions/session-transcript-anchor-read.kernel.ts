@@ -15,6 +15,7 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 export type SessionTranscriptAnchorSelection = {
   entryIds: readonly string[];
   afterSeq?: number;
+  includeHeader?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
   replayValidation?: Pick<
     SessionTranscriptWriteScope,
@@ -24,6 +25,7 @@ export type SessionTranscriptAnchorSelection = {
 
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
+  header?: unknown;
   contextValidated?: true;
   replayValidated?: "current" | "initial";
   tail?: {
@@ -77,6 +79,14 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         ...(context ? { contextValidated: true as const } : {}),
         ...(replayValidated ? { replayValidated } : {}),
       };
+      const header: Pick<SessionTranscriptAnchorFacts, "header"> = {};
+      if (selection.includeHeader) {
+        try {
+          header.header = readTranscriptHeaderFromDatabase(database, resolved.sessionId);
+        } catch {
+          // Lifecycle header metadata is best effort; reader admission and owner checks still fail closed.
+        }
+      }
       const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
       const readAnchor = (entryId: string) => {
         if (!anchors.has(entryId)) {
@@ -89,7 +99,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
       if (selection.afterSeq === undefined) {
-        return { anchors: selected, ...validated };
+        return { anchors: selected, ...validated, ...header };
       }
       const rows = loadTranscriptEventRowsAfterSeqInDatabase(
         database,
@@ -115,7 +125,12 @@ export function readSessionTranscriptAnchorFactsInDatabase(
           ...(anchor ? { anchor } : {}),
         });
       }
-      return { anchors: selected, ...validated, tail: { lastSeq: rows.at(-1)?.seq, entries } };
+      return {
+        anchors: selected,
+        ...validated,
+        ...header,
+        tail: { lastSeq: rows.at(-1)?.seq, entries },
+      };
     },
     { databaseLabel: database.path, operationLabel: "session transcript anchors read" },
   );

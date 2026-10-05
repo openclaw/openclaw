@@ -422,21 +422,15 @@ function hasCompatibleClientMetadata(original: PendingDevice, replacement: Pendi
   });
 }
 
-function resolveOriginalReplacementScopes(
-  original: PendingDevice,
-  paired: PairedDevice | undefined,
-): string[] {
-  const requestedScopes = normalizeDeviceAuthScopes(original.scopes);
-  const inferredOperatorScopes = resolvePendingOperatorApprovalScopes(original, paired);
-  return uniqueStrings([...requestedScopes, ...inferredOperatorScopes]);
-}
-
 function replacementScopesCoverOriginal(
   original: PendingDevice,
   replacement: PendingDevice,
   paired: PairedDevice | undefined,
 ): boolean {
-  const originalScopes = resolveOriginalReplacementScopes(original, paired);
+  const originalScopes = uniqueStrings([
+    ...normalizeDeviceAuthScopes(original.scopes),
+    ...resolvePendingOperatorApprovalScopes(original, paired),
+  ]);
   const replacementScopes = normalizeDeviceAuthScopes(replacement.scopes);
   const replacementScopeSet = new Set(replacementScopes);
   if (!originalScopes.every((scope) => replacementScopeSet.has(scope))) {
@@ -615,21 +609,24 @@ function formatAccessSummary(access: DevicePairingAccessSummary | null): string 
   return `roles: ${roles}; scopes: ${scopes}`;
 }
 
-function formatPendingApprovalKind(kind: PendingDeviceApprovalKind): string {
-  switch (kind) {
-    case "new-pairing":
-      return "new pairing";
-    case "role-upgrade":
-      return "role upgrade";
-    case "scope-upgrade":
-      return "scope upgrade";
-    case "re-approval":
-      return "re-approval";
-  }
-  const exhaustiveKind: never = kind;
-  void exhaustiveKind;
-  throw new Error("unsupported pending approval kind");
-}
+const PENDING_APPROVAL_COPY: Record<PendingDeviceApprovalKind, { label: string; note: string }> = {
+  "new-pairing": {
+    label: "new pairing",
+    note: "First-time device pairing request.",
+  },
+  "role-upgrade": {
+    label: "role upgrade",
+    note: "Already paired. Requested role exceeds the current approval, so reconnect stays blocked until you approve this upgrade.",
+  },
+  "scope-upgrade": {
+    label: "scope upgrade",
+    note: "Already paired. Requested scopes exceed the current approval, so reconnect stays blocked until you approve this upgrade.",
+  },
+  "re-approval": {
+    label: "re-approval",
+    note: "Already paired. Approval-bound device details changed, so OpenClaw created a fresh request instead of silently reusing the old approval.",
+  },
+};
 
 function indexPairedDevices(paired: PairedDevice[] | undefined): Map<string, PairedDevice> {
   const out = new Map<string, PairedDevice>();
@@ -730,7 +727,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
             req,
             lookupPairedDevice(pairedByDeviceId, req),
           );
-          const statusParts = [formatPendingApprovalKind(approval.kind)];
+          const statusParts = [PENDING_APPROVAL_COPY[approval.kind].label];
           if (req.isRepair) {
             statusParts.push("repair");
           }
@@ -935,26 +932,7 @@ export async function runDevicesApproveCommand(
     if (req.remoteIp) {
       defaultRuntime.log(`  IP:     ${sanitizeForLog(req.remoteIp)}`);
     }
-    switch (approval.kind) {
-      case "scope-upgrade":
-        defaultRuntime.log(
-          "  Note:   Already paired. Requested scopes exceed the current approval, so reconnect stays blocked until you approve this upgrade.",
-        );
-        break;
-      case "role-upgrade":
-        defaultRuntime.log(
-          "  Note:   Already paired. Requested role exceeds the current approval, so reconnect stays blocked until you approve this upgrade.",
-        );
-        break;
-      case "re-approval":
-        defaultRuntime.log(
-          "  Note:   Already paired. Approval-bound device details changed, so OpenClaw created a fresh request instead of silently reusing the old approval.",
-        );
-        break;
-      case "new-pairing":
-        defaultRuntime.log("  Note:   First-time device pairing request.");
-        break;
-    }
+    defaultRuntime.log(`  Note:   ${PENDING_APPROVAL_COPY[approval.kind].note}`);
     defaultRuntime.error(`Approve this exact request with: ${approveCommand}`);
     if (authReminder) {
       defaultRuntime.error(authReminder);

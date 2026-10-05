@@ -14,10 +14,11 @@ import {
 import {
   applySessionPatchProjection,
   preflightSessionTranscriptForManualCompact,
-  readTranscriptStatsSync,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -31,10 +32,8 @@ import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
-import {
-  resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "../session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -43,11 +42,7 @@ import {
   preflightGatewaySessionCompaction,
   runGatewaySessionCompaction,
 } from "./sessions-compaction-runner.js";
-import {
-  emitSessionOperation,
-  loadAccessorSessionEntryForGatewayTarget,
-  requireSessionKey,
-} from "./sessions-shared.js";
+import { emitSessionOperation, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -72,19 +67,19 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     }
     const requestedAgentId = requestedAgent.agentId;
     const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
-    const target = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key,
-      exactRead: true,
-      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-    });
-    const storePath = target.storePath;
     let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     const assertRequestCurrent = () => {
       requestAuthority.assertCurrent();
       capturedOperator?.authority.assertCurrent();
     };
     try {
+      const target = await resolveGatewaySessionStoreTargetInWorker({
+        cfg,
+        key,
+        agentId: requestedAgentId,
+        assertActive: assertRequestCurrent,
+      });
+      const storePath = target.storePath;
       if (maxLines === undefined) {
         capturedOperator = await captureGatewayOperatorRunAuthority({
           client,
@@ -152,6 +147,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         const trimPreflight = await preflightSessionTranscriptForManualCompact(transcriptScope, {
           maxLines,
         });
+        assertRequestCurrent();
         if (!trimPreflight.compacted) {
           respondNotCompacted(
             "kept" in trimPreflight ? { kept: trimPreflight.kept } : { reason: "no transcript" },
@@ -159,7 +155,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           return;
         }
       } else {
-        const transcriptStats = readTranscriptStatsSync(transcriptScope);
+        const transcriptStats = await readTranscriptStatsAsync(transcriptScope);
+        assertRequestCurrent();
         if (transcriptStats.eventCount === 0) {
           respondNotCompacted({ reason: "no transcript" });
           return;
@@ -167,12 +164,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       }
 
       const lifecycleRevision = entry.lifecycleRevision;
-      const readCurrentEntry = () => {
-        const latest = loadAccessorSessionEntryForGatewayTarget({
-          key,
-          cfg,
-          agentId: requestedAgentId,
-        }).entry;
+      const readCurrentEntry = async () => {
+        const latest = await readSessionEntryReadOnlyInWorker(
+          { ...transcriptScope, readConsistency: "latest" },
+          assertRequestCurrent,
+        );
+        assertRequestCurrent();
         return latest &&
           latest.sessionId === sessionId &&
           latest.lifecycleRevision === lifecycleRevision &&
@@ -195,7 +192,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         signal: abortSignal,
         prepare: async () => {
           assertRequestCurrent();
-          const latestEntry = readCurrentEntry();
+          const latestEntry = await readCurrentEntry();
           if (!latestEntry) {
             admissionError = sessionChangedError();
             return;
@@ -255,7 +252,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             respondNotCompacted({ ok: false, reason: compactionNoopReason });
             return;
           }
-          const latestEntry = readCurrentEntry();
+          const latestEntry = await readCurrentEntry();
           if (!latestEntry) {
             respond(false, undefined, sessionChangedError());
             return;
@@ -295,7 +292,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const transcriptStats = readTranscriptStatsSync(transcriptScope);
+          const transcriptStats = await readTranscriptStatsAsync(transcriptScope);
+          assertRequestCurrent();
           if (transcriptStats.eventCount === 0) {
             respondNotCompacted({ reason: "no transcript" });
             return;

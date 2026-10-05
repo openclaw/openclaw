@@ -107,13 +107,6 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts: { ...opts, ...probeBudget },
       runtime,
-      includeSecurityAudit: opts.all === true || opts.deep === true,
-      includePluginCompatibility: opts.all === true,
-      suppressHealthErrors: true,
-      scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
-        await import("./status.scan.fast-json.js").then(({ scanStatusJsonFast }) =>
-          scanStatusJsonFast(scanOpts, runtimeForScan),
-        ),
     });
     return;
   }

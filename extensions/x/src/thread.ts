@@ -1,4 +1,5 @@
 import type { XApiClient, XPage, XPost, XUser } from "./api.js";
+import { XBudgetExceededError } from "./spend.js";
 
 function comparePosts(a: XPost, b: XPost): number {
   return BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0;
@@ -32,48 +33,57 @@ export async function assembleXThread(options: {
     }
   }
 
-  let nextToken: string | undefined;
-  const seenTokens = new Set<string>();
-  do {
-    const page = await options.api.searchConversation({
-      conversationId: options.mention.conversation_id,
-      nextToken,
-      signal: options.signal,
-    });
-    merge(page);
-    nextToken = page.meta.next_token;
-    if (nextToken && seenTokens.has(nextToken)) {
-      throw new Error("X thread search pagination repeated a token");
-    }
-    if (nextToken) {
-      seenTokens.add(nextToken);
-    }
-  } while (nextToken && posts.size < maxPosts);
+  let budgetTruncated = false;
+  try {
+    let nextToken: string | undefined;
+    const seenTokens = new Set<string>();
+    do {
+      const page = await options.api.searchConversation({
+        conversationId: options.mention.conversation_id,
+        maxPosts: maxPosts - posts.size,
+        nextToken,
+        signal: options.signal,
+      });
+      merge(page);
+      nextToken = page.meta.next_token;
+      if (nextToken && seenTokens.has(nextToken)) {
+        throw new Error("X thread search pagination repeated a token");
+      }
+      if (nextToken) {
+        seenTokens.add(nextToken);
+      }
+    } while (nextToken && posts.size < maxPosts);
 
-  if (!users.has(options.mention.author_id)) {
-    merge(await options.api.getPosts([options.mention.id], options.signal));
-  }
-  await fetchPosts([options.mention.conversation_id]);
-  let ancestor: XPost | undefined = options.mention;
-  // The root is fetched explicitly; bound ancestor reads to the configured context budget.
-  for (let depth = 0; ancestor && depth < maxPosts; depth++) {
-    const parentId = ancestor.referenced_tweets?.find(
-      (reference) => reference.type === "replied_to",
-    )?.id;
-    if (!parentId || parentId === ancestor.id) {
-      break;
+    if (!users.has(options.mention.author_id)) {
+      merge(await options.api.getPosts([options.mention.id], options.signal));
     }
-    await fetchPosts([parentId]);
-    ancestor = posts.get(parentId);
+    await fetchPosts([options.mention.conversation_id]);
+    let ancestor: XPost | undefined = options.mention;
+    // The root is fetched explicitly; bound ancestor reads to the configured context budget.
+    for (let depth = 0; ancestor && depth < maxPosts; depth++) {
+      const parentId = ancestor.referenced_tweets?.find(
+        (reference) => reference.type === "replied_to",
+      )?.id;
+      if (!parentId || parentId === ancestor.id) {
+        break;
+      }
+      await fetchPosts([parentId]);
+      ancestor = posts.get(parentId);
+    }
+    await fetchPosts(
+      [...posts.values()].flatMap(
+        (post) =>
+          post.referenced_tweets
+            ?.filter((reference) => reference.type === "quoted")
+            .map((reference) => reference.id) ?? [],
+      ),
+    );
+  } catch (error) {
+    if (!(error instanceof XBudgetExceededError)) {
+      throw error;
+    }
+    budgetTruncated = true;
   }
-  await fetchPosts(
-    [...posts.values()].flatMap(
-      (post) =>
-        post.referenced_tweets
-          ?.filter((reference) => reference.type === "quoted")
-          .map((reference) => reference.id) ?? [],
-    ),
-  );
 
   const root = posts.get(options.mention.conversation_id);
   const retained = new Map<string, XPost>();
@@ -115,7 +125,9 @@ export async function assembleXThread(options: {
           .map((part) => `> ${part}`)
           .join("\n"),
       )
-      .join("\n")}\n\nReply to the triggering mention.`,
+      .join(
+        "\n",
+      )}${budgetTruncated ? "\n[thread context truncated by budget]" : ""}\n\nReply to the triggering mention.`,
     label: `${handle(labelPost)}: ${labelPost.text.replace(/\s+/g, " ").slice(0, 80)}`,
     posts: selected,
     users: [...users.values()],

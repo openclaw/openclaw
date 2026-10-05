@@ -83,15 +83,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     activeCliTools,
     () => cliLoopbackCorrelationOverflowed,
   );
-  const messagingToolSentTexts: string[] = [];
-  const messagingToolSentTextKeys = new Set<string>();
-  const messagingToolSentMediaUrls: string[] = [];
-  const messagingToolSentMediaUrlKeys = new Set<string>();
-  const messagingToolSentTargets: MessagingToolSend[] = [];
-  const messagingToolSentTargetKeys = new Set<string>();
+  const messagingToolSentTexts = new Set<string>();
+  const messagingToolSentMediaUrls = new Set<string>();
+  const messagingToolSentTargets = new Map<string, MessagingToolSend>();
   const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
-  const toolMediaUrls: string[] = [];
-  const toolMediaUrlKeys = new Set<string>();
+  const toolMediaUrls = new Set<string>();
   let toolAudioAsVoice = false;
   let toolTrustedLocalMedia = false;
   const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
@@ -275,16 +271,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       ? resolveMessageToolSourceReplyFinal(toolArgs)
       : undefined;
     if (isMessagingSend) {
-      appendUniqueCliMessagingEvidence(
-        messagingToolSentTexts,
-        messagingToolSentTextKeys,
-        content.text ? [content.text] : [],
-      );
-      appendUniqueCliMessagingEvidence(
-        messagingToolSentMediaUrls,
-        messagingToolSentMediaUrlKeys,
-        content.mediaUrls ?? [],
-      );
+      appendUniqueCliMessagingEvidence(messagingToolSentTexts, content.text ? [content.text] : []);
+      appendUniqueCliMessagingEvidence(messagingToolSentMediaUrls, content.mediaUrls ?? []);
     }
     if (deliveredCurrentSourceReply) {
       didDeliverSourceReplyViaMessageTool = true;
@@ -310,17 +298,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
     const evidenceKey = buildMessagingToolSendEvidenceKey(targetWithContent);
-    if (messagingToolSentTargetKeys.has(evidenceKey)) {
+    if (messagingToolSentTargets.has(evidenceKey)) {
       return;
     }
-    if (messagingToolSentTargets.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const removed = messagingToolSentTargets.shift();
-      if (removed) {
-        messagingToolSentTargetKeys.delete(buildMessagingToolSendEvidenceKey(removed));
+    if (messagingToolSentTargets.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+      for (const oldest of messagingToolSentTargets.keys()) {
+        messagingToolSentTargets.delete(oldest);
+        break;
       }
     }
-    messagingToolSentTargets.push(targetWithContent);
-    messagingToolSentTargetKeys.add(evidenceKey);
+    messagingToolSentTargets.set(evidenceKey, targetWithContent);
   };
   const isPreparedInternalSourceReply = async (call: McpLoopbackToolCallStart) => {
     if (
@@ -476,7 +463,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           const mediaUrls = artifact
             ? filterToolResultMediaUrls(toolName, artifact.mediaUrls, call.result)
             : [];
-          appendUniqueCliMessagingEvidence(toolMediaUrls, toolMediaUrlKeys, mediaUrls);
+          appendUniqueCliMessagingEvidence(toolMediaUrls, mediaUrls);
           if (mediaUrls.length > 0) {
             toolAudioAsVoice ||= artifact?.audioAsVoice === true;
             toolTrustedLocalMedia ||= artifact?.trustedLocalMedia === true;
@@ -646,11 +633,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool,
     sourceReplyDelivered,
-    messagingToolSentTexts,
-    messagingToolSentMediaUrls,
-    messagingToolSentTargets,
+    messagingToolSentTexts: [...messagingToolSentTexts],
+    messagingToolSentMediaUrls: [...messagingToolSentMediaUrls],
+    messagingToolSentTargets: [...messagingToolSentTargets.values()],
     messagingToolSourceReplyPayloads,
-    toolMediaUrls,
+    toolMediaUrls: [...toolMediaUrls],
     toolAudioAsVoice,
     toolTrustedLocalMedia,
     acceptedSessionSpawns,

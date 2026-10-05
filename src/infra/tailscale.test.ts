@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runExec } from "../process/exec.js";
 import { captureEnv } from "../test-utils/env.js";
 import { waitForTailscaleBackendReady } from "./tailscale-backend-ready.js";
 import * as tailscale from "./tailscale.js";
@@ -45,7 +46,7 @@ function expectExecCall(
   expect(call[1]).toEqual(args);
   if (options) {
     expect(call).toHaveLength(3);
-    expect(call[2]).toEqual(options);
+    expect(call[2]).toEqual(expect.objectContaining(options));
   } else {
     expect(call).toHaveLength(2);
   }
@@ -91,6 +92,28 @@ describe("tailscale helpers", () => {
   });
 
   it.each([
+    ["ordinary", getTailnetHostname],
+    ["post-Serve", getTailnetHostnameAfterServe],
+  ] as const)("reads the hostname from a large %s status response", async (_name, lookup) => {
+    const exec: typeof runExec = (_command, _args, options) =>
+      runExec(
+        process.execPath,
+        [
+          "-e",
+          `console.log(JSON.stringify({
+            Self: { DNSName: "large.tailnet.ts.net." },
+            Peer: Object.fromEntries(Array.from({ length: 12000 }, (_, i) => [
+              "peer" + i, { DNSName: "peer-" + i + ".tailnet.ts.net.", Online: true }
+            ]))
+          }))`,
+        ],
+        options,
+      );
+
+    await expect(lookup(exec)).resolves.toBe("large.tailnet.ts.net");
+  });
+
+  it.each([
     [new Error("Failed to connect to local Tailscale daemon; not running?")],
     [new Error("failed to connect to local Tailscale service; is Tailscale running?")],
     [
@@ -118,12 +141,10 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenCalledTimes(2);
     expectExecCall(exec, 1, tailscaleBin, ["status", "--json"], {
       timeoutMs: 5000,
-      maxBuffer: 400_000,
       logOutput: false,
     });
     expectExecCall(exec, 2, tailscaleBin, ["status", "--json"], {
       timeoutMs: 5000,
-      maxBuffer: 400_000,
       logOutput: false,
     });
   });
@@ -238,7 +259,7 @@ describe("tailscale helpers", () => {
   describe("waitForTailscaleBackendReady", () => {
     const status = (BackendState: string) => ({ stdout: JSON.stringify({ BackendState }) });
     const statusArgs = ["status", "--json"];
-    const execOptions = { timeoutMs: 5000, maxBuffer: 400_000, logOutput: false };
+    const execOptions = { timeoutMs: 5000, logOutput: false };
 
     it("waits through boot-time backend states and announces each once", async () => {
       const exec = vi

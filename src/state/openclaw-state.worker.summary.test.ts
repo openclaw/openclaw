@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readConfigHealthStateInDatabase } from "../config/io.health-state.kernel.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
@@ -257,16 +258,10 @@ it.each(["kv", "health"] as const)(
         reopened.execute({ type: "pluginState.lookup", input: key }),
       ),
     ).toEqual({ ok: true, value: { value: 42 } });
-    expect(
-      runWithSqliteWorkerStateContext(reopenedContext, () =>
-        reopened.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
-      ),
-    ).toMatchObject({
-      state: {
-        entries: {
-          [configPath]: {
-            lastObservedSuspiciousSignature: firstToClose === "kv" ? "second" : "first",
-          },
+    expect(readConfigHealthStateInDatabase(openOpenClawStateDatabase().db)).toMatchObject({
+      entries: {
+        [configPath]: {
+          lastObservedSuspiciousSignature: firstToClose === "kv" ? "second" : "first",
         },
       },
     });
@@ -293,13 +288,16 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(first).add(second);
-    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.read");
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("plugins.metadata.read");
     await second[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
     expect(
       runWithSqliteWorkerStateContext(context, () =>
-        first.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
+        first.execute({
+          type: "plugins.metadata.read",
+          input: { selector: "bundled-discovery", artifactPreservingReadOnly: false },
+        }),
       ),
-    ).toEqual({ state: { entries: {} }, basis: {} });
+    ).toBeUndefined();
     expect(readFileSync(databasePath)).toEqual(initialBytes);
 
     const scope = "tests/health-native-borrow";
@@ -345,20 +343,14 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(reopened);
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.read");
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("plugins.metadata.read");
     const reopenedDatabase = openOpenClawStateDatabase();
     if (operation === "config.health.patch") {
-      expect(
-        runWithSqliteWorkerStateContext(reopenedContext, () =>
-          reopened.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
-        ),
-      ).toMatchObject({
-        state: {
-          entries: {
-            "/first.json": { lastObservedSuspiciousSignature: "first" },
-            "/second.json": { lastObservedSuspiciousSignature: "second" },
-            "/third.json": { lastObservedSuspiciousSignature: "third" },
-          },
+      expect(readConfigHealthStateInDatabase(reopenedDatabase.db)).toMatchObject({
+        entries: {
+          "/first.json": { lastObservedSuspiciousSignature: "first" },
+          "/second.json": { lastObservedSuspiciousSignature: "second" },
+          "/third.json": { lastObservedSuspiciousSignature: "third" },
         },
       });
     } else {

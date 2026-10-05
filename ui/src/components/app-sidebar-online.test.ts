@@ -252,6 +252,7 @@ describe("sidebar people workload", () => {
       excludeSubagents: true,
       excludeCron: true,
       excludeSystem: true,
+      excludeDock: true,
     });
 
     sidebar.setSessionOwnerFilter("cy");

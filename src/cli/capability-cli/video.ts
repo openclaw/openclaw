@@ -4,6 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -93,7 +94,6 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const {
-          parseOptionalFiniteNumber,
           parseOptionalTimeoutMs,
           resolveCapabilityAgentOption,
           requireProviderModelOverride,
@@ -104,7 +104,10 @@ export function registerVideoCapabilityCommands(capability: Command): void {
         const model = opts.model as string | undefined;
         const output = opts.output as string | undefined;
         const resolution = parseVideoOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution");
-        const durationSeconds = parseOptionalFiniteNumber(opts.duration, "--duration");
+        const durationSeconds = parseStrictFiniteNumber(opts.duration);
+        if (opts.duration !== undefined && durationSeconds === undefined) {
+          throw new Error("--duration must be a finite number");
+        }
         const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
         const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
         const { generateVideo } = await import("../../video-generation/runtime.js");
@@ -268,15 +271,15 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     videoCommand,
     "List video generation and description providers",
     async (cfg, agentId) => {
-      const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-        await import("./shared.js");
+      const { providerHasGenericConfig } = await import("./shared.js");
+      const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
       const { listRuntimeVideoGenerationProviders } =
         await import("../../video-generation/runtime.js");
       const { buildMediaUnderstandingRegistry } =
         await import("../../media-understanding/provider-registry.js");
-      const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
+      const selectedGenerationProvider = resolveModelRefOverride(
         resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
-      );
+      ).provider;
       return {
         generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
           available: true,

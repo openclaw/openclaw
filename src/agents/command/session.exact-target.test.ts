@@ -128,7 +128,7 @@ it.each(["work", "dashboard:incognito-work"])(
       }
       const list = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
       try {
-        const resolved = resolveSession({ cfg, sessionKey });
+        const resolved = await resolveSession({ cfg, sessionKey });
         expect(resolved).toMatchObject({
           sessionId: entry.sessionId,
           sessionKey,
@@ -165,7 +165,7 @@ it.each(["agent:main:assist:01M21F31SCNCCQQ3N4X43AY420", "agent:main:signal:grou
         session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
       } satisfies OpenClawConfig;
 
-      const first = resolveSession({ cfg, sessionKey });
+      const first = await resolveSession({ cfg, sessionKey });
       expect(first.sessionEntry).toBeUndefined();
       expect(first.isNewSession).toBe(true);
       await sessionAccessor.replaceSessionEntry(
@@ -173,7 +173,7 @@ it.each(["agent:main:assist:01M21F31SCNCCQQ3N4X43AY420", "agent:main:signal:grou
         { sessionId: first.sessionId, updatedAt: Date.now(), sessionStartedAt: Date.now() },
       );
 
-      const second = resolveSession({ cfg, sessionKey });
+      const second = await resolveSession({ cfg, sessionKey });
       expect(second.sessionKey).toBe(sessionKey);
       expect(second.sessionId).toBe(first.sessionId);
       expect(second.isNewSession).toBe(false);

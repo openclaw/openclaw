@@ -2,6 +2,41 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   {
+    code: "channel-inbound-sync-envelope-timestamps",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-10-05",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await readSessionUpdatedAtAsync, createChannelInboundEnvelopeBuilderAsync, or resolveInboundSessionEnvelopeContextAsync at each message's formatting boundary. Resolve routes through resolveAgentRoute and use dispatchInboundDirectDm. Retain the synchronous signatures and callback timing shipped in 2026.9.8 until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#inbound-envelope-timestamps",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime.readSessionUpdatedAt",
+      "api.runtime.channel.session.readSessionUpdatedAt",
+      "openclaw/plugin-sdk/channel-inbound.createChannelInboundEnvelopeBuilder",
+      "openclaw/plugin-sdk/channel-inbound.resolveChannelInboundRouteEnvelope",
+      "openclaw/plugin-sdk/channel-inbound.resolveInboundSessionEnvelopeContext",
+      "openclaw/plugin-sdk/channel-inbound.dispatchInboundDirectDmWithRuntime",
+      "openclaw/plugin-sdk/inbound-envelope.createInboundEnvelopeBuilder",
+      "openclaw/plugin-sdk/inbound-envelope.resolveInboundRouteEnvelopeBuilder",
+      "openclaw/plugin-sdk/inbound-envelope.resolveInboundRouteEnvelopeBuilderWithRuntime",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/shipped-channel-compat.test.ts",
+      "src/channels/inbound-event/envelope.test.ts",
+      "src/channels/inbound-event/envelope.worker.test.ts",
+      "src/plugin-sdk/direct-dm.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Bundled channels prepare activity timestamps through the existing session reader while released plugins retain their synchronous envelope callbacks. Stored data, schemas, retention, and update behavior are unchanged.",
+  },
+  {
     code: "reply-run-start-unprepared-transcript",
     status: "deprecated",
     owner: "agent-runtime",
@@ -48,6 +83,29 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Plugins can await full-fidelity SessionManager context reads and asynchronous consumers. Source validation follows consumption; the synchronous reader remains available until the next Plugin SDK major. Storage and update behavior are unchanged.",
+  },
+  {
+    code: "session-reset-freshness-sync-read",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-10-05",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await runtime.channel.session.resolveEntryResetFreshnessAsync. The released synchronous resolveEntryResetFreshness method retains its parameters and result until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration#session-reset-freshness",
+    surfaces: ["api.runtime.channel.session.resolveEntryResetFreshness"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-reset-freshness-compat.test.ts",
+      "src/config/sessions/entry-freshness.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Channel plugins can await session reset freshness through the transcript worker. Existing plugins retain the synchronous method and reset policy; stored data and update behavior are unchanged.",
   },
   {
     code: "agent-end-sync-side-effects",
