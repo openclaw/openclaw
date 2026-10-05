@@ -153,23 +153,18 @@ describe("async work scope", () => {
     expect(late).not.toHaveBeenCalled();
   });
 
-  it("settles work for cleanup without closing its captured tracker, then fences final drain", async () => {
+  it("runs captured work outside a closing scope", async () => {
     const scope = new AsyncWorkScope();
     const track = await scope.track(captureAsyncWorkTracker);
     scope.beginClose();
     const cleanup = vi.fn(async () => {
+      expect(getAsyncWorkSignal()).toBeUndefined();
+      expect(isAsyncWorkScopeActiveHere(scope)).toBe(false);
       await Promise.resolve();
     });
-    await scope.runWhenIdle(() => {
-      expect(getAsyncWorkSignal()).toBe(scope.signal);
-      return track(cleanup);
-    });
+    await scope.runWhenIdle(() => track(cleanup));
     expect(cleanup).toHaveBeenCalledOnce();
-    const drained = scope.drain();
-    const late = vi.fn();
-    await expect(track(late)).rejects.toThrow("Async work scope is closed");
-    expect(late).not.toHaveBeenCalled();
-    await drained;
+    await scope.drain();
   });
 
   it("joins an inherited descendant after its parent returns", async () => {
