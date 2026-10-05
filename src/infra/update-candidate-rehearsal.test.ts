@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObject } from "../config/validation.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import type { HealthCheck } from "../flows/health-checks.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -103,3 +104,44 @@ it.each(["token", "password"] as const)(
     }
   },
 );
+
+it("keeps workspace-confined avatars as valid as the serving config", async () => {
+  const root = tempDirs.make("candidate-avatar-");
+  await materializeUpdateCandidateStateWorker(root);
+  const workspace = (id: string) => path.join(root, "workspaces", id);
+  const config: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: {
+        main: { workspace: workspace("main"), identity: { avatar: `${workspace("main")}/a.png` } },
+        relative: { workspace: workspace("relative"), identity: { avatar: "avatars/a.png" } },
+        // Explicit local syntax must not be rewritten into a home or URI-like value.
+        tilde: { workspace: workspace("tilde"), identity: { avatar: "./~a.png" } },
+        colon: { workspace: workspace("colon"), identity: { avatar: "./custom:a.png" } },
+        absoluteTilde: {
+          workspace: workspace("absoluteTilde"),
+          identity: { avatar: `${workspace("absoluteTilde")}/~a.png` },
+        },
+        remote: { identity: { avatar: "https://example.invalid/a.png" } },
+        escaped: { workspace: workspace("escaped"), identity: { avatar: `${root}/a.png` } },
+      },
+    },
+  };
+  const issuePaths = (cfg: unknown) => {
+    const result = validateConfigObject(cfg);
+    return result.ok ? [] : result.issues.map((issue) => issue.path);
+  };
+  expect(issuePaths(config)).toEqual(["agents.entries.escaped.identity.avatar"]);
+
+  const rehearsal = await prepareUpdateCandidateRehearsal({
+    config,
+    stateDir: path.join(root, "source"),
+    candidateRoot: root,
+  });
+  try {
+    const copied: unknown = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+    expect(issuePaths(copied)).toEqual(issuePaths(config));
+  } finally {
+    await rehearsal.cleanup();
+  }
+});
