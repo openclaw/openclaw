@@ -81,6 +81,13 @@ const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-ha
 // Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
 const bunCompatibleScopedOwners = new Map([
   [
+    "test/vitest/vitest.extension-database-workers.config.ts",
+    {
+      dir: "extensions",
+      files: ["extensions/team-reports/src/render/theme.test.ts"],
+    },
+  ],
+  [
     "test/vitest/vitest.extension-whatsapp.config.ts",
     {
       dir: "extensions",
@@ -120,6 +127,7 @@ const bunCompatibleScopedOwners = new Map([
       dir: "src/plugins",
       files: [
         "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/provider-discovery.capture-lifetime.test.ts",
         "src/plugins/sdk-alias.test.ts",
       ],
     },
@@ -162,7 +170,10 @@ const bunCompatibleScopedOwners = new Map([
     "test/vitest/vitest.infra.config.ts",
     {
       dir: "",
-      files: ["src/infra/update-managed-service-handoff-reclamation.test.ts"],
+      files: [
+        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/infra/update-managed-service-handoff-reclamation.test.ts",
+      ],
     },
   ],
   [
@@ -222,6 +233,7 @@ const bunCompatibleScopedOwners = new Map([
 ]);
 const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
 const bunCompatibleUnitFiles = new Set([
+  "packages/normalization-core/src/grapheme.test.ts",
   "src/library.test.ts",
   "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts",
   "src/worker/worker-connection-closing-window.test.ts",
@@ -258,12 +270,7 @@ const runtimePartitions = new Map<
     {
       files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
-        // The pinned WebKit still misidentifies UTF-16 surrogate-pair segment boundaries.
-        "packages/markdown-core/src/render-aware-chunking.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
-        // Asserts V8 used_heap_size deltas, cachedDataVersionTag stability, explicit GC,
-        // and Worker resourceLimits.maxOldGenerationSizeMb propagation.
-        "src/infra/worker-task-pool.memory.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",
