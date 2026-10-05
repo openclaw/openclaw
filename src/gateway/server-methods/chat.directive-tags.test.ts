@@ -1474,7 +1474,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(context.addChatRun).toHaveBeenCalledOnce();
       expect(operation.result).toEqual({ kind: "completed" });
       expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
-      expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+      expect(mockState.lastMessageInjectionDisposition).toBeUndefined();
     },
   );
 
@@ -2222,7 +2222,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+    expect(mockState.lastMessageInjectionDisposition).toBeUndefined();
     expect(staleQueue).not.toHaveBeenCalled();
     expect(staleCancel).not.toHaveBeenCalled();
     expect(readPersistedUserMessages()).toHaveLength(1);
