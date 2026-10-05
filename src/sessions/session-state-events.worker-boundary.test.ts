@@ -1,7 +1,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -12,6 +16,7 @@ import {
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -27,6 +32,7 @@ import {
   recordSubagentSpawned,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
+  sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
 import {
   child,
@@ -274,6 +280,99 @@ it("preserves consumed events across a same-store resolver handoff while acknowl
     release.resolve();
     await blocking;
     await draining;
+  }
+});
+
+it("rechecks acknowledged, rebound, and advanced cursors after sweep discovery", async ({
+  signal,
+}) => {
+  const database = createDatabaseOptions();
+  await upsertSessionEntryCore(
+    { sessionKey: nestedWatcher, env: database.env },
+    { sessionId: "sweep-watcher", updatedAt: 1 },
+  );
+  const storePath = resolvePhysicalSessionStorePath({
+    sessionKey: nestedWatcher,
+    env: database.env,
+  });
+  publishSystemEventStoreResolver(() => storePath);
+  const acked = `${child}-acked`;
+  const rebound = `${child}-rebound`;
+  const advanced = `${child}-advanced`;
+  const { db } = openOpenClawStateDatabase(database);
+  const insert = db.prepare(`
+    INSERT INTO session_watch_cursors
+      (watcher_session_key, target_session_key, watcher_store_path, last_seen_sequence,
+       notified_sequence, material_sequence, updated_at)
+    VALUES (?, ?, ?, 1, 3, 3, ?)
+  `);
+  for (const target of [acked, rebound, advanced]) {
+    insert.run(nestedWatcher, target, storePath, Date.now());
+  }
+  const discovered = createDeferred();
+  const release = createDeferred();
+  const executeRead = stateReads.executeExistingOpenClawStateRead;
+  const read = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementation(async (...args) => {
+      const result = await executeRead(...args);
+      if (args[1].type === "sessionState.pendingNotices") {
+        discovered.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+  const sweeping = sweepSessionStateWatchNotices(database);
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        discovered.promise,
+        sweeping,
+        "Notice sweep settled before reading pending cursors",
+      ),
+      signal,
+    );
+    await acknowledgeSessionStateNotices(
+      nestedWatcher,
+      [{ targetSessionKey: acked, watcherStorePath: storePath }],
+      database,
+    );
+    db.prepare(
+      `UPDATE session_watch_cursors
+       SET watcher_store_path = ?, last_seen_sequence = 5,
+           notified_sequence = 11, material_sequence = 13
+       WHERE watcher_session_key = ? AND target_session_key = ?`,
+    ).run(`${storePath}.replacement`, nestedWatcher, rebound);
+    db.prepare(
+      `UPDATE session_watch_cursors SET material_sequence = 7
+       WHERE watcher_session_key = ? AND target_session_key = ?`,
+    ).run(nestedWatcher, advanced);
+    release.resolve();
+    await sweeping;
+
+    expect(readCursor(database, nestedWatcher, acked)).toEqual({
+      last_seen_sequence: 3,
+      notified_sequence: 3,
+      material_sequence: 3,
+    });
+    expect(readCursor(database, nestedWatcher, rebound)).toEqual({
+      last_seen_sequence: 5,
+      notified_sequence: 11,
+      material_sequence: 13,
+    });
+    expect(readCursor(database, nestedWatcher, advanced)).toEqual({
+      last_seen_sequence: 1,
+      notified_sequence: 7,
+      material_sequence: 7,
+    });
+    const queued = peekSystemEventEntries(nestedWatcher);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.text).toContain(`Session "${advanced}" changed`);
+    expect(queued[0]?.text).toContain("changesSince 1");
+  } finally {
+    release.resolve();
+    await sweeping;
+    read.mockRestore();
   }
 });
 

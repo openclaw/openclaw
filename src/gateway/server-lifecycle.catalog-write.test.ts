@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import { refreshRemoteModelCatalog } from "../model-catalog/remote-refresh.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
+import { createHookRunner } from "../plugins/hooks.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { runGatewayStartupObservers } from "./server-startup-observers.js";
 
 it("settles an accepted catalog refresh before Gateway close retires its state writer", async ({
   signal,
@@ -93,6 +98,111 @@ it("settles an accepted catalog refresh before Gateway close retires its state w
   } finally {
     release.resolve();
     await Promise.allSettled([refreshing, closing]);
+    vi.restoreAllMocks();
+    await fixture.cleanup();
+  }
+});
+
+it("joins accepted startup notice persistence after the Gateway close prelude aborts", async ({
+  signal,
+}) => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-notice-sweep-close");
+  const accepted = createDeferredCore();
+  const release = createDeferredCore();
+  const parentClosed = createDeferredCore();
+  let sweeping: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
+  try {
+    const port = await fixture.reservePort();
+    const server = await fixture.start(port);
+    const kernel = fixture.kernels.get(port);
+    assert(kernel);
+    const watcher = "agent:main:subagent:startup-notice-watcher";
+    const target = "agent:main:subagent:startup-notice-target";
+    await upsertSessionEntryCore(
+      { sessionKey: watcher, env: fixture.state.env },
+      { sessionId: "startup-notice-watcher", updatedAt: Date.now() },
+    );
+    const options = { env: fixture.state.env };
+    const shared = openOpenClawStateDatabase(options).db;
+    shared
+      .prepare(
+        `INSERT INTO session_watch_cursors
+         (watcher_session_key, target_session_key, watcher_store_path, last_seen_sequence,
+          notified_sequence, material_sequence, updated_at)
+         VALUES (?, ?, ?, 1, 2, 3, ?)`,
+      )
+      .run(
+        watcher,
+        target,
+        resolvePhysicalSessionStorePath({ sessionKey: watcher, env: fixture.state.env }),
+        Date.now(),
+      );
+    const run = stateWorker.runOpenClawStateWorkerOperation;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+      (context, operation, operationOptions) =>
+        run(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                if (command.type === "sessionState.sweep") {
+                  accepted.resolve();
+                  await release.promise;
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          operationOptions,
+        ),
+    );
+    const logs = { info() {}, warn() {}, error() {} };
+    // Startup tracks the original promise without lending its connection scope to storage.
+    const operation = Promise.resolve().then(() =>
+      runGatewayStartupObservers({
+        registry: createEmptyPluginRegistry(),
+        signal: kernel.connectionWork.signal,
+        port,
+        config: fixture.config,
+        workspaceDir: fixture.state.workspaceDir,
+        getCron: () => undefined,
+        isClosing: () => kernel.lifecycle.closePreludeStarted,
+        log: logs,
+        logHooks: logs,
+        createHookRunner,
+        refreshLatestUpdateRestartSentinel: async () => {},
+      }),
+    );
+    sweeping = kernel.connectionWork.track(() => operation);
+    await withinTest(
+      awaitGateBeforeSettlement(
+        accepted.promise,
+        sweeping,
+        "Startup observers settled before their notice write reached the state worker",
+      ),
+      signal,
+    );
+    kernel.connectionWork.signal.addEventListener("abort", () => parentClosed.resolve(), {
+      once: true,
+    });
+    closing = server.close({ reason: "startup notice close regression" });
+    await withinTest(parentClosed.promise, signal);
+    expect(kernel.scheduler.signal.aborted).toBe(true);
+    expect(shared.isOpen).toBe(true);
+    release.resolve();
+    await sweeping;
+    await closing;
+    expect(shared.isOpen).toBe(false);
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare(
+          "SELECT notified_sequence FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+        )
+        .get(watcher, target),
+    ).toEqual({ notified_sequence: 3 });
+  } finally {
+    release.resolve();
+    await Promise.allSettled([sweeping, closing]);
     vi.restoreAllMocks();
     await fixture.cleanup();
   }

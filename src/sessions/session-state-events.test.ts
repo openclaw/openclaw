@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
@@ -396,17 +397,35 @@ describe("session state events", () => {
     ).toHaveLength(1);
   });
 
-  it("re-enqueues and re-freezes pending notices after restart", async () => {
+  it("re-enqueues and re-freezes pending notices after restart without caller-thread SQL", async () => {
     const database = createDatabaseOptions();
-    await createWatcherSession(database);
-    seedChild(database);
-    const material = recordSessionStateEvent(eventInput(), database)!;
+    const missingWatcher = "agent:main:subagent:missing-watcher";
+    for (const sessionKey of [watcher, nestedWatcher]) {
+      await createWatcherSession(database, sessionKey);
+    }
+    for (const sessionKey of [watcher, nestedWatcher, missingWatcher]) {
+      seedChild(database, sessionKey);
+    }
+    const input = eventInput({ watcherSessionKeys: [] });
+    recordSessionStateEvent(input, database);
+    const material = recordSessionStateEvent(input, database)!;
+    const missingBefore = readCursor(database, missingWatcher);
     resetSystemEventsForTest();
 
-    await sweepSessionStateWatchNotices(database);
+    const sql = observeHostDataSql();
+    try {
+      await sweepSessionStateWatchNotices(database);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
-    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
-    expect(readCursor(database)?.notified_sequence).toBe(material.sequence);
+    for (const sessionKey of [watcher, nestedWatcher]) {
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+      expect(readCursor(database, sessionKey)?.notified_sequence).toBe(material.sequence);
+    }
+    expect(peekSystemEventEntries(missingWatcher)).toEqual([]);
+    expect(readCursor(database, missingWatcher)).toEqual(missingBefore);
   });
 
   it("self-heals a lost queued notice on the next material event", () => {
