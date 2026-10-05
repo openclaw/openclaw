@@ -1,4 +1,5 @@
 import { format } from "node:util";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -484,6 +485,23 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
             eventAge: event.unsigned?.age ?? undefined,
             startupMs,
           }),
+        // The route (and so the agent) is resolved later in the handler; every agent's
+        // patterns are a superset, and over-detection only dispatches a message alone.
+        resolveCommandPrefixInputs: async (roomId, event) => {
+          return {
+            displayName: event.content.formatted_body
+              ? await getMemberDisplayName(roomId, auth.userId).catch(() => undefined)
+              : undefined,
+            mentionRegexes: listAgentIds(core.config.current()).flatMap((agentId) =>
+              // Same cfg the handler passes when it strips the prefix.
+              core.channel.mentions.buildMentionRegexes(cfg, agentId, {
+                provider: "matrix",
+                conversationId: roomId,
+                providerPolicy: accountConfig?.mentionPatterns,
+              }),
+            ),
+          };
+        },
         onError: (err) => {
           logger.warn("matrix inbound debounce flush failed", { error: String(err) });
         },

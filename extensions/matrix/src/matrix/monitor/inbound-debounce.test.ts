@@ -1,10 +1,13 @@
 // Matrix tests cover inbound burst debouncing ahead of the room-message handler.
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixRoomMessageDispatchOptions } from "./handler.js";
 import { createMatrixInboundDebouncer } from "./inbound-debounce.js";
+import type { MatrixCommandPrefixInputs } from "./inbound-debounce.js";
 import { joinMatrixInboundReplayClaims } from "./inbound-dedupe.js";
+import { resolveMentions } from "./mentions.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const ROOM = "!room:example.org";
@@ -53,7 +56,15 @@ function createClaim(eventId: string) {
 
 const STARTUP_TS = 1_000;
 
-function createSubject(params?: { debounceMs?: number; duplicates?: Set<string> }) {
+const BOT = "@bot:example.org";
+const BOT_NAME = "OpenClaw Bot";
+const botPill = `<a href="https://matrix.to/#/${BOT}">${BOT_NAME}</a>`;
+
+function createSubject(params?: {
+  debounceMs?: number;
+  duplicates?: Set<string>;
+  prefixInputs?: (event: MatrixRawEvent) => Promise<MatrixCommandPrefixInputs>;
+}) {
   const dispatched: Dispatched[] = [];
   const claims = new Map<string, ReturnType<typeof createClaim>>();
   let stopped = false;
@@ -62,7 +73,7 @@ function createSubject(params?: { debounceMs?: number; duplicates?: Set<string> 
   } as CoreConfig;
   const enqueue = createMatrixInboundDebouncer({
     cfg,
-    selfUserId: "@bot:example.org",
+    selfUserId: BOT,
     handleRoomMessage: async (roomId, event, options) => {
       dispatched.push({ roomId, event, options });
     },
@@ -83,6 +94,8 @@ function createSubject(params?: { debounceMs?: number; duplicates?: Set<string> 
     },
     logVerboseMessage: () => {},
     isPreStartupEvent: (event) => (event.origin_server_ts ?? STARTUP_TS) < STARTUP_TS,
+    resolveCommandPrefixInputs: async (_roomId, event) =>
+      (await params?.prefixInputs?.(event)) ?? { mentionRegexes: [] },
     onError: (err) => {
       throw err;
     },
@@ -182,6 +195,7 @@ describe("matrix inbound debounce", () => {
       }),
     ],
     ["a control command", text("$x", "/status")],
+    ["a command behind the bot's MXID", text("$x", `${BOT}: /stop`)],
     ["a voice note", media("$x", "m.audio", "voice.ogg")],
   ])("flushes pending text before %s and dispatches it immediately", async (_name, event) => {
     const { enqueue, dispatched } = createSubject();
@@ -190,6 +204,53 @@ describe("matrix inbound debounce", () => {
     await enqueue(ROOM, event);
 
     expect(dispatched.map((entry) => entry.event.event_id)).toEqual(["$1", "$x"]);
+  });
+
+  it.each([
+    [
+      "a display-name pill",
+      withContent(text("$x", `${BOT_NAME}: /stop`), {
+        format: "org.matrix.custom.html",
+        formatted_body: `${botPill}: /stop`,
+      }),
+    ],
+    ["a configured mention pattern", text("$x", "synapse: /stop")],
+  ])("flushes pending text before a command behind %s", async (_name, event) => {
+    const { enqueue, dispatched } = createSubject({
+      prefixInputs: async () => ({ displayName: BOT_NAME, mentionRegexes: [/\bsynapse\b/i] }),
+    });
+
+    await enqueue(ROOM, text("$1", "first"));
+    await enqueue(ROOM, event);
+
+    // The command reaches the handler on its own, so it still starts with the command.
+    expect(dispatched.map((entry) => [entry.event.event_id, entry.event.content.body])).toEqual([
+      ["$1", "first"],
+      ["$x", event.content.body],
+    ]);
+  });
+
+  it("keeps arrival order while prefix inputs resolve out of order", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const { enqueue, dispatched } = createSubject({
+      prefixInputs: async (event) => {
+        if (event.event_id === "$1") {
+          await firstGate;
+        }
+        return { mentionRegexes: [] };
+      },
+    });
+
+    const first = enqueue(ROOM, text("$1", "one"));
+    const second = enqueue(ROOM, text("$2", "two"));
+    releaseFirst();
+    await Promise.all([first, second]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(dispatched[0]?.event.content.body).toBe("one\ntwo");
   });
 
   it("keeps senders and threads in separate batches", async () => {
@@ -228,7 +289,7 @@ describe("matrix inbound debounce", () => {
     expect(dispatched[0]?.options?.absorbedReplayClaims).toEqual([]);
   });
 
-  it("drops per-event HTML and merges mentions across the burst", async () => {
+  it("keeps each event's HTML and merges mentions across the burst", async () => {
     const { enqueue, dispatched } = createSubject();
 
     await enqueue(
@@ -236,17 +297,48 @@ describe("matrix inbound debounce", () => {
       withContent(text("$1", "hey bot"), {
         format: "org.matrix.custom.html",
         formatted_body: "<b>hey</b> bot",
-        "m.mentions": { user_ids: ["@bot:example.org"] },
+        "m.mentions": { user_ids: [BOT] },
       }),
     );
-    await enqueue(ROOM, withContent(text("$2", "you there?"), { "m.mentions": { room: true } }));
+    await enqueue(ROOM, withContent(text("$2", "you <there>?"), { "m.mentions": { room: true } }));
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
     expect(dispatched[0]?.event.content).toEqual({
       msgtype: "m.text",
-      body: "hey bot\nyou there?",
-      "m.mentions": { user_ids: ["@bot:example.org"], room: true },
+      body: "hey bot\nyou <there>?",
+      format: "org.matrix.custom.html",
+      formatted_body: "<b>hey</b> bot<br>you &lt;there&gt;?",
+      "m.mentions": { user_ids: [BOT], room: true },
     });
+  });
+
+  it("keeps a display-name pill mention valid after merging", async () => {
+    installMatrixMonitorTestRuntime();
+    const { enqueue, dispatched } = createSubject();
+
+    await enqueue(
+      ROOM,
+      withContent(text("$1", `${BOT_NAME} can you look`), {
+        format: "org.matrix.custom.html",
+        formatted_body: `${botPill} can you look`,
+        "m.mentions": { user_ids: [BOT] },
+      }),
+    );
+    await enqueue(ROOM, text("$2", "at this?"));
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    const merged = dispatched[0]?.event;
+    expect(merged?.event_id).toBe("$2");
+    // The handler's own validator must still see the matrix.to pill behind the label.
+    expect(
+      resolveMentions({
+        content: merged?.content ?? {},
+        userId: BOT,
+        displayName: BOT_NAME,
+        text: String(merged?.content.body),
+        mentionRegexes: [],
+      }),
+    ).toEqual({ wasMentioned: true, hasExplicitMention: true });
   });
 
   it("merges a redelivered copy of an event only once", async () => {

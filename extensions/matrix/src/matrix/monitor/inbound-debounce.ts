@@ -11,6 +11,7 @@ import {
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableObjectRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixMessageAttachment } from "../media-text.js";
 import type { MatrixRoomMessageDispatchOptions, MatrixRoomMessageHandler } from "./handler.js";
@@ -18,7 +19,17 @@ import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { stripMatrixMentionPrefix } from "./mentions.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
 
-type MatrixInboundDebounceEntry = { roomId: string; event: MatrixRawEvent };
+type MatrixInboundDebounceEntry = {
+  roomId: string;
+  event: MatrixRawEvent;
+  /** Text after the handler's mention-prefix normalization; decides command bypass. */
+  commandCheckText?: string;
+};
+
+/** Inputs the handler's mention-prefix normalizer uses for this event. */
+export type MatrixCommandPrefixInputs = { displayName?: string; mentionRegexes: RegExp[] };
+
+const MATRIX_HTML_FORMAT = "org.matrix.custom.html";
 
 // Audio and stickers stay immediate: voice notes are complete messages on their own.
 const CAPTION_WAITING_MSGTYPES = new Set(["m.image", "m.file", "m.video"]);
@@ -66,6 +77,12 @@ function isCaptionlessMedia(event: MatrixRawEvent): boolean {
   return attachment !== undefined && attachment.caption === undefined;
 }
 
+function readFormattedBody(event: MatrixRawEvent): string | undefined {
+  return event.content.format === MATRIX_HTML_FORMAT
+    ? readStringValue(event.content.formatted_body)
+    : undefined;
+}
+
 function readTextBody(event: MatrixRawEvent): string {
   return readStringValue(event.content.body)?.trim() ?? "";
 }
@@ -104,13 +121,18 @@ function mergeMatrixInboundBurst(events: readonly MatrixRawEvent[]): MatrixRawEv
   if (!base) {
     throw new Error("cannot merge an empty Matrix inbound burst");
   }
-  const text = events
-    .filter((event) => event !== media)
-    .map(readTextBody)
-    .filter(Boolean)
-    .join("\n");
-  // Joined plain text replaces each event's own HTML, so drop the base event's HTML.
+  const textEvents = events.filter((event) => event !== media && readTextBody(event));
+  const text = textEvents.map(readTextBody).join("\n");
+  // Keep each event's HTML in the merged formatted_body: the handler validates native
+  // mentions from matrix.to anchors there, and bare m.mentions metadata is not trusted.
+  const hasHtml = textEvents.some(readFormattedBody);
   const { format: _format, formatted_body: _formattedBody, ...content } = base.content;
+  if (hasHtml) {
+    content.format = MATRIX_HTML_FORMAT;
+    content.formatted_body = textEvents
+      .map((event) => readFormattedBody(event) ?? escapeHtml(readTextBody(event)))
+      .join("<br>");
+  }
   const mentions = mergeMentions(events);
   if (mentions) {
     content["m.mentions"] = mentions;
@@ -126,6 +148,12 @@ function mergeMatrixInboundBurst(events: readonly MatrixRawEvent[]): MatrixRawEv
   return { ...base, content };
 }
 
+function buildBatchKey(roomId: string, event: MatrixRawEvent): string | null {
+  return event.type === EventType.RoomMessage && event.sender
+    ? `${roomId}\u0000${event.sender}\u0000${resolveThreadRootId(event)}`
+    : null;
+}
+
 export function createMatrixInboundDebouncer(params: {
   cfg: CoreConfig;
   selfUserId: string;
@@ -135,13 +163,18 @@ export function createMatrixInboundDebouncer(params: {
   logVerboseMessage: (message: string) => void;
   /** Startup eligibility owner; cold-start history must never merge into a fresh turn. */
   isPreStartupEvent: (event: MatrixRawEvent) => boolean;
+  /** Display name and mention patterns the handler strips before command detection. */
+  resolveCommandPrefixInputs: (
+    roomId: string,
+    event: MatrixRawEvent,
+  ) => Promise<MatrixCommandPrefixInputs>;
   onError: (err: unknown) => void;
 }) {
   const { cfg, handleRoomMessage, inboundDeduper, logVerboseMessage } = params;
   // Live config so debounce changes apply without reconnecting, like other channels.
   const readConfig = createRuntimeConfigReader(cfg);
 
-  const shouldDebounce = ({ event }: MatrixInboundDebounceEntry): boolean => {
+  const shouldDebounce = ({ event, commandCheckText }: MatrixInboundDebounceEntry): boolean => {
     if (
       event.type !== EventType.RoomMessage ||
       event.sender === params.selfUserId ||
@@ -156,10 +189,7 @@ export function createMatrixInboundDebouncer(params: {
     if (event.content.msgtype !== "m.text") {
       return false;
     }
-    return shouldDebounceTextInbound({
-      text: stripMatrixMentionPrefix({ text: readTextBody(event), userId: params.selfUserId }),
-      cfg: readConfig(),
-    });
+    return shouldDebounceTextInbound({ text: commandCheckText, cfg: readConfig() });
   };
 
   /**
@@ -196,10 +226,7 @@ export function createMatrixInboundDebouncer(params: {
     cfg,
     channel: "matrix",
     resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "matrix" }),
-    buildKey: ({ roomId, event }) =>
-      event.type === EventType.RoomMessage && event.sender
-        ? `${roomId}\u0000${event.sender}\u0000${resolveThreadRootId(event)}`
-        : null,
+    buildKey: ({ roomId, event }) => buildBatchKey(roomId, event),
     shouldDebounce,
     // One attachment per turn: a second caption-less upload starts its own batch.
     canAppend: (item, pending) =>
@@ -259,7 +286,44 @@ export function createMatrixInboundDebouncer(params: {
     onError: params.onError,
   });
 
+  /** Normalize like the handler does, so "@Bot: /stop" bypasses batching too. */
+  const resolveCommandCheckText = async (roomId: string, event: MatrixRawEvent) => {
+    if (event.type !== EventType.RoomMessage || event.content.msgtype !== "m.text") {
+      return undefined;
+    }
+    const inputs = await params.resolveCommandPrefixInputs(roomId, event);
+    return stripMatrixMentionPrefix({
+      text: readTextBody(event),
+      userId: params.selfUserId,
+      displayName: inputs.displayName,
+      mentionRegexes: inputs.mentionRegexes,
+    });
+  };
+
+  // Prefix resolution is async; chain it per key so a burst still reaches the debouncer in
+  // arrival order. Each link ends once its item is registered, not when its turn finishes.
+  const ingressChains = new Map<string, Promise<void>>();
+
   return async (roomId: string, event: MatrixRawEvent) => {
-    await debouncer.enqueue({ roomId, event });
+    const key = buildBatchKey(roomId, event);
+    if (!key) {
+      await debouncer.enqueue({ roomId, event });
+      return;
+    }
+    let enqueued: Promise<void> = Promise.resolve();
+    const registered = (ingressChains.get(key) ?? Promise.resolve()).then(async () => {
+      // A failed lookup leaves no command text, which dispatches the event on its own.
+      const commandCheckText = await resolveCommandCheckText(roomId, event).catch(() => "");
+      enqueued = debouncer.enqueue({ roomId, event, commandCheckText });
+    });
+    const settled = registered.catch(() => undefined);
+    ingressChains.set(key, settled);
+    void settled.then(() => {
+      if (ingressChains.get(key) === settled) {
+        ingressChains.delete(key);
+      }
+    });
+    await registered;
+    await enqueued;
   };
 }
