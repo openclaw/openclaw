@@ -19,7 +19,11 @@ import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { authProfilesLog, reportCommittedInlineAuthFailure } from "./constants.js";
+import {
+  AUTH_STORE_VERSION,
+  authProfilesLog,
+  reportCommittedInlineAuthFailure,
+} from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import type { createExternalAuthRuntime } from "./external-auth.js";
 import type { InlineAuthFailureOperations } from "./inline-usage-kernel.js";
@@ -34,7 +38,7 @@ import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStoreAtDatabasePath,
 } from "./persisted.js";
-import { updatePersonalAuthProfileStore } from "./personal-profiles.js";
+import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { LoadAuthProfileStoreOptions } from "./runtime-read.js";
 import { assertPersonalAuthProfileRuntime, getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import {
@@ -415,16 +419,19 @@ export function createAuthProfileStoreUpdater(
       if (params.profileId && isUserModelAuthProfileId(params.profileId)) {
         assertPersonalAuthProfileRuntime();
         params.assertCurrent?.();
-        return updatePersonalAuthProfileStore({
-          profileId: params.profileId,
-          updater(store) {
-            params.assertCurrent?.();
-            const changed = params.updater(store);
-            params.assertCurrent?.();
-            return changed;
-          },
-          stateDir: params.stateDir,
-        });
+        return (
+          (await withPersonalAuthProfileStore(
+            params.profileId,
+            (owner) =>
+              owner.update((store) => {
+                params.assertCurrent?.();
+                const changed = params.updater(store);
+                params.assertCurrent?.();
+                return changed;
+              }, params.assertCurrent),
+            params.stateDir,
+          )) ?? { version: AUTH_STORE_VERSION, profiles: {} }
+        );
       }
       const workerWrites = getWorkerAuthProfileWrites();
       const writeOptions = {

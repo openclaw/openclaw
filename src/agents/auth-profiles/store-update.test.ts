@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { JSON_FIELD_TRANSFER_BYTES } from "../../infra/json-field-transfer.js";
 import * as sqliteReplies from "../../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
 import * as executions from "../../state/openclaw-agent-execution.js";
 import * as workerPublications from "../../state/openclaw-agent-worker-store.js";
 import {
@@ -459,38 +460,61 @@ it("keeps a shared rotation that commits while a local save awaits publication",
   );
 });
 
-it("refuses revoked personal-account update authority before invoking its updater", async () => {
-  await withOpenClawTestState(
-    { label: "auth-personal-authority", scenario: "minimal" },
-    async () => {
-      const original = {
-        type: "token" as const,
-        provider: "anthropic",
-        token: "synthetic-personal-before",
-      };
-      const { authProfileId } = connectUserModelAccount({
-        ownerProfileId: ensureGatewayOwnerProfile("Synthetic owner").id,
-        credential: original,
-        assertCurrent() {},
-      });
-      const updater = vi.fn((store: AuthProfileStore) => {
-        store.profiles[authProfileId] = { ...original, token: "synthetic-personal-after" };
-        return true;
-      });
-      await expect(
-        updateAuthProfileStoreWithLock({
-          profileId: authProfileId,
-          updater,
-          assertCurrent() {
-            throw new Error("synthetic personal authority revoked");
-          },
-        }),
-      ).rejects.toThrow("synthetic personal authority revoked");
-      expect(updater).not.toHaveBeenCalled();
-      expect(readUserModelAuthProfile(authProfileId)?.credential).toEqual(original);
-    },
-  );
-});
+it.each(["before-callback", "in-callback", "commit"] as const)(
+  "refuses personal-account update authority revoked at %s",
+  async (phase) => {
+    await withOpenClawTestState(
+      { label: "auth-personal-authority", scenario: "minimal" },
+      async () => {
+        const original = {
+          type: "token" as const,
+          provider: "anthropic",
+          token: "synthetic-personal-before",
+        };
+        const { authProfileId } = connectUserModelAccount({
+          ownerProfileId: ensureGatewayOwnerProfile("Synthetic owner").id,
+          credential: original,
+          assertCurrent() {},
+        });
+        let revoked = phase === "before-callback";
+        if (phase === "commit") {
+          const createAdmission = sqliteWorkerStore.createSqliteWorkerWriteAdmission;
+          vi.spyOn(sqliteWorkerStore, "createSqliteWorkerWriteAdmission").mockImplementation(
+            (assertCurrent, nativeLocations, attachment) =>
+              createAdmission(
+                (request) => {
+                  if (request.stage === "commit") {
+                    revoked = true;
+                  }
+                  assertCurrent(request);
+                },
+                nativeLocations,
+                attachment,
+              ),
+          );
+        }
+        const updater = vi.fn((store: AuthProfileStore) => {
+          store.profiles[authProfileId] = { ...original, token: "synthetic-personal-after" };
+          revoked = phase === "in-callback";
+          return true;
+        });
+        await expect(
+          updateAuthProfileStoreWithLock({
+            profileId: authProfileId,
+            updater,
+            assertCurrent() {
+              if (revoked) {
+                throw new Error("synthetic personal authority revoked");
+              }
+            },
+          }),
+        ).rejects.toThrow("synthetic personal authority revoked");
+        expect(updater).toHaveBeenCalledTimes(phase === "before-callback" ? 0 : 1);
+        expect(readUserModelAuthProfile(authProfileId)?.credential).toEqual(original);
+      },
+    );
+  },
+);
 
 it.each(["shared", "agent"] as const)(
   "commits %s callbacks once off-thread and preserves oversized fields",

@@ -535,7 +535,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             },
             agentDir: ownerAgentDir,
             profileId: params.profileId,
-            assertCurrent: () => params.signal?.throwIfAborted(),
             updater: (authoritative) => {
               const existing = authoritative.profiles[params.profileId];
               if (!isExactOAuthCredential(existing, cred)) {
