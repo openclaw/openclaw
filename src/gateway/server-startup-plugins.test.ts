@@ -16,6 +16,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -442,7 +443,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       const { capturePluginRegistryLifecycleEpoch, markPluginRegistryActive } =
         await import("../plugins/registry-lifecycle.js");
       const ambientRegistry = createEmptyPluginRegistry();
-      ambientRegistry.gatewayHandlers.fixture = vi.fn();
+      ambientRegistry.gatewayHandlers.fixture = vi.fn<GatewayRequestHandler>();
       markPluginRegistryActive(ambientRegistry);
       const ambientEpoch = capturePluginRegistryLifecycleEpoch(ambientRegistry);
       getActivePluginRegistry.mockReturnValue(ambientRegistry);

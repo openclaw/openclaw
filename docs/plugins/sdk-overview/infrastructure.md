@@ -40,6 +40,23 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
+Read-only methods may opt into WebSocket response sharing with registration options
+`shareKey(caller, params)`, `shareInvalidationEvents`, and `shareMaxAgeMs`.
+Return `null` when a request cannot share. The key must include every caller and
+parameter dependency, including identity, scopes, capabilities, agent, and account
+selection. A successful result must be immutable after publication. The dispatcher
+checks each caller's authority and shares only the result and serialized payload;
+errors are not cached. Listed broadcasts invalidate pending and completed entries.
+The default absolute ceiling is one second and the host caps it at five seconds.
+The Gateway retains at most 16 responses across all methods, each at most 1 MiB,
+and clears them when its method registry is replaced. Expiry and invalidation
+release waiting callers to perform their own reads instead of repeatedly joining
+retired work.
+Only opt in when the method's authorization is fully covered by dispatch; a
+handler that performs additional caller-specific authorization or nested requests
+must remain request-local. Omit these options for mutations, subscriptions, and
+connection-bound providers.
+
 ### File-watch capacity errors
 
 `getFileWatchCapacityCode(error)` from `openclaw/plugin-sdk/file-access-runtime`

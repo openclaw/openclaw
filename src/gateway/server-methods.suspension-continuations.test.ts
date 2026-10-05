@@ -355,7 +355,7 @@ describe("draining Gateway completion ownership", () => {
         requestParams: { id: "question-unrelated" },
         context,
         client,
-        handler: vi.fn(),
+        handler: vi.fn<GatewayRequestHandler>(),
       });
       expect(unrelated).toHaveBeenCalledWith(
         false,
@@ -530,7 +530,7 @@ describe("draining Gateway completion ownership", () => {
           requestParams: { id: "unrelated-invoke", nodeId: "node-1", ok: true },
           context,
           client: node,
-          handler: vi.fn(),
+          handler: vi.fn<GatewayRequestHandler>(),
         });
         expect(ignored).toHaveBeenCalledWith(
           false,

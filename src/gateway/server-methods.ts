@@ -62,6 +62,7 @@ import { sessionLog } from "./session-log.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveRuntimeSessionParticipantRequest } from "./session-tool-participant.js";
+import { dispatchSharedRead } from "./shared-read-responses.js";
 import {
   startSlowRequestDiagnostics,
   type SessionSubscribePhase,
@@ -484,7 +485,24 @@ export async function handleGatewayRequest(
         // Long polls and shutdown initiators must never remain preparation leases.
         entry?.release();
         profileBinding?.markInvoked();
-        return GatewayRpcDiagnostics.runHandler(() => preparedHandler(handlerOptions), diagnostics);
+        const sharing = opts.acceptsSerializedJson
+          ? methodRegistry.getReadSharing?.(req.method)
+          : undefined;
+        return GatewayRpcDiagnostics.runHandler(
+          () =>
+            sharing
+              ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
+                  runtimeParticipant?.assertCurrent();
+                  profileBinding?.assertCurrent();
+                  assertOperatorCurrent();
+                  requestMutationAuthority.assertCurrent();
+                  authorization.sessionAccessAuthority?.assertCurrent();
+                  sessionMutationAuthorization?.assertCurrent();
+                  signal?.throwIfAborted();
+                })
+              : preparedHandler(handlerOptions),
+          diagnostics,
+        );
       };
       if (req.method === "question.get" || req.method === "question.resolve") {
         // Draining admission consults the pending owner before handler entry.

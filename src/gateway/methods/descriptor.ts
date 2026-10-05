@@ -1,5 +1,19 @@
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
+import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+
+export type GatewayReadSharing = {
+  /** Null keeps request-local reads out of response sharing. */
+  shareKey: (
+    caller: Pick<GatewayRequestHandlerOptions, "client" | "context"> & {
+      read?: { shareable?: boolean };
+    },
+    params: Record<string, unknown>,
+  ) => string | null;
+  shareInvalidationEvents: readonly string[];
+  /** Absolute lifetime, including computation; the host also enforces its safety ceiling. */
+  shareMaxAgeMs: number;
+};
 
 /** Scope marker for methods that only authenticated node clients may call. */
 export const NODE_GATEWAY_METHOD_SCOPE = "node" as const;
@@ -34,7 +48,7 @@ export type GatewayMethodSessionAccess = {
 export type GatewayMethodHandler = (opts: never) => unknown;
 
 /** Complete metadata for one dispatchable gateway method. */
-export type GatewayMethodDescriptor = {
+export type GatewayMethodDescriptor = Partial<GatewayReadSharing> & {
   name: string;
   handler: GatewayMethodHandler;
   scope: GatewayMethodScope;
@@ -56,14 +70,16 @@ export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "profil
 };
 
 /** Creates a plugin-owned method descriptor with plugin namespace scope normalization. */
-export function createPluginGatewayMethodDescriptor(params: {
-  pluginId: string;
-  name: string;
-  handler: GatewayMethodHandler;
-  scope?: OperatorScope;
-  profileAccess?: GatewayMethodProfileAccess;
-  sessionAccess?: GatewayMethodSessionAccess;
-}): GatewayMethodDescriptor {
+export function createPluginGatewayMethodDescriptor(
+  params: {
+    pluginId: string;
+    name: string;
+    handler: GatewayMethodHandler;
+    scope?: OperatorScope;
+    profileAccess?: GatewayMethodProfileAccess;
+    sessionAccess?: GatewayMethodSessionAccess;
+  } & Partial<GatewayReadSharing>,
+): GatewayMethodDescriptor {
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
   return {
     name: params.name,
@@ -71,6 +87,13 @@ export function createPluginGatewayMethodDescriptor(params: {
     owner: { kind: "plugin", pluginId: params.pluginId },
     profileAccess: params.profileAccess ?? "required",
     ...(params.sessionAccess ? { sessionAccess: params.sessionAccess } : {}),
+    ...(params.shareKey
+      ? {
+          shareKey: params.shareKey,
+          shareInvalidationEvents: params.shareInvalidationEvents,
+          shareMaxAgeMs: params.shareMaxAgeMs,
+        }
+      : {}),
     scope: normalizedScope ?? ADMIN_SCOPE,
   };
 }
@@ -84,6 +107,7 @@ export type GatewayMethodRegistryView = {
   listAdvertisedMethods: () => string[];
   getScope: (name: string) => GatewayMethodScope | undefined;
   getSessionAccess?: (name: string) => GatewayMethodSessionAccess | undefined;
+  getReadSharing?: (name: string) => GatewayReadSharing | undefined;
   isStartupUnavailable: (name: string) => boolean;
   isObservation: (name: string) => boolean;
   isControlPlaneWrite: (name: string) => boolean;

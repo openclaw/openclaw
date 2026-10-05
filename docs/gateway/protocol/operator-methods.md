@@ -219,6 +219,19 @@ does not make a reopened Settings picker refresh. The Gateway shares concurrent
 provider acquisition.
 
 `preparedOnly: true` and `refresh: true` remain mutually exclusive.
+
+The WebSocket dispatcher shares identical `cron.list`, `sessions.list`,
+`models.list`, and `chat.metadata` responses between eligible human connections.
+Each request still checks its own current authority. Sharing keys separate user
+and profile identity, scopes, client capabilities, and request parameters,
+including agent, session, and account selection. Explicit model refreshes,
+synthetic callers, and cron reads with restricted session visibility do not share.
+Session, cron, and model metadata broadcasts retire the relevant responses before
+clients can refetch. Config, access, and session-row revisions also fence reuse.
+All four methods currently use a one-second absolute ceiling; this bounds
+personal model metadata changes that do not publish a broadcast. This adds no
+client polling or provider refresh. Session catalogs and workboard reads do not use this response-sharing owner.
+
 The Gateway advertises these published-read and details controls as
 `published-model-catalog`. Clients that require this contract must check the
 capability before sending the new fields; an older Gateway requires an update

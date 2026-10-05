@@ -376,14 +376,16 @@ describe("direct session model catalogs", () => {
         };
         const respond = vi.fn<RespondFn>();
         const params = { sessionKey: selected.sessionKey };
-        const pending = handleChatMetadataRequest({
-          req: { type: "req", id: "held-metadata", method: "chat.metadata", params },
-          params,
-          context: f.context,
-          client: f.client,
-          respond,
-          isWebchatConnect: () => false,
-        });
+        const pending = Promise.resolve(
+          handleChatMetadataRequest({
+            req: { type: "req", id: "held-metadata", method: "chat.metadata", params },
+            params,
+            context: f.context,
+            client: f.client,
+            respond,
+            isWebchatConnect: () => false,
+          }),
+        );
         void pending.catch(() => {});
         try {
           await Promise.race([entered.promise, pending]);
