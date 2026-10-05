@@ -17,6 +17,25 @@ export type ChatSubagentWait = {
   child?: { key: string; label: string };
 };
 
+/**
+ * A wait behind a loaded handoff is that run's own status. Any other wait
+ * follows a turn that already ended, so it stays a row after the transcript.
+ */
+export function placedSubagentWait(
+  wait: ChatSubagentWait | null,
+): { startedAt: number; runId: string } | undefined {
+  return wait?.runId && wait.startedAt !== null
+    ? { startedAt: wait.startedAt, runId: wait.runId }
+    : undefined;
+}
+
+/** Everything the wait line draws, so rows without one keep memoizing across roster patches. */
+export function subagentWaitRenderKey(wait: ChatSubagentWait | null): string {
+  return wait
+    ? JSON.stringify([wait.startedAt, wait.runningCount, wait.child?.key, wait.child?.label])
+    : "";
+}
+
 export function resolveChatSubagentWait(input: {
   selectedSession: GatewaySessionRow | undefined;
   runActive?: boolean;

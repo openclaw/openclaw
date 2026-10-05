@@ -92,6 +92,25 @@ export function renderStreamGroupParts(
   );
 }
 
+/** A wait no loaded handoff can place: the standard working row, after the transcript. */
+export function renderUnplacedSubagentWait(
+  sessionKey: string,
+  wait: ChatSubagentWait,
+  opts: StreamGroupOptions,
+) {
+  return renderStreamGroup(
+    [
+      {
+        kind: "reading-indicator",
+        key: `waiting-subagents:${sessionKey}`,
+        startedAt: wait.startedAt ?? 0,
+        waitingOn: "subagents",
+      },
+    ],
+    opts,
+  );
+}
+
 export function renderStreamGroupPart(
   part: StreamGroupPart,
   opts: StreamGroupOptions,
