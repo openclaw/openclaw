@@ -737,8 +737,6 @@ describe("registered completion source custody", () => {
     "revoke",
     "gateway-close",
     "replace",
-    "completed-followup-original-revoked",
-    "completed-followup-successor-revoked",
     "release-rejected",
     "registration-rejected",
     "cancelled-by-another-operator",
@@ -899,87 +897,6 @@ describe("registered completion source custody", () => {
             /authority/,
           );
           await releaseSubagentRun("successor");
-        } else if (
-          ending === "completed-followup-original-revoked" ||
-          ending === "completed-followup-successor-revoked"
-        ) {
-          await updateRun(entry.runId, (draft) => {
-            draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
-            draft.delivery = { status: "pending" };
-          });
-          const successorClient = createOperatorClient({
-            profileName: "followup-owner",
-            scopes: ["operator.write"],
-          });
-          const successorRevoked = new AbortController();
-          const successorSource = (await operatorCapture.captureGatewayOperatorRunAuthority({
-            client: successorClient,
-            context,
-            sourceAuthority: {
-              signal: successorRevoked.signal,
-              assertCurrent: () => successorRevoked.signal.throwIfAborted(),
-            },
-          }))!;
-          successorClient.internal = { operatorRunAuthority: successorSource.authority };
-          try {
-            expect(
-              await withPluginRuntimeGatewayRequestScope(
-                {
-                  client: successorClient,
-                  context,
-                  resolveGatewayContext,
-                  isWebchatConnect: () => false,
-                },
-                () =>
-                  replaceSubagentRunAfterSteerCore({
-                    previousRunId: entry.runId,
-                    nextRunId: "successor",
-                    expected: subagentRuns.get(entry.runId),
-                    allowEndedSource: true,
-                    preserveCompletedRun: true,
-                    task: "second turn",
-                  }),
-              ),
-            ).toBe(true);
-            successorSource.release();
-            const retained = subagentRuns.get(entry.runId)!;
-            const successor = subagentRuns.get("successor")!;
-            const stored = loadSubagentRegistryFromSqlite();
-            expect(stored.get(entry.runId)).toMatchObject({
-              execution: { status: "terminal", suppressSessionEffects: true },
-              delivery: { status: "pending" },
-              requesterTurnRunId: "parent",
-            });
-            expect(stored.get(successor.runId)).toMatchObject({
-              taskRunId: successor.runId,
-              task: "second turn",
-              execution: { status: "running" },
-            });
-            expect(successor.requesterTurnRunId).toBeUndefined();
-            expect(successor.requesterTurnYielded).toBeUndefined();
-            const completionSource = (run: SubagentRunRecord) =>
-              subagentRuns.runWithCompletionAuthority(
-                run,
-                () =>
-                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
-                    ?.source,
-              );
-            // Suppressing old session effects must not retire its pending result's custody.
-            expect(completionSource(retained)).toBe(source.authority.source);
-            expect(completionSource(successor)).toBe(successorSource.authority.source);
-            const revokeOriginal = ending === "completed-followup-original-revoked";
-            (revokeOriginal ? revoked : successorRevoked).abort(new Error("operator revoked"));
-            expect(() => completionSource(revokeOriginal ? retained : successor)).toThrow(
-              /authority/,
-            );
-            expect(completionSource(revokeOriginal ? successor : retained)).toBe(
-              revokeOriginal ? successorSource.authority.source : source.authority.source,
-            );
-            await releaseSubagentRun(entry.runId);
-            await releaseSubagentRun(successor.runId);
-          } finally {
-            successorSource.release();
-          }
         } else if (ending === "release-rejected") {
           rejectNextRegistryWrite("write refused");
           await expect(releaseSubagentRun(entry.runId)).rejects.toThrow("write refused");

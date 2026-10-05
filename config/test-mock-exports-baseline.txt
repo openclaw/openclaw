@@ -3408,7 +3408,6 @@
 ["src/agents/subagents/registry/subagent-registry.mocks.shared.ts","../../../gateway/call.js","05f66d69ed3f79a3f468fd610e280dc38f48e814e4ff9f63e47a9caac5333aaa",1]
 ["src/agents/subagents/registry/subagent-registry.mocks.shared.ts","../../../infra/agent-events.js","ce6b293ab6996ce8aa7c0ece808a03e1f7ba720b0a88a61fd8c667b1881ed1d0",1]
 ["src/agents/subagents/registry/subagent-registry.mocks.shared.ts","../../../infra/agent-run-registry.js","0a7f5e340a581082065d55eaffc8e1e4777fb2dd53a99e3d8a3422531893976e",1]
-["src/agents/subagents/registry/subagent-registry.nested.e2e.test.ts","../announce/subagent-announce.js","08a136ccd704ce202083b0e8ce518cd5978236f78a7f9f6417795214853831f4",1]
 ["src/agents/subagents/registry/subagent-registry.persistence-fixture.test-support.ts","../announce/subagent-announce.js","d5e077afb8a2ce9421389b2a9bf351ea40afda810eb068f6c1b25d53e75e38c1",1]
 ["src/agents/subagents/registry/subagent-registry.persistence.mocks.test-support.ts","../../../browser-lifecycle-cleanup.js","c486cd3c82e7a0bb29b7d3299d563b1eb6ca6bdd3af4ac2445a29a7a57c0f015",1]
 ["src/agents/subagents/registry/subagent-registry.persistence.mocks.test-support.ts","../../runtime-plugins.js","1b4f97be63aaa315da9bb9c67586c63f11e4bf756e644e92c763f1ae36bcaa43",1]
