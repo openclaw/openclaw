@@ -257,7 +257,7 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
   });
 });
 
-it("reads row metadata, board presence, and cold summary position from one snapshot", async () => {
+it.each([false, true])("reads row metadata (continuation: %s)", async (useContinuation) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cron:row-facts";
@@ -347,6 +347,21 @@ it("reads row metadata, board presence, and cold summary position from one snaps
         if (!opened.found) {
           throw new Error("Expected the seeded read-only database");
         }
+        if (useContinuation) {
+          readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: target,
+            env,
+            sessionKeys: [sessionKey],
+          });
+        }
+        const continuation = useContinuation
+          ? captureCanonicalSessionReaderContinuation(opened.value)
+          : undefined;
+        if (useContinuation && !continuation) {
+          throw new Error("Expected committed reader admission");
+        }
+        const exec = vi.spyOn(opened.value.db, "exec");
         const queries = trackSqliteStatementExecutions(
           opened.value.db,
           ["boards", "entries"],
@@ -375,6 +390,7 @@ it("reads row metadata, board presence, and cold summary position from one snaps
               database: target,
               env,
               sessionKeys,
+              continuation: continuation?.receipt,
             });
           const first = read();
           expect(first.rows).toHaveLength(64);
@@ -404,7 +420,14 @@ it("reads row metadata, board presence, and cold summary position from one snaps
           expect(queries.counts.boards).toBe(2);
           expect(queries.counts.entries).toBe(2);
           expect(entryParseCount()).toBe(128);
+          expect(
+            exec.mock.calls
+              .map(([sql]) => sql)
+              .filter((sql) => /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql)),
+          ).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
         } finally {
+          continuation?.release();
+          exec.mockRestore();
           parse.mockRestore();
           queries.restore();
         }

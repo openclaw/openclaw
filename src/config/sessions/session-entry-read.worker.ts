@@ -629,40 +629,41 @@ export function readSessionRowDatabaseFacts(
   }
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
-        withSqlitePostCommitPublications(database.db, () =>
-          runSqliteDeferredTransactionSync(database.db, () => {
-            const readRow = prepareExactSessionEntryRowReads(
-              database,
-              request.sessionKeys,
-              "list",
-              "canonical",
-            );
-            const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
-            return {
-              kind: "session-row-facts" as const,
-              rows: request.sessionKeys.flatMap((sessionKey) => {
-                const entry = readRow(sessionKey)?.entry;
-                if (!entry) {
-                  return [];
-                }
-                const facts: SessionRowDatabaseFacts = {
-                  sessionKey,
-                  entry,
-                  hasBoard: boardKeys.has(sessionKey),
-                };
-                if (readSessionActivitySummary(entry)) {
-                  facts.activitySummaryWatermark = readSessionTranscriptWatermarkInDatabase(
-                    database,
-                    entry.sessionId,
-                  );
-                }
-                return facts;
-              }),
-            };
-          }),
-        ),
-      ),
+      readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
+        const read = () => {
+          const readRow = prepareExactSessionEntryRowReads(
+            database,
+            request.sessionKeys,
+            "list",
+            "canonical",
+          );
+          const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
+          return {
+            kind: "session-row-facts" as const,
+            rows: request.sessionKeys.flatMap((sessionKey) => {
+              const entry = readRow(sessionKey)?.entry;
+              if (!entry) {
+                return [];
+              }
+              const facts: SessionRowDatabaseFacts = {
+                sessionKey,
+                entry,
+                hasBoard: boardKeys.has(sessionKey),
+              };
+              if (readSessionActivitySummary(entry)) {
+                facts.activitySummaryWatermark = readSessionTranscriptWatermarkInDatabase(
+                  database,
+                  entry.sessionId,
+                );
+              }
+              return facts;
+            }),
+          };
+        };
+        return withSqlitePostCommitPublications(database.db, () =>
+          database.db.isTransaction ? read() : runSqliteDeferredTransactionSync(database.db, read),
+        );
+      }),
     { ...request.database, env: request.env },
   );
   if (result.found) {
