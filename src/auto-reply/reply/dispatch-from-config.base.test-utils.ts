@@ -231,7 +231,6 @@ describe("dispatchReplyFromConfig", () => {
     );
     sessionStoreMocks.currentEntry = {
       sessionId: "session-1",
-      status: "running",
       updatedAt: Date.now(),
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: sourceTurnId,

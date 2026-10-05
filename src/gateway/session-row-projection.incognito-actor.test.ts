@@ -120,7 +120,7 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
       const registryChild = "agent:work:subagent:incognito-registry-child";
       await other.sessions.create(authority, {
         sessionKey: registryChild,
-        entry: { sessionId: "registry-child", updatedAt: Date.now(), status: "running" },
+        entry: { sessionId: "registry-child", updatedAt: Date.now() },
       });
       const durableChild = "agent:work:subagent:durable-registry-child";
       replaceSessionEntrySync(
@@ -128,7 +128,6 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         {
           sessionId: "durable-registry-child",
           updatedAt: Date.now(),
-          status: "running",
         },
       );
       for (const registeredChild of [registryChild, durableChild]) {

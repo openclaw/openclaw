@@ -1,5 +1,6 @@
 import path from "node:path";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
@@ -89,8 +90,23 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
       });
       const pending = await transport.waitForCondition(
         async () => {
+          const listed = await gateway.call("sessions.list", { agentId: "qa", activeOnly: true });
+          if (!isRecord(listed) || !Array.isArray(listed.sessions)) {
+            throw new Error("sessions.list omitted its session rows");
+          }
+          if (
+            !listed.sessions.some(
+              (row) =>
+                isRecord(row) &&
+                row.key === sessionKey &&
+                row.hasActiveRun === true &&
+                row.status === "running",
+            )
+          ) {
+            return undefined;
+          }
           const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
-          if (entry?.status !== "running") {
+          if (!entry) {
             return undefined;
           }
           const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey, {
@@ -104,6 +120,8 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
         120_000,
         25,
       );
+      expect(pending.entry.status).toBeUndefined();
+      expect(pending.entry.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
       const pid = gateway.pid;
       expect(pid).not.toBeNull();
       // Kill the owned process group so no gateway or descendant can drain.
@@ -115,7 +133,11 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
       );
       await gateway.restartAfterStateMutation(async () => {
         const orphan = (await readRawQaSessionStore({ gateway }))[sessionKey];
-        expect(orphan).toMatchObject({ sessionId: pending.entry.sessionId, status: "running" });
+        expect(orphan).toMatchObject({
+          sessionId: pending.entry.sessionId,
+          restartRecoveryDeliveryRunId: pending.entry.restartRecoveryDeliveryRunId,
+        });
+        expect(orphan?.status).toBeUndefined();
         expect(orphan?.abortedLastRun).not.toBe(true);
       });
       expect(gateway.pid).not.toBe(pid);

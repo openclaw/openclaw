@@ -107,11 +107,11 @@ async function seedYieldedParent() {
     }),
   ).toBe(true);
   expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
-    status: "done",
     lifecycleRunId: parentRunId,
     endedAt: startedAt + 50,
     abortedLastRun: false,
   });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })?.status).toBeUndefined();
   expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
     requesterYieldBatch: true,
   });
