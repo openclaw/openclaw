@@ -19,9 +19,13 @@ const loadWebSocketConstructor = createLazyRuntimeNamedExport(
 
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
+const WEBSOCKET_CLOSING = 2;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
+// ws waits 30s for a close acknowledgement. A silent peer would hold the
+// desktop or portal command that long after the local target has already ended.
+const STREAM_CLOSE_ACK_MS = 5_000;
 const streamLog = createSubsystemLogger("node-host/stream");
 
 type NodeStreamCloseTrigger =
@@ -101,6 +105,7 @@ function createNodeStreamSplice(params: {
   diagnostics: NodeStreamDiagnostics;
 }) {
   let resumeTimer: ReturnType<typeof setInterval> | undefined;
+  let closeAckTimer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
   let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
   const resumeWebSocket = () => params.ws.resume();
@@ -133,6 +138,8 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= trigger;
       settled = true;
       clearInterval(resumeTimer);
+      clearTimeout(closeAckTimer);
+      closeAckTimer = undefined;
       stopInbound();
       if (error) {
         reject(error);
@@ -166,9 +173,19 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= "target-close";
       stopInbound();
       if (params.socket.readableEnded && params.ws.readyState === WEBSOCKET_OPEN) {
-        // Let the Gateway receive the last frames and close acknowledgement before
-        // the control-channel invocation can retire its desktop/portal stream.
+        // Queued frames still flush inside ws.close(). The library then waits
+        // 30s for the acknowledgement; retire this command sooner.
         params.ws.close();
+        closeAckTimer = setTimeout(() => {
+          closeAckTimer = undefined;
+          finish("websocket-close");
+          if (
+            params.ws.readyState === WEBSOCKET_OPEN ||
+            params.ws.readyState === WEBSOCKET_CLOSING
+          ) {
+            params.ws.terminate();
+          }
+        }, STREAM_CLOSE_ACK_MS);
       } else {
         finish("target-close");
       }
