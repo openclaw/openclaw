@@ -18,6 +18,7 @@ const PLUGIN_JSON_VALUE_LIMITS = {
 function isPluginJsonValueWithinLimits(
   value: unknown,
   state: { depth: number; nodes: number },
+  maxValueStringLength: number,
 ): value is PluginJsonValue {
   const limits = PLUGIN_JSON_VALUE_LIMITS;
   state.nodes += 1;
@@ -28,14 +29,16 @@ function isPluginJsonValueWithinLimits(
     return true;
   }
   if (typeof value === "string") {
-    return value.length <= limits.maxStringLength;
+    return value.length <= maxValueStringLength;
   }
   if (typeof value === "number") {
     return Number.isFinite(value);
   }
   if (Array.isArray(value)) {
     state.depth += 1;
-    const ok = value.every((entry) => isPluginJsonValueWithinLimits(entry, state));
+    const ok = value.every((entry) =>
+      isPluginJsonValueWithinLimits(entry, state, maxValueStringLength),
+    );
     state.depth -= 1;
     return ok;
   }
@@ -53,15 +56,21 @@ function isPluginJsonValueWithinLimits(
   state.depth += 1;
   const ok = entries.every(
     ([key, entry]) =>
-      key.length <= limits.maxStringLength && isPluginJsonValueWithinLimits(entry, state),
+      key.length <= limits.maxStringLength &&
+      isPluginJsonValueWithinLimits(entry, state, maxValueStringLength),
   );
   state.depth -= 1;
   return ok;
 }
 
 /** Validates that a plugin hook payload is finite, plain JSON under size limits. */
-export function isPluginJsonValue(value: unknown): value is PluginJsonValue {
-  if (!isPluginJsonValueWithinLimits(value, { depth: 0, nodes: 0 })) {
+export function isPluginJsonValue(
+  value: unknown,
+  options?: { maxValueStringLength: number },
+): value is PluginJsonValue {
+  const maxValueStringLength =
+    options?.maxValueStringLength ?? PLUGIN_JSON_VALUE_LIMITS.maxStringLength;
+  if (!isPluginJsonValueWithinLimits(value, { depth: 0, nodes: 0 }, maxValueStringLength)) {
     return false;
   }
   try {

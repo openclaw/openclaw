@@ -1,12 +1,19 @@
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { normalizeCloudRepo } from "./cloud-worker-project-profiles.js";
-import { validateProviderSettings } from "./provider-settings.js";
+import {
+  validateProviderSettings,
+  WORKER_PROFILE_SETTINGS_JSON_LIMITS,
+} from "./provider-settings.js";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
 
 const CloudWorkerSettingsSchema = z.record(z.string(), z.unknown()).superRefine((value, ctx) => {
-  const message = validateProviderSettings(value, "Worker profile");
+  const message = validateProviderSettings(
+    value,
+    "Worker profile",
+    WORKER_PROFILE_SETTINGS_JSON_LIMITS,
+  );
   if (message) {
     ctx.addIssue({ code: "custom", message });
   }

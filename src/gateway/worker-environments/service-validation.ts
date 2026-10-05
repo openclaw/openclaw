@@ -5,7 +5,10 @@ import {
   WorkerMachineOptionsSchema,
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
-import { validateProviderSettings } from "../../config/provider-settings.js";
+import {
+  validateProviderSettings,
+  WORKER_PROFILE_SETTINGS_JSON_LIMITS,
+} from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -23,7 +26,11 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import { normalizeWorkerSshEndpoint } from "./store-validation.js";
 
 export function requireWorkerProfile(value: unknown): WorkerProfile {
-  const error = validateProviderSettings(value, "Worker profile");
+  const error = validateProviderSettings(
+    value,
+    "Worker profile",
+    WORKER_PROFILE_SETTINGS_JSON_LIMITS,
+  );
   if (error) {
     throw serviceError("invalid_profile", error);
   }

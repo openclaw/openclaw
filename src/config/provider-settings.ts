@@ -3,13 +3,19 @@ import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { isSecretRef } from "./types.secrets.js";
 
+export const WORKER_PROFILE_SETTINGS_JSON_LIMITS = { maxValueStringLength: 128 * 1024 } as const;
+
 /** Provider settings stay bounded JSON and retain secrets as references until provider use. */
-export function validateProviderSettings(value: unknown, label: string): string | undefined {
+export function validateProviderSettings(
+  value: unknown,
+  label: string,
+  options?: { maxValueStringLength: number },
+): string | undefined {
   if (
     typeof value !== "object" ||
     value === null ||
     Array.isArray(value) ||
-    !isPluginJsonValue(value)
+    !isPluginJsonValue(value, options)
   ) {
     return `${label} settings must be bounded finite JSON`;
   }

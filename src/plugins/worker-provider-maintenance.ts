@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { validateProviderSettings } from "../config/provider-settings.js";
+import {
+  validateProviderSettings,
+  WORKER_PROFILE_SETTINGS_JSON_LIMITS,
+} from "../config/provider-settings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -45,7 +48,11 @@ export async function maintainConfiguredWorkerProviders(params: {
     }
     const settings = configuredSettings(config, providerId);
     if (
-      settings.some(([, value]) => validateProviderSettings(value, "Worker profile") !== undefined)
+      settings.some(
+        ([, value]) =>
+          validateProviderSettings(value, "Worker profile", WORKER_PROFILE_SETTINGS_JSON_LIMITS) !==
+          undefined,
+      )
     ) {
       params.warn(
         `Worker provider maintenance skipped invalid settings (${providerId.slice(0, 128)})`,
