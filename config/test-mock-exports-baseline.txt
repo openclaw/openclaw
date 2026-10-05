@@ -7745,8 +7745,6 @@
 ["src/gateway/server-methods/conversations.test.ts","../conversation-send.js","6db1bd2673c47b0ecac442827531e55a03e37054082a4aa1e682c23bbf53cd58",1]
 ["src/gateway/server-methods/conversations.test.ts","../conversation-turn.js","c50b230ca782c5fda859b0f5b9972d926438f4a7f37d20757fe7a3dbe412120e",1]
 ["src/gateway/server-methods/cron-creator-transports.integration.test.ts","../../agents/node-exec-availability.js","71ec8ee2c185e6b5049a3d16551c604ca81707e8473f8c24a2420035f245d7ca",1]
-["src/gateway/server-methods/cron.delivery-aliases.test.ts","../../cron/delivery-preview.js","8b47b3d885a21e90cc4d7f4e54edb1a244805a36c4b0046215498855a673eaf5",1]
-["src/gateway/server-methods/cron.delivery-aliases.test.ts","../session-utils.js","6fbae9292681c5858a8c64d986b926e37e763ff482124e8a26b724483a50a5f0",1]
 ["src/gateway/server-methods/cron.history-publication.test.ts","../../config/sessions/session-history-worker-runtime.js","1b0cc1a892be0ea95e10c401548735d0f4f92dc83ca4bcdc30cf8040526a91cb",1]
 ["src/gateway/server-methods/cron.history-publication.test.ts","../../cron/delivery-preview.js","4812ec57bb201ca29bef2a56fc2f0858b8cd49f41317dfeb5c757fbea394a6f2",1]
 ["src/gateway/server-methods/cron.history-publication.test.ts","../../cron/store/read-only.js","3170f72c9e330da886a8cf3772bd34a44d8fcfd9d7e25adf6b6aac45fd25968b",1]
