@@ -1,5 +1,5 @@
+import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SessionsUsageResult } from "./data-types.ts";
 import type { UsageProps } from "./types.ts";
 
 type UsageCacheStatus = SessionsUsageResult["cacheStatus"];

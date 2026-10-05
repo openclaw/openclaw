@@ -132,7 +132,6 @@ function renderPreparedGroupMessage(
       entryRef: opts.entryRefFor?.(item.key),
       duplicateCount: item.duplicateCount ?? 1,
       showToolCalls: opts.showToolCalls ?? true,
-      autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
       assistantMessageDisclosure,
       messageActions: actionDetails,
     },

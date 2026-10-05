@@ -23,7 +23,6 @@ import {
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
-  buildUpdateInboxEntry,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import {
@@ -230,15 +229,7 @@ export class SidebarAttentionStoreController implements StoreController {
       return outbox;
     }
     const overlay = this.sources.overlays.snapshot;
-    const updateState = resolveSidebarUpdateAttention(this.sources);
-    const update = buildUpdateInboxEntry({
-      canDismiss: updateState.canUpdate,
-      dismissal: updateState.dismissal,
-      forced: updateState.forced,
-      requiresAction: updateState.forced || (updateState.canUpdate && updateState.actionable),
-      severity: overlay.updateStatusBanner?.tone === "danger" ? "error" : "warning",
-      visible: updateState.present,
-    });
+    const update = resolveSidebarUpdateAttention(this.sources);
     const scopeUpgrade = buildScopeUpgradeInboxEntry({
       scopes: gateway.hello?.auth?.scopes,
       state: this.sources.scopeUpgrade.state,

@@ -43,7 +43,7 @@ import {
   type PendingComposerSnapshot,
 } from "./chat-send-composer.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
-import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
+import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
   canSendVolatileQueueItem,
@@ -400,15 +400,12 @@ export async function handleSendChat(
         if (waitsForPicker && !(await waitForSubmittedRoute(host, submittedSessionKey))) {
           return;
         }
-        let prevDraft = messageOverride == null ? previousDraft : undefined;
         let recoveryComposer: PendingComposerSnapshot | undefined;
         const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
           if (parsed.command.key !== "export-session") {
-            const cleared = clearComposer();
-            prevDraft = cleared.previousDraft;
-            recoveryComposer = cleared;
+            recoveryComposer = clearComposer();
           }
         }
         const recovery = captureChatCommandComposerRecovery(host, recoveryScope, recoveryComposer);
@@ -419,12 +416,6 @@ export async function handleSendChat(
           host,
           parsed.command.key,
           parsed.args,
-          {
-            previousDraft: prevDraft,
-            restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
-            sendResetMessage: (resetMessage, resetOpts) =>
-              chatOutboxDrainDependencies.sendResetSlashCommand(host, resetMessage, resetOpts),
-          },
         );
         if (
           parsed.command.key === "export-session" &&
@@ -666,8 +657,6 @@ export async function handleSendChat(
           ...(allowActiveRunSend ? { allowActiveRunSend: true } : {}),
           ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
           ...(pendingSettings ? { pendingSettings } : {}),
-          restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
-          restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
           restoreOnTerminalFailure: Boolean(rawParsedCommand || intent),
           routingSessionKey: submittedSessionKey,
           storageMode: canSendFromMemory ? "memory" : "durable",

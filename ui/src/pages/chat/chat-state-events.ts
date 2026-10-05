@@ -218,7 +218,6 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-  supersedeInFlight = false,
 ): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -234,7 +233,6 @@ function replayPendingSessionMessageReload(
   state.pendingSessionMessageReloadSessionKey = null;
   void loadChatHistory(state, {
     deferBranches: !presentation(),
-    supersedeInFlight,
   }).finally(() => state.requestUpdate?.());
   return true;
 }

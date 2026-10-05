@@ -2335,6 +2335,69 @@ describe("handleSendChat", () => {
     },
   );
 
+  it.each(["scope missing", "scope revoked", "equivalent alias", "run started", "confirmed"])(
+    "sends reset through its FIFO owner when %s",
+    async (outcome) => {
+      const confirmation = createDeferred<boolean>();
+      const confirming = createDeferred();
+      const host = makeChatHost({
+        chatMessage: "/reset now",
+        sessionKey: "main",
+        hello: {
+          ...gatewayHelloForMethods(
+            ["chat.send"],
+            outcome === "scope missing" ? ["operator.read"] : ["operator.admin"],
+          ),
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "main",
+              mainKey: "main",
+              mainSessionKey: "agent:main:main",
+              scope: "per-sender",
+            },
+          },
+        },
+        requestHandlers: { "chat.send": { status: "started" } },
+        confirmConversationReset: () => {
+          confirming.resolve();
+          return confirmation.promise;
+        },
+      });
+      const sending = handleSendChat(host);
+      if (outcome !== "scope missing") {
+        await confirming.promise;
+        if (outcome === "scope revoked") {
+          host.hello = {
+            ...host.hello!,
+            auth: { role: "operator", scopes: ["operator.write"] },
+          };
+        } else if (outcome === "equivalent alias") {
+          host.sessionKey = "agent:main:main";
+        } else if (outcome === "run started") {
+          host.chatRunId = "run-started-during-confirmation";
+        }
+        confirmation.resolve(true);
+      }
+      await sending;
+
+      if (outcome === "equivalent alias" || outcome === "confirmed") {
+        expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+        expect(findRequestPayload(host.request, "chat.send", "reset payload")).toMatchObject({
+          message: "/reset now",
+        });
+      } else {
+        expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+        expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+          localCommandName: "reset",
+          sendState: outcome === "run started" ? "waiting-idle" : "failed",
+        });
+        if (outcome !== "run started") {
+          expect(host.lastError).toContain("operator.admin");
+        }
+      }
+    },
+  );
+
   it("does not apply a queued reset acknowledgement from a replaced Gateway", async () => {
     const ack = createDeferred<{ runId: string; status: "ok" }>();
     const replacementRequest = makeRequestMock();

@@ -254,15 +254,13 @@ export function sessionListAgentMatcher(agentId?: string | null) {
 }
 
 /** Capture membership before event reconciliation can remove or move a known child. */
-export function sessionListEventMatcher(payload: unknown, fallbackAgentId?: string | null) {
-  const matches = sessionChangedSnapshots(payload).map((snapshot) =>
-    sessionListSnapshotMatcher(snapshot, fallbackAgentId),
-  );
+export function sessionListEventMatcher(payload: unknown) {
+  const matches = sessionChangedSnapshots(payload).map(sessionListSnapshotMatcher);
   return (scope: SessionListScope, result?: SessionsListResult | null): boolean =>
     matches.some((match) => match(scope, result));
 }
 
-function sessionListSnapshotMatcher(payload: unknown, fallbackAgentId?: string | null) {
+function sessionListSnapshotMatcher(payload: unknown) {
   const parsed = parseSessionChangedEvent(payload);
   const info = parsed?.[0];
   const event = parsed?.[1] ?? asOptionalRecord(payload);
@@ -270,7 +268,7 @@ function sessionListSnapshotMatcher(payload: unknown, fallbackAgentId?: string |
   const matchesAgent = sessionListAgentMatcher(
     info?.agentId ??
       parseAgentSessionKey(info?.key)?.agentId ??
-      (typeof event?.agentId === "string" ? event.agentId : fallbackAgentId),
+      (typeof event?.agentId === "string" ? event.agentId : undefined),
   );
   const owners = [
     source?.controlOwnerSessionKey,
