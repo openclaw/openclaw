@@ -495,11 +495,6 @@ export async function preparePlacementWorkspaceResultAuthority(
   claim.sessionId = required(claim.sessionId, "session id");
   const publicationSequence = owner.published.get(claim.sessionId) ?? 0;
   const observation = observePlacementAuthority(pathname, claim.sessionId);
-  const assertCurrent = () => {
-    if (!isCurrent()) {
-      throw new Error(`Session ${claim.sessionId} turn claim authority changed`);
-    }
-  };
   try {
     const projection = await read([claim.sessionId]);
     context.admission.assertCurrent();
@@ -706,6 +701,11 @@ export async function preparePlacementTurnClaimAuthority(
       return true;
     } catch {
       return false;
+    }
+  };
+  const assertCurrent = () => {
+    if (!isCurrent()) {
+      throw new Error(`Session ${claim.sessionId} turn claim authority changed`);
     }
   };
   try {
