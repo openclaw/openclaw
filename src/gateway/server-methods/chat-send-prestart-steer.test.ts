@@ -54,6 +54,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     const releaseWorkspace = createDeferred();
     const releaseInitialRun = createDeferred();
     const releaseInitialBackend = createDeferred();
+    const initialRuntimeStarted = createDeferred();
     const inputQueued = createDeferred();
     const steerAccepted = createDeferred();
     const releaseSteerCommit = createDeferred();
@@ -96,6 +97,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       const runId = expectDefined(opts?.runId, "runtime run ID");
       if (!initialOperation) {
         initialOperation = expectDefined(replyOperation, "initial reply admission");
+        initialRuntimeStarted.resolve();
         await releaseInitialBackend.promise;
         initialOperation.attachBackend({
           kind: "embedded",
@@ -200,6 +202,8 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       expect(terminalBeforeConsumption).toEqual([]);
       releaseWorkspace.resolve();
       await withinTest(Promise.race([inputQueued.promise, steerTerminal.promise]), signal);
+      // Steering can park before reply preparation reaches the runtime.
+      await withinTest(initialRuntimeStarted.promise, signal);
       expect(context.chatQueuedTurns.has(steerRunId)).toBe(true);
       expect(initialOperation?.phase).toBe("running");
       expect(consumed).toEqual([]);
