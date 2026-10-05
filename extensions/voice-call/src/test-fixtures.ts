@@ -53,6 +53,7 @@ export function createVoiceCallBaseConfig(params?: {
       instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
       toolPolicy: "safe-read-only",
       consultPolicy: "auto",
+      consentWindow: { enabled: false, windowMs: 5000 },
       tools: [],
       fastContext: {
         enabled: false,

@@ -468,6 +468,62 @@ describe("RealtimeCallHandler lifecycle", () => {
     expect(submitToolResult).toHaveBeenCalledTimes(1);
   });
 
+  it("speaks the consent-timeout goodbye before directly ending a native-delegation call", async () => {
+    let request: RealtimeVoiceBridgeCreateRequest | undefined;
+    const sendUserMessage = vi.fn();
+    const provider = makeRealtimeProvider((params) => {
+      request = params;
+      return createBridge(() => {}, { sendUserMessage });
+    });
+    const capabilities = {
+      transports: ["gateway-relay" as const],
+      inputAudioFormats: [],
+      outputAudioFormats: [],
+      handlesAgentConsult: true,
+      supportsBargeIn: false,
+      handlesInputAudioBargeIn: true,
+    };
+    const harness = createCarrierLifecycleHarness(provider.createBridge, {
+      consentWindow: { enabled: true, windowMs: 100 },
+      resolveCallRegistration: () => ({
+        agentId: "main",
+        instructions: "Ask for consent.",
+        provider,
+        providerConfig: {},
+        capabilities,
+      }),
+    });
+    const { ws } = await connectCarrierStream(harness.handler);
+
+    sendCarrierStart(ws, "MZ-native-consent", "CA-startup");
+    await vi.waitFor(() => expect(request).toBeDefined());
+
+    vi.useFakeTimers();
+    try {
+      request?.onTranscript?.("assistant", "Do you consent to this call being recorded?", true);
+      // The consent playback mark is queued only once the provider reports the response done (after
+      // the question audio), so the watchdog only arms from that signal; fire it before the window
+      // is allowed to expire.
+      request?.onResponseDone?.({ status: "completed", responseId: "response-1" });
+      // No goodbye audio is emitted by the stubbed bridge, so the close waits out the
+      // bounded 20s ceiling before ending the call.
+      vi.advanceTimersByTime(31_000);
+      await Promise.resolve();
+
+      expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/Goodbye.*host will end the call/s),
+      );
+      expect(harness.endCall).toHaveBeenCalledExactlyOnceWith(harness.call.callId, {
+        reason: "timeout",
+      });
+      expect(sendUserMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.endCall.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("aborts a hung native consult during stream teardown", async () => {
     let onToolCall: RealtimeVoiceBridgeCreateRequest["onToolCall"];
     let consultSignal: AbortSignal | undefined;

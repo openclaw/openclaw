@@ -866,6 +866,180 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
+  it("does not end an unanswered ordinary opening question by default", async () => {
+    const { endCall, start } = makeCallHarness(
+      {},
+      { call: makeCallRecord("CA-consent-default-off") },
+    );
+    const { callbacks } = await start("MZ-consent-default-off");
+
+    vi.useFakeTimers();
+    callbacks.onTranscript?.("assistant", "What would you like help with?", true);
+    vi.advanceTimersByTime(20_000);
+
+    expect(endCall).not.toHaveBeenCalled();
+  });
+
+  it("prompts the goodbye and ends an opted-in silent call when consult tools are disabled", async () => {
+    const sendUserMessage = vi.fn();
+    const triggerGreeting = vi.fn();
+    const { endCall, start } = makeCallHarness(
+      { sendUserMessage, triggerGreeting },
+      {
+        call: makeCallRecord("CA-consent-tool-policy-none"),
+        config: { toolPolicy: "none", consentWindow: { enabled: true, windowMs: 100 } },
+      },
+    );
+    const { callbacks } = await start("MZ-consent-tool-policy-none");
+    // The consent flow arms the greeting on bridge readiness; exercise the real
+    // harness path rather than a provider-level field that is never forwarded.
+    callbacks.onReady?.();
+    expect(triggerGreeting).toHaveBeenCalled();
+
+    vi.useFakeTimers();
+    callbacks.onTranscript?.("assistant", "Do you consent to this call being recorded?", true);
+    // The provider reports the question response complete after its model turn; the playback mark
+    // is queued from there so it cannot be acknowledged ahead of the question audio.
+    callbacks.onResponseDone?.({ status: "completed", responseId: "response-1" });
+    vi.advanceTimersByTime(31_000);
+    await Promise.resolve();
+
+    expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/Goodbye.*openclaw_end_call/s),
+    );
+    expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
+    expect(sendUserMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      endCall.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("reports a rejected carrier hangup after the consent window expires", async () => {
+    const sendUserMessage = vi.fn();
+    const endCall = vi.fn(async () => ({ success: false, error: "carrier rejected hangup" }));
+    const { start } = makeCallHarness(
+      { sendUserMessage },
+      {
+        call: makeCallRecord("CA-consent-end-failed"),
+        config: { consentWindow: { enabled: true, windowMs: 100 } },
+        deps: { manager: { endCall } },
+      },
+    );
+    const { ws, callbacks } = await start("MZ-consent-end-failed");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+
+    vi.useFakeTimers();
+    callbacks.onTranscript?.("assistant", "Do you consent to this call being recorded?", true);
+    callbacks.onResponseDone?.({ status: "completed", responseId: "response-1" });
+    vi.advanceTimersByTime(31_000);
+    await Promise.resolve();
+
+    expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("carrier rejected hangup"));
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("could not be closed automatically"),
+    );
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("does not queue a consent playback mark when the consent window is disabled", async () => {
+    const { endCall, start } = makeCallHarness(
+      {},
+      { call: makeCallRecord("CA-consent-mark-disabled") },
+    );
+    const { callbacks } = await start("MZ-consent-mark-disabled");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+
+    vi.useFakeTimers();
+    // Even the canonical consent question must not request a carrier mark on a default-config
+    // call: the opt-in flag, not transcript punctuation, admits the flow.
+    callbacks.onTranscript?.("assistant", "Do you consent to this call being recorded?", true);
+    callbacks.onResponseDone?.({ status: "completed", responseId: "response-1" });
+    vi.advanceTimersByTime(20_000);
+    await Promise.resolve();
+
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("consent-question"));
+    expect(endCall).not.toHaveBeenCalled();
+  });
+
+  it("does not arm the consent watchdog when the first assistant turn is not the consent question", async () => {
+    const sendUserMessage = vi.fn();
+    const { endCall, start } = makeCallHarness(
+      { sendUserMessage },
+      {
+        call: makeCallRecord("CA-consent-not-question"),
+        config: { consentWindow: { enabled: true, windowMs: 100 } },
+      },
+    );
+    const { callbacks } = await start("MZ-consent-not-question");
+
+    vi.useFakeTimers();
+    callbacks.onTranscript?.("assistant", "Hello, how can I help you today?", true);
+    vi.advanceTimersByTime(30_000);
+    await Promise.resolve();
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(endCall).not.toHaveBeenCalled();
+  });
+
+  it("does not arm the consent watchdog for a consent statement that asks nothing", async () => {
+    const sendUserMessage = vi.fn();
+    const { endCall, start } = makeCallHarness(
+      { sendUserMessage },
+      {
+        call: makeCallRecord("CA-consent-statement"),
+        config: { consentWindow: { enabled: true, windowMs: 100 } },
+      },
+    );
+    const { callbacks } = await start("MZ-consent-statement");
+
+    vi.useFakeTimers();
+    // Names both topics but is a policy statement, not a question; it must not arm the timer.
+    callbacks.onTranscript?.("assistant", "We require consent for recording.", true);
+    vi.advanceTimersByTime(30_000);
+    await Promise.resolve();
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(endCall).not.toHaveBeenCalled();
+  });
+
+  it("arms the consent watchdog only on the finalized consent question", async () => {
+    const sendUserMessage = vi.fn();
+    const { endCall, start } = makeCallHarness(
+      { sendUserMessage },
+      {
+        call: makeCallRecord("CA-consent-final-turn"),
+        config: { consentWindow: { enabled: true, windowMs: 100 } },
+      },
+    );
+    const { callbacks } = await start("MZ-consent-final-turn");
+
+    vi.useFakeTimers();
+    // A partial consent question must not arm the timer: the provider may pause mid-utterance.
+    callbacks.onTranscript?.("assistant", "Do you consent to this call being recorded?", false);
+    vi.advanceTimersByTime(30_000);
+    await Promise.resolve();
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(endCall).not.toHaveBeenCalled();
+
+    // The finalized turn arms the window, but the playback mark must wait until the question's
+    // response completes; only then may the answer window count down and the silent caller be
+    // closed.
+    callbacks.onTranscript?.("assistant", "Do you consent to this call being recorded?", true);
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(endCall).not.toHaveBeenCalled();
+
+    // The provider reports the question response complete after its model turn.
+    callbacks.onResponseDone?.({ status: "completed", responseId: "response-1" });
+    vi.advanceTimersByTime(31_000);
+    await Promise.resolve();
+    expect(sendUserMessage).toHaveBeenCalledOnce();
+    expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
+  });
+
   it("submits continuing responses only for realtime agent consult calls", async () => {
     const consultResult = createDeferred<unknown>();
     const workingSubmission = createDeferred<void>();

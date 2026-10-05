@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as realtimeBootstrapSdk from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
+import { REALTIME_VOICE_CONSENT_QUESTION } from "./realtime-consent.js";
 
 const contextSdk: Partial<
   Pick<typeof realtimeBootstrapSdk, "resolveRealtimeVoiceAgentContextInstructions">
@@ -21,6 +22,11 @@ export async function buildRealtimeVoiceInstructions(params: {
     params.baseInstructions,
     buildRealtimeVoiceAgentConsultPolicyInstructions(config.realtime),
   ];
+  if (config.realtime.consentWindow.enabled) {
+    sections.push(
+      `Opening consent flow: Your first spoken response must ask exactly, "${REALTIME_VOICE_CONSENT_QUESTION}" Wait for the caller's answer before continuing the conversation.`,
+    );
+  }
   if (contextSdk.resolveRealtimeVoiceAgentContextInstructions) {
     sections.push(
       await contextSdk.resolveRealtimeVoiceAgentContextInstructions({

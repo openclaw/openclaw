@@ -718,6 +718,19 @@
               }
             }
           },
+          "consentWindow": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "windowMs": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
           "providers": {
             "type": "object",
             "additionalProperties": {

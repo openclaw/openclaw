@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 // Voice Call tests cover config plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -757,6 +762,7 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
     expect(normalized.realtime.consultPolicy).toBe("auto");
+    expect(normalized.realtime.consentWindow).toEqual({ enabled: false, windowMs: 5000 });
     expect(normalized.realtime.fastContext).toEqual({
       enabled: false,
       timeoutMs: 800,
@@ -904,6 +910,21 @@ describe("resolveVoiceCallConfig realtime settings", () => {
     expect(resolved.realtime.consultFastMode).toBe(true);
   });
 
+  it("keeps the consent window default-off and fills its window default when enabled", () => {
+    const defaults = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+    });
+    const enabled = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      realtime: { consentWindow: { enabled: true } },
+    });
+
+    expect(defaults.realtime.consentWindow).toEqual({ enabled: false, windowMs: 5000 });
+    expect(enabled.realtime.consentWindow).toEqual({ enabled: true, windowMs: 5000 });
+  });
+
   it("rejects invalid realtime consult thinking levels", () => {
     expect(() =>
       resolveVoiceCallConfig({
@@ -923,5 +944,48 @@ describe("resolveVoiceCallConfig realtime settings", () => {
     });
 
     expect(resolved.responseModel).toBeUndefined();
+  });
+});
+
+describe("voice-call manifest config schema", () => {
+  // The host admits plugin config against the manifest schema before the plugin loads,
+  // so runtime-only Zod fields are unreachable until the manifest declares them.
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: JsonSchemaObject };
+  const validateManifestConfig = (value: unknown) =>
+    validateJsonSchemaValue({
+      cacheKey: "voice-call.manifest.config.test",
+      schema: manifest.configSchema,
+      value,
+      applyDefaults: true,
+    });
+
+  it("admits realtime.consentWindow", () => {
+    const result = validateManifestConfig({
+      realtime: { enabled: true, consentWindow: { enabled: true, windowMs: 5000 } },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects consent window values the runtime schema rejects", () => {
+    expect(
+      validateManifestConfig({ realtime: { consentWindow: { enabled: true, windowMs: 0 } } }).ok,
+    ).toBe(false);
+    expect(
+      validateManifestConfig({ realtime: { consentWindow: { enabled: true, windowMs: 1.5 } } }).ok,
+    ).toBe(false);
+    expect(
+      validateManifestConfig({ realtime: { consentWindow: { enabled: true, graceMs: 5000 } } }).ok,
+    ).toBe(false);
+  });
+
+  it("still rejects unknown realtime properties", () => {
+    const result = validateManifestConfig({
+      realtime: { enabled: true, consentWindowTypo: { enabled: true } },
+    });
+
+    expect(result.ok).toBe(false);
   });
 });
