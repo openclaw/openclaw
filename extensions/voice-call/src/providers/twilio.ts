@@ -539,7 +539,7 @@ export class TwilioProvider implements VoiceCallProvider {
       }
 
       try {
-        await this.playTtsViaStream(input.text, streamSid);
+        await this.playTtsViaStream(input.text, streamSid, input.providerCallId);
         return;
       } catch (err) {
         console.warn(
@@ -576,7 +576,11 @@ export class TwilioProvider implements VoiceCallProvider {
     );
   }
 
-  private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
+  private async playTtsViaStream(
+    text: string,
+    streamSid: string,
+    conversationId: string,
+  ): Promise<void> {
     if (!this.ttsProvider || !this.mediaStreamHandler) {
       throw new Error("TTS provider and media stream handler required");
     }
@@ -601,7 +605,10 @@ export class TwilioProvider implements VoiceCallProvider {
       const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
       try {
         muLawAudio = await raceWithTimeout(
-          ttsProvider.synthesizeForTelephony(text),
+          ttsProvider.synthesizeForTelephony(text, {
+            ...(conversationId.trim() ? { conversationId: conversationId.trim() } : {}),
+            signal,
+          }),
           synthTimeoutMs,
           () => {
             throw new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`);

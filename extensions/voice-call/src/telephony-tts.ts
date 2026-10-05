@@ -11,9 +11,15 @@ export type TelephonyTtsRuntime = Pick<
 >;
 
 /** Provider facade used by Twilio/webhook code for telephony synthesis. */
+export type TelephonyTtsSynthesisOptions = {
+  conversationId?: string;
+  signal?: AbortSignal;
+};
+
+/** Provider facade used by Twilio/webhook code for telephony synthesis. */
 export type TelephonyTtsProvider = {
   synthesisTimeoutMs: number;
-  synthesizeForTelephony: (text: string) => Promise<Buffer>;
+  synthesizeForTelephony: (text: string, options?: TelephonyTtsSynthesisOptions) => Promise<Buffer>;
 };
 
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
@@ -26,6 +32,32 @@ class UnsupportedTelephonyTtsOutputFormatError extends Error {
     super(`Unsupported telephony TTS output format "${outputFormat}" from provider "${provider}"`);
     this.name = "UnsupportedTelephonyTtsOutputFormatError";
   }
+}
+
+function mergeDialogueOverrides(
+  overrides: {
+    ttsText?: string;
+    provider?: string;
+    providerOverrides?: Record<string, Record<string, unknown>>;
+  },
+  options?: TelephonyTtsSynthesisOptions,
+) {
+  const conversationId = options?.conversationId?.trim();
+  if (!conversationId && !options?.signal) {
+    return overrides;
+  }
+  const current = overrides.providerOverrides?.elevenlabs;
+  return {
+    ...overrides,
+    providerOverrides: {
+      ...overrides.providerOverrides,
+      elevenlabs: {
+        ...(current && typeof current === "object" ? current : {}),
+        ...(conversationId ? { conversationId } : {}),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      },
+    },
+  };
 }
 
 function convertTelephonyTtsOutput(result: {
@@ -79,7 +111,7 @@ export async function createTelephonyTtsProvider(params: {
 
   return {
     synthesisTimeoutMs,
-    synthesizeForTelephony: async (text: string) => {
+    synthesizeForTelephony: async (text: string, options?: TelephonyTtsSynthesisOptions) => {
       const prepared = await runtime.prepareTtsRequest({
         cfg: preparedConfig.cfg,
         text,
@@ -96,7 +128,7 @@ export async function createTelephonyTtsProvider(params: {
       const result = await runtime.textToSpeechTelephony({
         text: cleanText,
         cfg: prepared.cfg,
-        overrides: directives.overrides,
+        overrides: mergeDialogueOverrides(directives.overrides, options),
       });
 
       if (!result.success || !result.audioBuffer || !result.sampleRate) {

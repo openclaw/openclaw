@@ -357,6 +357,17 @@ describe("TwilioProvider", () => {
           "first",
           "second",
         ]);
+        expect(
+          f.synthesize.mock.calls.map(
+            ([request]) => request.overrides?.providerOverrides?.elevenlabs?.conversationId,
+          ),
+        ).toEqual(["CA-stream", "CA-stream"]);
+        expect(
+          f.synthesize.mock.calls.every(
+            ([request]) =>
+              request.overrides?.providerOverrides?.elevenlabs?.signal instanceof AbortSignal,
+          ),
+        ).toBe(true);
         f.acknowledge(1);
         await withTimeout(second);
         expect(Buffer.concat(f.speech())).toEqual(Buffer.alloc(640, 0xce));

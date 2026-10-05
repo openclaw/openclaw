@@ -42,15 +42,32 @@ export ELEVENLABS_API_KEY="..."
 }
 ```
 
-Set `modelId` to `eleven_v3` to use ElevenLabs v3 TTS. OpenClaw keeps
-`eleven_multilingual_v2` as the default for existing installs.
+Set `modelId` to `eleven_v3` to use ElevenLabs v3 on the text-to-speech API.
+Set `modelId` to `eleven_v4_turbo` for low-latency agent speech, or `eleven_v4`
+for the slower narration model. `eleven_v3_conversational` also uses the
+dialogue path. OpenClaw keeps `eleven_multilingual_v2` as the default for
+existing installs.
+
+`eleven_v4`, `eleven_v4_turbo`, and `eleven_v3_conversational` are not accepted
+by the text-to-speech endpoint. OpenClaw sends those models over the Text to
+Dialogue WebSocket at `/v1/text-to-dialogue/stream-input`. Flash, Turbo v2.5,
+and Multilingual stay on text-to-speech. `eleven_turbo_v2_5` is still rewritten
+to `eleven_flash_v2_5`, and `eleven_turbo_v2` is still rewritten to
+`eleven_flash_v2`.
+
+Dialogue models read `stability` only. The other voice settings still apply to
+text-to-speech models. A telephony caller can pass a `conversationId` provider
+override so later utterances on that call share one socket and keep the scene.
+Each utterance is one turn. Aborting synthesis closes that socket, which is
+how interruption works on this API. While the conversation is idle the socket
+sends `keep_alive`, and it closes after 10 minutes without another utterance.
 
 Discord voice channels use ElevenLabs' streaming TTS endpoint when ElevenLabs
 is the selected `voice.tts`/`tts` provider: playback starts from the
 returned audio stream instead of waiting for OpenClaw to download the whole
 audio file first. `latencyTier` maps to ElevenLabs' `optimize_streaming_latency`
-query parameter for models that accept it; OpenClaw omits that parameter for
-`eleven_v3`, which rejects it.
+query parameter for models that accept it. OpenClaw omits that parameter for
+`eleven_v3`, which rejects it. Dialogue models do not use it.
 
 ## Speech-to-text
 

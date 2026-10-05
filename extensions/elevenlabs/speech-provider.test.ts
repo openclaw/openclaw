@@ -2,6 +2,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetElevenLabsDialogueSessionsForTests,
+  setElevenLabsDialogueSocketFactoryForTests,
+  type ElevenLabsDialogueSocket,
+} from "./dialogue.js";
 import { isValidElevenLabsVoiceId } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
 
@@ -74,6 +79,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   afterEach(() => {
+    resetElevenLabsDialogueSessionsForTests();
     globalThis.fetch = originalFetch;
     fetchWithSsrFGuardMock.mockClear();
     vi.unstubAllEnvs();
@@ -298,4 +304,129 @@ describe("elevenlabs speech provider", () => {
     await release();
     expect(cancel).toHaveBeenCalledOnce();
   });
+
+  it("advertises Eleven v4 dialogue models without changing the default", () => {
+    expect(provider.defaultModel).toBe("eleven_multilingual_v2");
+    expect(provider.models).toEqual(
+      expect.arrayContaining(["eleven_v4_turbo", "eleven_v4", "eleven_v3_conversational"]),
+    );
+  });
+
+  it("keeps eleven_v3 on the text-to-speech API", async () => {
+    setElevenLabsDialogueSocketFactoryForTests(() => {
+      throw new Error("dialogue socket opened for a text-to-speech model");
+    });
+    await provider.synthesizeTelephony?.({
+      ...request,
+      providerConfig: { apiKey: "xi-test", modelId: "eleven_v3" },
+    });
+    expect(sentRequest().url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE");
+    expect(sentRequest().url.searchParams.has("optimize_streaming_latency")).toBe(false);
+  });
+
+  it("sends eleven_v4_turbo telephony over the dialogue websocket", async () => {
+    const sockets: ProviderDialogueSocket[] = [];
+    setElevenLabsDialogueSocketFactoryForTests((url, options) => {
+      const socket = new ProviderDialogueSocket(url, options.headers);
+      sockets.push(socket);
+      queueMicrotask(() => socket.open());
+      return socket;
+    });
+
+    const result = await provider.synthesizeTelephony?.({
+      ...request,
+      providerConfig: {
+        apiKey: "xi-test",
+        modelId: "Eleven_V4_Turbo",
+        voiceSettings: { stability: 0.2, similarityBoost: 0.9, speed: 1.4 },
+      },
+      providerOverrides: { languageCode: "en", seed: 7 },
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      audioBuffer: Buffer.from([1, 2, 3]),
+      outputFormat: "pcm_22050",
+      sampleRate: 22_050,
+    });
+    const socket = expectDefined(sockets[0], "dialogue socket");
+    const url = new URL(socket.url);
+    expect(url.protocol).toBe("wss:");
+    expect(url.pathname).toBe("/v1/text-to-dialogue/stream-input");
+    expect(url.searchParams.get("model_id")).toBe("eleven_v4_turbo");
+    expect(url.searchParams.get("output_format")).toBe("pcm_22050");
+    expect(url.searchParams.get("language_code")).toBe("en");
+    expect(url.searchParams.get("seed")).toBe("7");
+    expect(url.searchParams.has("optimize_streaming_latency")).toBe(false);
+    expect(url.search).not.toContain("xi-test");
+    expect(socket.headers["xi-api-key"]).toBe("xi-test");
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toEqual([
+      {
+        voices: ["pMsXgVXv3BLzUgSXRplE"],
+        voice_settings: { stability: 0.2 },
+      },
+      {
+        inputs: [{ text: "hello", voice_id: "pMsXgVXv3BLzUgSXRplE", new_turn: true }],
+        flush: true,
+      },
+    ]);
+  });
 });
+
+class ProviderDialogueSocket implements ElevenLabsDialogueSocket {
+  readyState = 0;
+  readonly sent: string[] = [];
+  private openListeners: Array<() => void> = [];
+  private messageListeners: Array<(data: unknown) => void> = [];
+  private opened = false;
+
+  constructor(
+    readonly url: string,
+    readonly headers: Record<string, string>,
+  ) {}
+
+  open(): void {
+    if (this.opened) {
+      return;
+    }
+    this.opened = true;
+    this.readyState = 1;
+    for (const listener of this.openListeners) {
+      listener();
+    }
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+    if (this.sent.length === 2) {
+      this.push({ audio: "AQID", is_final_audio_for_turn: true });
+    }
+  }
+
+  close(): void {
+    this.readyState = 3;
+  }
+
+  push(message: unknown): void {
+    const encoded = JSON.stringify(message);
+    for (const listener of this.messageListeners) {
+      listener(encoded);
+    }
+  }
+
+  onOpen(listener: () => void): void {
+    this.openListeners.push(listener);
+    if (this.opened) {
+      listener();
+    }
+  }
+
+  onMessage(listener: (data: unknown) => void): void {
+    this.messageListeners.push(listener);
+  }
+
+  onError(_listener: (error: Error) => void): void {}
+
+  onClose(_listener: () => void): void {}
+}

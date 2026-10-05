@@ -1167,6 +1167,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/elevenlabs:
+    dependencies:
+      ws:
+        specifier: 8.21.3
+        version: 8.21.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

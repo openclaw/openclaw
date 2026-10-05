@@ -26,6 +26,11 @@ import {
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
+import {
+  resolveElevenLabsDialogueModelId,
+  synthesizeElevenLabsDialogue,
+  streamElevenLabsDialogue,
+} from "./dialogue.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
@@ -39,6 +44,9 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
 };
 
 const ELEVENLABS_TTS_MODELS = [
+  "eleven_v4_turbo",
+  "eleven_v4",
+  "eleven_v3_conversational",
   "eleven_v3",
   "eleven_multilingual_v2",
   "eleven_flash_v2_5",
@@ -305,6 +313,53 @@ type ElevenLabsSynthesisRequest = Pick<
   "providerConfig" | "providerOverrides" | "text" | "timeoutMs"
 >;
 
+function readDialogueTurnOptions(overrides: SpeechProviderOverrides | undefined): {
+  conversationId?: string;
+  signal?: AbortSignal;
+} {
+  const conversationId = trimToUndefined(overrides?.conversationId);
+  if (conversationId && !/^[\w.:-]{1,200}$/.test(conversationId)) {
+    throw new Error("Invalid ElevenLabs dialogue conversation id");
+  }
+  const signal = overrides?.signal instanceof AbortSignal ? overrides.signal : undefined;
+  return {
+    ...(conversationId ? { conversationId } : {}),
+    ...(signal ? { signal } : {}),
+  };
+}
+
+async function synthesizeElevenLabsAudio(
+  req: ElevenLabsSynthesisRequest,
+  options: { outputFormat: string; latencyTier?: number },
+): Promise<Buffer> {
+  const request = resolveElevenLabsTtsRequest(req, options);
+  const dialogueModelId = resolveElevenLabsDialogueModelId(request.modelId);
+  if (!dialogueModelId) {
+    return await elevenLabsTTS(request);
+  }
+  return await synthesizeElevenLabsDialogue({
+    ...request,
+    modelId: dialogueModelId,
+    ...readDialogueTurnOptions(req.providerOverrides),
+  });
+}
+
+async function streamElevenLabsAudio(
+  req: ElevenLabsSynthesisRequest,
+  options: { outputFormat: string; latencyTier?: number },
+): Promise<{ audioStream: ReadableStream<Uint8Array>; release: () => Promise<void> }> {
+  const request = resolveElevenLabsTtsRequest(req, options);
+  const dialogueModelId = resolveElevenLabsDialogueModelId(request.modelId);
+  if (!dialogueModelId) {
+    return await elevenLabsTTSStream(request);
+  }
+  return await streamElevenLabsDialogue({
+    ...request,
+    modelId: dialogueModelId,
+    ...readDialogueTurnOptions(req.providerOverrides),
+  });
+}
+
 function resolveElevenLabsTtsRequest(
   req: ElevenLabsSynthesisRequest,
   options: Pick<Parameters<typeof elevenLabsTTS>[0], "outputFormat" | "latencyTier">,
@@ -416,12 +471,10 @@ export function buildElevenLabsSpeechProvider({
     synthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputPlan = resolveElevenLabsOutputPlan(req);
-      const audioBuffer = await elevenLabsTTS(
-        resolveElevenLabsTtsRequest(req, {
-          outputFormat: outputPlan.outputFormat,
-          latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
-        }),
-      );
+      const audioBuffer = await synthesizeElevenLabsAudio(req, {
+        outputFormat: outputPlan.outputFormat,
+        latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
+      });
       return {
         audioBuffer,
         ...outputPlan,
@@ -430,12 +483,10 @@ export function buildElevenLabsSpeechProvider({
     streamSynthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputPlan = resolveElevenLabsOutputPlan(req);
-      const stream = await elevenLabsTTSStream(
-        resolveElevenLabsTtsRequest(req, {
-          outputFormat: outputPlan.outputFormat,
-          latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
-        }),
-      );
+      const stream = await streamElevenLabsAudio(req, {
+        outputFormat: outputPlan.outputFormat,
+        latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
+      });
       return {
         audioStream: stream.audioStream,
         ...outputPlan,
@@ -445,7 +496,7 @@ export function buildElevenLabsSpeechProvider({
     synthesizeTelephony: async (req) => {
       const outputFormat = "pcm_22050";
       const sampleRate = 22_050;
-      const audioBuffer = await elevenLabsTTS(resolveElevenLabsTtsRequest(req, { outputFormat }));
+      const audioBuffer = await synthesizeElevenLabsAudio(req, { outputFormat });
       return { audioBuffer, outputFormat, sampleRate };
     },
   };
