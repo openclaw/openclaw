@@ -56,7 +56,7 @@ export { withSessionPendingInputRelocation };
 
 /** Prepare physical ownership off-thread, then inspect live custody rather than consumed rows. */
 export async function getForeignLiveSessionPendingInputEntries(
-  scope: SessionAccessScope & { sessionId: string },
+  scope: import("./session-accessor.types.js").SessionAccessScope & { sessionId: string },
   signal?: AbortSignal,
 ): Promise<ReadonlyMap<string, string>> {
   signal?.throwIfAborted();
