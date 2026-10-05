@@ -25,7 +25,7 @@ import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
-import { type CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
+import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
 
 export async function prepareCodexAttemptContext(

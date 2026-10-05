@@ -490,7 +490,9 @@ function resolveOwnedApps(params: {
           accessible: false,
         };
       }
-      return { ...toCodexPluginOwnedAccountApp(info), name: app.name };
+      const ownedApp = toCodexPluginOwnedAccountApp(info);
+      ownedApp.name = app.name;
+      return ownedApp;
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

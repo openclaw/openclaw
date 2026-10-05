@@ -433,7 +433,16 @@ export type CodexDynamicToolCallResponse = {
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
 export type CodexDynamicToolDiagnosticTerminalReason = "failed" | "cancelled" | "timed_out";
 
-export type CodexDynamicToolCallOutputContentItem = JsonObject;
+export type CodexDynamicToolCallOutputContentItem =
+  | {
+      type: "inputText";
+      text: string;
+    }
+  | {
+      type: "inputImage";
+      imageUrl: string;
+    }
+  | JsonObject;
 
 // Mirrors v2 ErrorNotification/TurnError (codex-rs app-server-protocol
 // notification.rs + thread_data.rs). `message` is required upstream; other

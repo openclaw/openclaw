@@ -68,7 +68,7 @@ import {
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { type CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
+import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
 import {
   CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED,
   CodexThreadClientReplacementError,

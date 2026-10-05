@@ -373,8 +373,8 @@ class Monitor {
       resolveParentOwner: this.resolveParentOwner.bind(this),
       registerChildThread: this.registerChildThread.bind(this),
       registerDirectSpawnChild: (state, turnId, evidence, owner) =>
-        this.admissionCustody.registerDirectSpawnChild(turnId, evidence, owner, (options) =>
-          this.registerChildThread(state, evidence.childThreadId, options),
+        this.admissionCustody.registerDirectSpawnChild(turnId, evidence, owner, (registration) =>
+          this.registerChildThread(state, evidence.childThreadId, registration),
         ),
       observeParentInteraction: this.observeParentInteraction.bind(this),
       acceptInteraction: this.submissions.acceptInteraction.bind(this.submissions),
