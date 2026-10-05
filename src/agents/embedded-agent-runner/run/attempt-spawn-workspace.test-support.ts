@@ -70,11 +70,7 @@ type CapturedTrajectoryEvent = {
   workspaceDir?: string;
 };
 
-function normalizeMockProviderId(providerId?: string): string {
-  // Provider ids in mocked model routing follow the same lowercase normalization
-  // as production helpers.
-  return normalizeLowercaseStringOrEmpty(providerId);
-}
+const normalizeMockProviderId = normalizeLowercaseStringOrEmpty;
 
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -175,6 +171,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
+  const getBranch = vi.fn(() => []);
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
     getSessionId: vi.fn(() => "embedded-session"),
@@ -184,7 +181,8 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getEntries: vi.fn(() => []),
-    getBranch: vi.fn(() => []),
+    getBranch,
+    getToolResultProjectionEntries: getBranch,
     getBoundaryCount: vi.fn(() => 0),
     branchAsync: vi.fn(async () => undefined),
     resetLeafAsync: vi.fn(async () => undefined),

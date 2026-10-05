@@ -14,7 +14,11 @@ import {
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
-import { transcriptEventJsonSql, transcriptEventResetNavigationSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventModelNavigationSql,
+  transcriptEventResetNavigationSql,
+} from "./transcript-payload.js";
 
 /** Projection dependencies are metadata, separate from the byte-bounded model history. */
 export function readCacheTtlProjectionPrefix(
@@ -31,6 +35,13 @@ export function readCacheTtlProjectionPrefix(
   ) {
     return undefined;
   }
+  const lastNavigationValue = (key: "type" | "customType") =>
+    /* kysely-allow-raw: legacy duplicate members follow JSON.parse's last-key semantics. */
+    sql`(SELECT value FROM json_each(${transcriptEventResetNavigationSql("event")})
+      WHERE key = ${key} ORDER BY id DESC LIMIT 1)`;
+  const entryType =
+    /* kysely-allow-raw: exact-row identities carry the parsed kind; legacy rows retain native navigation. */
+    sql`coalesce(identity.event_type, ${lastNavigationValue("type")})`;
   const rows = iterateSqliteQuerySync(
     projection.database.db,
     getActiveTranscriptKysely(projection.database)
@@ -45,7 +56,16 @@ export function readCacheTtlProjectionPrefix(
           .onRef("identity.session_id", "=", "active.session_id")
           .onRef("identity.seq", "=", "active.event_seq"),
       )
-      .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
+      .select((eb) =>
+        eb
+          .case()
+          .when(entryType, "=", "reset")
+          // Preserve the classified kind when legacy JSON starts with another duplicate type.
+          .then(transcriptEventModelNavigationSql("event", sql.lit("reset")))
+          .else(transcriptEventJsonSql(projection.database.db, "event"))
+          .end()
+          .as("event_json"),
+      )
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.active_position", "<", anchor.activePosition)
       .$call((query) =>
@@ -60,18 +80,11 @@ export function readCacheTtlProjectionPrefix(
           .then(false)
           .else(
             eb.or([
-              eb(
-                /* kysely-allow-raw: control kinds live in canonical transcript navigation JSON. */
-                sql<string>`json_extract(${transcriptEventResetNavigationSql("event")}, '$.type')`,
-                "=",
-                "reset",
-              ),
-              eb(
-                /* kysely-allow-raw: filter cache-TTL markers using their recorded custom type. */
-                sql<string>`json_extract(${transcriptEventResetNavigationSql("event")}, '$.customType')`,
-                "=",
-                "openclaw.cache-ttl",
-              ),
+              eb(entryType, "=", "reset"),
+              eb.and([
+                eb(entryType, "=", "custom"),
+                eb(lastNavigationValue("customType"), "=", "openclaw.cache-ttl"),
+              ]),
             ]),
           )
           .end(),

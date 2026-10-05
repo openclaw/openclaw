@@ -7,6 +7,7 @@ import {
   replaceTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { seedUnindexedTranscriptForTest } from "../../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -720,3 +721,72 @@ it("preserves a retained checkpoint through a forward label with an omitted targ
     expect(replay(manager)).toEqual([fixture.expected]);
   }
 });
+
+it.each([
+  { firstType: "message", lastType: "reset" },
+  { firstType: "reset", lastType: "custom" },
+  { firstType: "message", lastType: "custom" },
+] as const)(
+  "restores legacy duplicate kinds $firstType → $lastType",
+  async ({ firstType, lastType }) => {
+    const { dir, scope } = await createSessionScope(
+      `projection-duplicate-${firstType}-${lastType}`,
+    );
+    const snapshot = (key: string) => ({
+      prunedToolResults: [{ key, mode: "soft" }],
+      ambiguousToolResultBaseKeys: [],
+      frozenToolResults: [],
+    });
+    const marker = "omitted-reset-details:";
+    const boundary = {
+      id: "boundary",
+      parentId: "before",
+      type: lastType,
+      customType: "openclaw.cache-ttl",
+      reason: "new",
+      data: snapshot("tool:after:1"),
+      details: marker + "x".repeat(4_096),
+    };
+    await seedUnindexedTranscriptForTest({
+      ...scope,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+      events: [
+        JSON.stringify({ type: "session", id: scope.sessionId, version: 3, cwd: dir }),
+        JSON.stringify({
+          type: "custom",
+          id: "before",
+          parentId: null,
+          customType: "openclaw.cache-ttl",
+          data: snapshot("tool:before:1"),
+        }),
+        `{"type":"${firstType}","customType":"other","message":"opaque",${JSON.stringify(boundary).slice(1)}`,
+        JSON.stringify({
+          type: "message",
+          id: "tail",
+          parentId: "boundary",
+          message: makeUserMessage("after", 2),
+        }),
+      ].map((event_json, seq) => ({
+        session_id: scope.sessionId,
+        seq,
+        created_at: seq,
+        event_json,
+      })),
+    });
+    const expected =
+      lastType === "reset"
+        ? { prunedToolResults: [], ambiguousToolResultBaseKeys: [], frozenToolResults: [] }
+        : snapshot("tool:after:1");
+    const full = await SessionManager.openAsync(scope, dir);
+    expect(serializeCacheTtlToolResultProjections(restore(full))).toEqual(expected);
+    const bounded = await SessionManager.openBoundedAsync(scope, {
+      cwd: dir,
+      maxEvents: 1,
+      maxBytes: 1_024,
+    });
+    expect(serializeCacheTtlToolResultProjections(restore(bounded))).toEqual(expected);
+    if (lastType === "reset") {
+      expect(JSON.stringify(bounded.getToolResultProjectionEntries())).not.toContain(marker);
+    }
+  },
+);
