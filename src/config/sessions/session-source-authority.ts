@@ -64,6 +64,26 @@ export async function prepareSessionSourceAuthority(
     : { assertCurrent: () => assertion?.(), checks: [], nativeSource: assertion?.nativeSource };
 }
 
+/** A live selector may advance between operations, never during one prepared write. */
+export function createDynamicSessionSourceAssertion(
+  select: () => SessionSourceAssertion | undefined,
+  refuse: () => never,
+): SessionSourceAssertion {
+  return Object.assign(() => select()?.(), {
+    prepareSessionSource() {
+      const selected = select();
+      return prepareSessionSourceAuthority(
+        composeSessionSourceAssertion([selected], (assertSource) => {
+          if (select() !== selected) {
+            refuse();
+          }
+          assertSource();
+        }),
+      );
+    },
+  });
+}
+
 /** Preserve each owner's error/lifetime wrapper while preparing its storage-dependent sources. */
 export function composeSessionSourceAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],

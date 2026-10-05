@@ -1,6 +1,14 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeExecApprovalsConfigRow } from "../../infra/exec-approvals-sqlite.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -10,6 +18,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ensureSkillSnapshot } from "./session-updates.js";
 
 // mock-isolation: Session classification reads are outside the approval SQL boundary.
@@ -56,6 +65,39 @@ function prepare(root: string, config: OpenClawConfig) {
 const config: OpenClawConfig = {
   tools: { exec: { host: "node", node: "build-node", mode: "full" } },
 };
+
+it("persists first-turn skills without caller-thread session SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:skill-persistence",
+      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+    };
+    const sessionEntry = { sessionId: "skill-session", updatedAt: 1 };
+    await replaceSessionEntry(scope, sessionEntry);
+    const sql = observeHostDataSql();
+    const result = await ensureSkillSnapshot({
+      ...scope,
+      cfg: {},
+      sessionEntry,
+      sessionStore: { [scope.sessionKey]: sessionEntry },
+      sessionId: sessionEntry.sessionId,
+      workspaceDir: state.statePath("workspace"),
+      isFirstTurnInSession: true,
+    }).finally(sql.restore);
+
+    expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    expect(result).toMatchObject({
+      systemSent: true,
+      sessionEntry: {
+        sessionId: sessionEntry.sessionId,
+        systemSent: true,
+        skillsSnapshot: { prompt: "", skills: [] },
+      },
+    });
+    expect(loadSessionEntry(scope)).toEqual(result.sessionEntry);
+  });
+});
 
 it("prepares current skill eligibility without caller-thread approval SQL and retains its store", async () => {
   const root = tempDirs.make("openclaw-skill-exec-");
