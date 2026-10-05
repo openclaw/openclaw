@@ -6,6 +6,7 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export type WorkerRuntimeRefreshInFlight = {
@@ -34,19 +35,11 @@ type WorkerRuntimeRefreshOptions = Pick<
   | "ensureNodeWorkerBundle"
   | "bootstrapWorker"
   | "credentialBroker"
-> & {
-  requireCurrentOwner: (record: WorkerEnvironmentRecord) => WorkerEnvironmentRecord;
-  stopOwner: (
-    record: WorkerEnvironmentRecord,
-    reason: undefined,
-    runtimeRefresh: { assertCurrent: () => void },
-  ) => Promise<WorkerEnvironmentRecord>;
-  identityResolverFor: (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-  ) => Parameters<WorkerProviderLifecycleOptions["bootstrapWorker"]>[0]["resolveIdentity"];
-};
+> &
+  Pick<
+    ReturnType<typeof createWorkerProviderOwnerLifecycle>,
+    "requireCurrentOwner" | "stopOwner" | "identityResolverFor"
+  >;
 
 export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOptions) {
   const { store, callBootstrap, requireCurrentOwner, stopOwner, identityResolverFor } = options;

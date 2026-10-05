@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { OpenClawConfig } from "../../config/types.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -11,43 +10,35 @@ import {
 import {
   createPreparedPoolPresence,
   isSupersededPresenceReserve,
+  matchingPreparedPoolPresenceDemand,
   type PreparedPoolPresenceOptions,
 } from "./prepared-pool-presence.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
-import type { createWorkerProviderIntent } from "./provider-intent.js";
+import type {
+  createWorkerProviderIntent,
+  WorkerProviderIntentPreparationOptions,
+} from "./provider-intent.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 const DEFAULT_READY_WORKERS = 1;
 const DEFAULT_MAX_TOTAL = 4;
 const PREPARATION_CONCURRENCY = 2;
 
-type PoolOptions = {
-  store: WorkerEnvironmentStore;
-  getConfig: () => OpenClawConfig;
+type PoolOptions = Omit<PreparedPoolPresenceOptions, "schedule" | "prepareIntent"> & {
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
   prepareIntent: (
     profileId: string,
-    options: NonNullable<
-      Parameters<ReturnType<typeof createWorkerProviderIntent>["prepareIntent"]>[1]
-    >,
+    options: WorkerProviderIntentPreparationOptions,
   ) => Promise<WorkerProviderPreparedIntent>;
-  assertIntentCurrent: (profileId: string, intent: WorkerProviderPreparedIntent) => void;
-  prepareRetention: (
-    record: WorkerEnvironmentRecord,
-    signal: AbortSignal,
-  ) => Promise<{ isCurrent: () => boolean } | undefined>;
+  prepareRetention: ReturnType<typeof createWorkerProviderIntent>["prepareRetention"];
   reconcile: (
     record: WorkerEnvironmentRecord,
     signal: AbortSignal,
     beforeReconcile: () => void,
   ) => Promise<void>;
-  now: () => number;
-  signal: AbortSignal;
   warn: (message: string) => void;
-  resolveHumanPresenceDemand?: PreparedPoolPresenceOptions["resolveHumanPresenceDemand"];
-  presenceDemandStore?: PreparedPoolPresenceOptions["presenceDemandStore"];
 };
 
 /** Environment rows own inventory; placement activation and explicit builds establish demand. */
@@ -201,12 +192,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           throw new Error(`Worker provider is unavailable (${record.providerId})`);
         }
         const timeout = provider.resolvePreparedIdleTimeoutMs?.(snapshotSettings(record));
-        const presenceOwned =
-          activePresenceDemand &&
-          activePresenceDemand.profileId === record.profileId &&
-          activePresenceDemand.preparationKey === record.preparation?.key &&
-          activePresenceDemand.project.key ===
-            readWorkerProjectSnapshot(record.profileSnapshot.project)?.key;
+        const presenceOwned = matchingPreparedPoolPresenceDemand(record, activePresenceDemand);
         const presenceExpiresAtMs = activePresenceDemand?.retireAtMs ?? Number.MAX_SAFE_INTEGER;
         // A newer spare may supply the snapshot, but only this exact generation's
         // real activation can supply its independent foreground demand deadline.
@@ -227,7 +213,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             source: record,
             preparationKey,
             demandAtMs: presenceOwned
-              ? Math.max(activePresenceDemand.lastPresentAtMs, demandAtMs)
+              ? Math.max(presenceOwned.lastPresentAtMs, demandAtMs)
               : demandAtMs,
             expiresAtMs: Math.max(
               presenceOwned ? presenceExpiresAtMs : 0,
@@ -260,19 +246,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     }
     const isGenerationCurrent = (generation: NonNullable<ReturnType<typeof eligible.get>>) => {
       current();
-      if (
-        generation.presenceOwned &&
-        !generation.activationEligible &&
-        (!activePresenceDemand || !presence.matchesCurrentPolicy(activePresenceDemand))
-      ) {
-        return false;
-      }
-      if (
-        generation.presenceOwned &&
-        !generation.activationEligible &&
-        (!presenceAdmitted || !presence.isPresent())
-      ) {
-        throw new Error("Authenticated human presence is unavailable for preparation");
+      if (generation.presenceOwned && !generation.activationEligible) {
+        if (!activePresenceDemand || !presence.matchesCurrentPolicy(activePresenceDemand)) {
+          return false;
+        }
+        if (!presenceAdmitted || !presence.isPresent()) {
+          throw new Error("Authenticated human presence is unavailable for preparation");
+        }
       }
       if (
         !isDeepStrictEqual(
@@ -671,12 +651,8 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     if (demandAtMs === undefined || !readWorkerProjectPreparation(record.profileSnapshot.project)) {
       return true;
     }
-    const presenceDemand = presence.current();
-    if (
-      presenceDemand?.profileId === record.profileId &&
-      presenceDemand.preparationKey === record.preparation?.key &&
-      presenceDemand.project.key === readWorkerProjectSnapshot(record.profileSnapshot.project)?.key
-    ) {
+    const presenceDemand = matchingPreparedPoolPresenceDemand(record, presence.current());
+    if (presenceDemand) {
       return presenceDemand.retireAtMs !== null && presenceDemand.retireAtMs <= nowMs;
     }
     // Unavailable policy cannot prove expiry. Retain metadata only; physical

@@ -13,8 +13,9 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { createWorkerProjectPreparation } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import type { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentTransitionPatch } from "./store.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 type NodeLease = Extract<WorkerLease, { node: { deviceId: string } }>;
@@ -34,16 +35,10 @@ type WorkerNodeProvisioningOptions = Pick<
   | "registerPreparedWorkspace"
   | "move"
   | "saveError"
-> & {
-  commitReady: WorkerCredentialBroker["commitReady"];
-  failBootstrap: (
-    record: WorkerEnvironmentRecord,
-    leaseId: string,
-    provider: WorkerProvider,
-    error: unknown,
-    patch: WorkerEnvironmentTransitionPatch,
-  ) => Promise<never>;
-};
+> &
+  Pick<ReturnType<typeof createWorkerProviderOwnerLifecycle>, "failBootstrap"> & {
+    commitReady: WorkerCredentialBroker["commitReady"];
+  };
 
 export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOptions) {
   const now = options.now ?? Date.now;

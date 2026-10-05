@@ -17,12 +17,9 @@ import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fa
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { normalizeUsage, hasObservedModelUsage, toDiagnosticUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -30,7 +27,6 @@ import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnost
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
-  type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
@@ -38,7 +34,6 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
-  Model,
   Tool,
   Usage,
 } from "../../llm/types.js";
@@ -60,19 +55,8 @@ import {
 import { boundedWorkerError, formatWorkerInferenceError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
-type WorkerInferenceSessionTarget = BoundAgentRunSessionTarget & { sessionEntry: SessionEntry };
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
-
-type WorkerInferenceUsageParams = {
-  config: OpenClawConfig;
-  target: WorkerInferenceSessionTarget;
-  request: WorkerInferenceStartParams;
-  model: Model;
-  usage: Usage;
-  durationMs: number;
-  trace: DiagnosticTraceContext;
-};
 
 function buildContext(context: WorkerInferenceContext): Context | undefined {
   const tools: Tool[] = [];
@@ -136,45 +120,6 @@ function toWorkerStreamEvent(
       return undefined;
   }
   return undefined;
-}
-
-function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
-  if (!isDiagnosticsEnabled(params.config)) {
-    return;
-  }
-  const usage = normalizeUsage(params.usage);
-  if (!hasObservedModelUsage(usage)) {
-    return;
-  }
-  const costUsd =
-    usage.cost?.total ??
-    estimateUsageCost({
-      usage,
-      cost: resolveModelCostConfig({
-        provider: params.model.provider,
-        model: params.model.id,
-        config: params.config,
-      }),
-    });
-  emitTrustedDiagnosticEvent({
-    type: "model.usage",
-    trace: freezeDiagnosticTraceContext(params.trace),
-    sessionKey: params.target.sessionKey,
-    sessionId: params.request.sessionId,
-    channel: "worker",
-    agentId: params.target.agentId,
-    provider: params.model.provider,
-    model: params.model.id,
-    usage: toDiagnosticUsage(usage),
-    context: {
-      limit: params.model.contextTokens ?? params.model.contextWindow,
-      ...(usage.contextUsage?.state === "available"
-        ? { used: usage.contextUsage.promptTokens }
-        : {}),
-    },
-    ...(costUsd !== undefined ? { costUsd } : {}),
-    durationMs: params.durationMs,
-  });
 }
 
 export const executeWorkerInference: WorkerInferenceExecutor = async (params) => {
@@ -374,15 +319,43 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
       contentCapture: resolveDiagnosticModelContentCapturePolicy(approved.config),
       nextCallId: () => `${request.runId}:${request.turnId}:worker-model:${(modelCallSeq += 1)}`,
     });
-    const recordUsage = (usage: Usage) => {
-      emitWorkerInferenceUsage({
-        config: approved.config,
-        target,
-        request,
-        model,
-        usage,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        trace,
+    const recordUsage = (rawUsage: Usage) => {
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      if (!isDiagnosticsEnabled(approved.config)) {
+        return;
+      }
+      const usage = normalizeUsage(rawUsage);
+      if (!hasObservedModelUsage(usage)) {
+        return;
+      }
+      const costUsd =
+        usage.cost?.total ??
+        estimateUsageCost({
+          usage,
+          cost: resolveModelCostConfig({
+            provider: model.provider,
+            model: model.id,
+            config: approved.config,
+          }),
+        });
+      emitTrustedDiagnosticEvent({
+        type: "model.usage",
+        trace: freezeDiagnosticTraceContext(trace),
+        sessionKey: target.sessionKey,
+        sessionId: request.sessionId,
+        channel: "worker",
+        agentId: target.agentId,
+        provider: model.provider,
+        model: model.id,
+        usage: toDiagnosticUsage(usage),
+        context: {
+          limit: model.contextTokens ?? model.contextWindow,
+          ...(usage.contextUsage?.state === "available"
+            ? { used: usage.contextUsage.promptTokens }
+            : {}),
+        },
+        ...(costUsd !== undefined ? { costUsd } : {}),
+        durationMs,
       });
     };
     const executionIsCurrent = () => !signal.aborted && params.isCurrent();

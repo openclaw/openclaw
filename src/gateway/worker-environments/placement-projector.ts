@@ -204,104 +204,82 @@ export function projectWorkerSessionPlacement(
     updatedAtMs: record.updatedAtMs,
     stateChangedAtMs: record.stateChangedAtMs,
   };
-  const conflict = record.workspaceResultConflict
-    ? { workspaceResultConflict: record.workspaceResultConflict }
-    : {};
-  const terminal = {
-    ...(record.terminalReason ? { terminalReason: record.terminalReason } : {}),
-    ...(record.terminalAtMs !== null ? { terminalAtMs: record.terminalAtMs } : {}),
-  };
-  switch (record.state) {
-    case "local":
-    case "requested":
-      return { state: record.state, ...timing };
-    case "provisioning":
-      return {
-        state: "provisioning",
-        ...timing,
-        ...identity,
-        ...(record.environmentId ? { environmentId: record.environmentId } : {}),
-        ...(options.workerRuntimeInstall
-          ? { workerRuntimeInstall: options.workerRuntimeInstall }
-          : {}),
-      };
-    case "syncing":
-      return {
-        state: "syncing",
-        ...timing,
-        ...identity,
-        environmentId: record.environmentId,
-        workerBundleHash: record.workerBundleHash,
-      };
-    case "starting":
-      return {
-        state: "starting",
-        ...timing,
-        ...identity,
-        environmentId: record.environmentId,
-        workerBundleHash: record.workerBundleHash,
-        workspaceBaseManifestRef: record.workspaceBaseManifestRef,
-        remoteWorkspaceDir: record.remoteWorkspaceDir,
-      };
-    case "active":
-    case "draining":
-    case "reconciling":
-      return {
-        state: record.state,
-        ...timing,
-        ...identity,
-        environmentId: record.environmentId,
-        activeOwnerEpoch: record.activeOwnerEpoch,
-        workerBundleHash: record.workerBundleHash,
-        workspaceBaseManifestRef: record.workspaceBaseManifestRef,
-        remoteWorkspaceDir: record.remoteWorkspaceDir,
-        ...(record.lastTranscriptAckCursor !== null
-          ? { lastTranscriptAckCursor: record.lastTranscriptAckCursor }
-          : {}),
-        ...(record.lastLiveEventAckCursor !== null
-          ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
-          : {}),
-        ...(record.state === "active" && diskSpace ? { diskSpace } : {}),
-        ...(record.state === "active" && runner ? { runner } : {}),
-        ...(record.state === "active" && options.workerRuntimeInstall
-          ? { workerRuntimeInstall: options.workerRuntimeInstall }
-          : {}),
-        ...(workspaceResultReconciling && record.state !== "reconciling"
-          ? { workspaceResultReconciling: true as const }
-          : {}),
-        ...conflict,
-      };
-    case "reclaimed":
-    case "failed": {
-      const retained = {
-        ...timing,
-        ...identity,
-        ...(record.environmentId ? { environmentId: record.environmentId } : {}),
-        ...(record.activeOwnerEpoch !== null ? { activeOwnerEpoch: record.activeOwnerEpoch } : {}),
-        ...(record.workspaceBaseManifestRef
-          ? { workspaceBaseManifestRef: record.workspaceBaseManifestRef }
-          : {}),
-        ...(record.remoteWorkspaceDir ? { remoteWorkspaceDir: record.remoteWorkspaceDir } : {}),
-        ...(record.workerBundleHash ? { workerBundleHash: record.workerBundleHash } : {}),
-        ...(record.lastTranscriptAckCursor !== null
-          ? { lastTranscriptAckCursor: record.lastTranscriptAckCursor }
-          : {}),
-        ...(record.lastLiveEventAckCursor !== null
-          ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
-          : {}),
-        ...conflict,
-      };
-      return record.state === "failed"
-        ? {
-            state: "failed",
-            ...retained,
-            recoveryError: record.recoveryError,
-            ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
-            ...(retryOnSend ? { retryOnSend: true as const } : {}),
-            ...terminal,
-          }
-        : { state: "reclaimed", ...retained, ...terminal };
-    }
+  if (record.state === "local" || record.state === "requested") {
+    return { state: record.state, ...timing };
   }
-  return record satisfies never;
+  const worker = { ...timing, ...identity };
+  const workerRuntimeInstall = options.workerRuntimeInstall
+    ? { workerRuntimeInstall: options.workerRuntimeInstall }
+    : {};
+  if (record.state === "provisioning") {
+    return {
+      state: record.state,
+      ...worker,
+      ...(record.environmentId ? { environmentId: record.environmentId } : {}),
+      ...workerRuntimeInstall,
+    };
+  }
+  const progress = {
+    ...(record.lastTranscriptAckCursor !== null
+      ? { lastTranscriptAckCursor: record.lastTranscriptAckCursor }
+      : {}),
+    ...(record.lastLiveEventAckCursor !== null
+      ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
+      : {}),
+    ...(record.workspaceResultConflict
+      ? { workspaceResultConflict: record.workspaceResultConflict }
+      : {}),
+  };
+  if (record.state === "reclaimed" || record.state === "failed") {
+    const retained = {
+      ...worker,
+      ...(record.environmentId ? { environmentId: record.environmentId } : {}),
+      ...(record.activeOwnerEpoch !== null ? { activeOwnerEpoch: record.activeOwnerEpoch } : {}),
+      ...(record.workspaceBaseManifestRef
+        ? { workspaceBaseManifestRef: record.workspaceBaseManifestRef }
+        : {}),
+      ...(record.remoteWorkspaceDir ? { remoteWorkspaceDir: record.remoteWorkspaceDir } : {}),
+      ...(record.workerBundleHash ? { workerBundleHash: record.workerBundleHash } : {}),
+      ...progress,
+      ...(record.terminalReason ? { terminalReason: record.terminalReason } : {}),
+      ...(record.terminalAtMs !== null ? { terminalAtMs: record.terminalAtMs } : {}),
+    };
+    return record.state === "failed"
+      ? {
+          state: record.state,
+          ...retained,
+          recoveryError: record.recoveryError,
+          ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
+          ...(retryOnSend ? { retryOnSend: true as const } : {}),
+        }
+      : { state: record.state, ...retained };
+  }
+  const bundle = {
+    ...worker,
+    environmentId: record.environmentId,
+    workerBundleHash: record.workerBundleHash,
+  };
+  if (record.state === "syncing") {
+    return { state: record.state, ...bundle };
+  }
+  const workspace = {
+    ...bundle,
+    workspaceBaseManifestRef: record.workspaceBaseManifestRef,
+    remoteWorkspaceDir: record.remoteWorkspaceDir,
+  };
+  if (record.state === "starting") {
+    return { state: record.state, ...workspace };
+  }
+  return {
+    state: record.state,
+    ...workspace,
+    activeOwnerEpoch: record.activeOwnerEpoch,
+    ...progress,
+    ...(record.state === "active" && diskSpace ? { diskSpace } : {}),
+    ...(record.state === "active" && runner ? { runner } : {}),
+    ...(record.state === "active" ? workerRuntimeInstall : {}),
+    ...(workspaceResultReconciling && record.state !== "reconciling"
+      ? { workspaceResultReconciling: true as const }
+      : {}),
+  };
 }

@@ -225,8 +225,8 @@ export function createWorkerProviderOwnerLifecycle(
     leaseId: string,
     provider: WorkerProvider,
     error: unknown,
-    failureCode: "bootstrap_failure" | "invalid_profile" = "bootstrap_failure",
     leasePatch?: TransitionPatch,
+    failureCode: "bootstrap_failure" | "invalid_profile" = "bootstrap_failure",
   ): Promise<never> => {
     const detail = boundedWorkerError(error);
     const failureLabel =

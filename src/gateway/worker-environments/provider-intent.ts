@@ -36,7 +36,7 @@ type WorkerProviderIntentOptions = Pick<
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
-type WorkerProviderIntentPreparationOptions = {
+export type WorkerProviderIntentPreparationOptions = {
   inherited?: { providerId: string; profileSnapshot: WorkerProfile };
   machineClass?: string;
   os?: string;

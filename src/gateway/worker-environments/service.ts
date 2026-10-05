@@ -543,18 +543,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     idempotencyKey,
     inheritedProfile,
     admittedIntent,
-    machineClass,
-    executionMode,
-    projectPath,
-    signal,
-    os,
-    runSetupScript,
+    ...selection
   }: WorkerEnvironmentCreateRequest) => {
     providerLifecycle.warmMachineShape(profileId);
-    if (executionMode) {
+    if (selection.executionMode) {
       requireProviderExecutionMode(
         inheritedProfile ? inheritedProfile.providerId : configuredProfileProviderId(profileId),
-        executionMode,
+        selection.executionMode,
       );
     }
     return environmentAccess.project(
@@ -562,20 +557,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         profileId,
         idempotencyKey,
         {
-          ...(inheritedProfile
-            ? {
-                inherited: {
-                  providerId: inheritedProfile.providerId,
-                  profileSnapshot: inheritedProfile.profileSnapshot,
-                },
-              }
-            : {}),
-          machineClass,
-          os,
-          executionMode,
-          projectPath,
-          runSetupScript,
-          signal,
+          ...selection,
+          ...(inheritedProfile ? { inherited: { ...inheritedProfile } } : {}),
         },
         admittedIntent,
       ),

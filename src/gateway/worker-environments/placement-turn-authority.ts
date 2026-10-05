@@ -7,7 +7,7 @@ import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { registerListener } from "../../shared/listeners.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
@@ -97,13 +97,7 @@ function notifyRevoked(claim: RetainedClaim): void {
   }
   const listeners = [...claim.listeners];
   claim.listeners.clear();
-  for (const listener of listeners) {
-    try {
-      listener();
-    } catch {
-      // Cleanup observers cannot undo the authoritative revocation.
-    }
-  }
+  notifyListeners(listeners, undefined);
 }
 
 function closeOwner(owner: PlacementAuthorityOwner): void {
@@ -501,6 +495,11 @@ export async function preparePlacementWorkspaceResultAuthority(
   claim.sessionId = required(claim.sessionId, "session id");
   const publicationSequence = owner.published.get(claim.sessionId) ?? 0;
   const observation = observePlacementAuthority(pathname, claim.sessionId);
+  const assertCurrent = () => {
+    if (!isCurrent()) {
+      throw new Error(`Session ${claim.sessionId} turn claim authority changed`);
+    }
+  };
   try {
     const projection = await read([claim.sessionId]);
     context.admission.assertCurrent();
@@ -707,11 +706,6 @@ export async function preparePlacementTurnClaimAuthority(
       return true;
     } catch {
       return false;
-    }
-  };
-  const assertCurrent = () => {
-    if (!isCurrent()) {
-      throw new Error(`Session ${claim.sessionId} turn claim authority changed`);
     }
   };
   try {
