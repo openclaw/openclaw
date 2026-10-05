@@ -1,5 +1,9 @@
 import path from "node:path";
 import type { BuildSessionEntryOptions } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type {
+  SessionTranscriptCorpusOptions,
+  SessionTranscriptCorpusScope,
+} from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
@@ -37,7 +41,7 @@ export function bindIncognitoSessionComputeReader(params: {
   const disclose = () => {
     signal?.throwIfAborted();
     claim.authorize(authority, "commit");
-    actor.assertCurrent();
+    actor.assertReadable();
   };
   const assertScope = (scope: Partial<SessionTranscriptReadScope>) => {
     disclose();
@@ -51,7 +55,10 @@ export function bindIncognitoSessionComputeReader(params: {
     }
   };
   const retain = <T>(operation: () => Promise<T>) =>
-    actor.sessions.withCompute(authority, target, operation, signal);
+    actor.sessions.withCompute(authority, target, operation, signal).then((result) => {
+      disclose();
+      return result;
+    });
   return {
     prepareHydration(
       limits?: Parameters<typeof prepareIncognitoSessionTranscriptHydration>[0]["limits"],
@@ -59,39 +66,64 @@ export function bindIncognitoSessionComputeReader(params: {
       disclose();
       return prepareIncognitoSessionTranscriptHydration({
         actor,
-        authority,
+        authority: {
+          assertCurrent: disclose,
+          authorize: (stage, facts) => authority.authorize?.(stage, facts),
+        },
         target,
         limits,
         signal,
       });
     },
-    memoryEntry(
-      absPath: string,
-      options: Omit<BuildSessionEntryOptions, "onTranscriptMessage"> = {},
-    ) {
-      const captured = structuredClone(options);
+    memoryEntry(absPath: string, options: BuildSessionEntryOptions = {}) {
+      const { onTranscriptMessage, ...serializable } = options;
+      const captured = structuredClone(serializable);
       assertScope(captured);
       return retain(async () => {
+        let source: ReturnType<typeof actor.sessions.captureSnapshot> | undefined;
         const snapshot = await actor.sessions.history(
           authority,
           {
             type: "session.history.memory-entry",
-            input: target,
+            input: { ...target, includeMessages: Boolean(onTranscriptMessage) },
           },
           signal,
+          () => {
+            source = actor.sessions.captureSnapshot(target.sessionKey);
+          },
         );
         const { buildSessionEntryFromSnapshot } =
           await import("../../../packages/memory-host-sdk/src/host/session-files.js");
         return buildSessionEntryFromSnapshot(
           absPath,
-          { ...captured, ...identity },
+          { ...captured, ...identity, onTranscriptMessage },
           snapshot,
-          disclose,
+          () => {
+            disclose();
+            if (!source) {
+              throw new Error("Incognito Memory snapshot was not acknowledged");
+            }
+            source.assertCurrent();
+          },
         );
       });
     },
-    memoryResetRecall: () =>
-      retain(async () => {
+    memoryCorpus(scope: SessionTranscriptCorpusScope, options: SessionTranscriptCorpusOptions) {
+      const captured = structuredClone({ scope, options });
+      disclose();
+      return retain(async () => {
+        const { readIncognitoMemoryCorpus } = await import("./session-incognito-memory-corpus.js");
+        return readIncognitoMemoryCorpus(
+          { actor, authority, target },
+          captured.scope,
+          captured.options,
+          signal,
+        );
+      });
+    },
+    memoryResetRecall(scope: Partial<SessionTranscriptReadScope> = {}) {
+      assertScope(scope);
+      return retain(async () => {
         const cutoff = await actor.sessions.history(
           authority,
           {
@@ -102,7 +134,8 @@ export function bindIncognitoSessionComputeReader(params: {
         );
         disclose();
         return cutoff;
-      }),
+      });
+    },
     nativeContext: createSessionTranscriptContextReader({
       assertCurrent: assertScope,
       read: () =>

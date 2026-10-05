@@ -55,7 +55,6 @@ export function withIncognitoSessionRow<T>(
       let active = true;
       const assertions = [snapshot.assertCurrent];
       const assertCurrent = () => {
-        actor.assertCurrent();
         authority.assertCurrent();
         if (!active) {
           throw new Error("Incognito row consumer is no longer active");
@@ -63,6 +62,7 @@ export function withIncognitoSessionRow<T>(
         for (const assert of assertions) {
           assert();
         }
+        actor.assertReadable();
       };
       const finish = (row: Row | undefined): T => {
         assertCurrent();
@@ -199,7 +199,7 @@ export function withIncognitoSessionRow<T>(
                 { assertCurrent },
                 { sessionKey: relatedKey },
               );
-              assertions.push(prepared.snapshot.assertCurrent);
+              assertions.push(() => relatedActor.assertReadable(), prepared.snapshot.assertCurrent);
               if (prepared.entry) {
                 relatedEntries[relatedKey] = prepared.entry;
               }
@@ -218,8 +218,8 @@ export function withIncognitoSessionRow<T>(
       }
     })
     .then((result) => {
-      actor.assertCurrent();
       authority.assertCurrent();
+      actor.assertReadable();
       return result;
     });
 }

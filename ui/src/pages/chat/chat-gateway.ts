@@ -1,6 +1,7 @@
 import {
   hasSessionProjectionAcceptedFinal,
   isSessionProjectionErrorMessage,
+  readSessionMessageIdentity,
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -25,13 +26,14 @@ import {
   readChatSessionProjectionScope,
   setChatRunOwner,
   publishChatSessionProjection,
+  reduceChatSessionProjection,
 } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
   reconcileChatRunLifecycle,
   setChatRunError,
 } from "./run-lifecycle.ts";
-import { appendChatMessageToCache } from "./session-message-cache.ts";
+import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   latestStreamBoundaryRunId,
   reconcileTerminalStreamBoundary,
@@ -116,8 +118,21 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
           ? "auth_refresh"
           : undefined;
-  const normalizedFinalMessage =
+  const injectedMessageId =
+    payload.state === "final" && payload.seq === 0 && payload.runId?.startsWith("inject-")
+      ? payload.runId.slice("inject-".length)
+      : null;
+  const incomingFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
+  // Only seq-zero inject deliveries encode a row ID: ordinary runs start at one
+  // and may use any client-selected ID. Reconcile with session.message/history.
+  const normalizedFinalMessage =
+    injectedMessageId && incomingFinalMessage
+      ? {
+          ...incomingFinalMessage,
+          __openclaw: { ...asRecord(incomingFinalMessage["__openclaw"]), id: injectedMessageId },
+        }
+      : incomingFinalMessage;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const activeRunMatches =
@@ -135,17 +150,41 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
           : payload.agentId;
         if (state.chatMessagesBySession) {
+          if (
+            injectedMessageId &&
+            readChatMessagesFromCache(state.chatMessagesBySession, state, {
+              sessionKey: payload.sessionKey,
+              agentId: cacheAgentId,
+            })?.some((message) => readSessionMessageIdentity(message)?.id === injectedMessageId)
+          ) {
+            return null;
+          }
           appendChatMessageToCache(
             state.chatMessagesBySession,
             state,
             { sessionKey: payload.sessionKey, agentId: cacheAgentId },
             finalMessage,
-            payload,
+            injectedMessageId ? { messageId: injectedMessageId } : payload,
           );
         }
       }
     }
     return null;
+  }
+  if (injectedMessageId) {
+    if (
+      normalizedFinalMessage &&
+      !shouldHideAssistantChatMessage(normalizedFinalMessage) &&
+      !state.chatMessages.some(
+        (message) => readSessionMessageIdentity(message)?.id === injectedMessageId,
+      )
+    ) {
+      reduceChatSessionProjection(state, {
+        type: "messagePersisted",
+        message: normalizedFinalMessage,
+      });
+    }
+    return "injected";
   }
   const scope = readChatSessionProjectionScope(state);
   const publishVisibleTerminal = (

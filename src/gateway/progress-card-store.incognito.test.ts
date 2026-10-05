@@ -5,10 +5,16 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import {
+  readSessionManagerModelContextAsync,
+  readSessionManagerContextAsync,
+} from "../agents/sessions/session-manager-incognito.js";
 import { appendSessionTranscriptNote } from "../agents/sessions/session-manager-write-admission.js";
+import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { loadSessionEntryForAdmission } from "../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { createIncognitoPendingInputHistoryReader } from "../config/sessions/session-pending-input-history.js";
 import {
   SessionReactionMessageMissingError,
   setSessionReactionAsync,
@@ -22,6 +28,7 @@ import { IncognitoSessionEndedError } from "../state/incognito-session-error.js"
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { createIncognitoProgressCardStore } from "./progress-card-store.js";
+import { createIncognitoSessionComputeReader } from "./session-history-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
@@ -170,25 +177,154 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("refuses progress-card disclosure when authorization ends after the worker read", async () => {
-  let allowed = true;
-  let reading = false;
-  const { scope, store } = await fixture("read-revocation", {
-    assertCurrent() {
-      if (!allowed) {
-        throw new Error("Card reader revoked");
-      }
-    },
-    authorize(stage) {
-      if (reading && stage === "commit") {
-        allowed = false;
-      }
-    },
+it.each([
+  "heartbeat",
+  "acp",
+  "pending",
+  "board",
+  "model-context",
+  "native-context",
+  "hydration",
+] as const)("refuses %s disclosure to a retained parent after release", async (reader) => {
+  const { scope, heartbeat } = await fixture(`retained-${reader}`);
+  await persistHeartbeatOutcome(heartbeat);
+  const borrowed = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: actor.agentId,
+    env,
+    authority,
+    existingOnly: true,
   });
-  await store.put(scope.sessionKey, { markdown: "Private" });
-  reading = true;
-  await expect(store.get(scope.sessionKey)).rejects.toThrow("Card reader revoked");
+  assert(borrowed);
+  let retiring: Promise<void> | undefined;
+  let reading = false;
+  const source: IncognitoSessionAuthority = {
+    assertCurrent() {},
+    authorize(stage) {
+      if (reading && reader !== "board" && stage === "commit") {
+        retiring ??= borrowed.release();
+      }
+    },
+  };
+  const bound = { ...scope, incognito: { actor: borrowed, authority: source } };
+  const hydration =
+    reader === "hydration"
+      ? (
+          await createIncognitoSessionComputeReader({
+            actor: borrowed,
+            authority: source,
+            target: {
+              sessionKey: scope.sessionKey,
+              sessionId: scope.sessionId,
+              lifecycleRevision: "initial",
+            },
+          })
+        ).prepareHydration()
+      : undefined;
+  let disclosed = false;
+  try {
+    await expect(
+      borrowed.sessions.withSharedState(async () => {
+        reading = true;
+        if (reader === "heartbeat") {
+          await claimHeartbeatOutcomeForRun({ ...bound, runId: "retained-read" });
+        } else if (reader === "acp") {
+          await borrowed.acp.readEntry({ ...scope, authority: source, cfg: {} });
+        } else if (reader === "pending") {
+          await createIncognitoPendingInputHistoryReader({
+            actor: borrowed,
+            authority: source,
+            target: {
+              sessionKey: scope.sessionKey,
+              sessionId: scope.sessionId,
+              lifecycleRevision: "initial",
+            },
+          }).list();
+        } else if (reader === "model-context" || reader === "native-context") {
+          await withIncognitoSessionActor(borrowed, () => {
+            const consume = () => {
+              retiring = borrowed.release();
+              return "private context result";
+            };
+            return reader === "model-context"
+              ? readSessionManagerModelContextAsync(scope, {}, consume)
+              : readSessionManagerContextAsync(scope, consume, {});
+          });
+        } else if (hydration) {
+          await hydration.read();
+        } else {
+          const store = new SqliteBoardStore({
+            env,
+            resolveSession: () => ({ ...bound, path: borrowed.path }),
+          });
+          await store.useSnapshot(scope, async () => {
+            retiring = borrowed.release();
+            return "private Board result";
+          });
+        }
+        disclosed = true;
+      }),
+    ).rejects.toThrow("reference is released");
+    expect(disclosed).toBe(false);
+  } finally {
+    await retiring;
+    await borrowed.release();
+  }
 });
+
+it.each(["revocation", "release", "close"] as const)(
+  "refuses progress-card disclosure after %s during the worker read",
+  async (ending) => {
+    let allowed = true;
+    let reading = false;
+    let retiring: Promise<void> | undefined;
+    const { scope } = await fixture(`read-${ending}`);
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: actor.agentId,
+      env,
+      authority,
+      existingOnly: true,
+    });
+    assert(borrowed);
+    const source: IncognitoSessionAuthority = {
+      assertCurrent() {
+        if (!allowed) {
+          throw new Error("Card reader revoked");
+        }
+      },
+      authorize(stage) {
+        if (reading && stage === "commit") {
+          if (ending === "revocation") {
+            allowed = false;
+          } else {
+            retiring ??= ending === "release" ? borrowed.release() : borrowed.close();
+          }
+        }
+      },
+    };
+    const store = createIncognitoProgressCardStore(() => ({
+      ...scope,
+      incognito: { actor: borrowed, authority: source },
+    }));
+    try {
+      await store.put(scope.sessionKey, { markdown: "Private" });
+      reading = true;
+      let disclosed = false;
+      await expect(
+        borrowed.sessions.withSharedState(async () => {
+          const card = await store.get(scope.sessionKey);
+          disclosed = true;
+          return card;
+        }),
+      ).rejects.toThrow();
+      expect(disclosed).toBe(false);
+    } finally {
+      await retiring;
+      await borrowed.release();
+    }
+  },
+);
 
 it("keeps the actor transport alive through admission policy cleanup after close revokes the claim", async ({
   onTestFinished,

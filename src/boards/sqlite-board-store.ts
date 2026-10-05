@@ -403,8 +403,10 @@ export class SqliteBoardStore implements BoardStore {
         try {
           const value = await actorRead(actor, currentAuthority, captured.sessionKey);
           currentAuthority.assertCurrent();
+          actor.assertReadable();
           const result = await runInRetainedContext(consume, value, captured.sessionKey);
           currentAuthority.assertCurrent();
+          actor.assertReadable();
           return result;
         } catch (error) {
           throw restoreBoardError(error);

@@ -30,7 +30,6 @@ import {
   summarizeNumbers,
   summarizeTraceStats,
   type InitialProbeResult,
-  type SummaryStats,
   parseCliArgs,
   writeGatewayBenchConfig,
   writePluginFixtures,
@@ -54,8 +53,6 @@ type GatewayBenchCase = {
   runByDefault?: boolean;
 };
 
-type ProbeResult = InitialProbeResult;
-
 type GatewaySample = {
   completionMs: number | null;
   cpuCoreRatio: number | null;
@@ -65,33 +62,17 @@ type GatewaySample = {
   firstOutputMs: number | null;
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
-  healthz: ProbeResult;
+  healthz: InitialProbeResult;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   maxRssMb: number | null;
   outputTail: string;
-  readyz: ProbeResult;
+  readyz: InitialProbeResult;
   signal: string | null;
   startupTrace: Record<string, number>;
 };
 
-type CaseResult = {
-  id: string;
-  name: string;
-  samples: GatewaySample[];
-  summary: {
-    completionMs: SummaryStats | null;
-    firstOutputMs: SummaryStats | null;
-    cpuCoreRatio: SummaryStats | null;
-    cpuMs: SummaryStats | null;
-    gatewayReadyLogMs: SummaryStats | null;
-    healthzMs: SummaryStats | null;
-    httpListenLogMs: SummaryStats | null;
-    maxRssMb: SummaryStats | null;
-    readyzMs: SummaryStats | null;
-    startupTrace: Record<string, SummaryStats>;
-  };
-};
+type CaseResult = ReturnType<typeof summarizeCase>;
 
 type BenchmarkFailure = {
   id: string;
@@ -400,7 +381,7 @@ Case ids:
 `);
 }
 
-function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): CaseResult {
+function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   const startupTrace = summarizeTraceStats(samples, (sample) => sample.startupTrace);
   const summarize = (read: (sample: GatewaySample) => number | null) =>
     summarizeNumbers(

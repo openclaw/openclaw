@@ -358,7 +358,7 @@ it("publishes model context before following work enters its actor", async () =>
     const history = actor.sessions.history;
     const forward: typeof history = async (grant, command, signal, onRead) => {
       const result = await history(grant, command, signal, onRead);
-      if (command.type === "session.history.native-context-current") {
+      if (onRead) {
         await actor.run(authority, async () => {
           order.push("following actor work");
         });

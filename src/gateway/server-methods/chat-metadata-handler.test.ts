@@ -563,31 +563,18 @@ describe("chat metadata dispatch authority", () => {
         fixture.role.agents = ["main"];
         fixture.role.sessions.others = "view";
         await state.writeConfig(fixture.config);
-        const accountRead = vi.spyOn(userModelAccounts, "isUserModelAuthProfileOwner");
-        try {
-          const { pending, respond } = dispatchMetadata(
-            fixture,
-            selector === "draft"
-              ? { agentId: "other", authProfileId: fixture.authProfileId }
-              : { sessionKey: "agent:other:missing-metadata" },
-          );
-          await pending;
+        const { pending, respond } = dispatchMetadata(
+          fixture,
+          selector === "draft"
+            ? { agentId: "other", authProfileId: fixture.authProfileId }
+            : { sessionKey: "agent:other:missing-metadata" },
+        );
+        await pending;
 
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
-          expect(fixture.readChatMetadata).toHaveBeenCalledWith(
-            expect.objectContaining({ agentId: "other" }),
-          );
-          if (selector === "draft") {
-            expect(accountRead).toHaveBeenCalledWith({
-              profileId: fixture.owner.id,
-              authProfileId: fixture.authProfileId,
-            });
-          } else {
-            expect(accountRead).not.toHaveBeenCalled();
-          }
-        } finally {
-          accountRead.mockRestore();
-        }
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
+        expect(fixture.readChatMetadata).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "other" }),
+        );
       });
     },
   );

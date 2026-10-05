@@ -45,16 +45,17 @@ import {
 } from "./openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
 
-// Two retained private actors plus shared-state cleanup need three broker slots.
+// Three retained private actors plus shared-state cleanup need four broker slots.
 vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+  availableParallelism: () => 32,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let lossActor: IncognitoAgentDatabaseExecution;
+let sameAgentActor: IncognitoAgentDatabaseExecution;
 let lossWorker: Worker;
 let env: NodeJS.ProcessEnv;
 
@@ -74,9 +75,16 @@ beforeAll(async () => {
       env,
       authority,
     });
-    assert(opened && loss);
+    const sameAgent = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("incognito-lifecycle-peer-") },
+      authority,
+    });
+    assert(opened && loss && sameAgent);
     actor = opened;
     lossActor = loss;
+    sameAgentActor = sameAgent;
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "loss", env });
     const index = posted.mock.calls.findIndex(
       ([message]) =>
@@ -90,7 +98,7 @@ beforeAll(async () => {
   }
 });
 afterAll(async () => {
-  await Promise.all([actor?.close(), lossActor?.close()]);
+  await Promise.all([actor?.close(), lossActor?.close(), sameAgentActor?.close()]);
   await closeOpenClawStateDatabaseAsync();
 });
 
@@ -682,6 +690,63 @@ it.each([false, true])(
       const next = await append(child, "child continues", destination);
       assert(next.ok && next.value.append);
       expect(next.value.append.effectiveParentId).toBe(appended.value.append.messageId);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  },
+);
+
+it.each(["transaction", "commit"] as const)(
+  "checks the destination %s grant for equal fork keys in separate actor namespaces",
+  async (deniedStage) => {
+    const parent = await create(`same-key-${deniedStage}`);
+    await append(parent, "private parent transcript");
+    const targetSessionId = `${parent.entry.sessionId}-child`;
+    const sql = observeHostDataSql();
+    try {
+      await expect(
+        forkSessionTranscriptFromParent(
+          {
+            storePath: actor.path,
+            targetStorePath: sameAgentActor.path,
+            parentEntry: parent.entry,
+            parentSessionKey: parent.sessionKey,
+            sessionKey: parent.sessionKey,
+            targetSessionId,
+          },
+          {
+            source: { actor, authority, sessionKey: parent.sessionKey },
+            destination: {
+              actor: sameAgentActor,
+              authority: {
+                assertCurrent() {},
+                authorize(stage) {
+                  if (stage === deniedStage) {
+                    throw new Error("destination fork denied");
+                  }
+                },
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow("destination fork denied");
+      const child = await sameAgentActor.sessions.create(authority, {
+        sessionKey: parent.sessionKey,
+        entry: { ...parent.entry, sessionId: targetSessionId },
+      });
+      assert(child.entry);
+      const snapshot = await sameAgentActor.sessions.history(authority, {
+        type: "session.history.hydrate",
+        input: {
+          sessionKey: parent.sessionKey,
+          sessionId: targetSessionId,
+          lifecycleRevision: child.entry.lifecycleRevision,
+        },
+      });
+      assert(snapshot.kind === "full");
+      expect(snapshot.snapshot.events).toHaveLength(1);
+      expect(snapshot.snapshot.events[0]).toMatchObject({ type: "session", id: targetSessionId });
       expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();

@@ -16,6 +16,7 @@ import { readResidentSessionRow } from "./session-row-projection-materialize.js"
 import type { Row } from "./session-row-projection-record.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { presentSessionRow } from "./session-utils-row.js";
+import * as sessionStoreLookup from "./session-utils-store-lookup.js";
 
 // Two retained private actors plus shared-state reads need three broker slots.
 vi.mock("node:os", async (importOriginal) => ({
@@ -214,6 +215,95 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         ).rejects.toThrow("snapshot changed");
       } finally {
         gap.mockRestore();
+      }
+      const deliveryBorrow = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId: actor.agentId,
+        env: state.env,
+        authority,
+        existingOnly: true,
+      });
+      assert(deliveryBorrow);
+      let retireAtDelivery = false;
+      let retiringDelivery: Promise<void> | undefined;
+      try {
+        await expect(
+          withIncognitoSessionRow(
+            {
+              actor: deliveryBorrow,
+              authority: {
+                assertCurrent() {
+                  if (retireAtDelivery) {
+                    retiringDelivery ??= deliveryBorrow.release();
+                  }
+                },
+              },
+              cfg,
+              env: state.env,
+              key: parentKey,
+            },
+            () => {
+              queueMicrotask(() => {
+                retireAtDelivery = true;
+              });
+              return "private row result";
+            },
+          ),
+        ).rejects.toThrow("reference is released");
+      } finally {
+        await retiringDelivery;
+        await deliveryBorrow.release();
+      }
+      const acquireDurable = sessionStoreLookup.withGatewaySessionStoreTarget;
+      let retiringRelated: Promise<void> | undefined;
+      const relatedGap = vi
+        .spyOn(sessionStoreLookup, "withGatewaySessionStoreTarget")
+        .mockImplementationOnce((params, consume) => {
+          retiringRelated = other.close();
+          return acquireDurable(params, consume);
+        });
+      const consumeRelated = vi.fn();
+      try {
+        await expect(
+          withIncognitoSessionRow({ actor, authority, cfg, env: state.env, key }, consumeRelated),
+        ).rejects.toThrow();
+        expect(consumeRelated).not.toHaveBeenCalled();
+      } finally {
+        relatedGap.mockRestore();
+        await retiringRelated;
+      }
+      for (const ending of ["release", "close"] as const) {
+        const borrowed = await captureOpenClawAgentDatabaseExecution({
+          kind: "ephemeral",
+          agentId: actor.agentId,
+          env: state.env,
+          authority,
+          existingOnly: true,
+        });
+        assert(borrowed);
+        const prepare = borrowed.acp.prepareEntryRead.bind(borrowed.acp);
+        let retiring: Promise<void> | undefined;
+        const retire = vi
+          .spyOn(borrowed.acp, "prepareEntryRead")
+          .mockImplementationOnce(async (params) => {
+            const prepared = await prepare(params);
+            retiring = ending === "release" ? borrowed.release() : borrowed.close();
+            return prepared;
+          });
+        const consume = vi.fn();
+        try {
+          await expect(
+            withIncognitoSessionRow(
+              { actor: borrowed, authority, cfg, env: state.env, key },
+              consume,
+            ),
+          ).rejects.toThrow();
+          expect(consume).not.toHaveBeenCalled();
+        } finally {
+          retire.mockRestore();
+          await retiring;
+          await borrowed.release();
+        }
       }
       await actor.close();
     } finally {

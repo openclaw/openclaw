@@ -9,14 +9,18 @@ import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sq
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
+import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type SessionTranscriptAnchorSelection = {
   entryIds: readonly string[];
   afterSeq?: number;
   includeHeader?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
+  contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
   replayValidation?: Pick<
     SessionTranscriptWriteScope,
     "expectedLifecycleRevision" | "expectedWriterRunId"
@@ -27,6 +31,17 @@ export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
   header?: unknown;
   contextValidated?: true;
+  contextAuthority?: {
+    entry?: Pick<
+      InternalSessionEntry,
+      | "sessionId"
+      | "lifecycleRevision"
+      | "activeWriterRunId"
+      | "cliHistoryBoundary"
+      | "permissionMode"
+    >;
+    watermark: SessionTranscriptWatermark;
+  };
   replayValidated?: "current" | "initial";
   tail?: {
     lastSeq?: number;
@@ -48,6 +63,31 @@ export function readSessionTranscriptAnchorFactsInDatabase(
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
+      const contextEntry = selection.contextAuthority
+        ? readSessionEntryRow(database, resolved.sessionKey)?.entry
+        : undefined;
+      const contextAuthority = selection.contextAuthority
+        ? {
+            entry: contextEntry && {
+              sessionId: contextEntry.sessionId,
+              lifecycleRevision: contextEntry.lifecycleRevision,
+              activeWriterRunId: contextEntry.activeWriterRunId,
+              cliHistoryBoundary: contextEntry.cliHistoryBoundary,
+              permissionMode: contextEntry.permissionMode,
+            },
+            watermark: readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
+          }
+        : undefined;
+      // Session replacement and permission refusal precede transcript-anchor refusal.
+      if (
+        selection.contextAuthority &&
+        (!contextEntry ||
+          contextEntry.sessionId !== resolved.sessionId ||
+          (selection.contextAuthority !== true &&
+            contextEntry.permissionMode !== selection.contextAuthority.permissionMode))
+      ) {
+        return { anchors: [], contextAuthority };
+      }
       let replayValidated: SessionTranscriptAnchorFacts["replayValidated"];
       const replay = selection.replayValidation;
       if (replay) {
@@ -76,6 +116,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         validateSessionTranscriptContextInDatabase(database, resolved, context);
       }
       const validated = {
+        ...(contextAuthority ? { contextAuthority } : {}),
         ...(context ? { contextValidated: true as const } : {}),
         ...(replayValidated ? { replayValidated } : {}),
       };

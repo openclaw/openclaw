@@ -157,6 +157,7 @@ export async function claimHeartbeatOutcomeForRun(params: {
     },
     params.assertCurrent,
   );
+  params.incognito?.actor.assertReadable();
   return row ? rowToOutcome(row) : undefined;
 }
 
@@ -315,5 +316,6 @@ export async function claimHeartbeatContextForUserRun(
   params.assertCurrent();
   const outcome = await claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey });
   params.assertCurrent();
+  params.incognito?.actor.assertReadable();
   return buildHeartbeatOutcomeContext(outcome);
 }

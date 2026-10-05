@@ -7,6 +7,7 @@ import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
+import { registerDispatcher } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   createReplyOperation,
   type ReplyOperation,
@@ -1527,36 +1528,33 @@ describe("createGatewayCloseHandler", () => {
     expect(order).toStrictEqual(["reply-drain", "session-end"]);
   });
 
-  it("waits for pending replies to settle before restart shutdown", async () => {
+  it("drains each Gateway's replies independently of another Gateway's pending work", async () => {
     vi.useFakeTimers();
-    let pendingReplies = 1;
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        getPendingReplyCount: () => pendingReplies,
-      }),
-    );
-
-    const closePromise = close({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-      drainTimeoutMs: 200,
-    });
-    await vi.advanceTimersByTimeAsync(100);
-    pendingReplies = 0;
-    await vi.advanceTimersByTimeAsync(100);
-    const result = await closePromise;
-
-    expect(result.warnings).not.toContain("restart-reply-drain");
-    expect(
-      mocks.logInfo.mock.calls.some(([message]) =>
-        String(message).includes("waiting for 1 pending reply(ies) before restart shutdown"),
-      ),
-    ).toBe(true);
-    expect(
-      mocks.logInfo.mock.calls.some(([message]) =>
-        String(message).includes("restart reply drain completed after"),
-      ),
-    ).toBe(true);
+    let firstPending = 1;
+    let secondPending = 1;
+    const unregister = registerDispatcher(() => secondPending);
+    const firstDeps = createGatewayCloseTestDeps({ getPendingReplyCount: () => firstPending });
+    const secondDeps = createGatewayCloseTestDeps({ getPendingReplyCount: () => secondPending });
+    const options = { restartExpectedMs: 123, drainTimeoutMs: 500 };
+    const firstClose = createGatewayCloseHandler(firstDeps)(options);
+    const secondClose = createGatewayCloseHandler(secondDeps)(options);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(firstDeps.chatRunState.clear).not.toHaveBeenCalled();
+      firstPending = 0;
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await firstClose).warnings).not.toContain("restart-reply-drain");
+      expect(secondDeps.chatRunState.clear).not.toHaveBeenCalled();
+      secondPending = 0;
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await secondClose).warnings).not.toContain("restart-reply-drain");
+    } finally {
+      firstPending = 0;
+      secondPending = 0;
+      unregister();
+      await vi.runAllTimersAsync();
+      await Promise.allSettled([firstClose, secondClose]);
+    }
   });
 
   it("marks pending reply work after its chat run registration is gone", async () => {
@@ -1745,7 +1743,7 @@ describe("createGatewayCloseHandler", () => {
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes(
-          "restart reply drain timed out after 100ms with 2 active run(s) still active",
+          "restart reply drain timed out after 100ms with chatRuns=2 still active",
         ),
       ),
     ).toBe(true);

@@ -65,9 +65,6 @@ internal object ChatWidgetUrlResolver {
   ): ChatWidgetResource? {
     val observed = currentSurfaceUrls()
     val blockedRoles = failedResource.attemptedSurfaceRoles
-    if (failedResource.surfaceRole == ChatWidgetSurfaceRole.LEGACY && ChatWidgetSurfaceRole.LEGACY in blockedRoles) {
-      return null
-    }
     val attemptedRoles = blockedRoles + failedResource.surfaceRole
     if (ChatWidgetSurfaceRole.NODE !in blockedRoles) {
       observed.node
@@ -114,15 +111,8 @@ internal object ChatWidgetUrlResolver {
     failedResource: ChatWidgetResource?,
   ): Boolean {
     if (failedResource == null) return true
-    return if (
-      failedResource.surfaceRole == ChatWidgetSurfaceRole.LEGACY &&
-      failedResource.tlsFingerprintSha256 == null
-    ) {
-      candidate.url != failedResource.url
-    } else {
-      candidate.url != failedResource.url ||
-        candidate.tlsFingerprintSha256 != failedResource.tlsFingerprintSha256
-    }
+    return candidate.url != failedResource.url ||
+      candidate.tlsFingerprintSha256 != failedResource.tlsFingerprintSha256
   }
 
   private fun parseCapabilitySurface(raw: String?): URI? {
@@ -182,12 +172,11 @@ internal data class ChatWidgetSurface(
 internal enum class ChatWidgetSurfaceRole {
   NODE,
   OPERATOR,
-  LEGACY,
 }
 
 internal data class ChatWidgetResource(
   val url: String,
   val tlsFingerprintSha256: String?,
-  val surfaceRole: ChatWidgetSurfaceRole = ChatWidgetSurfaceRole.LEGACY,
+  val surfaceRole: ChatWidgetSurfaceRole,
   val attemptedSurfaceRoles: Set<ChatWidgetSurfaceRole> = emptySet(),
 )

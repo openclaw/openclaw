@@ -93,7 +93,6 @@ export interface DiscordSource {
   collect(
     config: DiscordSourceConfig,
     window: ActivityWindow,
-    roster: Roster,
     emit: (entries: ActivityEntry<DiscordMessage>[]) => Promise<void>,
   ): Promise<SourceStatus>;
 }

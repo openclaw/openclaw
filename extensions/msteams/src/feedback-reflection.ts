@@ -21,7 +21,6 @@ type RunFeedbackReflectionParams = {
   agentId: string;
   conversationId: string;
   conversationKind: "direct" | "group" | "channel";
-  thumbedDownResponse?: string;
   userComment?: string;
   log: MSTeamsMonitorLogger;
 };
@@ -45,7 +44,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       sessionKey,
       conversationId: params.conversationId,
       conversationKind: params.conversationKind,
-      thumbedDownResponse: params.thumbedDownResponse,
       userComment: params.userComment,
       cooldownMs,
       onRecordError: (err) =>

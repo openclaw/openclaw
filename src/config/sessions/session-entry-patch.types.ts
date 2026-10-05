@@ -1,5 +1,7 @@
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 import type {
   SessionSourceAssertion,
   SessionSourcePredicate,
@@ -16,6 +18,11 @@ export type SessionEntryPatchGuard = {
   source?: SessionSourceAssertion;
   /** Retained host authority only: these assertions must not query SQLite. */
   assertCurrent?: () => void;
+  cliHistory?: {
+    sessionId: string;
+    admission?: UserTurnTranscriptAdmissionReceipt;
+    watermark: SessionTranscriptWatermark;
+  };
   shouldCommitIf?: {
     kind: "transcript";
     sessionId: string;
@@ -35,6 +42,7 @@ export type SessionEntryPatchCommit = {
   consumePendingReset?: boolean;
   providerReviewMutation?: boolean;
   shouldCommitIf?: SessionEntryPatchGuard["shouldCommitIf"];
+  cliHistory?: SessionEntryPatchGuard["cliHistory"];
   sources?: SessionSourcePredicate[];
 };
 

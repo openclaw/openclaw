@@ -87,6 +87,26 @@ vi.mock("../send-reactions.js", () => ({
   sendReactionSignal: sendReactionSignalMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/channel-feedback", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-feedback")>();
+  return {
+    ...actual,
+    createStatusReactionController: (
+      options: Parameters<typeof actual.createStatusReactionController>[0],
+    ) =>
+      actual.createStatusReactionController({
+        ...options,
+        timing: {
+          debounceMs: 0,
+          doneHoldMs: 0,
+          errorHoldMs: 0,
+          stallSoftMs: 5_000,
+          stallHardMs: 15_000,
+        },
+      }),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
     "openclaw/plugin-sdk/reply-runtime",
@@ -282,25 +302,7 @@ type DirectMessageOverrides = Omit<SignalEnvelope, "dataMessage"> & {
   dataMessage?: NonNullable<SignalEnvelope["dataMessage"]>;
 };
 
-const statusReactionTiming = {
-  debounceMs: 0,
-  doneHoldMs: 0,
-  errorHoldMs: 0,
-  stallSoftMs: 60_000,
-  stallHardMs: 120_000,
-};
-
-const shortStatusReactionTiming = {
-  ...statusReactionTiming,
-  stallSoftMs: 5_000,
-  stallHardMs: 15_000,
-};
-
-type TestMessagesConfig = Omit<Partial<SignalMessagesConfig>, "statusReactions"> & {
-  statusReactions?: NonNullable<SignalMessagesConfig["statusReactions"]> & {
-    timing?: typeof statusReactionTiming;
-  };
-};
+type TestMessagesConfig = Partial<SignalMessagesConfig>;
 
 function createStatusReactionConfig(
   options: {
@@ -313,7 +315,7 @@ function createStatusReactionConfig(
       ackReaction: "👀",
       ackReactionScope: "direct",
       inbound: { debounceMs: 0 },
-      statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+      statusReactions: { enabled: true },
       ...options.messages,
     },
     channels: {
@@ -716,12 +718,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         },
       );
       const handler = createTestHandler({
-        cfg: createStatusReactionConfig({
-          messages: {
-            statusReactions: { enabled: true, timing: { ...shortStatusReactionTiming } },
-          },
-        }),
-        statusReactionTiming: { ...shortStatusReactionTiming },
+        cfg: createStatusReactionConfig(),
       });
 
       const handled = receiveDirectMessage(handler);
@@ -1013,7 +1010,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         messages: {
           ackReaction: "👀",
           ackReactionScope: "group-all",
-          statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+          statusReactions: { enabled: true },
         },
         signal: {
           groupAllowFrom: ["g1"],
@@ -1044,7 +1041,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         messages: {
           ackReaction: "👀",
           groupChat: { mentionPatterns: ["@bot"] },
-          statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+          statusReactions: { enabled: true },
         },
         signal: {
           groupAllowFrom: ["g1"],

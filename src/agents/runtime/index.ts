@@ -30,7 +30,6 @@ export type {
   AgentToolResult,
   AgentToolUpdateCallback,
   BashExecutionMessage,
-  BranchSummaryResult,
   CompactionPreparation,
   CompactionResult,
   CompactionSummaryPrompt,
