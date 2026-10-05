@@ -39,6 +39,23 @@ describe("built-in machine-output resolvers", () => {
     }
   });
 
+  it("reserves externally managed Doctor repair JSON output", () => {
+    expect(
+      isDoctorMachineOutput({
+        argv: [
+          "node",
+          "openclaw",
+          "doctor",
+          "--fix",
+          "--externally-managed",
+          "--non-interactive",
+          "--json",
+        ],
+        stdoutIsTTY: true,
+      }),
+    ).toBe(true);
+  });
+
   it.each(["--post-upgrade", "--state-sqlite=compact", "--session-sqlite=dry-run"])(
     "preserves registered-command JSON handling for doctor %s",
     (mode) => {

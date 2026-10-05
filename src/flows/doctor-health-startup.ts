@@ -32,6 +32,7 @@ export async function prepareDoctorHealthFlow(
     cwd: process.cwd(),
   });
   if (
+    options.externallyManaged !== true &&
     resolveIsNixMode() &&
     (options.repair === true || options.yes === true || options.generateGatewayToken === true)
   ) {

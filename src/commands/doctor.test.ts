@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   promptYesNo: vi.fn(),
   readSourceConfigBestEffort: vi.fn(),
   reconcileGithubIssue: vi.fn(),
+  runDoctorHealthFlow: vi.fn(),
   runPostUpgradeProbes: vi.fn(),
   runDoctorStateSqliteCompact: vi.fn(),
   runDoctorSessionSqlite: vi.fn(),
@@ -27,6 +28,14 @@ vi.mock("../config/io.runtime.js", () => ({
 vi.mock("./doctor-post-upgrade.js", () => ({
   runPostUpgradeProbes: mocks.runPostUpgradeProbes,
 }));
+
+vi.mock("../flows/doctor-health.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../flows/doctor-health.js")>();
+  return {
+    ...actual,
+    runDoctorHealthFlow: mocks.runDoctorHealthFlow,
+  };
+});
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite: mocks.runDoctorSessionSqlite,
@@ -198,6 +207,77 @@ describe("doctorCommand", () => {
 
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps externally managed repair diagnostics inside its JSON report", async () => {
+    const report = {
+      schemaVersion: 1,
+      mode: "externally-managed",
+      ok: true,
+      config: { path: "/managed/openclaw.json", status: "unchanged", sha256: "abc123" },
+      service: { status: "externally-managed" },
+      applied: [],
+      skipped: [],
+      remaining: [],
+    };
+    mocks.runDoctorHealthFlow.mockImplementationOnce(
+      async (repairRuntime: ReturnType<typeof createDoctorRuntime>) => {
+        repairRuntime.log("maintenance acquired");
+        repairRuntime.error("recoverable detail");
+        return report;
+      },
+    );
+    const runtime = createDoctorRuntime();
+
+    await expect(
+      doctorCommand(runtime, {
+        externallyManaged: true,
+        json: true,
+        nonInteractive: true,
+        repair: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        ...report,
+        diagnostics: [
+          { level: "info", message: "maintenance acquired" },
+          { level: "error", message: "recoverable detail" },
+        ],
+      },
+      2,
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("exits nonzero when externally managed repair reports remaining maintenance work", async () => {
+    const warning = "SQLite NOCOW repair was skipped.";
+    const report = {
+      schemaVersion: 1,
+      mode: "externally-managed",
+      ok: false,
+      config: { path: "/managed/openclaw.json", status: "unchanged", sha256: "abc123" },
+      service: { status: "externally-managed" },
+      applied: [],
+      skipped: [],
+      remaining: [{ stepId: "maintenance", message: warning }],
+    };
+    mocks.runDoctorHealthFlow.mockResolvedValueOnce(report);
+    const runtime = createDoctorRuntime();
+
+    await expect(
+      doctorCommand(runtime, {
+        externallyManaged: true,
+        json: true,
+        nonInteractive: true,
+        repair: true,
+      }),
+    ).rejects.toThrow("exit:1");
+
+    expect(runtime.writeJson).toHaveBeenCalledWith({ ...report, diagnostics: [] }, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

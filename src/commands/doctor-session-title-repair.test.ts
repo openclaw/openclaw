@@ -67,11 +67,17 @@ async function withSession(
   );
 }
 
-function repair() {
+function repair(
+  callbacks: {
+    onChanges?: (changes: readonly string[]) => void;
+    onWarnings?: (warnings: readonly string[]) => void;
+  } = {},
+) {
   return noteSessionTranscriptHealth({
     cfg: { agents: { entries: { main: {} } } },
     shouldRepair: true,
     postSessionPluginMigrationPlanBound: true,
+    ...callbacks,
   });
 }
 
@@ -107,11 +113,13 @@ describe("Doctor session title repair", () => {
           });
         }
         const before = sessionAccessor.loadSessionEntry(params);
-        await repair();
+        const onChanges = vi.fn();
+        await repair({ onChanges });
         expect(sessionAccessor.loadSessionEntry(params)).toEqual(
           complete ? { ...before, displayName: "Investigate why the gateway times out" } : before,
         );
         if (complete) {
+          expect(onChanges).toHaveBeenCalledWith(["Repaired 1 missing session title(s)."]);
           expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
         } else {
           expect(oversizedParses).toBe(0);
@@ -182,6 +190,22 @@ describe("Doctor session title repair", () => {
           expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
         },
       });
+    });
+  });
+
+  it("reports a failed title repair to structured Doctor callers", async () => {
+    await withSession(async (params) => {
+      vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
+        new Error("read-only session row"),
+      );
+      const onWarnings = vi.fn();
+
+      await repair({ onWarnings });
+
+      expect(onWarnings).toHaveBeenCalledWith([
+        expect.stringContaining("Could not repair the title for agent:main:dashboard:legacy"),
+      ]);
+      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
     });
   });
 

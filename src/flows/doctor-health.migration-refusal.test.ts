@@ -227,6 +227,56 @@ describe("Doctor refused-migration maintenance outcome", () => {
     },
   );
 
+  it("does not claim convergence when externally managed maintenance is deferred", async () => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    try {
+      vi.mocked(doctorMaintenance.beginDoctorMaintenance).mockRejectedValueOnce(
+        new DoctorMaintenanceRefusalError("Doctor could not enter maintenance.", {
+          kind: "deferred",
+          reason: "coordinator-contention",
+        }),
+      );
+      const report = await runDoctorHealthFlow(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        { repair: true, externallyManaged: true, nonInteractive: true, json: true },
+      );
+
+      expect(report?.ok).toBe(false);
+      expect(report?.remaining).toContainEqual({
+        stepId: "repair-flow",
+        message: "Doctor repair did not complete; pending repairs may remain.",
+      });
+      expect(mocks.runContributions).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not claim convergence when maintenance completes with a skipped NOCOW repair", async () => {
+    const warning = "SQLite NOCOW repair refused: GNU mv does not support --exchange or --no-copy.";
+    const warnings: string[] = [];
+    vi.mocked(doctorMaintenance.beginDoctorMaintenance).mockResolvedValueOnce({
+      ...maintenance,
+      warnings,
+      repairSqliteNoCow: vi.fn(async () => {
+        // Maintenance can complete normally while the required filesystem rewrite remains undone.
+        warnings.push(warning);
+      }),
+    });
+    vi.spyOn(nocow, "inspectDoctorSqliteNoCow").mockReturnValue({
+      paths: ["/synthetic/store.sqlite"],
+      notes: [],
+    });
+
+    const report = await runDoctorHealthFlow(
+      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      { repair: true, externallyManaged: true, nonInteractive: true, json: true },
+    );
+
+    expect(report?.ok).toBe(false);
+    expect(report?.remaining).toContainEqual({ stepId: "maintenance", message: warning });
+  });
+
   it.each(["success", "validation", "conflict", "missing-receipt"] as const)(
     "uses the latest receipt for maintenance-time token recovery (%s)",
     async (outcome) => {
@@ -316,6 +366,59 @@ describe("Doctor refused-migration maintenance outcome", () => {
       });
     },
   );
+
+  it("projects state migration refusal receipts into externally managed repair evidence", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const failure = new DoctorStateMigrationRefusalError([
+        {
+          id: "completed-state-step",
+          phase: "shared",
+          source: [],
+          target: [],
+          requiredness: "required",
+          reversibility: "not-applicable",
+          outcome: "completed",
+          changes: ["Migrated independent runtime state."],
+          warnings: [],
+        },
+        {
+          id: "refused-state-step",
+          phase: "shared",
+          source: [],
+          target: [],
+          requiredness: "required",
+          reversibility: "not-applicable",
+          outcome: "refused",
+          changes: [],
+          warnings: ["Resolve the refused runtime state before retrying."],
+          refusal: {
+            code: "step-refused",
+            message: "Resolve the refused runtime state before retrying.",
+          },
+        },
+      ]);
+      mocks.runContributions.mockImplementationOnce(async () => {
+        throw failure;
+      });
+
+      const report = await runDoctorHealthFlow(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        { repair: true, externallyManaged: true, nonInteractive: true, json: true },
+      );
+
+      expect(report?.applied).toContainEqual({
+        stepId: "completed-state-step",
+        changes: ["Migrated independent runtime state."],
+      });
+      expect(report?.remaining).toContainEqual({
+        stepId: "refused-state-step",
+        message: "Resolve the refused runtime state before retrying.",
+      });
+      expect(report?.ok).toBe(false);
+      expect(maintenance.finish).toHaveBeenCalledExactlyOnceWith(undefined, undefined, failure);
+      expect(maintenance.release).toHaveBeenCalledOnce();
+    });
+  });
 
   it("retains migration recovery and explains why source rollback cannot undo repaired state", async () => {
     await withOpenClawTestState(

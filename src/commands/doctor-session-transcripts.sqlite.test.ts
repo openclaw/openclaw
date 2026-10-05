@@ -11,6 +11,7 @@ const repairReservedIncognitoSessionKeys = vi.hoisted(() => vi.fn());
 const repairCanonicalSessionDeliveryStates = vi.hoisted(() => vi.fn());
 const repairCanonicalSessionResolvedSkills = vi.hoisted(() => vi.fn());
 const repairCanonicalSessionKeys = vi.hoisted(() => vi.fn());
+const repairLegacySessionExecPolicy = vi.hoisted(() => vi.fn());
 const repairLegacySessionWorktreeWorkspaces = vi.hoisted(() => vi.fn());
 const migrateLegacyMainSessionKeys = vi.hoisted(() => vi.fn());
 const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
@@ -46,9 +47,13 @@ vi.mock("./doctor-session-delivery-state.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./doctor-session-exec-policy.js", () => ({
-  repairLegacySessionExecPolicy: vi.fn(),
-}));
+vi.mock("./doctor-session-exec-policy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-session-exec-policy.js")>();
+  return {
+    ...actual,
+    repairLegacySessionExecPolicy,
+  };
+});
 
 vi.mock("./doctor-session-canonical-keys.js", () => ({
   repairCanonicalSessionKeys,
@@ -136,9 +141,12 @@ describe("doctor session transcript repair", () => {
       repairedGroups: 0,
       scannedStores: 0,
     });
+    repairLegacySessionExecPolicy
+      .mockReset()
+      .mockReturnValue({ found: 0, repaired: 0, scannedStores: 0 });
     repairLegacySessionWorktreeWorkspaces
       .mockReset()
-      .mockResolvedValue({ found: 0, repaired: 0, scannedStores: 0 });
+      .mockResolvedValue({ found: 0, repaired: 0, scannedStores: 0, warnings: [] });
     migrateLegacyMainSessionKeys.mockReset().mockResolvedValue({
       armed: false,
       changes: [],
@@ -174,7 +182,9 @@ describe("doctor session transcript repair", () => {
     runDoctorSessionSqlite.mockResolvedValueOnce(
       sessionSqliteReport({
         archivedTranscriptFiles: 2,
+        archivedLegacyStoreFiles: 1,
         archivedUnreferencedJsonlFiles: 1,
+        importedEntries: 1,
         importedTranscriptEvents: 2,
         legacyEntries: 1,
         sqliteEntries: 1,
@@ -182,11 +192,13 @@ describe("doctor session transcript repair", () => {
     );
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const cfg = {};
+    const onChanges = vi.fn();
 
     await noteSessionTranscriptHealth({
       cfg,
       env,
       shouldRepair: true,
+      onChanges,
     });
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith(
@@ -245,6 +257,51 @@ describe("doctor session transcript repair", () => {
       expect.stringContaining("Archived 2 legacy transcript artifact(s)."),
       "Session SQLite",
     );
+    expect(onChanges).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        "Imported 1 legacy session entry(ies) into SQLite.",
+        "Archived 1 migrated legacy session index file(s).",
+      ]),
+    );
+  });
+
+  it("reports worktree repair failures through the structured warning callback", async () => {
+    runDoctorSessionSqlite.mockResolvedValueOnce(sessionSqliteReport());
+    repairLegacySessionWorktreeWorkspaces.mockResolvedValueOnce({
+      found: 0,
+      repaired: 0,
+      scannedStores: 1,
+      warnings: ["Agent worker database /state/worker.db: database is locked"],
+    });
+    const onWarnings = vi.fn();
+
+    await noteSessionTranscriptHealth({
+      cfg: {},
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+      shouldRepair: true,
+      onWarnings,
+    });
+
+    expect(onWarnings).toHaveBeenCalledWith([
+      "Agent worker database /state/worker.db: database is locked",
+    ]);
+  });
+
+  it("publishes committed imports before a later session repair fails", async () => {
+    runDoctorSessionSqlite.mockResolvedValueOnce(sessionSqliteReport({ importedEntries: 1 }));
+    migrateLegacyMainSessionKeys.mockRejectedValueOnce(new Error("legacy index is unreadable"));
+    const onChanges = vi.fn();
+
+    await expect(
+      noteSessionTranscriptHealth({
+        cfg: {},
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        shouldRepair: true,
+        onChanges,
+      }),
+    ).rejects.toThrow("legacy index is unreadable");
+
+    expect(onChanges).toHaveBeenCalledWith(["Imported 1 legacy session entry(ies) into SQLite."]);
   });
 
   it("defers workspace writes while legacy-main source cleanup is incomplete", async () => {
@@ -658,6 +715,7 @@ describe("doctor session transcript repair", () => {
     ),
   ])("reports the lock failure when session SQLite import is unavailable: %s", async (cause) => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const onWarnings = vi.fn();
     withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(
       new DoctorSqliteMaintenanceLockUnavailableError("session SQLite import", cause),
     );
@@ -667,10 +725,12 @@ describe("doctor session transcript repair", () => {
         cfg: {},
         env,
         shouldRepair: true,
+        onWarnings,
       }),
     ).resolves.toBeUndefined();
 
     expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
+    expect(onWarnings).toHaveBeenCalledWith([expect.stringContaining(cause.message)]);
     expect(note).toHaveBeenCalledWith(expect.stringContaining(cause.message), "Session SQLite");
     if (cause.cause) {
       expect(note).toHaveBeenCalledWith(expect.stringContaining("ENOSYS"), "Session SQLite");

@@ -96,6 +96,7 @@ async function runDoctorConfigPreflightOperation(
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
+  const stateMigrationMessages: Array<{ stepId: string; result: MigrationMessages }> = [];
   let postSessionPluginMigration: PreparedPostSessionPluginMigration | undefined;
   let postSessionPluginMigrationPlanBound = false;
   let doctorMediaPersistenceAttempted = false;
@@ -103,7 +104,7 @@ async function runDoctorConfigPreflightOperation(
   const pluginMigrations = createDoctorPluginMigrationPreparation({
     enabled: stateMigrationsRequested,
     env: () => process.env,
-    report: (result) => noteDoctorStateMigrationResult(result),
+    report: (result) => noteDoctorStateMigrationResult("plugin-state", result),
     recordReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
     measure: measurePreflightStep,
     runWithPluginMetadataSnapshot: (scope, run) => pluginMetadata.run(scope, run),
@@ -114,12 +115,14 @@ async function runDoctorConfigPreflightOperation(
     env: process.env,
     getDeferredPluginIds: () => pluginMigrations.deferred().map((pending) => pending.pluginId),
   });
-  const noteDoctorStateMigrationResult = (result: MigrationMessages) => {
+  const noteDoctorStateMigrationResult = (stepId: string, result: MigrationMessages) => {
     pluginMigrations.observe(result);
+    stateMigrationMessages.push({ stepId, result });
+    options.onStateMigrationMessage?.(stepId, result);
     noteStateMigrationResult(result);
   };
-  const getSnapshotPreparation = createDoctorRehearsalSnapshotPreparation(
-    noteDoctorStateMigrationResult,
+  const getSnapshotPreparation = createDoctorRehearsalSnapshotPreparation((result) =>
+    noteDoctorStateMigrationResult("config-rehearsal", result),
   );
   const { planScopedConfigRepair, planAdmittedConfigRepair } = createDoctorConfigRepairPlanner({
     options,
@@ -145,6 +148,7 @@ async function runDoctorConfigPreflightOperation(
     : undefined;
   if (stateDirMigrations) {
     noteDoctorStateMigrationResult(
+      "state-directory",
       await measurePreflightStep("state-dir-migrations", () =>
         stateDirMigrations.autoMigrateLegacyStateDir({ env: process.env }),
       ),
@@ -181,7 +185,7 @@ async function runDoctorConfigPreflightOperation(
     );
     if (receipt.outcome !== "skipped") {
       stateMigrationStepReceipts.push(receipt);
-      noteDoctorStateMigrationResult({
+      noteDoctorStateMigrationResult("state-schema", {
         changes: receipt.changes,
         warnings: receipt.warnings,
         notices: receipt.notices,
@@ -249,6 +253,7 @@ async function runDoctorConfigPreflightOperation(
       const stateDir = resolveStateDir(process.env);
       // Invalid config cannot drive the general graph; its root policy can still recover.
       noteDoctorStateMigrationResult(
+        "exec-approvals",
         await measurePreflightStep("exec-approvals-migration", () =>
           migrateLegacyExecApprovals({
             detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
@@ -273,13 +278,16 @@ async function runDoctorConfigPreflightOperation(
             migrateCodexModelRefs: false,
           }),
         );
-        noteDoctorStateMigrationResult(cronResult);
+        noteDoctorStateMigrationResult("cron-store", cronResult);
         if (options.repairPrefixedConfig === true) {
           const cronCodexPlan = await measurePreflightStep("cron-policy-scan", () =>
             collectCronCodexRuntimePolicyTargetsReadOnly({ cfg: migrationConfig }),
           );
           cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
-          noteDoctorStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
+          noteDoctorStateMigrationResult("cron-policy", {
+            changes: [],
+            warnings: cronCodexPlan.warnings,
+          });
         }
         const legacyStateResult = await measurePreflightStep("legacy-state-migrations", () =>
           pluginMetadata.run({ config: pluginDoctorConfig ?? migrationConfig }, () =>
@@ -302,12 +310,12 @@ async function runDoctorConfigPreflightOperation(
         postSessionPluginMigration = legacyStateResult.postSessionPluginMigration;
         postSessionPluginMigrationPlanBound = options.doctorOnlyStateMigrations === true;
         doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
-        noteDoctorStateMigrationResult(legacyStateResult);
+        noteDoctorStateMigrationResult("legacy-state", legacyStateResult);
         if (options.doctorOnlyStateMigrations === true) {
           await assertDoctorPreflightMigrationsComplete({
             cfg: migrationConfig,
             stepReceipts: stateMigrationStepReceipts,
-            report: noteDoctorStateMigrationResult,
+            report: (result) => noteDoctorStateMigrationResult("legacy-state", result),
           });
         }
       } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -316,7 +324,7 @@ async function runDoctorConfigPreflightOperation(
           config: pluginDoctorConfig,
           env: process.env,
           measure: measurePreflightStep,
-          report: noteDoctorStateMigrationResult,
+          report: (result) => noteDoctorStateMigrationResult("legacy-state", result),
         });
         await pluginMigrations.migrate(pluginDoctorConfig);
       }
@@ -330,6 +338,7 @@ async function runDoctorConfigPreflightOperation(
     const { migrateLegacyMediaPersistence } =
       await import("../infra/state-migrations.media-persistence.js");
     noteDoctorStateMigrationResult(
+      "media-persistence",
       await measurePreflightStep("media-persistence-migration", () =>
         migrateLegacyMediaPersistence({ env: process.env }),
       ),
@@ -377,6 +386,7 @@ async function runDoctorConfigPreflightOperation(
       : {}),
     ...(cronCodexRuntimePolicyTargets.length > 0 ? { cronCodexRuntimePolicyTargets } : {}),
     ...(stateMigrationStepReceipts.length > 0 ? { stateMigrationStepReceipts } : {}),
+    ...(stateMigrationMessages.length > 0 ? { stateMigrationMessages } : {}),
     ...(postSessionPluginMigration ? { postSessionPluginMigration } : {}),
     ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
   };

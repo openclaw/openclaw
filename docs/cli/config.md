@@ -36,7 +36,9 @@ Config writes are blocked, including setup, onboarding, Doctor config repairs, p
 install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
 Startup-derived defaults stay runtime-only. Change the config through your
 external deployment system, then let the Gateway reload it or restart the Gateway
-as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.
+as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`. To repair
+offline runtime state without changing this file or managing the Gateway service,
+use [`doctor --fix --externally-managed --non-interactive`](/cli/doctor/running#externally-managed-repair).
 
 Doctor's `--fix --non-interactive` pass, including the official Docker image's
 startup pass, still repairs writable SQLite, session, and plugin state in this

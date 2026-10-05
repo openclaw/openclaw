@@ -34,6 +34,7 @@ export function createDoctorHealthContribution(params: {
       params.run ??
       ((ctx) =>
         runStructuredDoctorHealthContribution({
+          contributionId: params.id,
           ctx,
           checks: healthChecks,
         })),
@@ -63,6 +64,7 @@ function normalizeHealthChecks(
 }
 
 async function runStructuredDoctorHealthContribution(params: {
+  contributionId: string;
   ctx: DoctorHealthFlowContext;
   checks: readonly DoctorHealthCheck[];
 }): Promise<void> {
@@ -81,8 +83,15 @@ async function runStructuredDoctorHealthContribution(params: {
     allowExecSecretRefs: params.ctx.options.allowExec === true,
     agentDatabaseRefusals: params.ctx.agentDatabaseRefusals,
   };
-  const result = await runDoctorHealthRepairs(context, { checks: params.checks, dryRun });
-  params.ctx.cfg = result.config;
+  const result = await runDoctorHealthRepairs(context, {
+    checks: params.checks,
+    dryRun,
+    allowConfigMutation: params.ctx.options.externallyManaged !== true,
+  });
+  const configChanged = configBeforeRepair !== JSON.stringify(result.config);
+  if (!params.ctx.options.externallyManaged) {
+    params.ctx.cfg = result.config;
+  }
   renderStructuredHealthFindings(params.ctx, result.findings);
   // Display retains original findings; finalization records only unresolved warnings.
   recordDoctorHealthWarnings(
@@ -93,12 +102,17 @@ async function runStructuredDoctorHealthContribution(params: {
   for (const warning of result.warnings) {
     params.ctx.runtime.error(warning);
   }
-  if (configBeforeRepair !== JSON.stringify(result.config)) {
+  if (configChanged || result.configChangesSkipped) {
+    if (params.ctx.options.externallyManaged) {
+      params.ctx.repairEvidence?.remaining("config", result.changes);
+      return;
+    }
     params.ctx.configResult.pendingChangePanels = [
       ...(params.ctx.configResult.pendingChangePanels ?? []),
       ...result.changes,
     ];
   } else {
+    params.ctx.repairEvidence?.applied(params.contributionId, result.changes);
     for (const change of result.changes) {
       params.ctx.runtime.log(change);
     }
@@ -121,6 +135,10 @@ export function recordDoctorHealthWarnings(
       ),
     ...warnings,
   ];
+  for (const finding of findings.filter((entry) => entry.severity !== "info")) {
+    ctx.repairEvidence?.remaining(finding.checkId, [finding.message]);
+  }
+  ctx.repairEvidence?.remaining("doctor", warnings);
   ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
     options?.prepend ? [...added, ...existing] : [...existing, ...added],
   );

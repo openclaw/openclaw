@@ -16,6 +16,7 @@ interface DoctorRepairRunOptions {
   readonly checks?: readonly DoctorHealthCheck[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
+  readonly allowConfigMutation?: boolean;
 }
 
 interface DoctorRepairRunResult {
@@ -29,6 +30,7 @@ interface DoctorRepairRunResult {
   readonly checksRun: number;
   readonly checksRepaired: number;
   readonly checksValidated: number;
+  readonly configChangesSkipped: boolean;
 }
 
 /** Runs health checks in fix mode, applies repair outputs, and validates repaired scopes. */
@@ -84,8 +86,15 @@ async function runHealthCheck(
       );
       return;
     }
-    if (result.config !== undefined && opts.dryRun !== true) {
+    if (result.config !== undefined && opts.dryRun !== true && opts.allowConfigMutation !== false) {
       outcome.config = result.config;
+    } else if (
+      result.config !== undefined &&
+      opts.dryRun !== true &&
+      opts.allowConfigMutation === false &&
+      JSON.stringify(result.config) !== JSON.stringify(outcome.config)
+    ) {
+      outcome.configChangesSkipped = true;
     }
     outcome.checksRepaired++;
     if (opts.dryRun === true) {
@@ -130,6 +139,7 @@ function createRepairRunResult(config: OpenClawConfig, checksRun: number) {
     checksRun,
     checksRepaired: 0,
     checksValidated: 0,
+    configChangesSkipped: false,
   };
 }
 

@@ -17,7 +17,15 @@ function reportDoctorRepairResult(
   findings: readonly HealthFinding[],
   note: typeof import("../../packages/terminal-core/src/note.js").note,
 ): void {
-  ctx.cfg = result.config;
+  const configChanged = JSON.stringify(ctx.cfg) !== JSON.stringify(result.config);
+  if (!ctx.options.externallyManaged) {
+    ctx.cfg = result.config;
+  } else if (configChanged || result.configChangesSkipped) {
+    ctx.repairEvidence?.remaining("config", result.changes);
+  }
+  if (!configChanged && !result.configChangesSkipped) {
+    ctx.repairEvidence?.applied("structured-health-repairs", result.changes);
+  }
   renderStructuredHealthFindings(ctx, findings);
   recordDoctorHealthWarnings(ctx, findings, result.warnings);
   if (result.changes.length > 0) {
@@ -73,7 +81,7 @@ export async function runStructuredHealthRepairs(
       cwd: workspaceDir,
       configPath: ctx.configPath,
     }),
-    { checks },
+    { checks, allowConfigMutation: ctx.options.externallyManaged !== true },
   );
   reportDoctorRepairResult(
     ctx,
@@ -110,7 +118,7 @@ export async function runCoreContributionHealth(
       configPath: ctx.configPath,
       dryRun,
     }),
-    { checks, dryRun },
+    { checks, dryRun, allowConfigMutation: ctx.options.externallyManaged !== true },
   );
   reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings, note);
 }

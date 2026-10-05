@@ -97,6 +97,19 @@ describe("Doctor foreign launchd jobs", () => {
     );
   });
 
+  it("preserves lifecycle jobs during externally managed repair", async () => {
+    await runGatewayServicesHealth(
+      createDoctorHealthFlowContext({
+        options: { repair: true, nonInteractive: true, externallyManaged: true },
+        gatewayMaintenanceActive: true,
+        runtime,
+        env: {},
+      }),
+    );
+
+    expect(mocks.repair).not.toHaveBeenCalled();
+  });
+
   it("reports a job rejected by fresh owner inspection as not removed", async () => {
     mocks.repair.mockResolvedValue({ removed: false, detail: "Lifecycle command changed." });
 

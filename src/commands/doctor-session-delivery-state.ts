@@ -41,6 +41,7 @@ export type SessionDeliveryStateRepairReport = {
   found: number;
   repaired: number;
   scannedStores: number;
+  warnings?: string[];
 };
 
 /** Scan or rewrite legacy delivery fields inside existing session row JSON. */
@@ -93,6 +94,7 @@ type PreparedSessionEntryRepairParams =
 
 function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
   const targets = params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env);
+  const warnings: string[] = [];
   const pending = targets.flatMap((target) => {
     const sessionKeys: string[] = [];
     const scope = { agentId: target.agentId, env: params.env, storePath: target.sqlitePath };
@@ -125,15 +127,20 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
       return { target, scope, sessionKeys, identity };
     };
     try {
-      const operation =
-        params.source === "raw"
-          ? { ok: true, value: scan() }
-          : runDoctorAgentDatabaseOperation({
-              agentId: target.agentId,
-              path: target.sqlitePath,
-              run: scan,
-            });
-      return operation.ok && sessionKeys.length > 0 ? [operation.value] : [];
+      if (params.source === "raw") {
+        const value = scan();
+        return sessionKeys.length > 0 ? [value] : [];
+      }
+      const operation = runDoctorAgentDatabaseOperation({
+        agentId: target.agentId,
+        path: target.sqlitePath,
+        run: scan,
+      });
+      if (!operation.ok) {
+        warnings.push(operation.message);
+        return [];
+      }
+      return sessionKeys.length > 0 ? [operation.value] : [];
     } catch (error) {
       if (
         params.source === "raw" &&
@@ -153,6 +160,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
   return {
     targets,
     pending,
+    warnings,
     found: pending.reduce((count, item) => count + item.sessionKeys.length, 0),
     scannedStores: targets.length,
     apply(assertCurrent?: (target: ExistingAgentDatabaseTarget) => void): number {
@@ -192,6 +200,7 @@ export function repairCanonicalSessionEntries(
     found: plan.found,
     repaired: params.apply ? plan.apply() : 0,
     scannedStores: plan.scannedStores,
+    ...(plan.warnings.length > 0 ? { warnings: plan.warnings } : {}),
   };
 }
 

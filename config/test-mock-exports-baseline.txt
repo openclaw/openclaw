@@ -6126,7 +6126,6 @@
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","../config/sessions/legacy-main-session-migration.js","d8162126f08c93b19ffd106522f5f37518c690d69625bd9f7a0100f6966ac421",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","../infra/state-migrations.plugin-doctor.js","40a5c6b3528c5d3b20d7a57bac8def15cc4268d46cb0e2702dbe9320c60033c5",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","./doctor-session-canonical-keys.js","1754e823e4ac4bbe705ab716dab4d3676a523e64bdac3b4b41f08f510b1a3927",1]
-["src/commands/doctor-session-transcripts.sqlite.test.ts","./doctor-session-exec-policy.js","8a466213ef66f7034e08ce3c55490f7baeb1547bc367cdee3cfbfaf3b6c4e70a",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","./doctor-session-incognito-key-repair.js","6147d3ba7ed206c1c1187ee07dd4886bc20eb1a3701f9388e3113eae17339e07",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","./doctor-session-sqlite.js","49e7988b2bb0c2d97cfbc9a5bd91aa0d35cdb68b2555bca552c67ed321a62fae",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","./doctor-session-worktree-workspace.js","291d3c21353b9aee4538e785334f792ff745da88544c92a931ed6f968dbbc80e",1]

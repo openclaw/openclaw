@@ -145,6 +145,7 @@ describe("doctor canonical session delivery state", () => {
       found: 0,
       repaired: 0,
       scannedStores: 1,
+      warnings: [expect.stringContaining("uses schema version 8")],
     });
   });
 

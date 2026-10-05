@@ -14,6 +14,11 @@ import { appendTranscriptEventsInTransaction } from "../config/sessions/session-
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runSessionTranscriptLabelsHealth } from "../flows/doctor-health-contribution-runners.state.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+} from "../flows/doctor-health-contributions.test-support.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -118,6 +123,37 @@ async function runTranscriptLabelHealth(
   cfg: OpenClawConfig = CFG,
 ): Promise<void> {
   await noteSessionTranscriptLabelHealth({ cfg, env: state.env, shouldRepair });
+}
+
+function createRepairEvidenceSpies() {
+  const applied = vi.fn();
+  const remaining = vi.fn();
+  return {
+    applied,
+    remaining,
+    sink: {
+      applied,
+      remaining,
+      complete: vi.fn(),
+      migration: vi.fn(),
+      receipts: vi.fn(),
+    },
+  };
+}
+
+async function runTranscriptLabelContribution(
+  state: OpenClawTestState,
+  repairEvidence: ReturnType<typeof createRepairEvidenceSpies>["sink"],
+): Promise<void> {
+  await runSessionTranscriptLabelsHealth(
+    createDoctorHealthFlowContext({
+      cfg: CFG,
+      env: state.env,
+      options: { repair: true, externallyManaged: true },
+      prompter: createDoctorPrompterFixture(true),
+      repairEvidence,
+    }),
+  );
 }
 
 function createLegacyLabelEvents(): {
@@ -245,7 +281,11 @@ describe("doctor SQLite session transcript label migration", () => {
     );
 
     note.mockClear();
-    await runTranscriptLabelHealth(state, true);
+    const evidence = createRepairEvidenceSpies();
+    await runTranscriptLabelContribution(state, evidence.sink);
+    expect(evidence.applied).toHaveBeenCalledWith("session-state", [
+      expect.stringContaining(SESSION_ID),
+    ]);
 
     const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const repairedContent = findMessageContent(repaired.events, "legacy-user");
@@ -314,7 +354,11 @@ describe("doctor SQLite session transcript label migration", () => {
         return transaction(write, options, transactionOptions);
       },
     );
-    await runTranscriptLabelHealth(state, true);
+    const evidence = createRepairEvidenceSpies();
+    await runTranscriptLabelContribution(state, evidence.sink);
+    expect(evidence.remaining).toHaveBeenCalledWith("session-state", [
+      expect.stringContaining("transcript changed while preparing rewrite"),
+    ]);
     expect(readTranscriptEventRows(database, SESSION_ID)).toEqual(
       before.map((row) => ({ seq: row.seq, eventJson: row.seq === 2 ? "{}" : row.eventJson })),
     );

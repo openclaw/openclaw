@@ -29,16 +29,21 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import * as configFlow from "./doctor-config-flow.js";
+import * as configPreflight from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import * as migrationBackup from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import * as sessionTranscripts from "./doctor-session-transcripts.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 const { mocks } = await import("../flows/doctor-health.test-support.js");
 beforeEach(async () => {
   mocks.packageRoot.mockReturnValue(undefined);
-  mocks.runContributions.mockReset().mockResolvedValue(undefined);
+  const { runSessionTranscriptsHealth } =
+    await import("../flows/doctor-health-contribution-runners.state.js");
+  mocks.runContributions.mockReset().mockImplementation(runSessionTranscriptsHealth);
   const actual =
     await vi.importActual<typeof import("./doctor-config-flow.js")>("./doctor-config-flow.js");
   vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig").mockImplementation((params) => {
@@ -57,14 +62,37 @@ async function repairContainerState() {
   expect(runtime.exit, runtime.error.mock.calls.flat().join("\n")).not.toHaveBeenCalled();
 }
 
-async function withContainerState(run: (stateDir: string, workspace: string) => Promise<void>) {
+async function repairExternallyManagedContainerState() {
+  const report = await runDoctorHealthFlow(
+    { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    {
+      repair: true,
+      externallyManaged: true,
+      nonInteractive: true,
+      json: true,
+    },
+  );
+  if (!report) {
+    throw new Error("Externally managed Doctor repair did not return a report.");
+  }
+  return report;
+}
+
+async function withContainerState(
+  run: (stateDir: string, workspace: string) => Promise<void>,
+  options: { explicitRoster?: boolean } = {},
+) {
   await withDoctorConfigPreflightHome(async (home) => {
     const stateDir = path.join(home, ".openclaw");
     const workspace = path.join(stateDir, "workspace");
     await writeOpenClawConfig(home, {
       gateway: { mode: "local" },
+      meta: { migrations: { webhookListeners: true } },
       plugins: { enabled: false },
-      agents: { defaults: { workspace } },
+      agents: {
+        defaults: { workspace },
+        ...(options.explicitRoster === false ? {} : { entries: { main: {} } }),
+      },
     });
     fs.mkdirSync(workspace, { recursive: true });
     await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () => run(stateDir, workspace));
@@ -111,6 +139,125 @@ function seedSchema19Agent(stateDir: string, unsafe = false): string {
 }
 
 describe("container image replacement Doctor repair and startup readiness", () => {
+  it("repairs offline state without changing externally managed config", async () => {
+    await withContainerState(async (stateDir) => {
+      const configPath = path.join(stateDir, "openclaw.json");
+      const configBefore = fs.readFileSync(configPath);
+      seedSchema19Agent(stateDir);
+
+      const report = await repairExternallyManagedContainerState();
+
+      expect(report.ok, report.remaining.map((entry) => entry.message).join("\n")).toBe(true);
+      expect(report.mode).toBe("externally-managed");
+      expect(report.config.status).toBe("unchanged");
+      expect(report.service.status).toBe("externally-managed");
+      expect(report.skipped.map((entry) => entry.scope)).toEqual(["config", "service"]);
+      expect(mocks.runContributions).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(configPath)).toEqual(configBefore);
+      await runStartupConfigPreflight({ gateway: true });
+    });
+  });
+
+  it("reports deployment-owned config repairs without changing config bytes", async () => {
+    await withContainerState(
+      async (stateDir) => {
+        const configPath = path.join(stateDir, "openclaw.json");
+        const configBefore = fs.readFileSync(configPath);
+
+        const report = await repairExternallyManagedContainerState();
+
+        expect(report.ok).toBe(false);
+        expect(report.remaining).toContainEqual({
+          stepId: "config",
+          message:
+            "Deployment-owned config requires changes. Update the deployment source, redeploy it, then rerun Doctor repair.",
+        });
+        expect(fs.readFileSync(configPath)).toEqual(configBefore);
+      },
+      { explicitRoster: false },
+    );
+  });
+
+  it("does not migrate a pending database when its backup fails", async () => {
+    await withContainerState(async (stateDir) => {
+      const databasePath = seedSchema19Agent(stateDir);
+      vi.spyOn(migrationBackup, "backupDoctorMigrationDatabases").mockResolvedValue({
+        changes: [],
+        warnings: ["Could not verify the pre-migration backup."],
+      });
+
+      const report = await repairExternallyManagedContainerState();
+
+      expect(report.ok).toBe(false);
+      expect(report.remaining).toContainEqual({
+        stepId: "database-backup",
+        message: "Could not verify the pre-migration backup.",
+      });
+      // Backup failure must leave the released schema untouched for a later retry.
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+      } finally {
+        database.close();
+      }
+    });
+  });
+
+  it("preserves completed repair evidence when a later session repair fails", async () => {
+    await withContainerState(async (stateDir) => {
+      seedSchema19Agent(stateDir);
+      vi.spyOn(sessionTranscripts, "noteSessionTranscriptHealth").mockImplementationOnce(
+        async (options) => {
+          options?.onChanges?.(["Imported 1 legacy session entry(ies) into SQLite."]);
+          throw new Error("session repair failed");
+        },
+      );
+
+      const report = await repairExternallyManagedContainerState();
+
+      expect(report.ok).toBe(false);
+      expect(report.applied).toContainEqual(
+        expect.objectContaining({
+          stepId: "database-backup",
+          changes: expect.arrayContaining([
+            expect.stringContaining("Saved pre-migration SQLite backup"),
+          ]),
+        }),
+      );
+      expect(report.remaining).toContainEqual({
+        stepId: "repair",
+        message: "Repair stopped after an unexpected failure: session repair failed",
+      });
+      expect(report.applied).toContainEqual({
+        stepId: "session-state",
+        changes: ["Imported 1 legacy session entry(ies) into SQLite."],
+      });
+    });
+  });
+
+  it("reports non-receipt migration warnings as unresolved repair work", async () => {
+    await withContainerState(async () => {
+      const runPreflight = configPreflight.runDoctorConfigPreflight;
+      vi.spyOn(configPreflight, "runDoctorConfigPreflight").mockImplementationOnce(
+        async (options) => {
+          options?.onStateMigrationMessage?.("state-directory", {
+            changes: [],
+            warnings: ["Legacy state directory requires operator recovery."],
+          });
+          return runPreflight(options);
+        },
+      );
+
+      const report = await repairExternallyManagedContainerState();
+
+      expect(report.ok).toBe(false);
+      expect(report.remaining).toContainEqual({
+        stepId: "state-directory",
+        message: "Legacy state directory requires operator recovery.",
+      });
+    });
+  });
+
   it("preserves schema 19 at startup, then backs it up and repairs it through Doctor", async () => {
     await withContainerState(async (stateDir) => {
       const databasePath = seedSchema19Agent(stateDir);
@@ -348,31 +495,39 @@ describe("container image replacement Doctor repair and startup readiness", () =
     await withContainerState(async (stateDir) => {
       const databasePath = seedSchema19Agent(stateDir, true);
       const original = fs.readFileSync(databasePath);
+      const runPreflight = configPreflight.runDoctorConfigPreflight;
+      vi.spyOn(configPreflight, "runDoctorConfigPreflight").mockImplementationOnce(
+        async (options) => {
+          options?.onStateMigrationMessage?.("state-directory", {
+            changes: [],
+            warnings: ["Legacy state directory requires operator recovery."],
+          });
+          return runPreflight(options);
+        },
+      );
       await withAgentDatabaseStartupAdmission(async () => {
         await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
           code: 78,
         });
       });
       expect(fs.readFileSync(databasePath)).toEqual(original);
-      await expect(repairContainerState()).rejects.toMatchObject({
-        name: "DoctorStateMigrationRefusalError",
-        stepReceipts: expect.arrayContaining([
+      const report = await repairExternallyManagedContainerState();
+      expect(report.ok).toBe(false);
+      expect(report.remaining).toEqual(
+        expect.arrayContaining([
           expect.objectContaining({
-            id: "media-persistence",
-            outcome: "refused",
-            refusal: { code: "step-refused", message: expect.any(String) },
-            warnings: expect.arrayContaining([
-              expect.stringContaining(
-                `${databasePath} metadata schema version 18 does not match 19`,
-              ),
-            ]),
+            stepId: "state-directory",
+            message: "Legacy state directory requires operator recovery.",
           }),
           expect.objectContaining({
-            id: "transcript-directives",
-            refusal: expect.objectContaining({ code: "blocked-by-prior-refusal" }),
+            stepId: "media-persistence",
+            message: expect.stringContaining(
+              `${databasePath} metadata schema version 18 does not match 19`,
+            ),
           }),
+          expect.objectContaining({ stepId: "transcript-directives" }),
         ]),
-      });
+      );
       expect(fs.readFileSync(databasePath)).toEqual(original);
       await withAgentDatabaseStartupAdmission(async () => {
         await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({

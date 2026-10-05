@@ -208,11 +208,12 @@ describe("doctor legacy session exec policy", () => {
       };
       await replaceSessionEntry({ agentId: "main", env, sessionKey }, entry);
     }
-    const run = (shouldRepair: boolean) =>
+    const run = (shouldRepair: boolean, onChanges?: (changes: readonly string[]) => void) =>
       noteSessionTranscriptHealth({
         cfg: { plugins: { enabled: false } },
         env,
         shouldRepair,
+        onChanges,
       });
     const read = () => listSessionEntriesCore({ agentId: "main", env });
     const before = read();
@@ -221,7 +222,8 @@ describe("doctor legacy session exec policy", () => {
     expect(read()).toEqual(before);
     note.mockClear();
 
-    await run(true);
+    const onChanges = vi.fn();
+    await run(true, onChanges);
     closeOpenClawAgentDatabasesForTest();
     const repaired = read();
     const lines = note.mock.calls.flatMap(([message]) => String(message).split("\n"));
@@ -245,6 +247,9 @@ describe("doctor legacy session exec policy", () => {
     expect(output).toContain("config default applies");
     expect(output).toContain("full permission mode was not granted");
     expect(output).toContain("ask=always has no mode equivalent");
+    expect(onChanges).toHaveBeenCalledWith(
+      expect.arrayContaining(["Retired legacy exec policy from 13 durable session row(s)."]),
+    );
     // The migrated ask=always row must not merely carry a label: resolving its
     // exec policy has to deny execution, so no allowlisted command can run
     // without the human approval the legacy value required.
