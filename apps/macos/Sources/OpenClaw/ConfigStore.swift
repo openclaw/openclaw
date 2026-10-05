@@ -209,7 +209,11 @@ enum ConfigStore {
         }
         guard let lease = document.origin.lease, document.isCurrent else { throw self.sourceChanged() }
         let data = try JSONSerialization.data(withJSONObject: document.root, options: [.prettyPrinted, .sortedKeys])
-        let raw = String(decoding: data, as: UTF8.self)
+        guard let raw = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "ConfigStore", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to encode config.",
+            ])
+        }
         var params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
         if let hash = document.hash { params["baseHash"] = AnyCodable(hash) }
         _ = try await document.origin.gateway.request(

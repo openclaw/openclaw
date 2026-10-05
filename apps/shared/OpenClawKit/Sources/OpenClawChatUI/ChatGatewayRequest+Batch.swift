@@ -4,8 +4,9 @@ import OpenClawProtocol
 
 extension OpenClawChatGatewayRequests {
     static func sidebarPinOrder(_ entries: [String], hash: String) throws -> OpenClawChatGatewayRequest {
-        let json = try String(
-            decoding: JSONEncoder().encode(["ui": ["prefs": ["sidebarEntries": entries]]]), as: UTF8.self)
+        let raw = try JSONEncoder().encode(["ui": ["prefs": ["sidebarEntries": entries]]])
+        guard let json = String(data: raw, encoding: .utf8)
+        else { throw CocoaError(.fileReadInapplicableStringEncoding) }
         return .init(
             method: "config.patch",
             params: [
