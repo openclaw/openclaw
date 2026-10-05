@@ -254,8 +254,8 @@ describe("private session source staging", () => {
     const operation = vi.spyOn(sqliteRuntime, "runSqliteWorkerStoreWrite");
     const shadowActivity = () => ({
       opens: open.mock.calls.filter(([options]) => options.databasePath === shadowPath).length,
-      operations: operation.mock.calls.filter(([, , , locations]) =>
-        locations.some((location) => location === shadowPath),
+      operations: operation.mock.calls.filter((call) =>
+        call[3].some((location) => location === shadowPath),
       ).length,
     });
     const load = storage.loadSqliteVecExtension;
