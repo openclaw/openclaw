@@ -10,7 +10,11 @@ import {
 } from "../daemon/constants.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { isValidProfileName, resolveProfileStateDir } from "./profile-utils.js";
+import {
+  DEV_PROFILE_GATEWAY_PORT,
+  isValidProfileName,
+  resolveProfileStateDir,
+} from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
@@ -154,6 +158,6 @@ export function applyCliProfileEnv(params: {
   }
 
   if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
-    env.OPENCLAW_GATEWAY_PORT = "19001";
+    env.OPENCLAW_GATEWAY_PORT = String(DEV_PROFILE_GATEWAY_PORT);
   }
 }
