@@ -129,6 +129,7 @@ vi.mock("./doctor-platform-notes.js", () => ({
   noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
+  maybeRepairMacGatewayServiceEnvQuotes: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-sandbox.js", () => ({
