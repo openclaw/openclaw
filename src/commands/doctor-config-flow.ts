@@ -479,9 +479,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const { repairSystemAgentWorkspacePin } =
     await import("./doctor/shared/system-agent-workspace-repair.js");
-  const authoredDefaultWorkspace = (
-    snapshot.parsed as { agents?: { defaults?: { workspace?: unknown } } } | undefined
-  )?.agents?.defaults?.workspace;
+  type AuthoredWorkspaceDefaults = { agents?: { defaults?: { workspace?: unknown } } };
+  // authoredConfig keeps include-resolved authored values (env refs intact); parsed only has the
+  // root file, so an agents.defaults $include would otherwise freeze the resolved absolute path.
+  const authoredDefaultWorkspace =
+    (snapshot.authoredConfig as AuthoredWorkspaceDefaults | undefined)?.agents?.defaults
+      ?.workspace ??
+    (snapshot.parsed as AuthoredWorkspaceDefaults | undefined)?.agents?.defaults?.workspace;
   const systemAgentWorkspace = await repairSystemAgentWorkspacePin(state.candidate, process.env, {
     includeOwnsRoster,
     authoredDefaultWorkspace:

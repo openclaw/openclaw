@@ -425,6 +425,50 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
+  it("keeps the authored env root when agents.defaults comes from an include", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const workspace = path.join(home, "shared-workspace");
+      const moved = path.join(home, "moved-workspace");
+      await withEnvAsync(
+        { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", WORKSPACE_ROOT: workspace },
+        async () => {
+          await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
+          await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
+          await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+          await fs.writeFile(
+            path.join(home, ".openclaw", "defaults.json5"),
+            '{ workspace: "${WORKSPACE_ROOT}", systemAgent: { agentId: "main" } }\n',
+          );
+          const configPath = await writeOpenClawConfig(home, {
+            agents: {
+              ownership: "explicit",
+              defaults: { $include: "./defaults.json5" },
+              entries: { main: {}, dev: {} },
+            },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+
+          await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+
+          const written = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+            agents: { defaults: Record<string, unknown>; entries: Record<string, any> };
+          };
+          expect(written.agents.defaults).toEqual({ $include: "./defaults.json5" });
+          expect(written.agents.entries.main.workspace).toBe("${WORKSPACE_ROOT}/main");
+          const after = (await readConfigFileSnapshot()).config;
+          expect(resolveAgentWorkspaceDir(after, "main")).toBe(path.join(workspace, "main"));
+          expect(resolveAgentWorkspaceDir(after, "dev")).toBe(path.join(workspace, "dev"));
+
+          process.env.WORKSPACE_ROOT = moved;
+          const reloaded = (await readConfigFileSnapshot()).config;
+          expect(resolveAgentWorkspaceDir(reloaded, "main")).toBe(path.join(moved, "main"));
+          expect(resolveAgentWorkspaceDir(reloaded, "dev")).toBe(path.join(moved, "dev"));
+        },
+      );
+    });
+  });
+
   it("persists cron runtime policy on the retained owner before rewriting its model", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");

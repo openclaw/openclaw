@@ -488,7 +488,8 @@ files resolve to `<root>/<agentId>`. `openclaw doctor --fix` records
 `agents.entries.<agentId>.workspace` as `<root>/<agentId>` only when the root
 holds no customized files, so nothing changes where the files live. The pin
 keeps the root as you wrote it (`${WORKSPACE_ROOT}/<agentId>`, `~/x/<agentId>`),
-so changing that variable moves defaults and pin together. A customized
+so changing that variable moves defaults and pin together, including when
+`agents.defaults` comes from an `$include` file. A customized
 `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, or `USER.md`, `memory/`, `MEMORY.md`, or
 workspace skills count as files; seeded templates do not. When the root holds
 such files, Doctor never assigns the shared root to the agent: it writes
