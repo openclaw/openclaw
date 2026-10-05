@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
@@ -96,6 +97,10 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   }
   const eligibleTargets: SessionStoreTarget[] = [];
   for (const target of storeTargets) {
+    // One explicit macrotask between targets: the refusal probe is synchronous,
+    // and yielding here guarantees timers queued before the scan can run
+    // mid-scan regardless of the status probe's internals (#149935).
+    await setImmediate();
     if (params.shouldContinue?.() === false) {
       return [];
     }
