@@ -545,6 +545,17 @@ export function hasSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): bo
   );
 }
 
+export function countSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): number {
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      getIndexKysely(db)
+        .selectFrom(selectSessionsNeedingTranscriptIndexReconcile(db).as("pending"))
+        .select((eb) => eb.fn.countAll<number>().as("count")),
+    )?.count ?? 0
+  );
+}
+
 /**
  * Sessions whose index needs reconcile work: flagged rebuilds, transcripts
  * that gained rows without index state (doctor imports), and watermarks
