@@ -13,6 +13,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { readUserTurnForegroundOnlyRunId } from "../../sessions/user-turn-transcript.metadata.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
@@ -36,6 +37,7 @@ export type SessionPendingInput = {
   message: PersistedUserTurnMessage;
   acceptedAt: number;
   state: SessionPendingInputState;
+  replayBlockedReason?: "foreground-restart";
 };
 export type SessionPendingInputPage = {
   items: SessionPendingInput[];
@@ -328,12 +330,18 @@ export function projectSessionPendingInput(row: SessionPendingInputRow): Session
   if (row.state !== "queued" && row.state !== "interrupted" && row.state !== "cancelled") {
     throw new Error("Pending input has an invalid disposition");
   }
+  const message = parseSessionPendingInputMessage(row.message_json);
   return {
     id: row.input_id,
     runId: row.run_id,
-    message: parseSessionPendingInputMessage(row.message_json),
+    message,
     acceptedAt: row.accepted_at,
     state: row.state,
+    ...(row.state === "interrupted" &&
+    !isAgentEventLifecycleGenerationCurrent(row.lifecycle_generation) &&
+    readUserTurnForegroundOnlyRunId(message)
+      ? { replayBlockedReason: "foreground-restart" as const }
+      : {}),
   };
 }
 

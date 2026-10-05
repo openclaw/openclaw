@@ -15,6 +15,7 @@ import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-s
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { stripEnvelopeFromMessage } from "../gateway/chat-sanitize.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -40,6 +41,66 @@ describe("persistUserTurnTranscript", () => {
   afterEach(() => {
     resetGlobalHookRunner();
   });
+
+  it.each([undefined, "admitted-source"])(
+    "retains only the admitted execution restriction across input and hook overrides (%s)",
+    async (foregroundOnlyRunId) => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const recorder = createUserTurnTranscriptRecorder({
+        target,
+        foregroundOnlyRunId,
+        message: {
+          role: "user",
+          content: "Continue the task",
+          timestamp: 1,
+          __openclaw: {
+            foregroundOnlyRunId: "caller-supplied",
+            foregroundOnlyLifecycleGeneration: "caller-generation",
+          },
+        },
+        beforeMessageWrite: ({ message }) => {
+          Reflect.deleteProperty(message, "__openclaw");
+          return {
+            ...message,
+            __openclaw: {
+              foregroundOnlyRunId: "hook-supplied",
+              foregroundOnlyLifecycleGeneration: "hook-generation",
+            },
+          };
+        },
+        updateMode: "none",
+      });
+      const prepared = recorder.message!;
+      expect(prepared["__openclaw"]?.foregroundOnlyRunId).toBe(foregroundOnlyRunId);
+      const runtime = restorePreparedUserTurnOperationalMetaForRuntime({
+        preparedMessage: prepared,
+        runtimeMessage: castAgentMessage({
+          ...prepared,
+          __openclaw: {
+            foregroundOnlyRunId: "runtime-supplied",
+            foregroundOnlyLifecycleGeneration: "runtime-generation",
+          },
+        }),
+      });
+      expect(Reflect.get(runtime, "__openclaw")?.foregroundOnlyRunId).toBe(foregroundOnlyRunId);
+      expect(Reflect.get(runtime, "__openclaw")?.foregroundOnlyLifecycleGeneration).toBe(
+        foregroundOnlyRunId ? getAgentEventLifecycleGeneration() : undefined,
+      );
+      await recorder.persistApproved();
+      const [stored] = await readTranscriptMessages(target);
+      expect(stored?.content).toBe("Continue the task");
+      if (foregroundOnlyRunId) {
+        expect(stored).toHaveProperty("__openclaw.foregroundOnlyRunId", foregroundOnlyRunId);
+        expect(stored).toHaveProperty(
+          "__openclaw.foregroundOnlyLifecycleGeneration",
+          getAgentEventLifecycleGeneration(),
+        );
+      } else {
+        expect(stored).not.toHaveProperty("__openclaw.foregroundOnlyRunId");
+        expect(stored).not.toHaveProperty("__openclaw.foregroundOnlyLifecycleGeneration");
+      }
+    },
+  );
 
   it.each(["available", "missing"] as const)(
     "resumes a cold current transcript only when its archive is %s",

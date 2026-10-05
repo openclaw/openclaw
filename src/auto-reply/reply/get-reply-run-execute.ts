@@ -222,18 +222,30 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       extractedFileImages: opts?.extractedFileImages,
     }),
   );
+  const foregroundRequest =
+    !isHeartbeat &&
+    !(ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource) &&
+    (!inputProvenance || inputProvenance.kind === "external_user")
+      ? (getForegroundUserRequest(ctx) ?? getForegroundUserRequest(sessionCtx))
+      : undefined;
+  const foregroundOnly =
+    opts?.operatorAuthority?.rolePolicy?.execution === "foreground-only" ||
+    preparedSessionState.sessionEntry?.execution === "foreground-only";
   const sourceMessageId =
     normalizeOptionalString(sessionCtx.MessageSidFull) ??
     normalizeOptionalString(sessionCtx.MessageSid);
   const sourceTurnId =
     readChannelSourceTurnId(sessionCtx) ??
     (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider)
-      ? buildChannelSourceTurnId({
+      ? (buildChannelSourceTurnId({
           provider: messageProvider,
           accountId: replyRoute.accountId,
           conversationId: replyRoute.to,
           messageId: sourceMessageId,
-        })
+        }) ??
+        // A source-less restricted request still needs one accepted identity
+        // for its transcript, queued handoff and durable restart claim.
+        (foregroundOnly && foregroundRequest ? crypto.randomUUID() : undefined))
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   // Direct sender identity is safe only after channel admission and an ingress-owned
@@ -342,6 +354,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     opts?.userTurnTranscriptRecorder ??
     (userTurnInput
       ? createUserTurnTranscriptRecorder({
+          foregroundOnlyRunId: foregroundOnly
+            ? (sourceTurnId ?? sourceMessageId ?? crypto.randomUUID())
+            : undefined,
           input: userTurnInput,
           target: () => ({
             sessionId: preparedSessionState.sessionId,
@@ -398,12 +413,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
     gatewayLocalUserIngress: getGatewayLocalUserIngress(ctx),
-    foregroundRequest:
-      !isHeartbeat &&
-      !(ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource) &&
-      (!inputProvenance || inputProvenance.kind === "external_user")
-        ? (getForegroundUserRequest(ctx) ?? getForegroundUserRequest(sessionCtx))
-        : undefined,
+    foregroundRequest,
     channelAdmissionEvidence:
       readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,

@@ -15,6 +15,7 @@ import {
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createUserTurnAdmissionWrite } from "./user-turn-transcript-admission-write.js";
 import {
   registerUserTurnTranscriptAdmissionOwner,
@@ -29,6 +30,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   normalizePersistedSteerTargetRunId,
   preparePersistedUserTurnMessageForTranscriptWrite,
+  replaceUserTurnForegroundOnlyMetadata,
   restorePreparedUserTurnOperationalMetaForRuntime,
   rewritePersistedSteerTargetRunId,
 } from "./user-turn-transcript.metadata.js";
@@ -211,7 +213,38 @@ export function createUserTurnTranscriptRecorder(
   params: CreateUserTurnTranscriptRecorderParams,
 ): UserTurnTranscriptRecorder {
   const logicalTurnId = randomUUID();
-  let message = resolvePersistedUserTurnMessage(params);
+  const foregroundOnlyRunId = params.foregroundOnlyRunId;
+  const foregroundOnlyLifecycleGeneration = foregroundOnlyRunId
+    ? getAgentEventLifecycleGeneration()
+    : undefined;
+  const bindExecutionPolicy = (candidate: PersistedUserTurnMessage | undefined) => {
+    if (!candidate) {
+      return undefined;
+    }
+    // The admitted producer owns this fact. Message overrides cannot grant or
+    // remove a restriction that must survive loss of the in-memory authority.
+    const metadata = { ...candidate["__openclaw"] };
+    // Unrestricted turns retain their prepared persistence-boundary object.
+    if (
+      !foregroundOnlyRunId &&
+      !Object.hasOwn(metadata, "foregroundOnlyRunId") &&
+      !Object.hasOwn(metadata, "foregroundOnlyLifecycleGeneration")
+    ) {
+      return candidate;
+    }
+    replaceUserTurnForegroundOnlyMetadata(
+      metadata,
+      foregroundOnlyRunId,
+      foregroundOnlyLifecycleGeneration,
+    );
+    const next = { ...candidate };
+    delete next["__openclaw"];
+    if (Object.keys(metadata).length > 0) {
+      next["__openclaw"] = metadata;
+    }
+    return next;
+  };
+  let message = bindExecutionPolicy(resolvePersistedUserTurnMessage(params));
   let blocked = false;
   let persisted = false;
   let runtimePersisted = false;
@@ -252,7 +285,7 @@ export function createUserTurnTranscriptRecorder(
 
   const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) => {
     const next = rewritePersistedSteerTargetRunId(
-      applyReplacementText(candidate),
+      bindExecutionPolicy(applyReplacementText(candidate)),
       confirmedSteerTargetRunId,
     );
     // Native mirrors must reuse this admission even when no transport supplied a key.

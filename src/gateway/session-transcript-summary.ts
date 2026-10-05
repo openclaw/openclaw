@@ -4,7 +4,7 @@ import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derive
 
 export type SessionTranscriptSummaryQuery =
   | { kind: "usage" }
-  | { kind: "recovery-checkpoint" }
+  | { kind: "recovery-checkpoint"; sourceRunId?: string; restartSourceRunIds?: readonly string[] }
   | { kind: "mcp-app"; lookup: McpAppTranscriptLookup };
 
 export type SessionTranscriptSummaryResult =
@@ -26,7 +26,11 @@ export async function prepareSessionTranscriptSummaryReader(
       await import("../agents/main-session-recovery/main-session-recovery-checkpoint.js");
     return (visit) => ({
       kind: "recovery-checkpoint",
-      checkpoint: selectMainSessionRecoveryCheckpoint(visit),
+      checkpoint: selectMainSessionRecoveryCheckpoint(
+        visit,
+        query.sourceRunId,
+        query.restartSourceRunIds,
+      ),
     });
   }
   if (query.kind === "mcp-app") {

@@ -418,7 +418,16 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const messages = [
-      { role: "user", content: "Continue safely", provenance: { kind: "external_user" } },
+      {
+        role: "user",
+        content: "Continue safely",
+        provenance: { kind: "external_user" },
+        idempotencyKey: "summary-source:user",
+        __openclaw: {
+          foregroundOnlyRunId: "summary-source",
+          foregroundOnlyLifecycleGeneration: "stopped-generation",
+        },
+      },
       {
         role: "toolResult",
         toolName: "exec",
@@ -490,7 +499,9 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
       );
     });
     try {
-      expect(await readMainSessionRecoveryCheckpoint(target)).toEqual({
+      expect(await readMainSessionRecoveryCheckpoint(target, "summary-source")).toEqual({
+        foregroundOnly: true,
+        foregroundOnlyRunId: "summary-source",
         replaySafe: true,
         source: "external_user",
       });

@@ -11,6 +11,14 @@ export type SessionPendingInputReceiptsWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
+export type SessionSubmittedInputWorkerInput = Omit<
+  SessionPendingInputReceiptsWorkerInput,
+  "kind" | "runIds"
+> & {
+  kind: "session-submitted-input";
+  runId: string;
+};
+
 export type ConversationDeliveryWorkerInput = {
   kind: "conversation-delivery";
   database: { agentId: string; path: string };

@@ -4,12 +4,19 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { getForegroundUserRequest } from "../../agents/foreground-request.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+} from "../../channels/inbound-event/context.js";
+import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
+import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
@@ -17,6 +24,7 @@ import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -31,6 +39,7 @@ import {
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
@@ -71,7 +80,7 @@ import {
   readSourceReplyDeliveryRuntime,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
-import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -463,6 +472,129 @@ function requireRunReplyAgentCall(index = 0) {
 }
 
 describe("runPreparedReply media-only handling", () => {
+  it.each(["source-less", "provider-source", "room-event", "unrestricted", "ambient"] as const)(
+    "carries one accepted channel source through the recorder and queued handoff: %s",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:default:telegram:group:foreground";
+        const sessionId = "foreground-source-session";
+        const messageId = kind === "provider-source" ? "input" : undefined;
+        const inboundEventKind =
+          kind === "room-event" || kind === "ambient" ? "room_event" : "user_request";
+        let live = true;
+        const gateway = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+        const owner = {
+          channelId: "telegram",
+          isLive: () => live,
+          resolveGatewayContext: () => gateway,
+        };
+        const ingress = await createHostChannelIngressRuntime(owner).resolveStable({
+          channelId: "telegram",
+          accountId: "local",
+          identity: { authentication: "verified" },
+          subject: { stableId: "sender" },
+          conversation: { kind: "group", id: "foreground" },
+          contextBinding: { agentId: "default", sessionKey, messageId, inboundEventKind },
+          dmPolicy: "open",
+          groupPolicy: "open",
+          allowFrom: ["*"],
+          groupAllowFrom: ["*"],
+          useDefaultPairingStore: false,
+        });
+        const builder = createHostChannelInboundEventContextBuilder(
+          (params: BuildChannelInboundEventContextParams) =>
+            buildChannelInboundEventContext(params),
+          kind === "ambient" ? undefined : owner,
+        );
+        const context = await builder({
+          channel: "telegram",
+          accountId: "local",
+          messageId,
+          from: "telegram:foreground",
+          sender: { id: "sender" },
+          conversation: { kind: "group", id: "foreground" },
+          route: { agentId: "default", routeSessionKey: sessionKey },
+          reply: { to: "foreground" },
+          message: { rawBody: "Keep my changes", inboundEventKind },
+          channelIngress: ingress,
+        });
+        const sessionEntry: SessionEntry = { sessionId, updatedAt: 1, systemSent: true };
+        loadSessionEntryMock.mockReturnValue(sessionEntry);
+        const params = baseParams({
+          agentId: "default",
+          sessionKey,
+          sessionId,
+          sessionEntry,
+          isNewSession: false,
+          ctx: context,
+          sessionCtx: context,
+          opts:
+            kind === "unrestricted"
+              ? undefined
+              : {
+                  operatorAuthority: createAdmittedRunOperatorAuthority({
+                    profileId: "foreground-source",
+                    scopes: ["operator.write"],
+                    assertCurrent() {
+                      if (!live) {
+                        throw new Error("channel source retired");
+                      }
+                    },
+                    rolePolicy: {
+                      sessionAccessCap: "none",
+                      sandboxRequired: true,
+                      agents: "*",
+                      execution: "foreground-only",
+                    },
+                  }),
+                },
+        });
+        try {
+          await runPreparedReply(params);
+          const { followupRun } = requireRunReplyAgentCall();
+          const recorder = expectDefined(
+            followupRun.userTurnTranscriptRecorder,
+            "accepted recorder",
+          );
+          const message = await recorder.resolveMessage();
+          if (kind === "unrestricted" || kind === "ambient") {
+            expect(followupRun.sourceTurnId).toBeUndefined();
+            expect(readChannelSourceTurnId(params.sessionCtx)).toBeUndefined();
+            if (kind === "unrestricted") {
+              expect(message?.__openclaw?.foregroundOnlyRunId).toBeUndefined();
+            } else {
+              expect(followupRun.foregroundRequest).toBeUndefined();
+            }
+          } else {
+            const source = expectDefined(followupRun.sourceTurnId, "accepted source identity");
+            expect(followupRun.foregroundRequest).toBe(getForegroundUserRequest(context));
+            expect(readChannelSourceTurnId(params.sessionCtx)).toBe(source);
+            expect(message).toMatchObject({
+              idempotencyKey: source,
+              __openclaw: { foregroundOnlyRunId: source },
+            });
+            if (kind === "provider-source") {
+              expect(source).toBe(
+                buildChannelSourceTurnId({
+                  provider: "telegram",
+                  accountId: "local",
+                  conversationId: "foreground",
+                  messageId,
+                }),
+              );
+            } else {
+              expect(source).toMatch(/^[a-f0-9-]{36}$/);
+            }
+          }
+          expect(params.sessionCtx.MessageSid).toBe(messageId);
+          expect(sessionEntry.execution).toBeUndefined();
+        } finally {
+          live = false;
+        }
+      });
+    },
+  );
+
   registerPendingRequesterAuthorityCases({ runPrepared, loadSessionEntryMock });
   it.each([
     "owner-alias",

@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -266,6 +269,118 @@ describe("accepted input custody", () => {
       }
       expect(execute).toHaveBeenCalledTimes(disposition === "interrupted" ? 1 : 0);
       expect(listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
+    },
+  );
+
+  it("refuses same-input replay after restart even if the sender now has unrestricted authority", async () => {
+    const runId = "foreground-source";
+    const requestFingerprint = "f".repeat(64);
+    let receipt = await stage(runId, {
+      requestFingerprint,
+      trackCompletion: true,
+      message: { ...message(runId), __openclaw: { foregroundOnlyRunId: runId } },
+    });
+    expect(readSessionPendingInput(scope(), receipt.inputId)).not.toHaveProperty(
+      "replayBlockedReason",
+    );
+    receipt.finish("interrupted");
+    expect(readSessionPendingInput(scope(), receipt.inputId)).not.toHaveProperty(
+      "replayBlockedReason",
+    );
+    const accepted = receipt.message;
+    receipt = await stage(runId, { requestFingerprint, trackCompletion: true });
+    expect(receipt.message).toEqual(accepted);
+    receipt.finish("interrupted");
+    rotateAgentEventLifecycleGeneration();
+    expect(readSessionPendingInput(scope(), receipt.inputId)).toMatchObject({
+      state: "interrupted",
+      replayBlockedReason: "foreground-restart",
+    });
+    const prepare = vi.fn((input: PersistedUserTurnMessage) => input);
+    await expect(
+      stage(runId, { requestFingerprint, prepareMessageAfterIdempotencyCheck: prepare }),
+    ).rejects.toThrow("Foreground-only work stopped after a Gateway restart");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(readSessionSubmittedInput(scope(), `${runId}:user`)).toEqual(receipt.message);
+    expect(await loadTranscriptEvents(scope())).toEqual([]);
+
+    const fresh = await stage("fresh-authenticated-source");
+    expect(await promote(fresh)).toMatchObject({ appended: true, message: fresh.message });
+    expect(readSessionSubmittedInput(scope(), `${runId}:user`)).toEqual(receipt.message);
+  });
+
+  it("preserves a collected source restriction alongside transport correlation", async () => {
+    const restricted = await stage("foreground-collected", {
+      message: {
+        ...message("foreground-collected"),
+        __openclaw: {
+          foregroundOnlyRunId: "foreground-collected",
+          foregroundOnlyLifecycleGeneration: getAgentEventLifecycleGeneration(),
+          transport: { clients: [{ id: "cli", mode: "cli" }] },
+        },
+      },
+    });
+    const unrestricted = await stage("unrestricted-collected");
+    const aggregate = bindSessionPendingInputSources(
+      [unrestricted, restricted],
+      message("collected"),
+    )!;
+    receipts.push(aggregate);
+    expect(aggregate.message["__openclaw"]).toMatchObject({
+      foregroundOnlyRunId: "foreground-collected",
+      foregroundOnlyLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      transport: { clients: [{ id: "cli", mode: "cli" }] },
+    });
+    await promote(aggregate);
+    expect(readSessionSubmittedInput(scope(), "collected:user")).toEqual(aggregate.message);
+  });
+
+  it.each(["single", "collected"] as const)(
+    "rejects cross-generation execution replay after %s transcript promotion",
+    async (kind) => {
+      const original = await stage("restricted-source", {
+        message: {
+          ...message("restricted-source"),
+          __openclaw: {
+            foregroundOnlyRunId: "restricted-source",
+            foregroundOnlyLifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        },
+      });
+      const accepted =
+        kind === "single"
+          ? original
+          : bindSessionPendingInputSources([original], message("aggregate"))!;
+      if (accepted !== original) {
+        receipts.push(accepted);
+      }
+      const runId = kind === "single" ? "restricted-source" : "aggregate";
+      await promote(accepted);
+      const before = await loadTranscriptEvents(scope());
+      const currentRetry = await stage(runId);
+      const execute = vi.fn();
+      currentRetry.run(execute);
+      expect(execute).toHaveBeenCalledOnce();
+      accepted.finish("interrupted");
+      currentRetry.finish("interrupted");
+      rotateAgentEventLifecycleGeneration();
+      expect(() => currentRetry.run(execute)).toThrow();
+      await expect(stage(runId)).rejects.toThrow(
+        "Foreground-only work stopped after a Gateway restart",
+      );
+      if (kind === "collected") {
+        const sourceReceipt = await stage("restricted-source", { message: original.message });
+        expect(sourceReceipt.state).toBe("consumed");
+        expect(() => sourceReceipt.run(execute)).toThrow("already been consumed");
+      }
+      expect(execute).toHaveBeenCalledOnce();
+      // Retained history can still be mirrored; this is not a fresh execution admission.
+      expect(
+        await withSessionPendingInputPersistence(accepted, () =>
+          appendTranscriptMessage(scope(), { message: accepted.message }),
+        ),
+      ).toMatchObject({ appended: false });
+      expect(await loadTranscriptEvents(scope())).toEqual(before);
     },
   );
 
@@ -945,6 +1060,11 @@ describe("accepted input custody", () => {
   it("does not create missing storage for a submitted-input lookup", () => {
     const storePath = path.join(fixture.sessionsDir(), "missing-agent.sqlite");
     expect(readSessionSubmittedInput({ ...scope(), storePath }, "missing:user")).toBeUndefined();
+    expect(() =>
+      readSessionSubmittedInput({ ...scope(), storePath }, "missing:user", {
+        requireReadSuccess: true,
+      }),
+    ).toThrow("Accepted input storage is unavailable");
     expect(fs.existsSync(storePath)).toBe(false);
   });
 
@@ -985,6 +1105,11 @@ describe("accepted input custody", () => {
         db.exec("PRAGMA query_only = ON");
         try {
           expect(readSessionSubmittedInput(scope(), "invalid-source:user")).toBeUndefined();
+          expect(() =>
+            readSessionSubmittedInput(scope(), "invalid-source:user", {
+              requireReadSuccess: true,
+            }),
+          ).toThrow();
         } finally {
           db.exec("PRAGMA query_only = OFF");
         }
@@ -1015,6 +1140,11 @@ describe("accepted input custody", () => {
       db.exec("PRAGMA query_only = ON");
       try {
         expect(readSessionSubmittedInput(scope(), "stale-source:user")).toBeUndefined();
+        expect(() =>
+          readSessionSubmittedInput(scope(), "stale-source:user", {
+            requireReadSuccess: true,
+          }),
+        ).toThrow("Accepted input transcript projection is unavailable");
       } finally {
         db.exec("PRAGMA query_only = OFF");
       }

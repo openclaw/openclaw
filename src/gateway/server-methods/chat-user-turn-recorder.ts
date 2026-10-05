@@ -107,6 +107,11 @@ export function createGatewayChatUserTurnController(params: {
     : Promise.resolve(baseInput);
   let contextFreeCommand = false;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+    foregroundOnlyRunId:
+      admission.operatorAuthority?.rolePolicy?.execution === "foreground-only" ||
+      (session.entry ?? admission.initialSessionEntry)?.execution === "foreground-only"
+        ? session.clientRunId
+        : undefined,
     ...(sender?.id && !request.goalOperation
       ? {
           // Attribution and submitted bytes survive reconnect; display names, leaf

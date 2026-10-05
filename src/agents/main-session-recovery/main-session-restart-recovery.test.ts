@@ -9,6 +9,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { resolveReplyRunDeliveryContext } from "../../auto-reply/reply/agent-runner-core.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -62,6 +63,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
@@ -113,6 +115,7 @@ import {
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import { createRestartRecoveryTranscriptFixture } from "./main-session-restart-recovery-fixture.test-support.js";
+import * as recoveryReplaySafety from "./main-session-restart-recovery-replay-safety.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
@@ -454,6 +457,327 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
+  it("joins a host source identity to its durable channel claim across a distinct shutdown run", async () => {
+    const sourceTurnId = randomUUID();
+    const operationalRunId = "foreground-channel-operational-run";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
+      status: "done",
+      abortedLastRun: false,
+    });
+    const scope = { agentId: "main", sessionId: "main-session", sessionKey, storePath };
+    let entry = loadSessionEntry(scope);
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "Keep my changes", idempotencyKey: sourceTurnId },
+      foregroundOnlyRunId: sourceTurnId,
+      target: () => ({ ...scope, sessionEntry: entry, cwd: sessionsDir }),
+    });
+    const controller = createReplyRestartRecoveryClaimController({
+      ...scope,
+      lifecycleGeneration,
+      sourceTurnId,
+      getEntry: () => entry,
+      getSessionId: () => scope.sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => discordDeliveryContext,
+      setEntry: (next) => {
+        entry = next;
+      },
+    });
+    await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+    expect(loadSessionEntry(scope)).toMatchObject({
+      restartRecoverySourceIngress: "channel",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+    });
+    expect(loadSessionEntry(scope)?.execution).toBeUndefined();
+    const accepted = await loadTestTranscript(sessionKey, storePath);
+    expect(accepted.at(-1)?.message).toMatchObject({
+      idempotencyKey: sourceTurnId,
+      __openclaw: {
+        foregroundOnlyRunId: sourceTurnId,
+        foregroundOnlyLifecycleGeneration: lifecycleGeneration,
+      },
+    });
+    const admission = await beginSessionWorkAdmission({
+      resolveGatewayContext,
+      scope: storePath,
+      identities: [sessionKey, scope.sessionId],
+      assertAllowed: () => undefined,
+    });
+    registerAgentRunContext(operationalRunId, { ...scope, lifecycleGeneration });
+    try {
+      await expect(
+        markRestartAbortedMainSessions({
+          resolveGatewayContext,
+          stateDir: tmpDir,
+          activeRuns: [
+            activeRestartRun(sessionKey, scope.sessionId, {
+              runId: operationalRunId,
+              observedAt: Date.now(),
+            }),
+          ],
+        }),
+      ).resolves.toEqual({ marked: 1, skipped: 0 });
+    } finally {
+      admission.release();
+    }
+    expect(loadSessionEntry(scope)?.restartRecoveryRuns).toContainEqual({
+      runId: operationalRunId,
+      lifecycleGeneration,
+    });
+    rotateAgentEventLifecycleGeneration();
+    await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry(scope)).toMatchObject({
+      status: "killed",
+      restartRecoveryTerminalRunIds: [sourceTurnId],
+    });
+    const stopped = await loadTestTranscript(sessionKey, storePath);
+    expect(stopped.slice(0, accepted.length)).toEqual(accepted);
+    expect(stopped).toHaveLength(accepted.length + 1);
+    expect(stopped.at(-1)?.message).toMatchObject({
+      role: "assistant",
+      idempotencyKey: `foreground-restart:${sourceTurnId}:stopped`,
+    });
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
+    expect(await loadTestTranscript(sessionKey, storePath)).toEqual(stopped);
+  });
+
+  it.each([false, true])(
+    "resolves accepted pending policy from shutdown fences without stopping an unrelated active source (%s)",
+    async (hasUnrestrictedSource) => {
+      const sessionKey = "agent:main:main";
+      const sourceRunId = "pending-foreground-source";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const sessionsDir = await writePreparedMainSessionTranscript(
+        [
+          makeUserMessage("Earlier unrestricted input", {
+            idempotencyKey: "unrestricted-source:user",
+            provenance: { kind: "external_user" },
+          }),
+          codeModeCheckpointMessage(),
+        ],
+        {
+          status: hasUnrestrictedSource ? "running" : "done",
+          abortedLastRun: false,
+          ...(hasUnrestrictedSource
+            ? {
+                restartRecoveryDeliveryRunId: "unrestricted-source",
+                restartRecoveryDeliverySourceRunId: "unrestricted-source",
+                restartRecoverySourceIngress: "control-ui" as const,
+                restartRecoveryDeliveryRequestFingerprint: "original-fingerprint",
+              }
+            : {}),
+        },
+      );
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const scope = { agentId: "main", sessionId: "main-session", sessionKey, storePath };
+      const pending = await sessionAccessor.stageSessionPendingInput(scope, {
+        runId: sourceRunId,
+        assertCurrent: () => {},
+        message: {
+          role: "user",
+          content: "Accepted before shutdown, still awaiting promotion",
+          timestamp: Date.now(),
+          idempotencyKey: `${sourceRunId}:user`,
+          __openclaw: {
+            foregroundOnlyRunId: sourceRunId,
+            foregroundOnlyLifecycleGeneration: lifecycleGeneration,
+          },
+        },
+      });
+      const admission = await beginSessionWorkAdmission({
+        resolveGatewayContext,
+        scope: storePath,
+        identities: [sessionKey, "main-session"],
+        assertAllowed: () => undefined,
+      });
+      // Runtime preparation registers the accepted run before input promotion.
+      registerAgentRunContext(sourceRunId, { sessionKey, sessionId: "main-session" });
+      try {
+        await expect(
+          markRestartAbortedMainSessions({
+            resolveGatewayContext,
+            stateDir: tmpDir,
+            activeRuns: [
+              activeRestartRun(sessionKey, "main-session", {
+                runId: sourceRunId,
+                observedAt: Date.now(),
+              }),
+            ],
+          }),
+        ).resolves.toEqual({ marked: 1, skipped: 0 });
+      } finally {
+        admission.release();
+        pending?.finish("interrupted");
+      }
+      expect(loadSessionEntry(scope)?.restartRecoveryRuns).toEqual(
+        expect.arrayContaining([{ runId: sourceRunId, lifecycleGeneration }]),
+      );
+      rotateAgentEventLifecycleGeneration();
+      const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+      expect(result.failed).toBe(0);
+      if (hasUnrestrictedSource) {
+        expect(callGateway).toHaveBeenCalled();
+        expect(loadSessionEntry(scope)?.status).not.toBe("killed");
+      } else {
+        expect(result.settled).toBe(1);
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(loadSessionEntry(scope)).toMatchObject({
+          status: "killed",
+          restartRecoveryTerminalRunIds: [sourceRunId],
+        });
+      }
+      expect(sessionAccessor.listSessionPendingInputs(scope)).toMatchObject({
+        items: [
+          {
+            runId: sourceRunId,
+            state: "interrupted",
+            replayBlockedReason: "foreground-restart",
+          },
+        ],
+      });
+    },
+  );
+
+  it.each(["accepted-source", "creation"] as const)(
+    "stops interrupted foreground-only %s work once without retiring the conversation",
+    async (policyOwner) => {
+      const sourceRunId = "foreground-source";
+      const worktree = { id: "task-tree", branch: "task/parser", repoRoot: "/projects/parser" };
+      const sessionsDir = await writePreparedMainSessionTranscript(
+        [
+          makeUserMessage("Keep my changes", {
+            idempotencyKey: `${sourceRunId}:user`,
+            provenance: { kind: "external_user" },
+            ...(policyOwner === "accepted-source"
+              ? { __openclaw: { foregroundOnlyRunId: sourceRunId } }
+              : {}),
+          }),
+          codeModeCheckpointMessage(),
+          ...Array.from({ length: 24 }, () => makeToolResultMessage()),
+          makeUserMessage("Maintainer steering must not replace the source policy", {
+            idempotencyKey: "maintainer-steer:user",
+            __openclaw: { steerTargetRunId: sourceRunId },
+          }),
+        ],
+        {
+          ...(policyOwner === "creation" ? { execution: "foreground-only" as const } : {}),
+          worktree,
+          lifecycleRunId: sourceRunId,
+          restartRecoveryDeliveryRunId: sourceRunId,
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoverySourceIngress: "control-ui",
+          restartRecoveryDeliveryRequestFingerprint: "source-fingerprint",
+        },
+      );
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const before = await loadTestTranscript(sessionKey, storePath);
+
+      await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+      expect(callGateway).not.toHaveBeenCalled();
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      expect(entry).toMatchObject({
+        sessionId: "main-session",
+        status: "killed",
+        abortedLastRun: false,
+        lastRunId: sourceRunId,
+        restartRecoveryTerminalRunIds: [sourceRunId],
+        worktree,
+      });
+      expect(entry?.mainRestartRecovery).toBeUndefined();
+      expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(configSessions.resolveSessionWorkStartError(sessionKey, entry)).toBeUndefined();
+      const after = await loadTestTranscript(sessionKey, storePath);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after).toHaveLength(before.length + 1);
+      expect(after.at(-1)?.message).toMatchObject({
+        role: "assistant",
+        idempotencyKey: `foreground-restart:${sourceRunId}:stopped`,
+        content: [expect.objectContaining({ text: expect.stringContaining("Send a new message") })],
+      });
+
+      await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
+      expect(await loadTestTranscript(sessionKey, storePath)).toEqual(after);
+      if (policyOwner === "accepted-source") {
+        await writeTranscript(sessionsDir, "main-session", [
+          makeUserMessage("A new authorized request", { idempotencyKey: "fresh-source:user" }),
+        ]);
+        expect(
+          await recoveryReplaySafety.readMainSessionRecoveryCheckpoint(
+            { agentId: "main", sessionKey, sessionId: "main-session", storePath },
+            "fresh-source",
+          ),
+        ).toMatchObject({ foregroundOnly: false });
+      }
+      // The source receipt prevents replay; a new authenticated request can still
+      // acquire the same conversation through the ordinary foreground owner.
+      const claim = await claimMainSessionRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        sessionId: "main-session",
+        target: { sessionKey, storePath },
+      });
+      expect(claim.kind).not.toBe("invalidated");
+    },
+  );
+
+  it("never dispatches a restricted source when its stopped receipt fails, then records it once", async () => {
+    const sessionsDir = await writePreparedMainSessionTranscript(
+      [
+        makeUserMessage("Preserve this accepted input", {
+          __openclaw: { foregroundOnlyRunId: "stopped-source" },
+        }),
+      ],
+      { restartRecoveryDeliverySourceRunId: "stopped-source" },
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const before = await loadTestTranscript(sessionKey, storePath);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("transcript write unavailable"),
+    );
+    await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(await loadTestTranscript(sessionKey, storePath)).toEqual(before);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryDeliverySourceRunId: "stopped-source",
+    });
+    await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+    expect(await loadTestTranscript(sessionKey, storePath)).toHaveLength(before.length + 1);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not stop a fresh foreground owner that wins the stopped-notice commit race", async () => {
+    const sessionsDir = await writePreparedMainSessionTranscript([
+      makeUserMessage("Interrupted source", {
+        __openclaw: { foregroundOnlyRunId: "old-source" },
+      }),
+    ]);
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const before = await loadTestTranscript(sessionKey, storePath);
+    const append =
+      transcriptMocks.appendAssistantMessageToSessionTranscript.getMockImplementation()!;
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(
+      async (params) => {
+        const claim = await claimMainSessionRecoveryOwner({
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          sessionId: "main-session",
+          target: { sessionKey, storePath },
+        });
+        expect(claim.kind).not.toBe("invalidated");
+        return append(params);
+      },
+    );
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(await loadTestTranscript(sessionKey, storePath)).toEqual(before);
+    expect(loadSessionEntry({ sessionKey, storePath })?.status).not.toBe("killed");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("preserves exact restart identities against stale same-id rows", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -2283,6 +2607,9 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("defers mixed deliveries while any exact queue owner is pending", async () => {
+    using checkpointRead = vi
+      .spyOn(recoveryReplaySafety, "readMainSessionRecoveryCheckpoint")
+      .mockRejectedValue(new Error("checkpoint unavailable"));
     try {
       seedQueuedFinal("delivery-still-pending", "Pending sibling.");
       const sessionsDir = await makeSessionsDir();
@@ -2300,6 +2627,7 @@ describe("main-session-restart-recovery", () => {
 
       await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
 
+      expect(checkpointRead).not.toHaveBeenCalled();
       expect(callGateway).not.toHaveBeenCalled();
       expect(sendRecoveryNotice).not.toHaveBeenCalled();
     } finally {
@@ -2308,6 +2636,9 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("completes terminal deliveries despite a residual pending queue row", async () => {
+    using checkpointRead = vi
+      .spyOn(recoveryReplaySafety, "readMainSessionRecoveryCheckpoint")
+      .mockRejectedValue(new Error("checkpoint unavailable"));
     try {
       seedQueuedFinal("delivery-terminal-with-row", "Already delivered.");
       const sessionsDir = await makeSessionsDir();
@@ -2325,6 +2656,7 @@ describe("main-session-restart-recovery", () => {
 
       await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
 
+      expect(checkpointRead).not.toHaveBeenCalled();
       expect(callGateway).not.toHaveBeenCalled();
       expect(sendRecoveryNotice).not.toHaveBeenCalled();
       const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
@@ -2333,6 +2665,52 @@ describe("main-session-restart-recovery", () => {
     } finally {
       closeOpenClawStateDatabaseForTest();
     }
+  });
+
+  it("leaves completed delivery receipts unchanged during ordinary observation", async () => {
+    using checkpointRead = vi
+      .spyOn(recoveryReplaySafety, "readMainSessionRecoveryCheckpoint")
+      .mockRejectedValue(new Error("checkpoint unavailable"));
+    const { storePath, sessionKey } = await makeMainSessionFixture({
+      pendingFinalDelivery: makePendingFinalDelivery("Already delivered.", {
+        intentId: "observation-terminal-intent",
+        deliveries: [{ id: "observation-terminal-delivery", state: "delivered" }],
+      }),
+    });
+
+    await expect(
+      recoverStore({
+        gatewayRuntime: mockRecoveryRuntime,
+        handledSessionKeys: new Set(),
+        observationOnly: true,
+        stateDir: tmpDir,
+        storePath,
+      }),
+    ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+
+    expect(checkpointRead).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      pendingFinalDelivery: { intentId: "observation-terminal-intent" },
+    });
+  });
+
+  it("retains recoverable work when its strict source checkpoint is unavailable", async () => {
+    using checkpointRead = vi
+      .spyOn(recoveryReplaySafety, "readMainSessionRecoveryCheckpoint")
+      .mockRejectedValue(new Error("checkpoint unavailable"));
+    const { storePath, sessionKey } = await makeMainSessionFixture();
+
+    await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
+
+    expect(checkpointRead).toHaveBeenCalledOnce();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
   });
 
   it("resumes safely when residual ambiguity has no notice identity", async () => {
@@ -2355,6 +2733,9 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("completes an unqueued media-only final with owed notice debt", async () => {
+    using checkpointRead = vi
+      .spyOn(recoveryReplaySafety, "readMainSessionRecoveryCheckpoint")
+      .mockRejectedValue(new Error("checkpoint unavailable"));
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({
@@ -2370,6 +2751,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
 
+    expect(checkpointRead).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
     // The debt is delivered on the next same-route turn; a fire-and-forget
     // notice would be lost during the outage that interrupted the send.
@@ -3663,33 +4045,52 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("tombstones exhausted recovery with replacement-session instructions", async () => {
-    const { storePath } = await makeMainSessionFixture({
-      sessionKey: "agent:main:discord:direct:123",
-      mainRestartRecovery: {
-        cycleId: "cycle-exhausted",
-        revision: 1,
-        chargedAttempts: 3,
-      },
-      restartRecoveryDeliveryContext: discordDeliveryContext,
-    });
+  it.each([false, true])(
+    "tombstones exhausted recovery with replacement-session instructions (observationOnly=%s)",
+    async (observationOnly) => {
+      const { storePath } = await makeMainSessionFixture({
+        sessionKey: "agent:main:discord:direct:123",
+        mainRestartRecovery: {
+          cycleId: "cycle-exhausted",
+          revision: 1,
+          chargedAttempts: 3,
+        },
+        restartRecoveryDeliveryContext: discordDeliveryContext,
+        pendingFinalDelivery: makePendingFinalDelivery("Already delivered.", {
+          intentId: "exhausted-terminal-intent",
+          deliveries: [{ id: "exhausted-terminal-delivery", state: "delivered" }],
+        }),
+      });
 
-    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
-    expect(sendRecoveryNotice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("Resume in new session"),
-      }),
-    );
-    expect(sendRecoveryNotice).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("/new or /reset") }),
-    );
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:discord:direct:123", storePath }),
-    ).toMatchObject({
-      status: "failed",
-      mainRestartRecovery: { tombstone: expect.any(Object) },
-    });
-  });
+      if (observationOnly) {
+        await expect(
+          recoverStore({
+            gatewayRuntime: mockRecoveryRuntime,
+            handledSessionKeys: new Set(),
+            observationOnly,
+            stateDir: tmpDir,
+            storePath,
+          }),
+        ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+      } else {
+        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+      }
+      expect(sendRecoveryNotice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("Resume in new session"),
+        }),
+      );
+      expect(sendRecoveryNotice).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("/new or /reset") }),
+      );
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:discord:direct:123", storePath }),
+      ).toMatchObject({
+        status: "failed",
+        mainRestartRecovery: { tombstone: expect.any(Object) },
+      });
+    },
+  );
 
   it("rejects foreground takeover while tombstoning exhausted recovery", async () => {
     tmpDir = transcriptFixture.prepareRoot();

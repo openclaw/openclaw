@@ -41,7 +41,10 @@ import {
   markSessionCompletedAfterRecoveryCheckpoint,
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
-import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
+import {
+  stopForegroundOnlyRestartWithNotice,
+  tombstoneMainRestartRecoveryWithNotice,
+} from "./main-session-restart-recovery-failure.js";
 import { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
@@ -292,12 +295,79 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    if (
-      recoveryView.status === "exhausted" ||
-      (!params.observationOnly &&
-        requiresRestartRecoveryMessageActionAuthority(entry) &&
-        !hasRestartRecoveryMessageActionAuthority(entry))
-    ) {
+    const terminalReason =
+      recoveryView.status === "exhausted"
+        ? recoveryView.reason
+        : !params.observationOnly &&
+            requiresRestartRecoveryMessageActionAuthority(entry) &&
+            !hasRestartRecoveryMessageActionAuthority(entry)
+          ? "message-tool-only recovery authority is unavailable"
+          : undefined;
+    if (params.observationOnly && !terminalReason) {
+      result.skipped++;
+      continue;
+    }
+    let pendingAction: Awaited<ReturnType<typeof pendingFinalRecoveryAction>> | undefined;
+    if (!terminalReason) {
+      // Durable delivery settlement does not resume execution. Keep it independent
+      // of source reads, without bypassing exhaustion or lost-authority handling.
+      pendingAction = entry.pendingFinalDelivery
+        ? await pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
+        : undefined;
+      if (stopped()) {
+        return result;
+      }
+      if (pendingAction === "defer") {
+        // The exact durable queue owner is still responsible for settlement.
+        // Dispatching a second recovery turn would duplicate that delivery.
+        result.skipped++;
+        continue;
+      }
+      if (pendingAction === "complete") {
+        const completion = await markSessionCompletedAfterRecoveryCheckpoint({
+          ...target,
+          entry,
+          messages: [],
+          pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
+          reason: "delivered-terminal-receipt",
+        });
+        result[completion.outcome === "completed" ? "settled" : "skipped"]++;
+        if (completion.outcome === "completed") {
+          params.handledSessionKeys.add(resumeDedupeKey);
+        }
+        continue;
+      }
+      if (pendingAction === "notice") {
+        const completed = await completePendingFinalRecoveryWithNotice(entry, target);
+        result[completed ? "settled" : "skipped"]++;
+        continue;
+      }
+    }
+    let checkpoint: Awaited<ReturnType<typeof readMainSessionRecoveryCheckpoint>>;
+    try {
+      checkpoint =
+        entry.execution === "foreground-only"
+          ? {
+              foregroundOnly: true,
+              foregroundOnlyRunId: undefined,
+              replaySafe: false,
+              source: undefined,
+            }
+          : await readMainSessionRecoveryCheckpoint(
+              { ...target, sessionEntry: entry, sessionId: entry.sessionId },
+              entry.restartRecoveryDeliverySourceRunId ??
+                entry.lifecycleRunId ??
+                entry.activeWriterRunId,
+              entry.restartRecoveryRuns,
+            );
+    } catch (error) {
+      mainSessionRecoveryLog.warn(
+        `failed to read restart source policy for ${sessionKey}: ${String(error)}`,
+      );
+      result.failed++;
+      continue;
+    }
+    if (!checkpoint.foregroundOnly && terminalReason) {
       if (stopped()) {
         return result;
       }
@@ -307,15 +377,38 @@ export async function recoverStore(params: {
         entry,
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
-        reason:
-          recoveryView.status === "exhausted"
-            ? recoveryView.reason
-            : "message-tool-only recovery authority is unavailable",
+        reason: terminalReason,
       });
       result[tombstone === "notice_failed" ? "failed" : "skipped"]++;
       continue;
     }
     if (params.observationOnly) {
+      result.skipped++;
+      continue;
+    }
+    if (checkpoint.foregroundOnly) {
+      if (stopped()) {
+        return result;
+      }
+      const stoppedInput = await stopForegroundOnlyRestartWithNotice({
+        ...target,
+        entry,
+        foregroundOnlyRunId: checkpoint.foregroundOnlyRunId,
+        observation: recoveryView.observation,
+      });
+      result[
+        stoppedInput === "stopped"
+          ? "settled"
+          : stoppedInput === "notice_failed"
+            ? "failed"
+            : "skipped"
+      ]++;
+      if (stoppedInput === "stopped") {
+        params.handledSessionKeys.add(resumeDedupeKey);
+      }
+      continue;
+    }
+    if (recoveryView.status !== "recoverable") {
       result.skipped++;
       continue;
     }
@@ -372,37 +465,6 @@ export async function recoverStore(params: {
       return true;
     };
 
-    const pendingAction = entry.pendingFinalDelivery
-      ? await pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
-      : undefined;
-    if (stopped()) {
-      return result;
-    }
-    if (pendingAction === "defer") {
-      // The exact durable queue owner is still responsible for settlement.
-      // Dispatching a second recovery turn would duplicate that delivery.
-      result.skipped++;
-      continue;
-    }
-    if (pendingAction === "complete") {
-      const completion = await markSessionCompletedAfterRecoveryCheckpoint({
-        ...target,
-        entry,
-        messages: [],
-        pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
-        reason: "delivered-terminal-receipt",
-      });
-      result[completion.outcome === "completed" ? "settled" : "skipped"]++;
-      if (completion.outcome === "completed") {
-        params.handledSessionKeys.add(resumeDedupeKey);
-      }
-      continue;
-    }
-    if (pendingAction === "notice") {
-      const completed = await completePendingFinalRecoveryWithNotice(entry, target);
-      result[completed ? "settled" : "skipped"]++;
-      continue;
-    }
     const harnessCompletion = entry.restartRecoveryHarnessCompletion;
     let recoverableHarnessCompletion: boolean;
     try {
@@ -490,7 +552,6 @@ export async function recoverStore(params: {
         maxMessages: 20,
         maxBytes: 256 * 1024,
       });
-      const checkpoint = await readMainSessionRecoveryCheckpoint(transcriptScope);
       source = checkpoint.source;
       replaySafeCheckpoint = fullAccess && !entry.pendingFinalDelivery && checkpoint.replaySafe;
     } catch (err) {

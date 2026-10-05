@@ -15,7 +15,10 @@ import type {
   SessionCostUsageCacheReadResult,
 } from "../../infra/session-cost-usage-cache-read.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnTranscriptAdmissionReceipt,
+} from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type {
   SessionActivitySummaryBatchInput,
@@ -106,6 +109,7 @@ import type {
   ConversationDeliveryWorkerInput,
   SessionGoalOperationReceiptWorkerInput,
   SessionPendingInputReceiptsWorkerInput,
+  SessionSubmittedInputWorkerInput,
 } from "./session-transcript-worker-receipts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -498,6 +502,7 @@ export type SessionHistoryWorkerInput =
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | SessionPendingInputReceiptsWorkerInput
+  | SessionSubmittedInputWorkerInput
   | SessionGoalOperationReceiptWorkerInput
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
@@ -579,6 +584,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "session-pending-input-receipts": {
     kind: "session-pending-input-receipts";
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
+  };
+  "session-submitted-input": {
+    kind: "session-submitted-input";
+    message: PersistedUserTurnMessage | undefined;
   };
   "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
   "session-store-summary": {
@@ -745,6 +754,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   readPendingInputReceipts: SessionHistoryReader<
     SessionPendingInputReceiptsWorkerInput,
     ReturnType<typeof listSessionPendingInputReceipts>
+  >;
+  readSubmittedInput: SessionHistoryReader<
+    SessionSubmittedInputWorkerInput,
+    PersistedUserTurnMessage | undefined
   >;
   readUsageCache: SessionHistoryReader<SessionUsageCacheWorkerInput>;
 };

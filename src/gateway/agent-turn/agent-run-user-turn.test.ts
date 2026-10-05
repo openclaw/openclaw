@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnContext } from "./types.js";
@@ -94,6 +97,139 @@ describe("prepareAgentRunUserTurn", () => {
         ],
         sessionEntry: scope.sessionEntry,
       };
+    });
+  });
+
+  it.each(["source", "creation", "unrestricted"] as const)(
+    "stages the immutable foreground restriction from %s before acceptance",
+    async (policyOwner) => {
+      const sessionKey = "agent:main:main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "admitted-session",
+        updatedAt: 1,
+        ...(policyOwner === "creation" ? { execution: "foreground-only" as const } : {}),
+      };
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        canonicalKey: sessionKey,
+        entry: sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+      });
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "test-profile",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        rolePolicy: {
+          agents: "*",
+          sessionAccessCap: "none",
+          sandboxRequired: false,
+          ...(policyOwner === "source" ? { execution: "foreground-only" as const } : {}),
+        },
+      });
+      const prepared = await prepareAgentRunUserTurn({
+        request: { message: "Keep this task", idempotencyKey: "admitted-run" },
+        cfg: {},
+        sessionEntry,
+        operatorAuthority,
+        resolvedSessionKey: sessionKey,
+        admittedSessionId: sessionEntry.sessionId,
+        activeSessionAgentId: "main",
+        suppressVisibleSessionEffects: false,
+        requestedPromptPersistenceSuppression: false,
+        canUseInternalRuntimeHandoff: false,
+        message: "Keep this task",
+        effectiveTranscriptInputText: "Keep this task",
+        images: [],
+        offloadedRefs: [],
+        runId: "admitted-run",
+        client: null,
+        context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+        assertCurrent: () => {},
+      });
+      expect(mocks.persistedMessages).toHaveLength(1);
+      if (policyOwner === "unrestricted") {
+        expect(mocks.persistedMessages[0]).not.toHaveProperty("__openclaw.foregroundOnlyRunId");
+      } else {
+        expect(mocks.persistedMessages[0]).toHaveProperty(
+          "__openclaw.foregroundOnlyRunId",
+          "admitted-run",
+        );
+      }
+      prepared.recorder?.finishPendingInput?.("interrupted");
+    },
+  );
+
+  it("rejects a promoted operator's generic agent replay of a consumed foreground input after restart", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const actual = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.js")
+      >("../../config/sessions/session-accessor.js");
+      const sessionKey = "agent:main:replay-source";
+      const sessionEntry: SessionEntry = { sessionId: "replay-session", updatedAt: 1 };
+      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+      const scope = { agentId: "main", sessionKey, sessionId: sessionEntry.sessionId, storePath };
+      await actual.upsertSessionEntryCore(scope, sessionEntry);
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath,
+        canonicalKey: sessionKey,
+        entry: sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+      });
+      mocks.stageSessionPendingInput.mockImplementation(actual.stageSessionPendingInput);
+      const params: Parameters<typeof prepareAgentRunUserTurn>[0] = {
+        request: { message: "Keep this task", idempotencyKey: "restricted-run" },
+        cfg: {},
+        sessionEntry,
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          profileId: "same-profile",
+          scopes: ["operator.write"],
+          assertCurrent: () => {},
+          rolePolicy: {
+            agents: "*",
+            sessionAccessCap: "none",
+            sandboxRequired: false,
+            execution: "foreground-only",
+          },
+        }),
+        resolvedSessionKey: sessionKey,
+        admittedSessionId: sessionEntry.sessionId,
+        activeSessionAgentId: "main",
+        suppressVisibleSessionEffects: false,
+        requestedPromptPersistenceSuppression: false,
+        canUseInternalRuntimeHandoff: false,
+        message: "Keep this task",
+        effectiveTranscriptInputText: "Keep this task",
+        images: [],
+        offloadedRefs: [],
+        runId: "restricted-run",
+        client: null,
+        context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+        assertCurrent: () => {},
+      };
+      const original = await prepareAgentRunUserTurn(params);
+      const recorder = original.recorder!;
+      await recorder.withPendingInput!(() =>
+        actual.appendTranscriptMessage(scope, {
+          message: recorder.getPendingInputMessage!(),
+        }),
+      );
+      recorder.finishPendingInput!("interrupted");
+      const history = await actual.loadTranscriptEvents(scope);
+      rotateAgentEventLifecycleGeneration();
+      await expect(
+        prepareAgentRunUserTurn({
+          ...params,
+          operatorAuthority: createAdmittedRunOperatorAuthority({
+            profileId: "same-profile",
+            scopes: ["operator.admin"],
+            assertCurrent: () => {},
+          }),
+        }),
+      ).rejects.toThrow("Foreground-only work stopped after a Gateway restart");
+      expect(await actual.loadTranscriptEvents(scope)).toEqual(history);
+      expect(actual.listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
     });
   });
 

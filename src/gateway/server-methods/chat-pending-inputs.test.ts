@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
@@ -28,6 +29,49 @@ import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import type { GatewayRequestContext } from "./types.js";
 
 describe("pending input read boundary", () => {
+  it("projects a stopped reason only after the original foreground generation ends", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:foreground-pending",
+        sessionId: "foreground-pending",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const receipt = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "foreground-source",
+          assertCurrent: () => {},
+          message: {
+            role: "user",
+            content: "Keep my draft",
+            timestamp: 1,
+            idempotencyKey: "foreground-source:user",
+            __openclaw: { foregroundOnlyRunId: "foreground-source" },
+          },
+        }),
+        "foreground pending receipt",
+      );
+      try {
+        const current = await readChatPendingInputs(scope, { limit: 20, maxChars: 100 });
+        expect(current.items[0]).not.toHaveProperty("replayBlockedReason");
+        rotateAgentEventLifecycleGeneration();
+        expect(await readChatPendingInputs(scope, { limit: 20, maxChars: 100 })).toMatchObject({
+          total: 1,
+          items: [
+            {
+              runId: "foreground-source",
+              state: "interrupted",
+              replayBlockedReason: "foreground-restart",
+              message: { content: "Keep my draft" },
+            },
+          ],
+        });
+      } finally {
+        receipt.finish("interrupted");
+      }
+    });
+  });
+
   it("prepares automation names once per pending page from the Gateway's selected partition", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = {

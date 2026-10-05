@@ -25,6 +25,39 @@ export function normalizePersistedSteerTargetRunId(value: unknown): string | und
   return normalized && normalized.length <= STEER_TARGET_RUN_ID_MAX_CHARS ? normalized : undefined;
 }
 
+/** A retained restriction is not authority to resume the input that carried it. */
+export function readUserTurnForegroundOnlyRunId(message: unknown): string | undefined {
+  const record = asOptionalRecord(message);
+  return record?.role === "user"
+    ? normalizeOptionalString(asOptionalRecord(record["__openclaw"])?.foregroundOnlyRunId)
+    : undefined;
+}
+
+export function readUserTurnForegroundOnlyLifecycleGeneration(
+  message: unknown,
+): string | undefined {
+  return readUserTurnForegroundOnlyRunId(message)
+    ? normalizeOptionalString(
+        asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])
+          ?.foregroundOnlyLifecycleGeneration,
+      )
+    : undefined;
+}
+
+/** Replace only producer-owned execution facts on a fresh metadata copy. */
+export function replaceUserTurnForegroundOnlyMetadata(
+  metadata: Record<string, unknown>,
+  runId: string | undefined,
+  lifecycleGeneration: string | undefined,
+): void {
+  delete metadata.foregroundOnlyRunId;
+  delete metadata.foregroundOnlyLifecycleGeneration;
+  if (runId) {
+    metadata.foregroundOnlyRunId = runId;
+    metadata.foregroundOnlyLifecycleGeneration = lifecycleGeneration;
+  }
+}
+
 /** Channel source facts qualify an observation, never an authenticated Gateway profile. */
 export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["sender"] {
   const id = normalizeOptionalString(ctx.SenderId);
@@ -143,6 +176,10 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   const preparedMeta = params.preparedMessage["__openclaw"];
   const senderIsOwner = preparedMeta?.senderIsOwner;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(preparedMeta?.steerTargetRunId);
+  const foregroundOnlyRunId = readUserTurnForegroundOnlyRunId(params.preparedMessage);
+  const foregroundOnlyLifecycleGeneration = readUserTurnForegroundOnlyLifecycleGeneration(
+    params.preparedMessage,
+  );
   const nextMessage: TMessage & { display?: boolean; __openclaw?: Record<string, unknown> } = {
     ...params.runtimeMessage,
   };
@@ -162,6 +199,11 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   if (steerTargetRunId) {
     runtimeMeta.steerTargetRunId = steerTargetRunId;
   }
+  replaceUserTurnForegroundOnlyMetadata(
+    runtimeMeta,
+    foregroundOnlyRunId,
+    foregroundOnlyLifecycleGeneration,
+  );
   if (typeof senderIsOwner === "boolean") {
     runtimeMeta.senderIsOwner = senderIsOwner;
   }
@@ -246,6 +288,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     : undefined;
   const originalTransport = originalMeta?.transport;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(originalMeta?.steerTargetRunId);
+  const foregroundOnlyRunId = readUserTurnForegroundOnlyRunId(message);
+  const foregroundOnlyLifecycleGeneration = readUserTurnForegroundOnlyLifecycleGeneration(message);
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
@@ -296,6 +340,11 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (steerTargetRunId) {
     protectedMeta.steerTargetRunId = steerTargetRunId;
   }
+  replaceUserTurnForegroundOnlyMetadata(
+    protectedMeta,
+    foregroundOnlyRunId,
+    foregroundOnlyLifecycleGeneration,
+  );
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,
     ...(display === false ? { display: false } : {}),
