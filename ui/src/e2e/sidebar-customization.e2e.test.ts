@@ -91,9 +91,9 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
 }
 
 suite.define(() => {
-  it("keeps the first pinned row's grip left of its icon and clear of the editor", async () => {
+  it.each([1440, 390])("keeps nav controls separated at %i px", async (width) => {
     await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
       async ({ page }) => {
         await installMockGateway(page);
         await page.addInitScript(
@@ -108,6 +108,9 @@ suite.define(() => {
           controlUiBundledSettingsStorageKey(suite.server.baseUrl),
         );
         await page.goto(`${suite.server.baseUrl}chat`);
+        if (width < 900) {
+          await visibleDrawerButton(page).click();
+        }
         const sidebar = page.locator("openclaw-app-sidebar");
         const row = sidebar.locator('[data-sidebar-entry="route:systems"]');
         const grip = row.getByRole("button", { name: "Reorder Systems", exact: true });
@@ -119,16 +122,23 @@ suite.define(() => {
         await expect
           .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
           .toBe("1");
-        const [gripBox, editorBox, iconBox, rowBox] = await Promise.all([
+        const [gripBox, editorBox, iconBox, rowBox, linkBox, siblingBox] = await Promise.all([
           grip.boundingBox(),
           editor.boundingBox(),
           row.locator(".nav-item__icon").boundingBox(),
           row.boundingBox(),
+          row.locator(".nav-item").boundingBox(),
+          sidebar.locator('[data-sidebar-entry="route:agents-home"]').boundingBox(),
         ]);
         expect(gripBox).not.toBeNull();
         expect(editorBox).not.toBeNull();
         expect(iconBox).not.toBeNull();
         expect(rowBox).not.toBeNull();
+        expect(linkBox).not.toBeNull();
+        expect(siblingBox).not.toBeNull();
+        expect(rowBox!.height).toBe(siblingBox!.height);
+        expect(linkBox!.height).toBe(rowBox!.height);
+        expect(editorBox!.y + editorBox!.height / 2).toBe(rowBox!.y + rowBox!.height / 2);
         expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
         expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
         expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
