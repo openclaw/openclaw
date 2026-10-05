@@ -6,7 +6,10 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerListener } from "../../shared/listeners.js";
 import type { WorkerCredentialRecord } from "./credential.js";
-import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import {
+  isWorkerRecoveryDisposalCandidate,
+  type WorkerEnvironmentRecord,
+} from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
 import { isTerminalWorkerEnvironmentState } from "./state.js";
 import {
@@ -333,7 +336,9 @@ function createWorkerEnvironmentProjection() {
     },
     preparedRecords() {
       assertActive();
-      return [...environments.values()].filter((row) => row.preparation !== null);
+      return [...environments.values()].filter(
+        (row) => row.preparation !== null || row.recoveryHold !== undefined,
+      );
     },
     hasNodeEnrollmentOwner(nodeId: string) {
       assertActive();
@@ -428,7 +433,11 @@ function createWorkerEnvironmentProjection() {
       }
       reconcilable ??= freezeJsonSnapshot(
         sorted
-          .filter((row) => !isTerminalWorkerEnvironmentState(row.state))
+          .filter(
+            (row) =>
+              !isTerminalWorkerEnvironmentState(row.state) ||
+              isWorkerRecoveryDisposalCandidate(row),
+          )
           .toSorted(
             (a, b) =>
               Buffer.compare(Buffer.from(a.providerId), Buffer.from(b.providerId)) || compare(a, b),

@@ -130,6 +130,9 @@ async function createBuildRecoveryHarness(
       throw new Error("unexpected prepared intent");
     },
     assertPreparedIntentCurrent: vi.fn(),
+    revalidatePreparedIntentRepository: async () => {
+      throw new Error("Unexpected Factory repository preparation in local build recovery");
+    },
     getPreparedCandidates: () => [],
     schedulePreparedRefill: vi.fn(),
     bindPreparedWorkspace: async () => {

@@ -17,8 +17,15 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  getRuntimeConfig: () => support.testState.config,
+}));
 
 function createPlacementStore() {
   return createWorkerSessionPlacementStore({
@@ -29,6 +36,124 @@ function createPlacementStore() {
 
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it.each(["confirmed", "pending", "default", "held", "retained VM"] as const)(
+    "retires an ephemeral stale draining worker only after exact provider cleanup: %s",
+    async (disposition) => {
+      const placements = createPlacementStore();
+      const environmentId = "ephemeral-lost-worker";
+      await support.seedReadyNodeDesktop(environmentId);
+      await support.testState.store.ensureNodeEnrollment(environmentId);
+      const attached = await support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: { ...support.attachedPatch(environmentId, REQUEST.sessionId), sharedHost: false },
+      });
+      if (disposition !== "default") {
+        support.getDevelopmentProfile().lostWorkerRecovery = "repository-ref";
+      }
+      expect(attached.profileSnapshot).not.toHaveProperty("lostWorkerRecovery");
+      const active = await seedActivePlacement(placements, {
+        environmentId,
+        ownerEpoch: attached.ownerEpoch,
+        executionMode: "remote-exec",
+      });
+      const draining = await placements.startDrain({
+        sessionId: active.sessionId,
+        environmentId,
+        ownerEpoch: attached.ownerEpoch,
+        expectedGeneration: active.generation,
+      });
+      // Only external provider effects are synthetic; credential/placement custody is real SQLite.
+      const destroy = vi.fn(async () => {
+        if (disposition === "pending" || disposition === "held" || disposition === "retained VM") {
+          throw new Error("Exact resource cleanup is unconfirmed");
+        }
+      });
+      const hold = vi.fn(async () => ({
+        status: "held" as const,
+        leaseId: attached.leaseId!,
+        unacceptedChanges: "unknown" as const,
+        resources: [
+          {
+            kind: "vm",
+            id: "/synthetic/old-vm",
+            state: disposition === "retained VM" ? ("retained" as const) : ("absent" as const),
+            immutableId: "observed-vm",
+          },
+          {
+            kind: "disk",
+            id: "/synthetic/old-disk",
+            state: "retained" as const,
+            immutableId: "observed-disk",
+          },
+        ],
+      }));
+      const environments = support.createService(
+        support.createProvider({
+          inspect: async () => ({ status: "unknown" }),
+          destroy,
+          ...(disposition === "held" || disposition === "retained VM"
+            ? {
+                resolveAllocation: async () => ({ leaseId: attached.leaseId!, sharedHost: false }),
+                holdFailedLease: hold,
+              }
+            : {}),
+        }),
+        { placementStore: createWorkerSessionPlacementGate(placements) },
+      );
+      const recovery = createRecoveryService(placements, environments);
+      await recovery.reconcileActive(environmentId);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+      const observed = placements.get(REQUEST.sessionId)!;
+      if (disposition === "held" || disposition === "retained VM") {
+        expect(hold).toHaveBeenCalledOnce();
+        expect(hold).toHaveBeenCalledWith(
+          expect.objectContaining({
+            operationId: "provision:ephemeral-lost-worker",
+            leaseId: attached.leaseId,
+            profile: attached.profileSnapshot.settings,
+          }),
+          expect.anything(),
+        );
+        expect(environments.get(environmentId)).toMatchObject({
+          state: "orphaned",
+          leaseId: attached.leaseId,
+          recoveryHold: { phase: "held" },
+        });
+        if (observed.state !== "failed") {
+          throw new Error("Expected fenced lost-worker placement");
+        }
+        expect(canRedispatchFailedWorkerPlacement(observed, environments.get(environmentId))).toBe(
+          disposition === "held",
+        );
+      }
+      if (disposition === "confirmed") {
+        expect(environments.get(environmentId)).toMatchObject({ state: "failed", leaseId: null });
+        expect(placements.get(REQUEST.sessionId)).toMatchObject({
+          sessionId: REQUEST.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+          state: "failed",
+          recoveryError: "Ephemeral worker lost; recover from the recorded repository branch",
+          turnClaim: null,
+        });
+      } else if (disposition === "default") {
+        expect(placements.get(REQUEST.sessionId)).toMatchObject({
+          state: "draining",
+          generation: draining.generation,
+        });
+      } else {
+        expect(placements.get(REQUEST.sessionId)).toMatchObject({
+          state: "failed",
+          turnClaim: null,
+        });
+        expect(environments.get(environmentId)?.state).not.toBe("destroyed");
+      }
+    },
+  );
 
   describe.each(["startup", "active"] as const)("%s recovery after worker retirement", (mode) => {
     it.each(["idle", "claimed turn", "pending result", "provider loss"] as const)(

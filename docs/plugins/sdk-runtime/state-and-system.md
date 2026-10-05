@@ -365,6 +365,52 @@ to every loaded plugin. Runtime deprecation warnings should wait for an actionab
 Only the operations identified above execute on the worker. Callback execution
 is unchanged during this migration.
 
+## Per-agent canonical readiness reads
+
+The private `openclaw/plugin-sdk/sqlite-runtime` facade exposes
+`hasPersistedOpenClawAgentCanonicalValidation` with the existing
+`withFreshOpenClawAgentDatabaseReadOnly` opener. Use the validator on the admitted
+database inside that synchronous callback. It checks the persisted canonical
+validation receipt against the native logical agent and current physical file
+generation; it does not certify integrity or acquire write authority. Raw SQLite
+connections and copied or replaced generations do not acquire receipt authority.
+
+Read the compared receipt row and validate it on the same admitted connection.
+For a consistent multi-query snapshot, use the existing
+`runSqliteDeferredTransactionSync` from `openclaw/plugin-sdk/sqlite-worker-runtime`
+inside the callback. Do not retain the result as authority for another file or
+later operation. The opener refuses unsupported schemas, foreign ownership and
+terminal or quarantined stores, does not create or migrate stores, and closes
+the connection when the callback returns or throws.
+
+## Read-only migration and plugin artifact inspection
+
+The private `sqlite-runtime` facade exposes
+`inspectSharedAuthPluginArtifactsReadOnly(native, { env, signal })` for supported
+modern state inspection. Call it synchronously inside the existing admitted
+`withFreshOpenClawAgentDatabaseReadOnly` callback, including its existing deferred
+read transaction when comparing related original rows. The inspector opens no
+additional original connection. It binds private copies to the native original
+file generations and projects ownership, source/target row counts and owner-format
+hashes, cleanup custody, complete source/run migration facts and fresh plugin
+install-record status/count/hash. Marker, target, ledger and plugin facts share
+one private shared-state observation; different files are separate observations.
+
+The result contains no credential or plugin payload, raw report, path or error
+text. Raw connections, private copies in place of the original, ended callbacks,
+replaced files, cancellation, retained sources and unsupported state are refused.
+Unknown or extra receipts remain visible as counts and comparison failures.
+`observed` describes a read, not preservation, migration completion or
+Store/lease/token admission. A null canonical validation receipt remains false.
+
+This qualifies the inspector's delta **after existing callback admission**.
+Cold original SQLite admission can create WAL/SHM sidecars and is not an
+artifact-preserving opener. Keep the original whole before/after preservation
+baseline; do not move it after admission. Older pre-Doctor schemas, populated
+preservation and genuine predecessor-to-Doctor-to-Factory admission need their
+own supported proof. Do not return a Promise that outlives the original callback
+or retain inspection facts as authority for a later operation.
+
 ## Per-agent SQLite writes
 
 Bundled and official plugins that already use the private `sqlite-runtime`

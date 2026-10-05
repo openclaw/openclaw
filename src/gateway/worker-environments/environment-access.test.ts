@@ -41,6 +41,7 @@ describe("worker environment service", () => {
       stopAll: vi.fn().mockRejectedValueOnce(shutdownError).mockResolvedValue(undefined),
     } as unknown as WorkerTunnelManager;
     const nodeTunnelManager = {
+      isNodeConnected: async () => true,
       status: () => "stopped" as const,
       observeProcesses: vi.fn(async () => {
         throw new Error("Process observation is not configured in this fixture");
@@ -353,6 +354,7 @@ describe("worker environment service", () => {
         stopAll: vi.fn(async () => {}),
       } as unknown as WorkerTunnelManager;
       const nodeTunnelManager = {
+        isNodeConnected: async () => true,
         status: () => "connecting" as const,
         observeProcesses: vi.fn(async () => {
           throw new Error("Process observation is not configured in this fixture");

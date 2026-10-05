@@ -5,6 +5,47 @@ export type WorkerPlacementCancellationTarget = Readonly<
   Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
 >;
 
+/** Local retirement receipt; provider disposal remains with the old environment owner. */
+export type WorkerPreactivationRetirement = {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  environmentId: string;
+  ownerEpoch: number;
+  provisionOperationId: string;
+  nodeSetupId: string | null;
+};
+
+export function isNeverActivatedWorkerPlacement(placement: WorkerSessionPlacementRecord): boolean {
+  return (
+    placement.state === "failed" &&
+    placement.environmentId !== null &&
+    placement.activeOwnerEpoch === null &&
+    placement.turnClaim === null &&
+    placement.workspaceBaseManifestRef === null &&
+    placement.remoteWorkspaceDir === null &&
+    placement.workerBundleHash === null &&
+    placement.lastTranscriptAckCursor === null &&
+    placement.lastLiveEventAckCursor === null
+  );
+}
+
+export function isFencedPreactivationEnvironment(environment: WorkerEnvironmentRecord): boolean {
+  return (
+    environment.destroyRequestedAtMs !== null &&
+    (environment.state === "destroying" ||
+      environment.state === "draining" ||
+      environment.state === "failed" ||
+      environment.state === "destroyed") &&
+    environment.lastActivatedAtMs === null &&
+    environment.bootstrapReceipt === null &&
+    environment.nodeDeviceId === null &&
+    environment.sshEndpoint === null &&
+    environment.attachedSessionIds.length === 0 &&
+    environment.recoveryHold === undefined
+  );
+}
+
 export function matchesWorkerPlacementTarget(
   current: WorkerPlacementCancellationTarget | undefined,
   expected: WorkerPlacementCancellationTarget | undefined,
@@ -43,4 +84,42 @@ export function isFailedWorkerPlacementEnvironmentGone(params: {
   } catch {
     return false;
   }
+}
+
+/** A failed dispatch that never bound an allocation or admitted a worker executor. */
+export function isUnallocatedWorkerPlacementFailure(
+  placement: WorkerSessionPlacementRecord,
+): boolean {
+  return (
+    placement.state === "failed" &&
+    placement.environmentId === null &&
+    placement.activeOwnerEpoch === null &&
+    placement.turnClaim === null &&
+    placement.workspaceBaseManifestRef === null &&
+    placement.remoteWorkspaceDir === null &&
+    placement.workerBundleHash === null &&
+    placement.lastTranscriptAckCursor === null &&
+    placement.lastLiveEventAckCursor === null
+  );
+}
+
+/** Canonical teardown completed before a session executor or workspace was admitted. */
+export function isWorkerPlacementDestroyedBeforeActivation(
+  placement: WorkerSessionPlacementRecord,
+  environment:
+    | Pick<WorkerEnvironmentRecord, "environmentId" | "state" | "recoveryHold">
+    | undefined,
+): boolean {
+  return (
+    placement.state === "failed" &&
+    placement.activeOwnerEpoch === null &&
+    placement.turnClaim === null &&
+    environment?.environmentId === placement.environmentId &&
+    environment?.state === "destroyed" &&
+    environment.recoveryHold === undefined &&
+    placement.workspaceBaseManifestRef === null &&
+    placement.remoteWorkspaceDir === null &&
+    placement.lastTranscriptAckCursor === null &&
+    placement.lastLiveEventAckCursor === null
+  );
 }

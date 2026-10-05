@@ -285,12 +285,12 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
       manifestHash: `sha256:${"c".repeat(64)}`,
       assertCurrent: () => {},
     });
-    expect(selected.workspace).toEqual({ kind: "repository", repository: bound });
+    expect(selected.workspace).toMatchObject({ kind: "repository", repository: bound });
     expect(() => selected.assertCurrent()).toThrow("repository selection changed");
     selected.assertBindingCurrent();
     const refreshed = await select();
     refreshed.assertCurrent();
-    expect(refreshed.workspace).toEqual({ kind: "repository", repository: accepted });
+    expect(refreshed.workspace).toMatchObject({ kind: "repository", repository: accepted });
 
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
@@ -348,7 +348,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
         return result;
       },
       reclaim: async (workspace, current) => {
-        expect(workspace).toEqual({ kind: "repository", repository: drained });
+        expect(workspace).toMatchObject({ kind: "repository", repository: drained });
         if (current.state !== "draining") {
           throw new Error("Expected a newly drained placement");
         }

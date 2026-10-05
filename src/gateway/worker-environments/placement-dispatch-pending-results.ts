@@ -6,8 +6,8 @@ import {
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
-import type { PreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
-import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
+import { prepareAcceptedReclaimCheckpoint } from "./placement-reclaim-checkpoint.js";
+import { placementTurnOwner, requireAcceptedWorkspaceManifest } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import { completeRecoveredWorkspaceTeardown } from "./placement-teardown.js";
@@ -24,11 +24,11 @@ import {
   type WorkerSessionWorkspace,
 } from "./session-workspace.js";
 import { boundedWorkerError } from "./worker-error.js";
-import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   finalizeWorkspaceResultConflicts,
+  resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
 } from "./workspace-result-settlement.js";
 import {
@@ -43,29 +43,6 @@ import {
 } from "./workspace-result-staging.js";
 
 const log = createSubsystemLogger("gateway/worker-placement");
-
-export async function resolvePriorWorkspaceResultConflict(
-  resolve: PreparedWorkerWorkspaceRecovery["resolveConflict"],
-  placement: WorkerSessionPlacementIdentity & {
-    workspaceResultConflict?: WorkerWorkspaceResultConflict;
-  },
-): Promise<WorkerWorkspaceResultConflict | undefined> {
-  if (placement.workspaceResultConflict) {
-    return placement.workspaceResultConflict;
-  }
-  const lookup = await resolve();
-  if (lookup.kind === "conflict") {
-    return lookup.conflict;
-  }
-  if (lookup.kind === "unknown") {
-    log.warn(
-      `Cloud workspace conflict state unknown sessionId=${boundedWorkerError(placement.sessionId, 128)} reason=${lookup.reason}; preserving prior conflict state`,
-    );
-    // Undefined means no prior knowledge to finalizeWorkspaceResultConflicts: it cannot
-    // clear the retained report or delete its unseen staged ref. The warning signals this.
-  }
-  return undefined;
-}
 
 type WorkerOwnedPendingPlacement = Extract<
   WorkerDispatchPlacement,
@@ -108,7 +85,9 @@ export async function recoverPendingWorkspaceResults(
     }
     // An explicit Gateway move may already have bound a local worktree. The
     // result's recorded source still owns its immutable artifact until settlement.
-    return { kind: "repository", repository };
+    return workspace.kind === "repository"
+      ? { ...workspace, repository }
+      : { kind: "repository", repository };
   };
   const prepareGatewayMove = async (
     placement: WorkerOwnedPendingPlacement,
@@ -161,7 +140,9 @@ export async function recoverPendingWorkspaceResults(
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
     const reclaimResult =
       pending.claimId === pending.runId && pending.claimId.startsWith("reclaim-");
-    if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
+    const strandedReclaim =
+      sameGatewayInstance && pending.recoveryRequestedAtMs === null && reclaimResult;
+    if (sameGatewayInstance && pending.recoveryRequestedAtMs === null && !strandedReclaim) {
       continue;
     }
     const placement = projection.placements.get(pending.sessionId);
@@ -245,6 +226,19 @@ export async function recoverPendingWorkspaceResults(
               active,
             );
             const canonicalStagedResultRef = workerWorkspaceResultRef(turnClaim.claimId);
+            // The caller holds serialized recovery admission, after the original reclaim exits.
+            const reclaimCheckpoint = strandedReclaim
+              ? await prepareAcceptedReclaimCheckpoint({
+                  placement: active,
+                  pending,
+                  claim: turnClaim,
+                  workspace,
+                  checkpointRef: canonicalStagedResultRef,
+                  placements,
+                  environments,
+                  assertCurrent: recovery.assertCurrent,
+                })
+              : undefined;
             let stagedResultRef = pending.stagedResultRef;
             if (
               !stagedResultRef &&
@@ -258,7 +252,7 @@ export async function recoverPendingWorkspaceResults(
                 turnClaim,
                 canonicalStagedResultRef,
                 workspace.kind === "repository" ? workspace.repository.workspaceId : undefined,
-                recovery.assertCurrent,
+                reclaimCheckpoint?.assertCurrent ?? recovery.assertCurrent,
               );
               recovery.assertCurrent();
               stagedResultRef = canonicalStagedResultRef;
@@ -441,6 +435,7 @@ export async function recoverPendingWorkspaceResults(
               sessionId: active.sessionId,
               environmentId: active.environmentId,
               ownerEpoch: active.activeOwnerEpoch,
+              authorize: recovery.assertCurrent,
               placementGeneration: pending.placementGeneration,
             };
             const journal = {
@@ -454,7 +449,7 @@ export async function recoverPendingWorkspaceResults(
                 assertPreservedEnvironment();
                 await placements.updateWorkspaceBaseManifest(
                   { claim: turnClaim, manifestRef },
-                  recovery.assertCurrent,
+                  reclaimCheckpoint?.assertCurrent ?? recovery.assertCurrent,
                   currentCheck,
                 );
               },
@@ -483,6 +478,7 @@ export async function recoverPendingWorkspaceResults(
                     checkpointRef: ownedStagedResultRef,
                     assertCurrent: () => {
                       recovery.assertCurrent();
+                      reclaimCheckpoint?.assertCurrent();
                       if (!placements.validateWorkspaceResultClaim(turnClaim)) {
                         throw new Error("Recovered repository checkpoint lost its placement owner");
                       }
@@ -503,7 +499,7 @@ export async function recoverPendingWorkspaceResults(
                   const reconciliation = await applyStagedWorkerWorkspaceResult({
                     root,
                     stagedResultRef: ownedStagedResultRef,
-                    expectedBaseManifestRef: active.workspaceBaseManifestRef,
+                    expectedBaseManifestRef: requireAcceptedWorkspaceManifest(active),
                     alreadyAccepted: pending.workspaceAcceptedAtMs !== null || alreadyApplied,
                     journal,
                     assertCurrent: recovery.assertCurrent,
@@ -514,7 +510,10 @@ export async function recoverPendingWorkspaceResults(
                 if (pending.workspaceAcceptedAtMs === null) {
                   await prepareAcceptedPublication(deps, turnClaim);
                   assertPreservedEnvironment();
-                  await placements.acceptWorkspaceResult(turnClaim, recovery.assertCurrent);
+                  await placements.acceptWorkspaceResult(
+                    turnClaim,
+                    reclaimCheckpoint?.assertCurrent ?? recovery.assertCurrent,
+                  );
                 }
                 if (
                   conflictPaths.length > 0 &&
@@ -533,8 +532,16 @@ export async function recoverPendingWorkspaceResults(
                   {
                     beforeComplete: async () => {
                       if (!preserveEnvironment) {
-                        await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
-                        await destroyPendingEnvironment(active, recovery.assertCurrent);
+                        const teardown = async () => {
+                          await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
+                          reclaimCheckpoint?.assertCurrent();
+                          await destroyPendingEnvironment(active, recovery.assertCurrent);
+                        };
+                        if (reclaimCheckpoint) {
+                          await reclaimCheckpoint.teardown(teardown);
+                        } else {
+                          await teardown();
+                        }
                       }
                     },
                     complete: completeResult,
@@ -596,7 +603,7 @@ export async function recoverPendingWorkspaceResults(
                   createWorkerWorkspaceReconcileRequest({
                     workspace,
                     remoteWorkspaceDir: active.remoteWorkspaceDir,
-                    baseManifestRef: active.workspaceBaseManifestRef,
+                    baseManifestRef: requireAcceptedWorkspaceManifest(active),
                     journal,
                     stagedResult: {
                       ref: canonicalStagedResultRef,

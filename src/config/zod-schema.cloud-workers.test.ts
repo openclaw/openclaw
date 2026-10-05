@@ -8,6 +8,19 @@ function cloudProfile(profile: Record<string, unknown>) {
 }
 
 describe("OpenClawSchema cloudWorkers config", () => {
+  it("keeps repository-ref loss recovery opt-in and rejects other worker recovery policies", () => {
+    expect(
+      OpenClawSchema.parse(cloudProfile({})).cloudWorkers?.profiles?.development
+        ?.lostWorkerRecovery,
+    ).toBeUndefined();
+    expect(
+      OpenClawSchema.parse(cloudProfile({ lostWorkerRecovery: "repository-ref" })).cloudWorkers
+        ?.profiles?.development?.lostWorkerRecovery,
+    ).toBe("repository-ref");
+    expect(OpenClawSchema.safeParse(cloudProfile({ lostWorkerRecovery: "force" })).success).toBe(
+      false,
+    );
+  });
   it("accepts normalized per-project default profiles", () => {
     const projectProfiles = { "github.com/acme/app": "development" };
     expect(OpenClawSchema.parse({ cloudWorkers: { projectProfiles } }).cloudWorkers).toStrictEqual({

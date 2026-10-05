@@ -11,6 +11,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import type { WorkerEnvironmentRecoveryHold } from "./environment-record.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -20,6 +21,7 @@ import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
+import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-failed-redispatch",
@@ -74,6 +76,195 @@ describe("failed worker placement redispatch", () => {
       }),
     ).toMatchObject({ state: "provisioning", generation: placement.generation + 1 });
   });
+
+  it("uses the canonical generation and identity reset", async () => {
+    let placement = await store.startDispatch(SESSION);
+    placement = await store.transition({
+      sessionId: SESSION.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: placement.generation,
+      patch: { environmentId: "environment-failed-dispatch" },
+    });
+    placement = await store.transition({
+      sessionId: SESSION.sessionId,
+      from: "provisioning",
+      to: "syncing",
+      expectedGeneration: placement.generation,
+      patch: { workerBundleHash: "a".repeat(64) },
+    });
+    placement = await store.transition({
+      sessionId: SESSION.sessionId,
+      from: "syncing",
+      to: "starting",
+      expectedGeneration: placement.generation,
+      patch: {
+        workspaceBaseManifestRef: "manifest-failed-dispatch",
+        remoteWorkspaceDir: "/workspace/failed-dispatch",
+      },
+    });
+    const failed = await store.fail({
+      sessionId: SESSION.sessionId,
+      expectedGeneration: placement.generation,
+      recoveryError: "gateway restarted during activation",
+    });
+
+    expect(await store.startDispatch(SESSION)).toMatchObject({
+      state: "requested",
+      generation: failed.generation + 1,
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: null,
+      remoteWorkspaceDir: null,
+      workerBundleHash: null,
+      lastTranscriptAckCursor: null,
+      lastLiveEventAckCursor: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+    });
+  });
+
+  it.each(["current", "stale", "retained-workspace"] as const)(
+    "admits only the exact unallocated failure without %s source ambiguity",
+    async (scenario) => {
+      const requested = await store.startDispatch({ ...SESSION, executionMode: "remote-exec" });
+      const failed = await store.fail({
+        sessionId: SESSION.sessionId,
+        expectedGeneration: requested.generation,
+        recoveryError: "Dispatch stopped before selection",
+      });
+      if (scenario === "stale") {
+        const replacement = await store.startDispatch({ ...SESSION, executionMode: "remote-exec" });
+        await store.fail({
+          sessionId: SESSION.sessionId,
+          expectedGeneration: replacement.generation,
+          recoveryError: "Replacement dispatch stopped before selection",
+        });
+      } else if (scenario === "retained-workspace") {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE worker_session_placements SET remote_workspace_dir = ? WHERE session_id = ?",
+            ).run("/retained/unknown-workspace", SESSION.sessionId);
+          },
+          { database },
+        );
+      }
+      const before = store.get(SESSION.sessionId);
+      const dispatch = store.startDispatch({
+        ...SESSION,
+        executionMode: "remote-exec",
+        expectedPlacement: failed,
+      });
+      if (scenario === "current") {
+        await expect(dispatch).resolves.toMatchObject({
+          state: "requested",
+          generation: failed.generation + 1,
+          environmentId: null,
+          activeOwnerEpoch: null,
+          turnClaim: null,
+        });
+      } else {
+        await expect(dispatch).rejects.toThrow(
+          scenario === "stale" ? "changed before redispatch" : "still requires recovery",
+        );
+        expect(store.get(SESSION.sessionId)).toEqual(before);
+      }
+    },
+  );
+
+  it.each(["destroyed", "destroying", "missing", "held", "workspace", "stale"] as const)(
+    "requires confirmed preactivation cleanup without %s ambiguity before replacement",
+    async (scenario) => {
+      const environmentId = "rejected-first-bind";
+      const requested = await store.startDispatch(SESSION);
+      const provisioning = await store.transition({
+        sessionId: SESSION.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: requested.generation,
+        patch: { environmentId },
+      });
+      const failed = await store.fail({
+        sessionId: SESSION.sessionId,
+        expectedGeneration: provisioning.generation,
+        recoveryError: "Setup authorization failed before executor activation",
+      });
+      if (failed.state !== "failed") {
+        throw new Error("Expected rejected first-bind placement");
+      }
+      if (scenario !== "missing") {
+        writePlacementEnvironmentFixture(database, {
+          environmentId,
+          state: scenario === "destroying" ? "destroying" : "destroyed",
+          ownerEpoch: 2,
+          attachedSessionIds: [],
+        });
+      }
+      if (scenario === "held") {
+        const hold: WorkerEnvironmentRecoveryHold = {
+          ...SESSION,
+          environmentId,
+          ownerEpoch: 1,
+          placementGeneration: failed.generation,
+          leaseId: `lease:${environmentId}`,
+          phase: "disposal-pending",
+          createdAtMs: 1,
+        };
+        // Persist an unresolved historical custody receipt independently of routing.
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "INSERT INTO worker_environment_recovery_holds (environment_id, session_id, hold_json) VALUES (?, ?, ?)",
+            ).run(environmentId, SESSION.sessionId, JSON.stringify(hold));
+          },
+          { database },
+        );
+        const projection = await store.readProjection([SESSION.sessionId], { current: true });
+        expect(projection.environments.get(environmentId)?.recoveryHold).toEqual(hold);
+        const dispatch = vi.fn();
+        const redispatch = createWorkerPlacementRedispatch({ placements: store, dispatch });
+        await expect(redispatch(failed, { assertCurrent: () => {} })).rejects.toThrow(
+          "Worker recovery is not ready",
+        );
+        expect(dispatch).not.toHaveBeenCalled();
+      } else if (scenario === "workspace") {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE worker_session_placements SET remote_workspace_dir = ? WHERE session_id = ?",
+            ).run("/unresolved/worker-edits", SESSION.sessionId);
+          },
+          { database },
+        );
+      } else if (scenario === "stale") {
+        const replacement = await store.startDispatch(SESSION);
+        await store.fail({
+          sessionId: SESSION.sessionId,
+          expectedGeneration: replacement.generation,
+          recoveryError: "Another source now owns the placement",
+        });
+      }
+      const before = store.get(SESSION.sessionId);
+      const dispatch = store.startDispatch({ ...SESSION, expectedPlacement: failed });
+      if (scenario === "destroyed") {
+        await expect(dispatch).resolves.toMatchObject({
+          ...SESSION,
+          state: "requested",
+          generation: failed.generation + 1,
+          environmentId: null,
+          activeOwnerEpoch: null,
+          turnClaim: null,
+        });
+      } else {
+        await expect(dispatch).rejects.toThrow(
+          scenario === "stale" ? "changed before redispatch" : "still requires recovery",
+        );
+        expect(store.get(SESSION.sessionId)).toEqual(before);
+      }
+    },
+  );
 
   it.each(["replaced", "cleanup", "claim", "move"] as const)(
     "rechecks the complete %s source in the redispatch transaction",

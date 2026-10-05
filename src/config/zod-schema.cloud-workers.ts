@@ -47,6 +47,10 @@ const CloudWorkerProfileSchema = z
       label: "Cloud Worker Ready Reserve Target",
       help: "Target unassigned prepared workers per eligible project using this profile (default: 1), subject to the Gateway-wide prepared pool cap. Set 0 to disable this profile's reserves while preserving snapshot reuse. Preparing workers and unconfirmed reserve cleanup count toward the target.",
     }),
+    lostWorkerRecovery: z.literal("repository-ref").optional().register(configUiMetadata, {
+      label: "Lost Worker Recovery",
+      help: "Recover a definitively lost dedicated worker from the session's recorded GitHub branch after exact provider cleanup. Worker files, disks, packages, and unpushed commits are ephemeral. Unset preserves workspace reconciliation and retained-checkpoint recovery; session history, Goal, original authority, and unknown-effect holds remain intact.",
+    }),
     settings: CloudWorkerSettingsSchema.optional().register(configUiMetadata, {
       label: "Cloud Worker Provider Settings",
       help: "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",

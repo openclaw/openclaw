@@ -6,6 +6,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { readSessionRepositoryWorkspaceInDatabase } from "../../state/session-repository-workspaces.kernel.js";
 import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
@@ -16,6 +17,7 @@ import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
 import { readTotalChanges } from "./store-write.js";
 import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
 import type {
+  WorkerRecoveryPublication,
   WorkerEnvironmentMutationInput,
   WorkerEnvironmentMutationMethods,
 } from "./store.types.js";
@@ -32,6 +34,7 @@ type MutationContext = {
   store: ReturnType<typeof createWorkerEnvironmentStoreKernel>;
   now: () => number;
   touch: (id: string) => void;
+  publishRecovery: (facts: WorkerRecoveryPublication) => void;
 };
 
 function mutation<Name extends Method, Result>(
@@ -48,16 +51,28 @@ function mutation<Name extends Method, Result>(
         const store = createWorkerEnvironmentStoreKernel(transactionDatabase, now);
         const changesBefore = readTotalChanges(db);
         const touched = new Set<string>();
-        const result = execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) });
+        let recovery: WorkerRecoveryPublication | undefined;
+        const result = execute(input, {
+          db,
+          store,
+          now,
+          touch: (id) => touched.add(id.trim()),
+          publishRecovery: (facts) => {
+            recovery = facts;
+          },
+        });
         const receipt = {
           result,
           changed: readTotalChanges(db) !== changesBefore,
           facts: readWorkerEnvironmentFacts(db, [...touched]),
+          recovery,
         };
         deferSqliteWorkerCommitReceipt(db, receipt);
         requestSqliteWorkerOperationAdmission({
           stage: "commit",
-          facts: createWorkerEnvironmentCommitAdmission(receipt.facts),
+          facts: recovery
+            ? { environments: createWorkerEnvironmentCommitAdmission(receipt.facts), recovery }
+            : createWorkerEnvironmentCommitAdmission(receipt.facts),
         });
         return receipt;
       },
@@ -68,6 +83,44 @@ function mutation<Name extends Method, Result>(
 }
 
 export const workerEnvironmentOperations = {
+  "workerEnvironments.retainPreparedEnvironment": mutation(
+    "retainPreparedEnvironment",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.retainPreparedEnvironment(input);
+    },
+  ),
+  "workerEnvironments.retainFailedEnvironment": mutation(
+    "retainFailedEnvironment",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.retainFailedEnvironment(input);
+    },
+  ),
+  "workerEnvironments.acceptRetainedRecovery": mutation(
+    "acceptRetainedRecovery",
+    ({ input }, { store, db, touch, publishRecovery }) => {
+      touch(input.environmentId);
+      const placement = store.acceptRetainedRecovery(input);
+      if (placement.state !== "reclaimed") {
+        return placement;
+      }
+      const workspace = readSessionRepositoryWorkspaceInDatabase(db, input.workspaceId);
+      if (!workspace) {
+        throw new Error("Recovered repository workspace disappeared");
+      }
+      publishRecovery({
+        placement,
+        workspace: {
+          workspaceId: workspace.workspaceId,
+          workspace,
+          changed: true,
+          owner: { agentId: workspace.agentId, sessionKey: workspace.sessionKey },
+        },
+      });
+      return placement;
+    },
+  ),
   "workerEnvironments.initialize": mutation("initialize", (_input, { db, now, touch }) => {
     for (const id of reconcileAttachedSessionOwners(db, now())) {
       touch(id);

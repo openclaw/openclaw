@@ -38,10 +38,12 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementRecord,
 } from "./worker-environments/placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/placement-target.js";
 import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./worker-environments/placement-test-fixtures.js";
+import { createRetainedWorkerRecovery } from "./worker-environments/retained-worker-recovery.js";
 import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -683,3 +685,115 @@ test("sessions.describe requires worker teardown before failed-placement restart
     recoveryAction: "stop-first",
   });
 });
+test.each(["no owner", "unsupported", "mismatched epoch", "supported"] as const)(
+  "sessions.describe and list expose current retained recovery without declaring cleanup: %s",
+  async (scenario) => {
+    await seedSessionRows();
+    const placement = {
+      ...activePlacementRecord(),
+      state: "failed" as const,
+      turnClaim: null,
+      recoveryError: "worker unavailable",
+      terminalReason: "worker unavailable",
+      terminalAtMs: 400,
+    } satisfies WorkerSessionPlacementRecord;
+    const environment: WorkerEnvironmentServiceRecord = {
+      environmentId: placement.environmentId!,
+      providerId: "crabbox",
+      profileId: "team",
+      ownerEpoch: scenario === "mismatched epoch" ? 13 : 12,
+      state: "orphaned",
+      leaseId: "lease-retained",
+      sharedHost: false,
+      createdAtMs: 100,
+      idleSinceAtMs: null,
+      destroyRequestedAtMs: null,
+      attachedSessionIds: [placement.sessionId],
+      desktopAvailable: false,
+      desktopApps: [],
+      tunnelStatus: "stopped",
+      recoveryHold: {
+        sessionId: placement.sessionId,
+        sessionKey: placement.sessionKey,
+        agentId: placement.agentId,
+        executionMode: placement.executionMode,
+        placementGeneration: placement.generation,
+        environmentId: placement.environmentId!,
+        ownerEpoch: 12,
+        leaseId: "lease-retained",
+        phase: "held",
+        createdAtMs: 400,
+        receipt: {
+          status: "held",
+          leaseId: "lease-retained",
+          unacceptedChanges: "unknown",
+          resources: [
+            { kind: "vm", id: "/retained/vm", state: "absent" },
+            { kind: "disk", id: "/retained/disk", immutableId: "original-disk", state: "retained" },
+          ],
+        },
+      },
+    };
+    let providerAvailable = scenario !== "unsupported";
+    const readEnvironment = () => environment;
+    const mutation = async () => {
+      throw new Error("Recovery presentation must not mutate placement or held resources");
+    };
+    const recovery = createRetainedWorkerRecovery({
+      environments: {
+        get: readEnvironment,
+        supportsFailedLeaseHold: () => providerAvailable,
+        holdFailedEnvironment: mutation,
+        acceptRetainedRecovery: mutation,
+      },
+      placements: { get: () => placement, withWorkspaceExclusion: mutation },
+      runFailedReclaimBarrier: mutation,
+      withPreparedRecovery: mutation,
+      prepareCheckpoint: mutation,
+    });
+    const context = {
+      ...(scenario !== "no owner"
+        ? { workerPlacementDispatchService: { canRecoverFailedPlacement: recovery.canRecover } }
+        : {}),
+      workerSessionPlacementService: {
+        getMany: () => new Map([[placement.sessionId, placement]]),
+      },
+      workerEnvironmentService: {
+        get: readEnvironment,
+        readMachineShape: () => undefined,
+        machineShapeVersion: () => 0,
+        inventoryVersion: () => 0,
+      },
+    };
+    const described = await directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      { context },
+    );
+    expect(described.ok).toBe(true);
+    expect(described.payload?.session?.placement).toMatchObject({
+      state: "failed",
+      recoveryAction: scenario === "supported" ? "restart" : "stop-first",
+    });
+    // Plugin availability can change without publishing another placement or environment.
+    providerAvailable = !providerAvailable;
+    const listed = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
+      "sessions.list",
+      {},
+      { context },
+    );
+    expect(listed.ok).toBe(true);
+    expect(
+      listed.payload?.sessions.find((row) => row.sessionId === placement.sessionId)?.placement,
+    ).toMatchObject({
+      state: "failed",
+      recoveryAction: scenario === "unsupported" ? "restart" : "stop-first",
+    });
+    expect(
+      isFailedWorkerPlacementEnvironmentGone({
+        environmentService: { get: readEnvironment },
+        placement,
+      }),
+    ).toBe(false);
+  },
+);

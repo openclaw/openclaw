@@ -7,8 +7,7 @@ import {
   type WorkerNodePlacementAuthority,
 } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { readImageReserveProject } from "./image-reserve.js";
-import { recordWorkerPlacementStage } from "./placement-diagnostics.js";
+import { recordWorkerPlacementAwait, recordWorkerPlacementStage } from "./placement-diagnostics.js";
 import type {
   PlacementFailureActions,
   WorkerActivationBarrier,
@@ -28,12 +27,9 @@ import {
   requireProvisionedEnvironment,
 } from "./placement-dispatch-provisioning.js";
 import { reportPlacementTransition } from "./placement-record.js";
-import {
-  readWorkerProjectPreparation,
-  type WorkerProviderPreparedIntent,
-} from "./preparation-identity.js";
-import { readWorkerProjectSnapshot } from "./project-preparation.js";
-import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
+import { prepareActiveRepository } from "./placement-repository-preparation.js";
+import { syncProvisionedWorkspace } from "./placement-workspace-startup.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementAuthorization,
@@ -152,6 +148,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     signal?: AbortSignal;
     recovery?: true;
     admittedNode?: WorkerNodePlacementAdmission;
+    asynchronousRepository?: boolean;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
@@ -166,12 +163,18 @@ export function createWorkerPlacementDispatchStartup(options: {
     );
     const admittedNode =
       params.admittedNode ?? (await requireNodePlacementEligibility(request, params.environment));
+    let activated = false;
     // Provisioning and transport setup yield; revoked callers must not attach or upload.
     params.signal?.throwIfAborted();
     params.authorize?.();
     const assertRequestCurrent = () => {
-      params.signal?.throwIfAborted();
-      params.authorize?.();
+      (activated ? request.repositoryPreparationSignal : params.signal)?.throwIfAborted();
+      if (activated) {
+        request.operatorAuthority?.assertCurrent();
+        request.assertRepositoryPreparationCurrent?.();
+      } else {
+        params.authorize?.();
+      }
     };
     let placement = await placements.transition(
       {
@@ -190,17 +193,17 @@ export function createWorkerPlacementDispatchStartup(options: {
     params.signal?.throwIfAborted();
     const syncingPlacement = placement;
     const assertAttachmentCurrent = () => {
-      params.signal?.throwIfAborted();
-      params.authorize?.();
+      assertRequestCurrent();
       const current = placements.get(request.sessionId);
       if (
-        current?.state !== "syncing" ||
-        current.generation !== syncingPlacement.generation ||
+        !current ||
+        (activated ? current?.state !== "active" : current?.state !== "syncing") ||
+        current.generation !== (activated ? placement.generation : syncingPlacement.generation) ||
         current.sessionKey !== request.sessionKey ||
         current.agentId !== request.agentId ||
         current.executionMode !== request.executionMode ||
         current.environmentId !== provisioned.environmentId ||
-        current.turnClaim !== null
+        (!activated && current.turnClaim !== null)
       ) {
         throw new Error("Worker workspace preparation lost its exact placement owner");
       }
@@ -247,9 +250,9 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentId: provisioned.environmentId,
       ownerEpoch,
     });
-    let activated = false;
     let activationIndeterminate = false;
     let stoppingTunnel: Promise<void> | undefined;
+    let releaseRepositoryAuthority: (() => void) | undefined;
     const stopAttemptTunnel = () => {
       stoppingTunnel ??= environments.stopTunnel(provisioned.environmentId, ownerEpoch);
       void stoppingTunnel.catch(() => undefined);
@@ -264,6 +267,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         environmentId: provisioned.environmentId,
         ownerEpoch,
         authorize: assertAttachmentCurrent,
+        signal: params.signal,
       });
       params.signal?.throwIfAborted();
       params.authorize?.();
@@ -272,9 +276,8 @@ export function createWorkerPlacementDispatchStartup(options: {
         ownerEpoch,
       });
       const gitAuthor = options.resolveGitAuthor?.(request.agentId);
-      const project = readWorkerProjectSnapshot(params.environment.profileSnapshot.project);
       const requireAttachedEnvironment = () => {
-        params.signal?.throwIfAborted();
+        (activated ? request.repositoryPreparationSignal : params.signal)?.throwIfAborted();
         const attachedEnvironment = environments.get(provisioned.environmentId);
         if (
           !attachedEnvironment ||
@@ -295,90 +298,67 @@ export function createWorkerPlacementDispatchStartup(options: {
         assertAttachmentCurrent();
         requireAttachedEnvironment();
       };
-      recordWorkerPlacementStage(request.sessionId, "workspace_sync_started", {
+      const syncFacts = {
+        generation: placement.generation,
         environmentId: provisioned.environmentId,
         ownerEpoch,
-      });
-      const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
-      let preparedRepository: Parameters<
-        typeof syncSessionRepositoryWorkspace
-      >[0]["preparedRepository"];
-      if (preparation && !readImageReserveProject(params.environment.profileSnapshot.project)) {
-        if (project && "source" in project) {
-          if (
-            params.workspace.kind !== "repository" ||
-            project.source.url !== params.workspace.repository.url
-          ) {
-            throw new Error("Prepared repository does not match this session's source");
-          }
-        }
-        // Every command to a prepared workspace needs its session binding.
-        // Reuse the checkout only when its immutable base matches or is unpinned.
-        const prepared = await environments.bindPreparedWorkspace({
-          environmentId: provisioned.environmentId,
+      };
+      const asynchronousRepository = Boolean(
+        params.asynchronousRepository &&
+        params.workspace.kind === "repository" &&
+        tunnel.prepareRepositoryWorkspace &&
+        tunnel.settleRepositoryWorkspace,
+      );
+      if (asynchronousRepository && admittedNode?.node.workerHost.repositoryReadiness !== 1) {
+        throw new Error("Update the worker host before asynchronous repository preparation");
+      }
+      releaseRepositoryAuthority = asynchronousRepository
+        ? request.operatorAuthority!.retain!()
+        : undefined;
+      const pendingDirectory =
+        asynchronousRepository && params.workspace.kind === "repository"
+          ? await tunnel.prepareRepositoryWorkspace!({
+              sessionKey: request.sessionKey,
+              repository: params.workspace.repository,
+              assertCurrent: assertSyncOwner,
+              signal: params.signal,
+            })
+          : undefined;
+      const performSync = (
+        repository?: import("../../state/session-repository-workspaces.types.js").SessionRepositoryWorkspaceRecord,
+      ) =>
+        syncProvisionedWorkspace({
+          request,
+          environments,
+          environment: params.environment,
+          workspace: params.workspace,
+          tunnel,
+          generation: placement.generation,
           ownerEpoch,
-          sessionId: request.sessionId,
-          sessionKey: request.sessionKey,
-          preparationKey: preparation.key,
-          cacheKey: preparation.cacheKey,
-          signal: params.signal,
+          repository,
+          gitAuthor,
+          signal: activated ? request.repositoryPreparationSignal : params.signal,
+          recovery: params.recovery,
+          asynchronousRepository,
           assertCurrent: assertSyncOwner,
         });
-        assertSyncOwner();
-        if (project && "source" in project && params.workspace.kind === "repository") {
-          if (
-            !params.workspace.repository.baseCommit ||
-            project.baseCommit === params.workspace.repository.baseCommit
-          ) {
-            preparedRepository = {
-              baseCommit: project.baseCommit,
-              workspaceDir: prepared.workspaceDir,
-              sourceManifestRef: prepared.sourceManifestRef,
-              preparedManifestRef: prepared.preparedManifestRef,
-            };
-          }
-        }
-      }
-      const retainedSource = environments.readRecoveryHold?.(request.sessionId);
-      const synced =
-        params.workspace.kind === "repository"
-          ? await syncSessionRepositoryWorkspace({
-              repository: params.workspace.repository,
-              preparedRepository,
-              tunnel,
-              sessionId: request.sessionId,
-              sessionKey: request.sessionKey,
-              agentId: request.agentId,
-              generation: placement.generation,
-              gitAuthor,
-              runSetupScript: request.runSetupScript,
-              recovery: params.recovery,
-              assertCurrent: assertSyncOwner,
-            })
-          : await tunnel.syncWorkspace({
-              source: {
-                kind: "local",
-                path: params.workspace.path,
-                ...(project ? { projectKey: project.key } : {}),
-              },
-              sessionId: request.sessionId,
-              sessionKey: request.sessionKey,
-              generation: placement.generation,
-              ...(gitAuthor ? { gitAuthor } : {}),
-              authorize: assertSyncOwner,
-            });
-      assertSyncOwner();
-      recordWorkerPlacementStage(request.sessionId, "workspace_sync_completed", {
-        environmentId: provisioned.environmentId,
-        ownerEpoch,
-      });
-      if (params.intent) {
-        await environments.revalidatePreparedIntentRepository(
-          request.profileId,
-          params.intent,
-          params.signal,
+      const synced = asynchronousRepository ? undefined : await performSync();
+      if (params.intent && !asynchronousRepository) {
+        const intent = params.intent;
+        await recordWorkerPlacementAwait(
+          request.sessionId,
+          "post_sync_repository_revalidation",
+          async () => {
+            await environments.revalidatePreparedIntentRepository(
+              request.profileId,
+              intent,
+              params.signal,
+            );
+            assertSyncOwner();
+          },
+          syncFacts,
+          "dispatch",
         );
-        assertSyncOwner();
       }
       params.signal?.throwIfAborted();
       params.authorize?.();
@@ -405,67 +385,114 @@ export function createWorkerPlacementDispatchStartup(options: {
           to: "starting",
           expectedGeneration: placement.generation,
           patch: {
-            workspaceBaseManifestRef: synced.manifestRef,
-            remoteWorkspaceDir: synced.remoteWorkspaceDir,
+            workspaceBaseManifestRef: synced?.manifestRef ?? null,
+            remoteWorkspaceDir: synced?.remoteWorkspaceDir ?? pendingDirectory!,
+            ...(asynchronousRepository ? { repositoryPreparation: "pending" as const } : {}),
           },
         },
         assertActivationCurrent,
       );
       reportPlacementTransition(params.onTransition, placement);
       const startingPlacement = placement;
-      recordWorkerPlacementStage(request.sessionId, "activation_started", {
+      const activationFacts = {
         generation: placement.generation,
         environmentId: provisioned.environmentId,
         ownerEpoch,
-      });
-      await requireNodePlacementEligibility(
-        request,
-        requireAttachedEnvironment(),
-        admittedNode?.node,
-      );
-      requireAttachedEnvironment();
-      const activate = async (
-        assertLifecycleCurrent?: () => void,
-      ): Promise<WorkerActiveDispatchPlacement> => {
-        const active = await placements.transition(
-          {
-            sessionId: request.sessionId,
-            from: "starting",
-            to: "active",
-            expectedGeneration: startingPlacement.generation,
-            patch: { activeOwnerEpoch: ownerEpoch },
-          },
-          () => {
-            assertActivationCurrent();
-            assertLifecycleCurrent?.();
-          },
-        );
-        if (active.state !== "active") {
-          throw new Error("Worker dispatch activation did not produce an active placement");
-        }
-        // Activation transfers the tunnel to session reconciliation before observers can Stop.
-        activated = true;
-        params.signal?.removeEventListener("abort", stopAttemptTunnel);
-        recordWorkerPlacementStage(request.sessionId, "active", {
-          generation: active.generation,
-          environmentId: provisioned.environmentId,
-          ownerEpoch,
-        });
-        reportPlacementTransition(params.onTransition, active);
-        return active;
       };
-      // Recovery retains the exact session/placement lifecycle fence through activation.
-      const activePlacement = params.recovery
-        ? await activate()
-        : await options.runActivationBarrier({
-            sessionId: request.sessionId,
-            sessionKey: request.sessionKey,
-            agentId: request.agentId,
-            executionMode: request.executionMode,
-            authorize: params.authorize,
-            signal: params.signal,
-            activate,
-          });
+      const activePlacement = await recordWorkerPlacementAwait(
+        request.sessionId,
+        "activation",
+        async () => {
+          await requireNodePlacementEligibility(
+            request,
+            requireAttachedEnvironment(),
+            admittedNode?.node,
+          );
+          requireAttachedEnvironment();
+          const activate = async (
+            assertLifecycleCurrent?: () => void,
+          ): Promise<WorkerActiveDispatchPlacement> => {
+            const active = await placements.transition(
+              {
+                sessionId: request.sessionId,
+                from: "starting",
+                to: "active",
+                expectedGeneration: startingPlacement.generation,
+                patch: { activeOwnerEpoch: ownerEpoch },
+              },
+              () => {
+                assertActivationCurrent();
+                assertLifecycleCurrent?.();
+              },
+            );
+            if (active.state !== "active") {
+              throw new Error("Worker dispatch activation did not produce an active placement");
+            }
+            // Activation transfers the tunnel to session reconciliation before observers can Stop.
+            activated = true;
+            params.signal?.removeEventListener("abort", stopAttemptTunnel);
+            recordWorkerPlacementStage(request.sessionId, "active", {
+              generation: active.generation,
+              environmentId: provisioned.environmentId,
+              ownerEpoch,
+            });
+            reportPlacementTransition(params.onTransition, active);
+            return active;
+          };
+          // Recovery retains the exact session/placement lifecycle fence through activation.
+          return params.recovery
+            ? await activate()
+            : await options.runActivationBarrier({
+                sessionId: request.sessionId,
+                sessionKey: request.sessionKey,
+                agentId: request.agentId,
+                executionMode: request.executionMode,
+                authorize: params.authorize,
+                signal: params.signal,
+                activate,
+              });
+        },
+        activationFacts,
+        "placement",
+      );
+      placement = activePlacement;
+      if (asynchronousRepository && params.workspace.kind === "repository") {
+        const assertCleanupCurrent = () => {
+          request.assertRepositoryCleanupCurrent?.();
+          const current = placements.get(request.sessionId);
+          const environment = environments.get(provisioned.environmentId);
+          if (
+            current?.state !== "active" ||
+            current.generation !== activePlacement.generation ||
+            current.sessionKey !== request.sessionKey ||
+            current.agentId !== request.agentId ||
+            current.environmentId !== provisioned.environmentId ||
+            current.activeOwnerEpoch !== ownerEpoch ||
+            environment?.state !== "attached" ||
+            environment.ownerEpoch !== ownerEpoch ||
+            environment.leaseId !== params.environment.leaseId ||
+            environment.attachedSessionIds.length !== 1 ||
+            environment.attachedSessionIds[0] !== request.sessionId
+          ) {
+            throw new Error("Repository cleanup owner changed");
+          }
+        };
+        const preparation = prepareActiveRepository({
+          request,
+          placement: activePlacement,
+          repository: params.workspace.repository,
+          environments,
+          placements,
+          tunnel,
+          assertCurrent: assertSyncOwner,
+          assertCleanupCurrent,
+          sync: performSync,
+          releaseAuthority: releaseRepositoryAuthority!,
+          onTransition: params.onTransition,
+        });
+        releaseRepositoryAuthority = undefined;
+        request.trackRepositoryPreparation!(preparation);
+      }
       try {
         options.onActivated?.(request);
       } catch {
@@ -481,6 +508,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       activationIndeterminate = error instanceof AcceptedWorkspacePublicationIndeterminateError;
       throw error;
     } finally {
+      releaseRepositoryAuthority?.();
       params.signal?.removeEventListener("abort", stopAttemptTunnel);
       if (!activated && !activationIndeterminate && params.signal?.aborted) {
         // Start may publish its owner after the first abort. Join that exact epoch as well

@@ -48,6 +48,7 @@ import * as operatorApprovalMigration from "./openclaw-state-db-operator-approva
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import {
   ensureAdditiveStateColumns,
+  ensureWorkerEnvironmentRecoveryHoldSchema,
   ensureFirstUseAdditiveStateColumnsForStrictMigration,
 } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";

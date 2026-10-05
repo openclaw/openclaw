@@ -7,7 +7,6 @@ import {
   isConfiguredAgentDatabaseTarget,
   resolveConfiguredAgentDatabaseCandidatePaths,
 } from "../config/sessions/targets.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -45,11 +44,11 @@ import {
   OpenClawDatabaseSchemaPreflightError,
 } from "./openclaw-database-preflight.messages.js";
 import type {
-  AgentDatabasePreflightStats,
   DeferredStateSchemaPublication,
   IndeterminateOpenClawDatabase,
   OpenClawDatabaseSchemaPreflight,
   OpenClawDatabasePreflightOptions,
+  OpenClawDatabaseReadinessOptions,
   OpenClawStateSchemaPreflightResult,
 } from "./openclaw-database-preflight.types.js";
 import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-verify.js";
@@ -92,20 +91,7 @@ const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>(
 
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
-  options: {
-    env: NodeJS.ProcessEnv;
-    onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
-  } & (
-    | {
-        operation: "doctor";
-        configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
-        config?: OpenClawConfig;
-        onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
-        onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
-      }
-    | { operation: "gateway-restart"; config?: OpenClawConfig }
-    | { operation: "gateway-startup"; config: OpenClawConfig }
-  ),
+  options: OpenClawDatabaseReadinessOptions,
 ): Promise<void> {
   const schemas = await preflightOpenClawDatabaseSchemas(
     {
@@ -128,7 +114,11 @@ export async function assertOpenClawDatabasesReady(
         ? { requireStartupMigrationReadiness: true }
         : {}),
       ...(options.operation === "doctor"
-        ? { configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets }
+        ? {
+            configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets,
+            onAgentDatabaseDiscovery: options.onAgentDatabaseDiscovery,
+            signal: options.signal,
+          }
         : {}),
     },
     options.operation === "doctor" ? "maintenance" : "runtime",

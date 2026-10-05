@@ -21,6 +21,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
+import { recordWorkerPlacementAwait, recordWorkerPlacementStage } from "./placement-diagnostics.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -30,6 +31,7 @@ import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.j
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerWorkspaceReconcileRequest,
+  resolvePreparedTurnRepository,
   type WorkerSessionWorkspace,
 } from "./session-workspace.js";
 import { transferSkillResources } from "./skill-resource-transfer.js";
@@ -153,6 +155,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   workspace: WorkerSessionWorkspace;
   transcriptTarget: ReturnType<typeof resolveWorkerTurnTranscriptTarget>;
+  resolveWorkspace?: () => Promise<WorkerSessionWorkspace>;
   tunnel: WorkerTunnelHandle;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
@@ -182,11 +185,47 @@ export async function reconcileWorkspaceAfterTurn(params: {
     }
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
-  requireCurrentPlacement();
+  const initialPlacement = requireCurrentPlacement();
+  if (
+    params.workspace.kind === "repository" &&
+    initialPlacement.workspaceBaseManifestRef === null &&
+    (await params.placements.completeUnreadyRepositoryTurn(params.turnClaim, assertResultCurrent))
+  ) {
+    await params.publishAcceptedWorkspace?.(params.turnClaim);
+    await params.placements.completeWorkspaceResultAndReleaseTurn(
+      params.turnClaim,
+      assertResultCurrent,
+    );
+    return undefined;
+  }
   await params.placements.prepareWorkspaceResultClaim(params.turnClaim);
   const completed = await SessionManager.openAsync(transcriptTarget);
   const currentPlacement = requireCurrentPlacement();
+  if (!currentPlacement.workspaceBaseManifestRef) {
+    throw new Error(
+      "Repository preparation is pending or failed; no file result can be reconciled",
+    );
+  }
   assertResultCurrent();
+  let workspace = params.workspace;
+  if (
+    params.placement.repositoryPreparation === "pending" &&
+    params.resolveWorkspace &&
+    workspace.kind === "repository"
+  ) {
+    const manifestRef = currentPlacement.workspaceBaseManifestRef;
+    workspace = await resolvePreparedTurnRepository({
+      workspace,
+      manifestRef,
+      resolveWorkspace: params.resolveWorkspace,
+      assertCurrent: () => {
+        assertResultCurrent();
+        if (requireCurrentPlacement().workspaceBaseManifestRef !== manifestRef) {
+          throw new Error("Repository preparation baseline changed before reconciliation");
+        }
+      },
+    });
+  }
   const priorWorkspaceConflict =
     currentPlacement.workspaceResultConflict ??
     latestDurableWorkspaceConflict(completed.getBranch());
@@ -218,9 +257,13 @@ export async function reconcileWorkspaceAfterTurn(params: {
         const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
         const reconciliation = await params.tunnel.reconcileWorkspace(
           createWorkerWorkspaceReconcileRequest({
-            workspace: params.workspace,
+            workspace,
             remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
-            baseManifestRef: currentPlacement.workspaceBaseManifestRef,
+            baseManifestRef:
+              currentPlacement.workspaceBaseManifestRef ??
+              (() => {
+                throw new Error("Repository preparation is not ready");
+              })(),
             journal: journal.adapter,
             stagedResult: {
               ref: stagedResultRef,
@@ -228,9 +271,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
                 params.placements.recordStagedWorkspaceResult(
                   params.turnClaim,
                   ref,
-                  params.workspace.kind === "repository"
-                    ? params.workspace.repository.workspaceId
-                    : undefined,
+                  workspace.kind === "repository" ? workspace.repository.workspaceId : undefined,
                   assertWorkspaceResultCurrent,
                 ),
             },
@@ -257,7 +298,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
           conflictPaths: applied?.conflictPaths ?? [],
           priorConflict: priorWorkspaceConflict,
           stagedResultRef: recordedStagedResultRef,
-          workspace: params.workspace,
+          workspace,
           report: async (report) => {
             const manager = await SessionManager.openAsync(transcriptTarget);
             assertResultCurrent();
@@ -302,7 +343,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
           assertCurrent: assertResultCurrent,
           placements: params.placements,
           turnClaim: params.turnClaim,
-          workspace: params.workspace,
+          workspace,
           stagedResultRef: recordedStagedResultRef,
           conflictRetained: finalized.conflictRetained,
           beforeComplete: async () => {
@@ -355,6 +396,7 @@ export async function executeRemoteExecTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   workspace: WorkerSessionWorkspace;
   runLocal: () => Promise<EmbeddedAgentRunResult>;
+  resolveWorkspace?: () => Promise<WorkerSessionWorkspace>;
   assertRunCurrent?: () => void;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
@@ -370,29 +412,58 @@ export async function executeRemoteExecTurn(params: {
   ) {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
-  await recoverWorkspaceBeforeTurn({ ...params, signal: params.turn.abortSignal });
+  const preparationFacts = {
+    generation: params.placement.generation,
+    environmentId: params.placement.environmentId,
+    ownerEpoch: params.placement.activeOwnerEpoch,
+    claimId: params.turnClaim.claimId,
+    runId: params.turnClaim.runId,
+  };
+  await recordWorkerPlacementAwait(
+    params.placement.sessionId,
+    "turn_workspace_recovery",
+    () => recoverWorkspaceBeforeTurn({ ...params, signal: params.turn.abortSignal }),
+    preparationFacts,
+    "placement",
+  );
   params.assertRunCurrent?.();
-  const tunnel = await waitForTurnOperation({
-    start: () =>
-      params.environments.startTunnel({
-        environmentId: params.placement.environmentId,
-        ownerEpoch: params.placement.activeOwnerEpoch,
+  const tunnel = await recordWorkerPlacementAwait(
+    params.placement.sessionId,
+    "turn_tunnel",
+    () =>
+      waitForTurnOperation({
+        start: () =>
+          params.environments.startTunnel({
+            environmentId: params.placement.environmentId,
+            ownerEpoch: params.placement.activeOwnerEpoch,
+            authorize: params.assertRunCurrent,
+            signal: params.turn.abortSignal,
+          }),
+        ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
+        timeoutMs: params.turn.timeoutMs,
       }),
-    ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
-    timeoutMs: params.turn.timeoutMs,
-  });
+    preparationFacts,
+    "placement",
+  );
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(params.turn);
-  const attachmentNote = await prepareWorkerTurnAttachments({
-    turn: params.turn,
-    tunnel,
-    remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
-    assertRunCurrent: params.assertRunCurrent,
-    assertCurrent: () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud attachment transfer lost its turn claim");
-      }
-    },
-  });
+  const attachmentNote = await recordWorkerPlacementAwait(
+    params.placement.sessionId,
+    "turn_attachments",
+    () =>
+      prepareWorkerTurnAttachments({
+        turn: params.turn,
+        tunnel,
+        remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
+        assertRunCurrent: params.assertRunCurrent,
+        assertCurrent: () => {
+          if (!params.placements.validateTurnClaim(params.turnClaim)) {
+            throw new Error("Cloud attachment transfer lost its turn claim");
+          }
+        },
+      }),
+    preparationFacts,
+    "placement",
+  );
   params.assertRunCurrent?.();
   await params.placements.markWorkspaceResultPending(params.turnClaim, params.assertRunCurrent);
   params.assertRunCurrent?.();
@@ -404,28 +475,52 @@ export async function executeRemoteExecTurn(params: {
   let computer: PreparedWorkerComputer | undefined;
   let skillResources: Awaited<ReturnType<typeof transferSkillResources>>;
   try {
-    skillResources = await transferSkillResources({
-      snapshot: params.turn.skillsSnapshot,
-      workspaceDir: params.turn.workspaceDir,
-      explicitSelections: params.turn.explicitSkillSelections,
-      tunnel,
-      remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
-      signal: params.turn.abortSignal,
-      assertRunCurrent: params.assertRunCurrent,
-      assertCurrent: () => {
-        const current = params.environments.get(environment.environmentId);
-        if (
-          !params.placements.validateTurnClaim(params.turnClaim) ||
-          current?.state !== "attached" ||
-          current.ownerEpoch !== environment.ownerEpoch ||
-          current.leaseId !== environment.leaseId
-        ) {
-          throw new Error("Skill transfer lost its exact placement authority.");
-        }
-      },
-    });
+    skillResources = await recordWorkerPlacementAwait(
+      params.placement.sessionId,
+      "turn_skill_resources",
+      () =>
+        transferSkillResources({
+          snapshot: params.turn.skillsSnapshot,
+          workspaceDir: params.turn.workspaceDir,
+          explicitSelections: params.turn.explicitSkillSelections,
+          deferDelivery: () => {
+            const current = params.placements.get(params.placement.sessionId);
+            const pending =
+              current?.state === "active" &&
+              current.generation === params.turnClaim.placementGeneration &&
+              current.environmentId === params.placement.environmentId &&
+              current.activeOwnerEpoch === params.placement.activeOwnerEpoch &&
+              current.repositoryPreparation === "pending";
+            // Only enrolled nodes have the private delivery receipt protocol.
+            return pending ? (environment.nodeDeviceId ? "all" : "empty") : undefined;
+          },
+          tunnel,
+          remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
+          signal: params.turn.abortSignal,
+          assertRunCurrent: params.assertRunCurrent,
+          assertCurrent: () => {
+            const current = params.environments.get(environment.environmentId);
+            if (
+              !params.placements.validateTurnClaim(params.turnClaim) ||
+              current?.state !== "attached" ||
+              current.ownerEpoch !== environment.ownerEpoch ||
+              current.leaseId !== environment.leaseId
+            ) {
+              throw new Error("Skill transfer lost its exact placement authority.");
+            }
+          },
+        }),
+      preparationFacts,
+      "placement",
+    );
     params.assertRunCurrent?.();
-    computer = await params.environments.prepareComputer?.(params.turnClaim);
+    computer = await recordWorkerPlacementAwait(
+      params.placement.sessionId,
+      "turn_computer",
+      () => params.environments.prepareComputer?.(params.turnClaim),
+      preparationFacts,
+      "placement",
+    );
     params.assertRunCurrent?.();
     const sandboxToolPolicy = resolveSandboxToolPolicyForAgent(
       params.turn.config,
@@ -486,10 +581,16 @@ export async function executeRemoteExecTurn(params: {
             sandboxToolPolicy: computer ? sandboxToolPolicy : undefined,
             bind: (run) => (computer ? computer.bind(run) : null),
           },
-          () =>
-            skillResources
+          () => {
+            recordWorkerPlacementStage(
+              params.placement.sessionId,
+              "turn_runner_invoked",
+              preparationFacts,
+            );
+            return skillResources
               ? withSessionSkillResources(skillResources, params.runLocal)
-              : params.runLocal(),
+              : params.runLocal();
+          },
         ),
     );
     execution = { ok: true, value: result };
@@ -525,6 +626,7 @@ export async function executeRemoteExecTurn(params: {
     turnClaim: params.turnClaim,
     workspaceOperations: params.workspaceOperations,
     workspace: params.workspace,
+    resolveWorkspace: params.resolveWorkspace,
     transcriptTarget,
     tunnel,
     prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication,

@@ -196,6 +196,18 @@ export type WorkerLeaseStatus =
   | { status: "destroyed" }
   | { status: "unknown" };
 
+export type WorkerLeaseRecoveryHold = {
+  status: "held";
+  leaseId: string;
+  unacceptedChanges: "unknown";
+  resources: Array<{
+    kind: string;
+    id: string;
+    immutableId?: string;
+    state: "absent" | "retained";
+  }>;
+};
+
 /** Provision failed after allocation and the provider could not prove cleanup completed. */
 class WorkerProvisionCleanupError extends AggregateError {
   readonly code = "cleanup_indeterminate";
@@ -269,6 +281,34 @@ export class WorkerProviderError extends Error {
 
   static isCleanupIndeterminate(error: unknown): error is WorkerProvisionCleanupError {
     return error instanceof WorkerProvisionCleanupError;
+  }
+
+  /** Exact rejected attempt is settled; this does not assert that no resources ever existed. */
+  static capacityShortage(
+    receipt: WorkerProvisionCapacityError["receipt"],
+  ): WorkerProvisionCapacityError {
+    return new WorkerProvisionCapacityError(receipt);
+  }
+
+  static isCapacityShortage(error: unknown): error is WorkerProvisionCapacityError {
+    return error instanceof WorkerProvisionCapacityError;
+  }
+}
+
+class WorkerProvisionCapacityError extends Error {
+  readonly code = "capacity_shortage";
+
+  constructor(
+    readonly receipt: {
+      operationId: string;
+      leaseId: string;
+      attemptName: string;
+      attemptNonce: string;
+      providerCode: string;
+    },
+  ) {
+    super("Waiting for worker capacity");
+    this.name = "WorkerProvisionCapacityError";
   }
 }
 
@@ -411,6 +451,16 @@ export type WorkerProvider = {
    * proves teardown complete and lets core skip destroy.
    */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
+  /** Wake an exact recognized lease; never allocate or mutate through inspection. */
+  resume?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    authority: {
+      signal: AbortSignal;
+      assertCurrent: () => void;
+      /** Existing node-enrollment owner binds reconnection to this same device and epoch. */
+      beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
+    },
+  ) => Promise<"resumed" | "unsupported">;
   /**
    * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
    * SecretRef resolver; when present, failures are authoritative and never fall back.
@@ -429,6 +479,12 @@ export type WorkerProvider = {
   }) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+  /** Retain a failed machine's resources. operationId is the original allocation fact, not new authority. */
+  holdFailedLease?: (
+    lease: { leaseId: string; profile: WorkerProfile; operationId?: string },
+    authority: { assertCurrent: () => void; signal?: AbortSignal },
+  ) => Promise<WorkerLeaseRecoveryHold>;
+  supportsFailedLeaseHold?: (profile: WorkerProfile) => boolean;
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };

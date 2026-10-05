@@ -5,6 +5,7 @@ import {
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import type { WorkerWorkspaceRetentionNotice } from "./worker-environments/placement-reclaim-contract.js";
 import { boundedWorkerError } from "./worker-environments/worker-error.js";
 import {
   formatWorkspaceConflictSummary,
@@ -37,6 +38,40 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
   }
 
   return {
+    reportRetention: async (notice: WorkerWorkspaceRetentionNotice) => {
+      await withWorkerTranscript(
+        () =>
+          appendSessionTranscriptReport(target, {
+            kind: "custom",
+            customTypes: ["cloud-worker-retained"],
+            selectReport: (previous) =>
+              previous?.details &&
+              typeof previous.details === "object" &&
+              "environmentId" in previous.details &&
+              previous.details.environmentId === notice.environmentId &&
+              "previousCheckpointRef" in previous.details &&
+              previous.details.previousCheckpointRef === notice.previousCheckpointRef &&
+              "checkpointRef" in previous.details &&
+              previous.details.checkpointRef === notice.checkpointRef &&
+              "manifestHash" in previous.details &&
+              previous.details.manifestHash === notice.manifestHash
+                ? undefined
+                : {
+                    customType: "cloud-worker-retained",
+                    content: notice.message,
+                    display: true,
+                    details: {
+                      environmentId: notice.environmentId,
+                      previousCheckpointRef: notice.previousCheckpointRef,
+                      checkpointRef: notice.checkpointRef,
+                      manifestHash: notice.manifestHash,
+                      unacceptedChanges: "unknown",
+                    },
+                  },
+          }),
+        "Retained cloud worker recovery notice",
+      );
+    },
     resolveConflict: async (): Promise<WorkspaceResultConflictLookup> => {
       const result = await withWorkerTranscript(() =>
         readLatestSessionTranscriptReport(target, [

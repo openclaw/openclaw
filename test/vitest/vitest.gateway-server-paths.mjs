@@ -12,6 +12,9 @@ export const gatewayPluginTestFiles = [
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/agent-turn/agent-run-commentary-media.test.ts",
+  "src/gateway/worker-environments/worker-turn-capacity.test.ts",
+  "src/gateway/worker-environments/placement-reclaim.repository-publication.test.ts",
+  "src/gateway/worker-environments/skill-resource-transfer.library.test.ts",
   "src/gateway/server-methods/chat-send-github-issue-context.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/auth-token-store-ref.test.ts",
@@ -324,8 +327,10 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-dispatch-staged-results.test.ts",
   "src/gateway/worker-environments/placement-dispatch-transport-authority.test.ts",
   "src/gateway/worker-environments/placement-dispatch.test.ts",
+  "src/gateway/worker-environments/placement-dispatch-repository-readiness.test.ts",
   "src/gateway/worker-environments/placement-force-abandon.test.ts",
   "src/gateway/worker-environments/placement-force-destroy.test.ts",
+  "src/gateway/worker-environments/placement-preactivation-retirement.test.ts",
   "src/gateway/worker-environments/placement-gateway-recovery.test.ts",
   "src/gateway/worker-environments/placement-idle-sweep.test.ts",
   "src/gateway/worker-environments/placement-move-abandon.test.ts",
@@ -413,6 +418,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-launcher-initial-setup.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-media.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-reclaimed-placement.test.ts",
+  "src/gateway/worker-environments/worker-turn-launcher-background-repository.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-reconcile-error.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-reconciliation-authority.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",

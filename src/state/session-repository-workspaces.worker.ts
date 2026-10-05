@@ -22,6 +22,7 @@ import type {
   RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
+  RepositoryWorkspacePublishedHead,
 } from "./session-repository-workspaces.types.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
@@ -59,7 +60,7 @@ export const repositoryWorkspaceOperations = {
       discardSessionRepositoryWorkspaceCheckpointInDatabase(db, input, input.nowMs ?? Date.now()),
     ),
   "repositoryWorkspaces.advanceToPublishedHead": (
-    input: RepositoryWorkspaceMutation & { branch: string; headCommit: string; nowMs?: number },
+    input: RepositoryWorkspacePublishedHead & { nowMs?: number },
     { open },
   ) =>
     mutate(open(), "repositoryWorkspaces.advanceToPublishedHead", (db) =>

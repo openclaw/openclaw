@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
+import {
+  replaceSessionEntrySync,
+  replaceTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
@@ -16,7 +20,13 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -28,6 +38,7 @@ import { STATE_SUPERVISION_KEY } from "../state/openclaw-state-ownership.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import * as doctorMaintenance from "./doctor-maintenance.js";
 
 const { mocks } = await import("../flows/doctor-health.test-support.js");
 beforeEach(() => {
@@ -39,6 +50,146 @@ beforeEach(() => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
+afterEach(() => vi.restoreAllMocks());
+
+it.each(["valid", "invalid", "cleanup failed"] as const)(
+  "joins final canonical readiness after all Doctor repair work (%s)",
+  async (scenario) => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "doctor-final-canonical" },
+      async (state) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: {},
+              custom: { agentDir: state.path("custom-agent") },
+            },
+          },
+          plugins: { enabled: false },
+        };
+        await state.writeConfig(cfg);
+        const configBytes = fs.readFileSync(state.configPath);
+        mocks.config.mockReturnValue(cfg);
+        const sources = ["main", "custom", "retained"].map((agentId) => ({
+          agentId,
+          env: state.env,
+          path: path.join(
+            agentId === "custom" ? state.path("custom-agent") : state.agentDir(agentId),
+            "openclaw-agent.sqlite",
+          ),
+          sessionId: `doctor-final-${agentId}`,
+          sessionKey: `agent:${agentId}:doctor-final`,
+        }));
+        const { DatabaseSync } = requireNodeSqlite();
+        const snapshot = (filename: string) => {
+          const db = new DatabaseSync(filename, { readOnly: true });
+          try {
+            return {
+              nodes: db.prepare("SELECT * FROM session_nodes").all(),
+              events: db.prepare("SELECT * FROM transcript_events").all(),
+              cold: db.prepare("SELECT * FROM session_entry_snapshots").all(),
+              pending: db
+                .prepare("SELECT session_key FROM session_canonical_validation_pending")
+                .all(),
+            };
+          } finally {
+            db.close();
+          }
+        };
+        for (const source of sources) {
+          openOpenClawAgentDatabase(source);
+          replaceSessionEntrySync(
+            { ...source, storePath: source.path },
+            {
+              sessionId: source.sessionId,
+              updatedAt: 1,
+              label: "Retain canonical completion fixture",
+              skillsSnapshot: { prompt: "Retained cold snapshot", skills: [] },
+            },
+          );
+          await replaceTranscriptEvents({ ...source, storePath: source.path }, [
+            { type: "session", id: source.sessionId, version: 3 },
+            {
+              type: "message",
+              id: `${source.sessionId}:message`,
+              parentId: null,
+              message: { role: "user", content: "Retain exact Doctor history" },
+            },
+          ]);
+        }
+        await closeOpenClawAgentDatabasesAsync();
+        const expected = new Map<string, ReturnType<typeof snapshot>>();
+        const begin = doctorMaintenance.beginDoctorMaintenance;
+        vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async (params) => {
+          const maintenance = await begin(params);
+          if (maintenance) {
+            const cleanup = maintenance.cleanupRetainedRuntimes.bind(maintenance);
+            vi.spyOn(maintenance, "cleanupRetainedRuntimes").mockImplementation(async () => {
+              await cleanup();
+              maintenance.run(() => {
+                for (const source of sources) {
+                  openOpenClawAgentDatabase(source);
+                  // An older admitted writer leaves the real trigger's pending work for completion.
+                  runOpenClawAgentWriteTransaction(({ db }) => {
+                    db.prepare("UPDATE session_nodes SET entry_json = entry_json || ' '").run();
+                    db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
+                    if (scenario === "invalid" && source.agentId === "main") {
+                      db.prepare(
+                        "UPDATE session_nodes SET parent_session_key = 'agent:main:unaccepted'",
+                      ).run();
+                    }
+                  }, source);
+                  expected.set(source.path, snapshot(source.path));
+                  expect(expected.get(source.path)?.pending).toEqual([
+                    { session_key: source.sessionKey },
+                  ]);
+                }
+              });
+              if (scenario === "cleanup failed") {
+                throw new Error("Synthetic final cleanup failure");
+              }
+            });
+          }
+          return maintenance;
+        });
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await runCommandWithRuntime(runtime, () =>
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        );
+        expect(expected.size, runtime.error.mock.calls.flat().join("\n")).toBe(3);
+        for (const source of sources) {
+          const after = snapshot(source.path);
+          const before = expected.get(source.path)!;
+          expect(after.nodes).toEqual(before.nodes);
+          expect(after.events).toEqual(before.events);
+          expect(after.cold).toEqual(before.cold);
+          if (scenario !== "invalid" || source.agentId === "main") {
+            expect(
+              after.pending,
+              `${source.agentId}: ${runtime.error.mock.calls.flat().join("\n")}`,
+            ).toEqual(scenario === "valid" ? [] : before.pending);
+          }
+        }
+        expect(fs.readFileSync(state.configPath)).toEqual(configBytes);
+        expect(cfg.agents?.entries).not.toHaveProperty("retained");
+        assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env });
+        if (scenario === "valid") {
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+        } else {
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+          expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+          expect(runtime.error.mock.calls.flat().join("\n")).toContain(
+            scenario === "invalid"
+              ? "invalid persisted session row"
+              : "Synthetic final cleanup failure",
+          );
+        }
+      },
+    );
+  },
+);
 
 function createLegacyRegistryFixture() {
   const root = tempDirs.make("openclaw-doctor-legacy-registry-");

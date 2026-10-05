@@ -8,6 +8,7 @@ import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { NodeWorkerProcessInput } from "../../worker/worker-process-observation.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
@@ -31,7 +32,7 @@ const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 
 export type WorkerEnvironmentNodeTunnel = Pick<
   NodeWorkerTunnelManager,
-  "status" | "start" | "stop" | "stopAll" | "observeProcesses"
+  "status" | "start" | "stop" | "stopAll" | "observeProcesses" | "isNodeConnected"
 >;
 
 /** Lease teardown joins every transport sharing that environment owner. */
@@ -70,8 +71,11 @@ type WorkerEnvironmentAccessOptions = {
   getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
   projectNamespace?: string;
-  prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
+  prepareCurrentBundle: () => Promise<WorkerInstallationArtifact>;
   bindPreparedWorkspace?: WorkerProviderLifecycleInputOptions["bindPreparedWorkspace"];
+  resumeNodeLease: ReturnType<
+    typeof import("./provider-node-provisioning.js").createWorkerNodeProvisioning
+  >["resume"];
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: WorkerEnvironmentNodeTunnel;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
@@ -270,6 +274,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
+    request.signal?.throwIfAborted();
     if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -278,13 +283,16 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     }
     // Prepare process-stable metadata outside the lock, then validate the durable
     // owner once. Credential revocation may happen while this await is pending.
-    let currentBundle: ExpectedWorkerBuild;
+    let currentBundle: Awaited<
+      ReturnType<WorkerProviderLifecycleInputOptions["prepareInstallation"]>
+    >;
     try {
       currentBundle = await options.prepareCurrentBundle();
     } catch {
       throw serviceError("invalid_state", "Current worker build identity is unavailable");
     }
     const { startup, stopStartup } = await withLock(request.environmentId, async () => {
+      request.signal?.throwIfAborted();
       const record = requireCurrentRecord(request.environmentId);
       if (
         !["ready", "idle", "attached"].includes(record.state) ||
@@ -334,6 +342,41 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         ) {
           throw serviceError("invalid_state", "Node worker tunnel runtime is unavailable");
         }
+        const assertStartupCurrent = () => {
+          request.signal?.throwIfAborted();
+          request.authorize?.();
+          const current = requireCurrentRecord(record.environmentId);
+          const currentCredential = store.getCredential(record.environmentId);
+          if (
+            current.ownerEpoch !== record.ownerEpoch ||
+            current.leaseId !== record.leaseId ||
+            current.nodeDeviceId !== nodeDeviceId ||
+            current.state !== record.state ||
+            current.attachedSessionIds.length !== 1 ||
+            current.attachedSessionIds[0] !== sessionId ||
+            currentCredential?.credentialHash !== credential.credentialHash ||
+            currentCredential.ownerEpoch !== credential.ownerEpoch ||
+            currentCredential.sessionId !== sessionId ||
+            current.destroyRequestedAtMs !== null
+          ) {
+            throw new Error("Worker resumption lost its admitted session owner");
+          }
+        };
+        const connected = await nodeTunnels.isNodeConnected(nodeDeviceId);
+        assertStartupCurrent();
+        if (!connected) {
+          const provider = providerFor(record.providerId);
+          if (provider.resume) {
+            if (!request.authorize) {
+              throw new Error("Worker resumption requires admitted request authority");
+            }
+            await options.resumeNodeLease(record, provider, currentBundle, {
+              signal: request.signal ?? new AbortController().signal,
+              assertCurrent: assertStartupCurrent,
+            });
+            assertStartupCurrent();
+          }
+        }
         return {
           startup: nodeTunnels.start({
             executionMode:
@@ -379,18 +422,21 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       "Worker tunnel did not connect within 3 minutes; check that the worker is online and reachable, then retry",
     );
     try {
-      return await withTimeout(startup, TUNNEL_START_TIMEOUT_MS, {
-        createError: () => timeoutError,
-      });
+      return await racePromiseWithAbortSignal(
+        withTimeout(startup, TUNNEL_START_TIMEOUT_MS, {
+          createError: () => timeoutError,
+        }),
+        request.signal,
+      );
     } catch (error) {
-      if (error !== timeoutError) {
+      if (error !== timeoutError && !request.signal?.aborted) {
         throw error;
       }
       // Stop can itself block on an unkillable transport child; detach it (rejection observed,
       // entry stays manager-tracked) so the deadline error is returned on time. Epoch-fenced
       // so a stale timed-out attempt can never tear down a newer owner's tunnel.
       void stopStartup().catch(() => undefined);
-      throw timeoutError;
+      throw error;
     }
   };
 

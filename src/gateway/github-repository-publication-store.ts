@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type {
   RepositoryGitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
@@ -13,6 +14,10 @@ import {
   decodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
 import { ensureRepositoryGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -70,23 +75,84 @@ export async function readPendingRepositoryGitHubPublication(
 }
 
 /** A pushed branch outlives its publisher and the request's PR outcome. */
-export function readRepositoryGitHubPublicationBranch(input: {
+export function readRepositoryGitHubPublicationBranch(
+  input: RepositoryGitHubPublicationBranchInput,
+) {
+  return readRepositoryGitHubPublicationBranchInDatabase(openOpenClawStateDatabase().db, input);
+}
+
+export type RepositoryGitHubPublicationBranchInput = {
   workspaceId: string;
   branch: string;
   pushRepository: string;
-}) {
-  const rows = listRepositoryGitHubPublications({ workspaceId: input.workspaceId }).filter(
-    (row) => row.branch === input.branch && row.push_repository === input.pushRepository,
-  );
+};
+
+export function readRepositoryGitHubPublicationBranchInDatabase(
+  db: Parameters<typeof getNodeSqliteKysely>[0],
+  input: RepositoryGitHubPublicationBranchInput,
+) {
+  const rows = listRepositoryGitHubPublicationsInDatabase(db, {
+    workspaceId: input.workspaceId,
+  }).filter((row) => row.branch === input.branch && row.push_repository === input.pushRepository);
   const pushed = rows.filter((row) => row.pushed_head_commit !== null);
-  // Retried ancestors may have newer timestamps; follow recorded parent links instead.
   const ancestors = new Set(pushed.map((row) => row.previous_head_commit));
   return {
+    attempted: rows.length > 0,
     head: pushed.findLast((row) => !ancestors.has(row.pushed_head_commit)),
-    unsettled: rows.some(
-      (row) => !terminalRepositoryGitHubPublication(row) && row.effect_state === "dispatched",
-    ),
+    unsettled: rows.some((row) => row.effect_state === "dispatched"),
   };
+}
+
+/** Retain branch observations while recovery yields; publications invalidate the held facts. */
+export async function prepareRepositoryGitHubPublicationBranch(
+  input: RepositoryGitHubPublicationBranchInput,
+  owner: { sessionKey: string; agentId: string },
+) {
+  const context = captureOpenClawStateWorkerContext();
+  let active = true;
+  let invalidated = false;
+  const stop = onSessionLifecycleEvent((event) => {
+    if (
+      event.reason === "github-publication" &&
+      event.sessionKey === owner.sessionKey &&
+      (event.agentId === undefined || event.agentId === owner.agentId)
+    ) {
+      invalidated = true;
+    }
+  });
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (!active || invalidated) {
+      throw new Error("Repository publication changed during recovery");
+    }
+  };
+  try {
+    const reply = await withArtifactPreservingStateReads(() =>
+      executeExistingOpenClawStateRead(
+        {},
+        { type: "githubRepository.branch", input },
+        { context, current: true, preferIndependentWarmRead: true },
+      ),
+    );
+    assertCurrent();
+    if (reply && (!reply.ok || reply.type !== "githubRepository.branch")) {
+      throw new Error("Repository publication branch observation is unavailable");
+    }
+    const branch = reply?.branch ?? { attempted: true, head: undefined, unsettled: false };
+    return {
+      current: () => {
+        assertCurrent();
+        return branch;
+      },
+      release: () => {
+        active = false;
+        stop();
+      },
+    };
+  } catch (error) {
+    stop();
+    throw error;
+  }
 }
 
 export function readRepositoryGitHubPublication(

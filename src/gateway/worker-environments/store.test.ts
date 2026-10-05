@@ -17,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -24,6 +25,7 @@ import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-d
 import { hashWorkerCredential } from "./credential.js";
 import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
 import { ensureWorkerEnvironmentStoreSchema } from "./store-schema.js";
+import { readWorkerUpgradeState, seedWorkerUpgradeState } from "./store-upgrade.test-support.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
 const DESKTOP: WorkerDesktopEndpoint = {
@@ -301,59 +303,126 @@ describe("worker environment store", () => {
     },
   );
 
-  it("lazily ensures the companion table once for a current database", async () => {
-    const databasePath = database.path;
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    const current = new DatabaseSync(databasePath);
-    current.exec("DROP TABLE worker_environment_ssh_fallback_ports;");
-    current.close();
+  it.each([
+    { table: "worker_environment_ssh_fallback_ports", doctor: false },
+    { table: "worker_environment_recovery_holds", doctor: false },
+    { table: "worker_environment_recovery_holds", doctor: true },
+  ] as const)(
+    "admits existing state and ensures $table without losing worker state (Doctor: $doctor)",
+    async ({ table, doctor }) => {
+      let retained = await createIntent("retained-worker");
+      if (table === "worker_environment_recovery_holds") {
+        await store.transition({
+          environmentId: retained.environmentId,
+          from: "requested",
+          to: "provisioning",
+        });
+        await store.transition({
+          environmentId: retained.environmentId,
+          from: "provisioning",
+          to: "bootstrapping",
+          patch: { leaseId: "retained-lease", sshEndpoint: SSH_ENDPOINT },
+        });
+        await store.transition({
+          environmentId: retained.environmentId,
+          from: "bootstrapping",
+          to: "ready",
+          patch: readyPatch(),
+        });
+        retained = await store.transition({
+          environmentId: retained.environmentId,
+          from: "ready",
+          to: "attached",
+          patch: attachedPatch("retained-session", "retained-session"),
+        });
+      }
+      seedWorkerUpgradeState(database.db, retained.environmentId);
+      const persistedState = () => readWorkerUpgradeState(database.db, doctor);
+      const before = persistedState();
+      const databasePath = database.path;
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      const { DatabaseSync } = requireNodeSqlite();
+      const current = new DatabaseSync(databasePath);
+      current.exec(`DROP TABLE ${table};`);
+      current.close();
 
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    expect(
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("worker_environment_ssh_fallback_ports"),
-    ).toBeUndefined();
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
+      expect(
+        await prepareOpenClawStateDatabaseSchema({ env: { OPENCLAW_STATE_DIR: root } }),
+      ).toEqual({ changes: [], warnings: [] });
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      expect(
+        database.db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(table),
+      ).toBeUndefined();
+      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
 
-    expect(() =>
-      runOpenClawStateWriteTransaction(
-        () => {
-          ensureWorkerEnvironmentStoreSchema(database);
-          throw new Error("refused environment mutation");
-        },
-        { database },
-      ),
-    ).toThrow("refused environment mutation");
-    expect(
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("worker_environment_ssh_fallback_ports"),
-    ).toBeUndefined();
-    ensureWorkerEnvironmentStoreSchema(database);
-    expect(
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("worker_environment_ssh_fallback_ports"),
-    ).toEqual({ name: "worker_environment_ssh_fallback_ports" });
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            ensureWorkerEnvironmentStoreSchema(database);
+            throw new Error("refused environment mutation");
+          },
+          { database },
+        ),
+      ).toThrow("refused environment mutation");
+      expect(
+        database.db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(table),
+      ).toBeUndefined();
+      if (doctor) {
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        expect(
+          await prepareOpenClawStateDatabaseSchema({ env: { OPENCLAW_STATE_DIR: root } }, "doctor"),
+        ).toEqual({ changes: ["Added optional worker recovery hold schema"], warnings: [] });
+        database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+        expect(
+          database.db
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get(table),
+        ).toEqual({ name: table });
+        expect(persistedState()).toEqual(before);
+      }
+      store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+      expect(
+        database.db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(table),
+      ).toEqual({ name: table });
 
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-    await createWorkerEnvironmentStore({ database, now: () => nowMs });
-    expect(
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("worker_environment_ssh_fallback_ports"),
-    ).toEqual({ name: "worker_environment_ssh_fallback_ports" });
-    expect(() =>
-      assertOpenClawStateDatabaseForMaintenance(database.db, {
-        pathname: database.path,
-      }),
-    ).not.toThrow();
-  });
+      await createWorkerEnvironmentStore({ database, now: () => nowMs });
+      expect(
+        database.db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(table),
+      ).toEqual({ name: table });
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database.db, {
+          pathname: database.path,
+        }),
+      ).not.toThrow();
+      expect(store.get(retained.environmentId)).toEqual(retained);
+      expect(persistedState()).toEqual(before);
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      expect(
+        await prepareOpenClawStateDatabaseSchema(
+          { env: { OPENCLAW_STATE_DIR: root } },
+          doctor ? "doctor" : "automatic",
+        ),
+      ).toEqual({ changes: [], warnings: [] });
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      expect(persistedState()).toEqual(before);
+      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+    },
+  );
 
   it("enforces canonical companion-table constraints and cascading ownership", async () => {
     await createIntent("worker-constraints");

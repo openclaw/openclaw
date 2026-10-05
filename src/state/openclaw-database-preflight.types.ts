@@ -97,3 +97,20 @@ export type OpenClawDatabasePreflightOptions = {
   agentAdmissionConfig?: OpenClawConfig;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 };
+
+export type OpenClawDatabaseReadinessOptions = {
+  env: NodeJS.ProcessEnv;
+  onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
+} & (
+  | {
+      operation: "doctor";
+      configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
+      config?: OpenClawConfig;
+      onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
+      onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
+      onAgentDatabaseDiscovery?: OpenClawDatabasePreflightOptions["onAgentDatabaseDiscovery"];
+      signal?: AbortSignal;
+    }
+  | { operation: "gateway-restart"; config?: OpenClawConfig }
+  | { operation: "gateway-startup"; config: OpenClawConfig }
+);

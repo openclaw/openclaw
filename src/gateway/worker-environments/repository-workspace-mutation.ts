@@ -46,6 +46,11 @@ export function createRepositoryWorkspaceMutationService(options: {
       if (placement?.state !== "active") {
         throw new Error("Repository workspace editing requires an active cloud placement");
       }
+      if (!placement.workspaceBaseManifestRef) {
+        throw new Error(
+          "Repository preparation is pending or failed; repository editing is blocked",
+        );
+      }
       return await options.workspaceOperations.run(placement.environmentId, async () => {
         params.assertCurrent();
         const workspace = await options.resolveWorkspace(params);
@@ -154,6 +159,7 @@ export function createRepositoryWorkspaceMutationService(options: {
           const tunnel = await environments.startTunnel({
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,
+            authorize: assertCurrent,
           });
           assertCurrent();
           if (
@@ -178,7 +184,11 @@ export function createRepositoryWorkspaceMutationService(options: {
               createWorkerWorkspaceReconcileRequest({
                 workspace,
                 remoteWorkspaceDir: placement.remoteWorkspaceDir,
-                baseManifestRef: placement.workspaceBaseManifestRef,
+                baseManifestRef:
+                  placement.workspaceBaseManifestRef ??
+                  (() => {
+                    throw new Error("Repository preparation is not ready");
+                  })(),
                 journal: journal.adapter,
                 stagedResult: {
                   ref: stagedResultRef,

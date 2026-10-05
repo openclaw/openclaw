@@ -1,8 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import {
+  createSubsystemLogger,
+  redactSensitiveText,
+  redactToolPayloadText,
+} from "openclaw/plugin-sdk/logging-core";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { createCrabboxWorkerStageObserver } from "./crabbox-worker-provision-telemetry.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
+
+const commandLog = createSubsystemLogger("crabbox/command");
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_COMMAND_DETAIL_CHARS = 512;
@@ -56,10 +64,62 @@ export async function runCrabboxCommand(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
+  diagnostics?: {
+    operationId: string;
+    leaseId: string;
+    stage?: "profile-setup" | "runtime-preparation" | "node-bootstrap" | "other";
+  };
 }): Promise<SpawnResult> {
-  params.signal?.throwIfAborted();
+  const commandId = params.diagnostics ? randomUUID() : undefined;
+  const identity = {
+    commandId,
+    operationId: params.diagnostics?.operationId,
+    leaseId: params.diagnostics?.leaseId,
+    provisionStage: params.diagnostics?.stage ?? "other",
+    timeoutMs: params.timeoutMs,
+    commandKind: ["run", "warmup", "inspect", "status", "stop", "heartbeat"].includes(
+      params.args[0] ?? "",
+    )
+      ? params.args[0]
+      : "other",
+  };
+  const observe = (disposition: string, fields: Record<string, unknown> = {}) => {
+    if (!params.diagnostics) {
+      return;
+    }
+    try {
+      commandLog.info("crabbox command", {
+        ...identity,
+        disposition,
+        remoteEffects: "unknown",
+        remoteSubmission: "unknown",
+        ...fields,
+      });
+    } catch {
+      // A command observation neither releases custody nor replaces its outcome.
+    }
+  };
+  if (params.signal?.aborted) {
+    observe("not_invoked", { callerAborted: true });
+    params.signal.throwIfAborted();
+  }
+  const remoteObserver = params.diagnostics
+    ? createCrabboxWorkerStageObserver(
+        params.diagnostics.leaseId,
+        params.diagnostics.operationId,
+        (event) =>
+          observe("remote_milestone", {
+            stage: event.stage,
+            outcome: event.outcome,
+            ...(event.elapsedMs === undefined ? {} : { elapsedMs: event.elapsedMs }),
+            ...(event.totalElapsedMs === undefined ? {} : { totalElapsedMs: event.totalElapsedMs }),
+            ...(event.runtimeCache ? { runtimeCache: event.runtimeCache } : {}),
+          }),
+      )
+    : undefined;
   let result: SpawnResult;
   try {
+    observe("runner_invoked");
     result = await params.runCommand([params.binary, ...params.args], {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
@@ -67,13 +127,33 @@ export async function runCrabboxCommand(params: {
       ...(params.env === undefined ? {} : { env: params.env }),
       ...(params.input === undefined ? {} : { input: params.input }),
       ...(params.signal ? { signal: params.signal } : {}),
-      ...(params.onOutputChunk ? { onOutputChunk: params.onOutputChunk } : {}),
+      ...(params.onOutputChunk || remoteObserver
+        ? {
+            onOutputChunk: remoteObserver
+              ? (chunk: Buffer, stream: "stdout" | "stderr") => {
+                  const onOutputChunk = params.onOutputChunk;
+                  onOutputChunk?.(chunk, stream);
+                  remoteObserver(chunk, stream);
+                }
+              : params.onOutputChunk,
+          }
+        : {}),
     });
   } catch (error) {
+    observe("runner_rejected", { callerAborted: params.signal?.aborted ?? false });
     params.signal?.throwIfAborted();
     throw crabboxExecutionError(params.action, error);
   }
   // The runner owns child/tree settlement; cancellation must not release that custody early.
+  observe("runner_settled", {
+    pid: result.pid ?? null,
+    exitCode: result.code,
+    signal: result.signal,
+    termination: result.termination,
+    cleanup: result.cleanup ?? "unknown",
+    killIssuedByAbort: result.killIssuedByAbort ?? false,
+    callerAborted: params.signal?.aborted ?? false,
+  });
   params.signal?.throwIfAborted();
   return result;
 }
@@ -109,6 +189,88 @@ type CrabboxCommandResult = SpawnResult & {
   coordinatorAttempts?: number;
   coordinatorDetail?: string;
 };
+
+export class CrabboxSettledCapacityError extends Error {
+  constructor(
+    readonly receipt: {
+      leaseId: string;
+      attemptName: string;
+      attemptNonce: string;
+      providerCode: string;
+    },
+  ) {
+    super("Waiting for worker capacity");
+  }
+}
+
+/** Consume the trusted CLI frame before diagnostic redaction can truncate its identity. */
+export function readCrabboxSettledCapacity(
+  result: SpawnResult,
+  context: LeaseCommandContext,
+): CrabboxSettledCapacityError | undefined {
+  if (
+    context.provider !== "azure" ||
+    result.stdout.includes("crabbox-allocation-result") ||
+    result.termination !== "exit" ||
+    result.code === null ||
+    result.code === 0 ||
+    result.killed ||
+    result.signal ||
+    result.killIssuedByAbort ||
+    result.outputLimitExceeded ||
+    result.stdoutTruncatedBytes ||
+    result.stderrTruncatedBytes ||
+    (result.cleanup !== undefined && result.cleanup !== "normal")
+  ) {
+    return undefined;
+  }
+  const prefix = "crabbox-allocation-result ";
+  const lines = result.stderr.split("\n");
+  const frames = lines.filter((line) => line.includes("crabbox-allocation-result"));
+  if (frames.length !== 1 || !frames[0]?.startsWith(prefix) || !result.stderr.endsWith("\n")) {
+    return undefined;
+  }
+  const encoded = frames[0].slice(prefix.length);
+  let value: unknown;
+  try {
+    value = JSON.parse(encoded);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  // The CLI's flat json.Marshal frame is canonical. Round-trip equality rejects
+  // duplicate properties and trailing bytes instead of letting JSON.parse pick a winner.
+  if (JSON.stringify(value) !== encoded) {
+    return undefined;
+  }
+  const fields = value as Record<string, unknown>;
+  if (
+    Object.keys(fields).length !== 10 ||
+    fields.schema !== "crabbox.fixed-allocation-result.v1" ||
+    fields.capability !== "azure-fixed-vm-capacity-v1" ||
+    fields.provider !== context.provider ||
+    fields.leaseId !== context.id ||
+    fields.category !== "capacity_shortage" ||
+    fields.allocation !== "settled_nonallocation" ||
+    fields.companions !== "settled" ||
+    (fields.providerCode !== "AllocationFailed" &&
+      fields.providerCode !== "ZonalAllocationFailed") ||
+    typeof fields.attemptName !== "string" ||
+    !/^[a-zA-Z0-9_-]{1,128}$/u.test(fields.attemptName) ||
+    typeof fields.attemptNonce !== "string" ||
+    !/^[a-zA-Z0-9_-]{1,128}$/u.test(fields.attemptNonce)
+  ) {
+    return undefined;
+  }
+  return new CrabboxSettledCapacityError({
+    leaseId: context.id,
+    attemptName: fields.attemptName,
+    attemptNonce: fields.attemptNonce,
+    providerCode: fields.providerCode,
+  });
+}
 
 export function crabboxCommandError(action: string, result: CrabboxCommandResult): Error {
   const attempts = result.coordinatorAttempts
@@ -294,7 +456,7 @@ export async function stopCrabboxLease(params: {
     sleep: params.sleep,
     timeoutMs: CRABBOX_STOP_TIMEOUT_MS,
   });
-  if (isUnrecognizedLease(result, params.id, "stop")) {
+  if (params.provider !== "azure" && isUnrecognizedLease(result, params.id, "stop")) {
     params.warn(
       `Crabbox lease ${params.id} (provider ${params.provider}) is absent; treating stop as already released`,
     );

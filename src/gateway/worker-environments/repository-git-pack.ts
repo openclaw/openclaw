@@ -9,22 +9,15 @@ import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 const FETCH_TIMEOUT_MS = 10 * 60_000;
 
 /** The caller retains scratch-directory custody until this operation settles. */
-export async function prepareRepositoryWorkerGitPack(params: {
+async function createTemporaryRepositoryFetch(params: {
   url: string;
-  baseCommit: string;
-  token: string;
+  token?: string;
   temporaryRoot: string;
   signal: AbortSignal;
   assertCurrent: () => void;
-}): Promise<string> {
+}) {
   if (parseConfiguredProjectGitUrl(params.url)?.url !== params.url) {
     throw new Error("Repository preparation requires a canonical GitHub URL");
-  }
-  if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
-    throw new Error("Repository preparation requires an exact GitHub commit");
-  }
-  if (!params.token.trim()) {
-    throw new Error("Private repository preparation requires a current GitHub credential");
   }
   const assertCurrent = () => {
     params.signal.throwIfAborted();
@@ -51,7 +44,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
       ["-c", "http.followRedirects=false", ...args],
       {
         baseEnv,
-        ...(authenticated
+        ...(authenticated && params.token
           ? {
               env: {
                 GIT_CONFIG_COUNT: "3",
@@ -87,6 +80,28 @@ export async function prepareRepositoryWorkerGitPack(params: {
   assertCurrent();
   await fs.mkdir(repository, { mode: 0o700 });
   await command(["init", "--bare", "--quiet", "--template=", "--object-format=sha1"]);
+  return { repository, command, baseEnv };
+}
+
+export async function prepareRepositoryWorkerGitPack(params: {
+  url: string;
+  baseCommit: string;
+  token: string;
+  temporaryRoot: string;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}): Promise<string> {
+  if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
+    throw new Error("Repository preparation requires an exact GitHub commit");
+  }
+  if (!params.token.trim()) {
+    throw new Error("Private repository preparation requires a current GitHub credential");
+  }
+  const { repository, command, baseEnv } = await createTemporaryRepositoryFetch(params);
+  const assertCurrent = () => {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+  };
   // Depth bounds history, not incoming disk bytes. The existing pack owner caps
   // the emitted snapshot; the temporary fetch also has a finite command deadline.
   await command(
@@ -116,4 +131,83 @@ export async function prepareRepositoryWorkerGitPack(params: {
   });
   assertCurrent();
   return pack;
+}
+
+/** Fetch only into a caller-owned import directory; never register a Gateway project. */
+export async function prepareRepositoryRecoveryCheckout(params: {
+  url: string;
+  baseCommit: string;
+  branch: string;
+  requestedRef: string | null;
+  token?: string;
+  temporaryRoot: string;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}) {
+  if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
+    throw new Error("Recovery requires an exact pinned repository commit");
+  }
+  const { command } = await createTemporaryRepositoryFetch(params);
+  const readHead = async (branch: string) => {
+    const ref = `refs/heads/${branch.replace(/^(?:refs\/)?heads\//u, "")}`;
+    const raw = await command(["ls-remote", "--refs", "--", params.url, ref], true);
+    if (!raw) {
+      return undefined;
+    }
+    const [sha, observed, ...extra] = raw.split(/\s+/u);
+    if (!sha || !/^[a-f0-9]{40}$/u.test(sha) || observed !== ref || extra.length) {
+      throw new Error("Recovery remote branch observation is invalid");
+    }
+    return sha;
+  };
+  const sessionHead = await readHead(params.branch);
+  const selectedRef = sessionHead ? params.branch : params.requestedRef;
+  if (!selectedRef) {
+    throw new Error("Recovery cannot verify the retired branch's source ref");
+  }
+  const remoteHeadCommit = sessionHead ?? (await readHead(selectedRef));
+  if (!remoteHeadCommit) {
+    throw new Error(
+      "Recovery repository ref is missing; retain the old checkpoint and restore its source",
+    );
+  }
+  // A finite history window proves ordinary forward movement without importing all historical blobs.
+  await command(
+    [
+      "fetch",
+      "--depth=2048",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "--no-auto-maintenance",
+      "--",
+      params.url,
+      remoteHeadCommit,
+    ],
+    true,
+  );
+  await command(
+    [
+      "fetch",
+      "--depth=1",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "--no-auto-maintenance",
+      "--",
+      params.url,
+      params.baseCommit,
+    ],
+    true,
+  );
+  await command(["merge-base", "--is-ancestor", params.baseCommit, remoteHeadCommit]);
+  const root = path.join(params.temporaryRoot, "checkout");
+  await command(["worktree", "add", "--detach", "--", root, remoteHeadCommit]);
+  return {
+    root,
+    remoteHeadCommit,
+    verifyRemote: async () => {
+      if ((await readHead(selectedRef)) !== remoteHeadCommit) {
+        throw new Error("Remote branch changed during recovery; retain the checkpoint and retry");
+      }
+    },
+  };
 }

@@ -78,9 +78,23 @@ The first cloud-node preparation in a new Gateway process copies that optional i
 
 Distribution scanning, import validation, archive construction, and hashing run in a worker thread so preparation does not block the Gateway's event loop. Enrollment and prepared-pool maintenance await the same verified artifact; canceling one enrollment does not cancel preparation for other consumers.
 
+After worker-service startup, a single background job prepares the canonical node
+and worker archives for configured managed-node providers. A turn shares those
+same producers; it still waits if preparation has not finished. This creates no
+worker, reserve, enrollment credential, or session checkpoint. Plugin-generation
+changes invalidate node artifacts, and shutdown joins preparation before cleanup.
+
 The deployment image owns the retained file. Gateway shutdown removes only its temporary copy, after active consumers finish. Replace the image archive when the distribution or plugins change; removing it restores ordinary preparation. Windows Gateways continue to build their archive because the shared Windows archive reader normalizes permissions rather than preserving the tar modes needed for this comparison.
 
 This avoids repeated archive construction after restart. It does not reuse enrollment credentials, skip worker authorization, or eliminate worker installation and startup. Measure archive validation separately from end-to-end worker readiness when evaluating cold-start savings.
+
+### Prepare runtime caches without enrollment
+
+Image preparation can import `openclaw/runtime-artifacts` from the exact built installation. `qualifyWorkerRuntimePlugins({ packageRoot, config })` uses the canonical bundled discovery, manifest validation, and nonactivated registry inspection and joins inspection cleanup before returning its data projection. Pass that projection to `resolveNodeBootstrapPlugins`, then call `prepareWorkerRuntimeArtifacts({ packageRoot, runningBuildId, plugins, outputDirectory })`. The output directory must be new and outside the installed package. Both canonical artifact producers settle before the export returns or cleans up a failure. This contract supports that installation's bundled plugins; callers must not manufacture loaded or trusted plugin facts.
+
+The export records the full node archive and portable worker archive, each with its actual path, byte length, and SHA-256 digest. The public `workerBundleArchiveRelativePath(worker.tarballSha256)` helper supplies the worker archive's package-relative location. Resolve the Crabbox plugin's `cli-runtime-api.js` self-export from its qualified package root, rather than assuming a root dependency link or a build chunk name.
+
+`createCrabboxOfflineRuntimeSetup` accepts local verified archive descriptors: `nodeBootstrap` has `localPath`, `sha256`, `bytes`, `openclawVersion`, and `enabledPluginIds`; `workerBundle` has `localPath`, `sha256`, `bytes`, and `packageRelativePath`. Run its returned command through the image owner's bounded command runner. It uses the same digest cache, archive verification, npm lifecycle policy, package/version verification, and atomic publication as ordinary bootstrap, without creating a lease, session state, enrollment credentials, or a node process. Local archives avoid artifact HTTP downloads; npm still needs access to registry dependencies. Later enrollment independently requires current authority and the exact qualified digests.
 
 ### Provisioning stage telemetry
 
@@ -97,6 +111,15 @@ this event with the node invocation and worker process evidence before
 attributing a turn failure to the native child.
 
 The Gateway emits `worker provision stage` events under `gateway/worker-provision` at the start and terminal outcome of node artifact preparation, provider provisioning, bundle installation, prepared workspace registration, and ready commit. Fields are `environmentId`, `provisionOperationId`, `leaseId` when known, `sessionId` when attached, `stage`, `elapsedMs`, `outcome` (`started`, `completed`, or `failed`), and a bounded `errorCode` on failure. A prepared reserve has no session ID until a session claims it.
+
+Within `node-artifacts`, `node-bootstrap-artifact` and `worker-bundle-artifact`
+record the concurrent waits separately. Before the dispatch barrier,
+`dispatch_repository_ref_preparation_*` and `dispatch_retained_worker_recovery_*`
+separate repository-ref recovery from retained-worker cleanup. Startup archive
+preparation logs `*-artifact-preturn` duration and outcome without session or
+credential data. These timings do not imply worker readiness or a startup target.
+
+A refused node invocation emits `node invoke dispatch refused` under `gateway/nodes`, binding `nodeId`, `connId`, and `invokeId` to the active trace. Its fixed `reason` distinguishes connection refusal, a pairing mismatch, unavailable pairing authority, event-transport refusal, a socket outside OPEN, a saturated socket buffer, and a send or serialization exception. Socket refusals include numeric `socketReadyState` and `bufferedBytes`. Private worker commands retain their fixed command name; public commands are labeled `public`. Bundle installation logs the environment, connection, and invoke IDs after transport handoff. Neither handoff nor refusal proves the remote outcome: `remoteEffects` remains `unknown`, and these records omit invocation payloads and transport error text.
 
 The Crabbox plugin emits `worker_provision_stage` JSON records for allocation, lease inspection, the SSH readiness gate, setup, project preparation, warm image capture, node bootstrap, and device enrollment. These carry `operationId`, `leaseId`, `stage`, `elapsedMs`, `totalElapsedMs`, `outcome`, and a safe error class on failure. The remote bootstrap script emits `CRABBOX_WORKER_STAGE:` JSON milestones with `leaseId`, fixed `stage`, `elapsedMs`, and `outcome`; the plugin forwards only validated milestones for the matching lease. It retains `CRABBOX_PHASE:` markers for Crabbox's own timing report. Stage records are transition events, not poll logs. A start without a terminal event identifies the current wait; a successful ARM VM provision does not by itself establish SSH, node enrollment, bundle installation, or ready commit.
 

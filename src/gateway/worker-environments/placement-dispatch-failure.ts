@@ -18,6 +18,7 @@ import {
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementAuthorization,
+  WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isTerminalWorkerEnvironmentState } from "./state.js";
@@ -86,6 +87,8 @@ export type WorkerDispatchPlacementStore = Pick<
   | "startWorkspaceResultDrain"
   | "startReconcile"
   | "transition"
+  | "settleRepository"
+  | "withWorkspaceExclusion"
   | "updateWorkspaceBaseManifest"
 >;
 
@@ -107,7 +110,8 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
   | "supportsProviderExecutionMode"
->;
+> &
+  Partial<Pick<WorkerEnvironmentService, "readRecoveryHold" | "retireFailedPreactivation">>;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;
@@ -207,6 +211,7 @@ export function isCurrentActiveWorkerEnvironment(
 export function createPlacementFailureActions(deps: {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService;
+  disposeFailedPlacement?: (placement: WorkerFailedDispatchPlacement) => Promise<boolean>;
 }) {
   const { environments, placements } = deps;
 
@@ -302,12 +307,67 @@ export function createPlacementFailureActions(deps: {
     );
   };
 
+  const retireSetup = async (
+    source: WorkerFailedDispatchPlacement,
+    request: WorkerPlacementReclaimRequest,
+    authorize?: WorkerPlacementAuthorization,
+  ): Promise<Extract<WorkerDispatchPlacement, { state: "local" }> | undefined> => {
+    if (request.recoverToGateway || !environments.retireFailedPreactivation) {
+      return undefined;
+    }
+    const assertPlacementCurrent = () => {
+      authorize?.();
+      const current = placements.get(request.sessionId);
+      if (
+        !matchesWorkerPlacementTarget(current, source) ||
+        current?.sessionKey !== request.sessionKey ||
+        current.agentId !== request.agentId
+      ) {
+        throw new Error("Failed placement changed before preactivation retirement");
+      }
+    };
+    const retired = await environments.retireFailedPreactivation(
+      source,
+      (preactivationRetirement, assertEnvironmentCurrent) =>
+        placements.transition(
+          {
+            sessionId: request.sessionId,
+            from: "failed",
+            to: "local",
+            expectedGeneration: source.generation,
+            preactivationRetirement,
+          },
+          () => {
+            assertPlacementCurrent();
+            assertEnvironmentCurrent();
+          },
+        ),
+      assertPlacementCurrent,
+    );
+    if (retired && retired.state !== "local") {
+      throw new Error("Preactivation retirement did not return local custody");
+    }
+    return retired;
+  };
+
   const retryFailedTeardown = async (
     placement: WorkerFailedDispatchPlacement,
     authorize?: WorkerPlacementAuthorization,
   ): Promise<string | undefined> => {
     if (!placement.environmentId) {
       return undefined;
+    }
+    if (deps.disposeFailedPlacement) {
+      try {
+        authorize?.();
+        if (await deps.disposeFailedPlacement(placement)) {
+          return undefined;
+        }
+      } catch (error) {
+        // Checkpoint custody and uncertain provider outcomes remain retryable;
+        // neither grants a generic teardown fallback or logical continuation.
+        return boundedError(error);
+      }
     }
     const environment = environments.get(placement.environmentId);
     if (!environment || isTerminalWorkerEnvironmentState(environment.state)) {
@@ -477,6 +537,7 @@ export function createPlacementFailureActions(deps: {
     failDraining,
     reclaimActive,
     retryFailedTeardown,
+    retireSetup,
     teardownEnvironment,
   };
 }

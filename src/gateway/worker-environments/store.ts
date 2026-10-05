@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteWorkerOperationAdmission,
@@ -12,19 +13,23 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { stageRepositoryWorkspacePublication } from "../../state/session-repository-workspaces.publication.js";
+import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import {
   isPreparedReservationWithinCapacity,
   preparedCapacityFromReservations,
   selectPreparedEnvironmentReservations,
 } from "./prepared-environment-store.js";
 import type { WorkerEnvironmentSessionIdentity } from "./session-attachment.js";
+import { isWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
+import { reconcilePendingWorkerEnvironmentMutations } from "./store-native-publication.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
 import { normalizeCredentialHash, requireWorkerEnvironmentString } from "./store-validation.js";
 import type { WorkerEnvironmentWorkerOperations } from "./store-worker-contract.js";
 import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 import type {
+  WorkerRecoveryPublication,
   WorkerEnvironmentFacts,
-  WorkerEnvironmentCommitAdmission,
   WorkerEnvironmentMutationMethods,
   WorkerEnvironmentPruneCursor,
   WorkerEnvironmentPrunePage,
@@ -54,18 +59,29 @@ function isInventoryFacts(value: unknown): value is WorkerEnvironmentFacts {
   );
 }
 
-function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmission {
+function isRecoveryPublication(value: unknown): value is WorkerRecoveryPublication {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.workspace) ||
+    !isRecord(value.workspace.workspace) ||
+    !isRecord(value.placement)
+  ) {
+    return false;
+  }
+  const workspace = value.workspace.workspace;
+  const placement = value.placement;
   return (
-    Array.isArray(value) &&
-    value.every(
-      (fact) =>
-        isRecord(fact) &&
-        typeof fact.environmentId === "string" &&
-        typeof fact.environmentAuthority === "string" &&
-        typeof fact.credentialAuthority === "string" &&
-        typeof fact.transferAuthority === "string" &&
-        typeof fact.attachmentAuthority === "string",
-    )
+    typeof workspace.workspaceId === "string" &&
+    workspace.workspaceId === value.workspace.workspaceId &&
+    typeof workspace.revision === "number" &&
+    typeof workspace.agentId === "string" &&
+    typeof workspace.sessionKey === "string" &&
+    placement.state === "reclaimed" &&
+    placement.agentId === workspace.agentId &&
+    placement.sessionKey === workspace.sessionKey &&
+    typeof placement.sessionId === "string" &&
+    typeof placement.generation === "number" &&
+    placement.turnClaim === null
   );
 }
 
@@ -144,6 +160,33 @@ export async function createWorkerEnvironmentStore(
       let commitSequence: number | undefined;
       let committedIds: readonly string[] = [];
       let revocationPublished = false;
+      let recovery: WorkerRecoveryPublication | undefined;
+      let workspacePublication: ReturnType<typeof stageRepositoryWorkspacePublication> | undefined;
+      let placementPublication:
+        | ReturnType<typeof stagePlacementTurnClaimWorkerPublication>
+        | undefined;
+      let recoverySettled = false;
+      const settleRecovery = (
+        committed: boolean,
+        known: boolean,
+        received?: WorkerRecoveryPublication,
+      ) => {
+        if (recoverySettled) {
+          return;
+        }
+        if (committed && !isDeepStrictEqual(received, recovery)) {
+          throw new Error("Recovery commit postimages changed during settlement");
+        }
+        recoverySettled = true;
+        workspacePublication?.settle(committed, known);
+        if (committed) {
+          placementPublication?.commit();
+        } else if (known) {
+          placementPublication?.rollback();
+        } else {
+          placementPublication?.invalidate();
+        }
+      };
       const publishRevocation = () => {
         if (revocationId === undefined || revocationPublished) {
           return;
@@ -165,6 +208,7 @@ export async function createWorkerEnvironmentStore(
             if (commitSequence === undefined) {
               throw new Error("Worker environment mutation has no commit admission");
             }
+            settleRecovery(true, true, receipt.recovery);
             owner.install(receipt.facts, commitSequence, false);
             owner.release(token);
             publishRevocation();
@@ -183,11 +227,32 @@ export async function createWorkerEnvironmentStore(
                 }
                 check();
                 if (request.stage === "commit") {
-                  if (!isCommitAdmission(request.facts)) {
+                  const facts = isRecord(request.facts)
+                    ? request.facts.environments
+                    : request.facts;
+                  if (!isWorkerEnvironmentCommitAdmission(facts)) {
                     throw new Error("Worker inventory commit lacks affected authority facts");
                   }
-                  committedIds = request.facts.map((fact) => fact.environmentId);
-                  owner.fence(request.facts, token);
+                  committedIds = facts.map((fact) => fact.environmentId);
+                  owner.fence(facts, token);
+                  if (isRecord(request.facts)) {
+                    if (
+                      type !== "workerEnvironments.acceptRetainedRecovery" ||
+                      !isRecoveryPublication(request.facts.recovery)
+                    ) {
+                      throw new Error("Worker recovery commit lacks current postimages");
+                    }
+                    recovery = request.facts.recovery;
+                    workspacePublication = stageRepositoryWorkspacePublication(
+                      context.admission,
+                      recovery.workspace,
+                    );
+                    placementPublication = stagePlacementTurnClaimWorkerPublication(
+                      context.admission.identity,
+                      recovery.placement,
+                      { placement: recovery.placement, pendingResult: undefined },
+                    );
+                  }
                 }
                 if (!grant()) {
                   throw new Error("Worker environment mutation admission expired");
@@ -211,6 +276,11 @@ export async function createWorkerEnvironmentStore(
           isInventoryFacts(committed.facts) &&
           commitSequence !== undefined
         ) {
+          settleRecovery(
+            true,
+            true,
+            isRecoveryPublication(committed.recovery) ? committed.recovery : undefined,
+          );
           owner.install(committed.facts, commitSequence, false);
           owner.release(token);
           publishRevocation();
@@ -233,6 +303,14 @@ export async function createWorkerEnvironmentStore(
         owner.release(token);
         throw error;
       } finally {
+        if (!recoverySettled) {
+          const settlement = admission?.settlement;
+          settleRecovery(
+            false,
+            commitSequence === undefined ||
+              (settlement?.kind === "completed" && !settlement.committed),
+          );
+        }
         if (commitSequence === undefined) {
           owner.release(token);
         }
@@ -301,6 +379,25 @@ export async function createWorkerEnvironmentStore(
     }
   };
   const store = {
+    retainPreparedEnvironment({ assertCurrent, ...input }: Input<"retainPreparedEnvironment">) {
+      return mutate(
+        "workerEnvironments.retainPreparedEnvironment",
+        { input },
+        assertCurrent,
+        input.environmentId,
+      );
+    },
+    retainFailedEnvironment({ assertCurrent, ...input }: Input<"retainFailedEnvironment">) {
+      return mutate(
+        "workerEnvironments.retainFailedEnvironment",
+        { input },
+        assertCurrent,
+        input.environmentId,
+      );
+    },
+    acceptRetainedRecovery({ assertCurrent, ...input }: Input<"acceptRetainedRecovery">) {
+      return mutate("workerEnvironments.acceptRetainedRecovery", { input }, assertCurrent);
+    },
     close,
     ready,
     async hasSessionAttachment(environmentId: string): Promise<boolean> {
@@ -382,8 +479,12 @@ export async function createWorkerEnvironmentStore(
     },
     reconcileSharedHost: (input: Input<"reconcileSharedHost">) =>
       mutate("workerEnvironments.reconcileSharedHost", { input }),
-    adoptProvisionCleanupFailure: (input: Input<"adoptProvisionCleanupFailure">) =>
-      mutate("workerEnvironments.adoptProvisionCleanupFailure", { input }),
+    adoptProvisionCleanupFailure({
+      assertCurrent,
+      ...input
+    }: Input<"adoptProvisionCleanupFailure">) {
+      return mutate("workerEnvironments.adoptProvisionCleanupFailure", { input }, assertCurrent);
+    },
     requestDestroy({ assertCurrent, ...input }: Input<"requestDestroy">) {
       return mutate("workerEnvironments.requestDestroy", { input }, assertCurrent);
     },

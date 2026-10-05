@@ -247,6 +247,11 @@ export function coordinateWorkerPlacementDispatch(
         await claimWait.settled;
       }
     },
+    canRecoverFailedPlacement: service.canRecoverFailedPlacement,
+    recoverFailedPlacement: (placement, authority) =>
+      runSessionOperation(placement.sessionId, authority.signal, () =>
+        service.recoverFailedPlacement(placement, authority),
+      ),
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
     hasPendingPlacementLifecycleOperation: (sessionId) =>
       pendingOperations(sessionId).some((operation) => operation.kind !== "recovery"),
@@ -375,10 +380,21 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          (signal) =>
+          (signal, repositoryPreparation) =>
             runSessionOperation(request.sessionId, signal, () => {
               recordWorkerPlacementStage(request.sessionId, "dispatch_admitted");
-              return service.dispatch(request, report, authorize, signal);
+              return service.dispatch(
+                {
+                  ...request,
+                  trackRepositoryPreparation: repositoryPreparation?.track,
+                  assertRepositoryPreparationCurrent: repositoryPreparation?.assertCurrent,
+                  assertRepositoryCleanupCurrent: repositoryPreparation?.assertCleanupCurrent,
+                  repositoryPreparationSignal: repositoryPreparation?.signal,
+                },
+                report,
+                authorize,
+                signal,
+              );
             }),
           authorize,
           callerSignal,

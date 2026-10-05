@@ -510,6 +510,8 @@ Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.
 
 Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
 
+The additive `worker_environment_recovery_holds` table retains one failed source per session, keyed to its environment with a restrictive foreign key. Its typed receipt records provider-held resource identities, pending or confirmed custody, and reconciled checkpoint/history facts. Worker-broker transactions reserve custody before the provider call and atomically accept the repository checkpoint with the reclaimed placement. Terminal pruning excludes held sources. The table leaves the schema version unchanged; rollback requires a Crabbox binary that refuses the `azure-recovery-held-v1` claim marker. Retained disks are accounted separately from fresh prepared compute.
+
 ## Sandbox runtime reservations
 
 The existing `sandbox_registry_entries` table owns runtime identity and cleanup.

@@ -37,6 +37,7 @@ import {
   sessionTarget,
   setWorkerTurnSessionTarget,
   setupWorkerTurnLauncherTest,
+  testState,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
@@ -103,6 +104,7 @@ export function useRepositoryWorkspaceResultFixture() {
     executionMode: "worker-turn" | "remote-exec",
     runSetupScript = false,
     incognito = false,
+    deferRepositorySync = false,
   ) {
     if (incognito) {
       setWorkerTurnSessionTarget({
@@ -177,17 +179,34 @@ export function useRepositoryWorkspaceResultFixture() {
           ),
       }),
     };
-    const synced = await syncSessionRepositoryWorkspace({
-      ...sessionTarget,
-      repository,
-      tunnel,
-      generation: 1,
-      runSetupScript,
-      assertCurrent: () => {},
-    });
+    const syncRepository = () =>
+      syncSessionRepositoryWorkspace({
+        ...sessionTarget,
+        repository,
+        tunnel,
+        generation: 1,
+        runSetupScript,
+        assertCurrent: () => {},
+        repositoryOperationsBlocked: deferRepositorySync,
+      });
+    const synced = deferRepositorySync
+      ? {
+          remoteWorkspaceDir: await tunnel.prepareRepositoryWorkspace!({
+            sessionKey: sessionTarget.sessionKey,
+            repository,
+            assertCurrent: () => {},
+          }),
+          manifestRef: "sha256:" + "0".repeat(64),
+        }
+      : await syncRepository();
     const remote = synced.remoteWorkspaceDir;
     const initialCheckpointRef = (await store.get(repository.workspaceId))!.checkpointRef;
-    await seedActivePlacement(executionMode, remote, synced.manifestRef);
+    await seedActivePlacement(
+      executionMode,
+      remote,
+      synced.manifestRef,
+      deferRepositorySync ? "pending" : undefined,
+    );
     const beginTurn = async (claimId: string, markResultPending = true) => {
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
@@ -263,6 +282,7 @@ export function useRepositoryWorkspaceResultFixture() {
         .withPreparedRecovery,
     });
     return {
+      state: testState,
       remote,
       store,
       repository,
@@ -276,6 +296,7 @@ export function useRepositoryWorkspaceResultFixture() {
       resolveWorkspace,
       tunnel,
       ownerSignal,
+      syncRepository,
     };
   }
 

@@ -26,7 +26,9 @@ import {
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
+import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { prepareActiveRepository } from "./placement-repository-preparation.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.kernel.js";
 import * as checkpoints from "./session-repository-checkpoints.js";
@@ -67,6 +69,67 @@ vi.mock("./worker-github-binding.js", async (importOriginal) => ({
 
 describe("repository workspace result ownership", () => {
   const { fixture, readArtifact } = useRepositoryWorkspaceResultFixture();
+
+  it("settles a denied pre-command repository turn without losing result custody", async () => {
+    const f = await fixture("remote-exec", false, false, true);
+    const owned = await f.beginTurn("repository-denied", false);
+    const runLocal = vi.fn();
+    const denial = new Error("Repository admission denied (HTTP 403); authorize repository access");
+    f.environments.prepareProjectIntent = async () => {
+      throw denial;
+    };
+    let failurePublication: Promise<void> | undefined;
+    const sync = vi.fn();
+    await expect(
+      executeRemoteExecTurn({
+        ...owned,
+        environments: {
+          ...f.environments,
+          prepareComputer: async () => {
+            await f.tunnel.runWorkspaceCommand({
+              argv: ["git", "status"],
+              transportRetry: "never",
+            });
+            return undefined;
+          },
+        },
+        placements,
+        workspaceOperations: f.workspaceOperations,
+        workspace: { kind: "repository", repository: f.repository },
+        turn: turn("repository-denied"),
+        onHandoff: () => {
+          failurePublication = prepareActiveRepository({
+            request: {
+              ...REQUEST,
+              ...sessionTarget,
+              executionMode: "remote-exec",
+              operatorAuthority: {
+                profileId: "fixture",
+                scopes: ["operator.write"],
+                assertCurrent: () => {},
+              },
+            },
+            placement: owned.placement,
+            repository: f.repository,
+            environments: f.environments,
+            placements,
+            tunnel: f.tunnel,
+            assertCurrent: () => {},
+            assertCleanupCurrent: () => {},
+            sync,
+            releaseAuthority: () => {},
+          });
+          void failurePublication.catch(() => {});
+        },
+        runLocal,
+      }),
+    ).rejects.toThrow(/^Repository preparation failed; this operation did not run$/);
+    await expect(failurePublication).rejects.toBe(denial);
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    expect(sync).not.toHaveBeenCalled();
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+  });
 
   it.for([false, true])(
     "settles a turn admitted before background repository publication (foreign=%s)",

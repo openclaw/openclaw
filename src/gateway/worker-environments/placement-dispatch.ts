@@ -2,12 +2,13 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { assertWorkerRecoveryExecutorReleased } from "./environment-record.js";
 import { PreparedWorkspaceRegistrationMissingError } from "./node-worker-prepared-workspace-transport.js";
-import { recordWorkerPlacementStage } from "./placement-diagnostics.js";
+import { recordWorkerPlacementAwait, recordWorkerPlacementStage } from "./placement-diagnostics.js";
 import {
   createPlacementFailureActions,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import { prepareDispatchWorkerRecovery } from "./placement-dispatch-preparation.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { createWorkerPlacementDispatchStartup } from "./placement-dispatch-startup.js";
 import { PreparedEnvironmentBindingIndeterminateError } from "./placement-dispatch-store.js";
@@ -20,6 +21,10 @@ import type {
 } from "./placement-reclaim-contract.js";
 import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import {
+  canPrepareRepositoryConcurrently,
+  needsColdRepositoryRevalidation,
+} from "./placement-repository-preparation.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
@@ -45,6 +50,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     ...options,
     failure,
   });
+  const retainedRecovery = createRetainedWorkerRecovery({
+    ...options,
+    environments,
+    prepareCheckpoint: options.prepareRetainedRecoveryCheckpoint,
+    prepareDisposalCheckpoint: options.prepareFailedDisposalCheckpoint,
+  });
 
   // Background recovery observes previously requested cleanup; explicit Stop and
   // Move retain their retry contract. Pending-result recovery must inherit this too.
@@ -52,24 +63,52 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const recovery = createPlacementRecoveryActions({
     ...options,
     environments: recoveryEnvironments,
-    failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
+    failure: createPlacementFailureActions({
+      environments: recoveryEnvironments,
+      placements,
+      disposeFailedPlacement: async (placement) => {
+        if (!placement.environmentId) {
+          return false;
+        }
+        const disposed = await options.workspaceOperations.run(placement.environmentId, () =>
+          retainedRecovery.dispose(placement),
+        );
+        if (disposed) {
+          environments.schedulePreparedRefill();
+        }
+        return disposed;
+      },
+    }),
     recoverPlacementMoves: (projection, environmentId) =>
       moveService.recoverSession(projection, environmentId),
   });
 
-  const dispatch = async (
+  const dispatchOnce = async (
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
+    coldSource?: Extract<WorkerDispatchPlacement, { state: "failed" }>,
   ): Promise<WorkerActiveDispatchPlacement> => {
     const assertCurrent = () => {
       signal?.throwIfAborted();
       authorize?.();
     };
+    const selectPrepared = coldSource === undefined;
     let placement: WorkerDispatchPlacement | undefined;
+    let selectedEnvironment:
+      | Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>
+      | undefined;
     try {
       signal?.throwIfAborted();
+      await prepareDispatchWorkerRecovery(
+        options,
+        retainedRecovery,
+        request,
+        assertCurrent,
+        signal,
+      );
+      recordWorkerPlacementStage(request.sessionId, "local_barrier_started");
       placement = await options.runLocalBarrier({
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
@@ -171,6 +210,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         );
       }
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
+      const asynchronousRepository = canPrepareRepositoryConcurrently(request, workspace);
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
       recordWorkerPlacementStage(request.sessionId, "intent_prepare_started", {
@@ -181,7 +221,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             machineClass: request.machineClass,
             executionMode: request.executionMode,
             projectPath,
-            ...(workspace.kind === "repository"
+            ...(asynchronousRepository ? { imageReserve: true } : {}),
+            ...(workspace.kind === "repository" && !asynchronousRepository
               ? {
                   repository: {
                     agentId: request.agentId,
@@ -220,18 +261,37 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       selectedEnvironment = prepared?.environment;
       assertCurrent();
       let allocationIntent = preparedIntent;
-      if (
-        process.env.FACTORY_AUTH_MODE === "github" &&
-        workspace.kind === "repository" &&
-        !request.deviceId &&
-        !prepared
-      ) {
+      if (asynchronousRepository && !prepared) {
+        // An image reserve is the fast path, but an unavailable reserve must not
+        // turn a cold worker into a prepared placement. Repository admission
+        // remains owned by prepareActiveRepository after activation.
+        allocationIntent = await environments.prepareProjectIntent(request.profileId, {
+          machineClass: request.machineClass,
+          executionMode: request.executionMode,
+          inherited: request.inheritedProfile,
+          signal,
+          os: request.os,
+        });
+        assertCurrent();
+      }
+      if (needsColdRepositoryRevalidation(request, workspace, prepared, asynchronousRepository)) {
         if (!preparedIntent) {
           throw new Error("Factory cold startup requires its admitted provider intent");
         }
-        await environments.revalidatePreparedIntentRepository(request.profileId, preparedIntent);
-        assertCurrent();
-        environments.assertPreparedIntentCurrent(request.profileId, preparedIntent);
+        await recordWorkerPlacementAwait(
+          request.sessionId,
+          "cold_repository_revalidation",
+          async () => {
+            await environments.revalidatePreparedIntentRepository(
+              request.profileId,
+              preparedIntent,
+            );
+            assertCurrent();
+            environments.assertPreparedIntentCurrent(request.profileId, preparedIntent);
+          },
+          { generation: placement.generation },
+          "dispatch",
+        );
         // The node owns Factory checkout; cold allocation must not seed a Gateway repository pack.
         allocationIntent = await environments.prepareProjectIntent(request.profileId, {
           machineClass: request.machineClass,
@@ -275,6 +335,17 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             os: request.os,
             runSetupScript: request.runSetupScript,
             admittedIntent: allocationIntent,
+            assertCurrent: () => {
+              assertCurrent();
+              const current = placements.get(request.sessionId);
+              if (
+                !placement ||
+                !matchesWorkerPlacementTarget(current, placement) ||
+                current?.turnClaim
+              ) {
+                throw new Error("Worker provider lost its exact dispatch owner");
+              }
+            },
             inheritedProfile: request.inheritedProfile,
           });
       recordWorkerPlacementStage(request.sessionId, "environment_ready", {
@@ -289,10 +360,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         environment,
         expectedEnvironmentId,
         workspace,
-        intent: preparedIntent,
+        intent: prepared ? preparedIntent : allocationIntent,
         onTransition,
         authorize: assertCurrent,
         signal,
+        asynchronousRepository,
         ...(prepared ? { admittedNode: prepared.admittedNode } : {}),
       });
     } catch (error) {
@@ -471,6 +543,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             if (failedPlacement?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
             }
+            const retired = await failure.retireSetup(failedPlacement, request, reauthorize);
+            if (retired) {
+              reportPlacementTransition(onTransition, retired);
+              return retired;
+            }
             const cleanupError = await failure.retryFailedTeardown(failedPlacement, reauthorize);
             const failed = placements.get(request.sessionId);
             if (failed?.state !== "failed") {
@@ -612,6 +689,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   });
 
   return {
+    canRecoverFailedPlacement: retainedRecovery.canRecover,
+    recoverFailedPlacement: retainedRecovery.recover,
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
     getEnvironmentAttachedSessionIds: (environmentId: string): readonly string[] =>

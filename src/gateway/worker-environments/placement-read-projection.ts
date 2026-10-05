@@ -14,6 +14,7 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import type { WorkerEnvironmentCustodyHold } from "./environment-record.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
 import {
   workerPlacementMoveFromRow,
@@ -114,6 +115,7 @@ function readProjectionRows(
       "transition_generation",
       "active_owner_epoch",
       "workspace_base_manifest_ref",
+      "repository_preparation",
       "remote_workspace_dir",
       "worker_bundle_hash",
       "last_transcript_ack_cursor",
@@ -229,7 +231,13 @@ function readProjectionRows(
         .where("session_id", "in", ids)
         .where("environment_id", "is not", null),
     )
-    .$assertType<Selectable<StateDatabase["worker_environments"]>>();
+    .select((eb) =>
+      eb
+        .selectFrom("worker_environment_recovery_holds")
+        .select("hold_json")
+        .whereRef("environment_id", "=", "worker_environments.environment_id")
+        .as("recovery_hold_json"),
+    );
   // Each recovery table contributes independently, including local and terminal placements.
   // The native sync executor returns JSON text without Kysely's result plugins.
   return executeSqliteQuerySync(
@@ -318,9 +326,9 @@ export function readWorkerSessionPlacementProjectionInDatabase(
         moves.set(move.sessionId, move);
       }
       // SAFETY: jsonArrayFrom serializes the $assertType-checked environment selection; decodeWorkerEnvironmentRow validates it.
-      for (const row of JSON.parse(rows.environments, reviveProjectionInteger) as Selectable<
+      for (const row of JSON.parse(rows.environments, reviveProjectionInteger) as (Selectable<
         StateDatabase["worker_environments"]
-      >[]) {
+      > & { recovery_hold_json: string | null })[]) {
         const record = decodeWorkerEnvironmentRow(row, []);
         environments.set(record.environmentId, {
           environmentId: record.environmentId,
@@ -332,7 +340,11 @@ export function readWorkerSessionPlacementProjectionInDatabase(
           leaseId: record.leaseId,
           ownerEpoch: record.ownerEpoch,
           nodeDeviceId: record.nodeDeviceId,
+          sharedHost: record.sharedHost,
           attachedSessionIds: record.attachedSessionIds,
+          recoveryHold: row.recovery_hold_json
+            ? (JSON.parse(row.recovery_hold_json) as WorkerEnvironmentCustodyHold)
+            : undefined,
         });
       }
     }

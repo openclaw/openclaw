@@ -3,15 +3,22 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { findSessionRepositoryWorkspaces } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { resolveProjectProfileDestination } from "./placement-destination.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import {
+  isUnallocatedWorkerPlacementFailure,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 
 type RedispatchableWorkerPlacement = Extract<
@@ -46,7 +53,7 @@ export function createWorkerPlacementRedispatch(params: {
   return async (
     placement: RedispatchableWorkerPlacement,
     {
-      assertCurrent,
+      assertCurrent: assertCallerCurrent,
       signal,
       operatorAuthority,
     }: {
@@ -55,10 +62,19 @@ export function createWorkerPlacementRedispatch(params: {
       operatorAuthority?: AdmittedRunOperatorAuthority;
     },
   ) => {
+    if (operatorAuthority) {
+      assertAdmittedRunOperatorAuthority(operatorAuthority);
+    }
+    const assertCurrent = () => {
+      assertCallerCurrent();
+      operatorAuthority?.assertCurrent();
+    };
     let retainedPlacement:
       | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
       | undefined;
     let settled = false;
+    let assertDestinationCurrent = () => {};
+    let freshRepositoryTarget: ReturnType<typeof repositoryDispatchTarget> | undefined;
     try {
       signal?.throwIfAborted();
       assertCurrent();
@@ -87,37 +103,103 @@ export function createWorkerPlacementRedispatch(params: {
       const previousEnvironment = placement.environmentId
         ? projection.environments.get(placement.environmentId)
         : undefined;
-      if (!previousEnvironment) {
+      const unallocatedFailure = isUnallocatedWorkerPlacementFailure(current);
+      if (!previousEnvironment && !unallocatedFailure) {
         throw new Error(
           `Worker placement has no environment record: ${placement.environmentId}. Choose where the session should continue.`,
         );
       }
       if (
         placement.state === "failed" &&
+        !unallocatedFailure &&
         !canRedispatchFailedWorkerPlacement(placement, previousEnvironment)
       ) {
         throw new Error(`Worker recovery is not ready: ${placement.recoveryError}`);
       }
-      const { profileId, providerId, profileSnapshot, nodeDeviceId } = previousEnvironment;
+      let profileId = previousEnvironment?.profileId;
+      const nodeDeviceId = previousEnvironment?.nodeDeviceId;
       const { sessionId, sessionKey, agentId, executionMode } = placement;
       const identity = { sessionId, sessionKey, agentId, executionMode };
+      const resolveRepositoryWorkspace =
+        params.resolveRepositoryWorkspace ??
+        (async (target) =>
+          (
+            await findSessionRepositoryWorkspaces([target], {
+              path: resolveOpenClawStateSqlitePath(),
+            })
+          )[0]);
+      if (unallocatedFailure) {
+        if (process.env.FACTORY_AUTH_MODE !== "github") {
+          throw new Error(
+            "Unallocated worker recovery requires original repository dispatch authority",
+          );
+        }
+        assertAdmittedRunOperatorAuthority(operatorAuthority);
+        operatorAuthority.assertCurrent();
+        const workspace = await resolveRepositoryWorkspace(identity);
+        signal?.throwIfAborted();
+        assertCurrent();
+        operatorAuthority.assertCurrent();
+        retainedPlacement?.assertCurrent();
+        if (
+          !workspace?.checkpointRef ||
+          !workspace.baseCommit ||
+          !workspace.baseManifestHash ||
+          !workspace.manifestHash
+        ) {
+          throw new Error(
+            "Unallocated worker recovery requires the accepted session repository checkpoint",
+          );
+        }
+        freshRepositoryTarget = repositoryDispatchTarget(workspace);
+        const config = getRuntimeConfig();
+        const destination = await resolveProjectProfileDestination({
+          cfg: config,
+          workspace: { kind: "repository", repository: workspace },
+        });
+        signal?.throwIfAborted();
+        assertCurrent();
+        operatorAuthority.assertCurrent();
+        retainedPlacement?.assertCurrent();
+        const projectKey = normalizeCloudRepo(workspace.url);
+        if (!destination || !projectKey) {
+          throw new Error(
+            "Unallocated worker recovery has no configured repository worker profile",
+          );
+        }
+        profileId = destination.profileId;
+        const selectedProfileId = destination.profileId;
+        const selectedProfile = structuredClone(config.cloudWorkers?.profiles?.[selectedProfileId]);
+        assertDestinationCurrent = () => {
+          const currentConfig = getRuntimeConfig();
+          if (
+            currentConfig.cloudWorkers?.projectProfiles?.[projectKey] !== selectedProfileId ||
+            !isDeepStrictEqual(
+              currentConfig.cloudWorkers?.profiles?.[selectedProfileId],
+              selectedProfile,
+            )
+          ) {
+            throw new Error("Unallocated worker recovery repository profile changed");
+          }
+        };
+        assertDestinationCurrent();
+      }
       let readNativeCredential:
-        | ((env: NodeJS.ProcessEnv) => Promise<string | undefined>)
+        | import("../../agents/github-credential-reader.js").GitHubCredentialReader
         | undefined;
       let dispatchTarget: WorkerSessionPlacementRecord = placement;
       if (process.env.FACTORY_AUTH_MODE === "github") {
-        const resolveRepositoryWorkspace =
-          params.resolveRepositoryWorkspace ??
-          (async (target) =>
-            (
-              await findSessionRepositoryWorkspaces([target], {
-                path: resolveOpenClawStateSqlitePath(),
-              })
-            )[0]);
         const workspace = await resolveRepositoryWorkspace(identity);
         signal?.throwIfAborted();
         assertCurrent();
         retainedPlacement?.assertCurrent();
+        if (
+          freshRepositoryTarget &&
+          (!workspace ||
+            !isDeepStrictEqual(repositoryDispatchTarget(workspace), freshRepositoryTarget))
+        ) {
+          throw new Error("Unallocated worker recovery repository changed during preparation");
+        }
         if (workspace) {
           if (!operatorAuthority?.createFactoryGitHubDispatchCredentialReader) {
             throw new Error(
@@ -128,6 +210,7 @@ export function createWorkerPlacementRedispatch(params: {
           const assertSourceCurrent = () => {
             signal?.throwIfAborted();
             assertCurrent();
+            assertDestinationCurrent();
             operatorAuthority.assertCurrent();
             if (settled) {
               throw new Error("Factory repository redispatch has already settled");
@@ -196,9 +279,9 @@ export function createWorkerPlacementRedispatch(params: {
           if (!reader) {
             throw new Error("Factory repository redispatch credential authority is unavailable");
           }
-          readNativeCredential = async (env) => {
+          readNativeCredential = async (env, admission) => {
             await assertWorkspaceCurrent();
-            const token = await reader(env);
+            const token = await reader(env, admission);
             await assertWorkspaceCurrent();
             return token;
           };
@@ -216,10 +299,19 @@ export function createWorkerPlacementRedispatch(params: {
       signal?.throwIfAborted();
       assertCurrent();
       retainedPlacement?.assertCurrent();
+      assertDestinationCurrent();
+      if (!profileId) {
+        throw new Error("Worker recovery has no authoritative worker profile");
+      }
       return await params.dispatch(
         {
           ...identity,
-          ...(operatorAuthority ? { operatorAuthority } : {}),
+          ...(operatorAuthority
+            ? {
+                operatorAuthority,
+                runSetupScript: operatorAuthority.scopes.includes(ADMIN_SCOPE),
+              }
+            : {}),
           ...(readNativeCredential ? { readNativeCredential } : {}),
           profileId,
           expectedPlacement: {
@@ -229,10 +321,17 @@ export function createWorkerPlacementRedispatch(params: {
             activeOwnerEpoch: placement.activeOwnerEpoch,
           },
           ...(devicePlacement ? { devicePlacement } : {}),
-          ...(providerId === DEVICE_WORKER_PROVIDER_ID && nodeDeviceId
+          ...(previousEnvironment?.providerId === DEVICE_WORKER_PROVIDER_ID && nodeDeviceId
             ? { deviceId: nodeDeviceId }
             : {}),
-          inheritedProfile: { providerId, profileSnapshot },
+          ...(previousEnvironment
+            ? {
+                inheritedProfile: {
+                  providerId: previousEnvironment.providerId,
+                  profileSnapshot: previousEnvironment.profileSnapshot,
+                },
+              }
+            : {}),
         },
         readNativeCredential
           ? (observed) => {
@@ -249,7 +348,14 @@ export function createWorkerPlacementRedispatch(params: {
               dispatchTarget = observed;
             }
           : undefined,
-        assertCurrent,
+        unallocatedFailure
+          ? () => {
+              signal?.throwIfAborted();
+              assertCurrent();
+              operatorAuthority?.assertCurrent();
+              assertDestinationCurrent();
+            }
+          : assertCurrent,
         signal,
       );
     } finally {

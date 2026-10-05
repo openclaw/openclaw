@@ -9,10 +9,15 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
+  startSessionWorkAdmissionInterruption,
+} from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
@@ -30,6 +35,17 @@ import { workerWorkspaceResultStaging } from "./worker-environments/workspace-re
 const lookup = vi.hoisted(() => ({
   value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
 }));
+const diagnostics = vi.hoisted(() => ({ info: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...original,
+    createSubsystemLogger: (name: string) => {
+      const logger = original.createSubsystemLogger(name);
+      return name === "gateway/worker-placement" ? { ...logger, info: diagnostics.info } : logger;
+    },
+  };
+});
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: () => lookup.value,
@@ -39,12 +55,137 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   getRuntimeConfig: () => ({}),
 }));
 const roots: string[] = [];
+const telemetryDirs = useStateDatabaseTempDirs();
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   lookup.value = undefined;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
+
+it("reports the first session lifecycle interruption after foreground dispatch while retaining background custody", async () => {
+  const root = telemetryDirs.make("dispatch-background-interruption-");
+  const entry = { sessionId: REQUEST.sessionId, lifecycleRevision: "original", updatedAt: 1 };
+  const target = {
+    storePath: path.join(root, "sessions.sqlite"),
+    canonicalKey: REQUEST.sessionKey,
+    storeKeys: [REQUEST.sessionKey],
+    agentId: REQUEST.agentId,
+    store: { [REQUEST.sessionKey]: entry },
+  };
+  const runtime = {
+    managedWorktrees: { findLiveByOwner: () => undefined },
+    resolveGatewaySessionStoreTargetWithStore: () => target,
+    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+  };
+  const background = createDeferred();
+  let owner: Parameters<Parameters<ReturnType<typeof createGatewayWorkerDispatchAdmission>>[1]>[1];
+  diagnostics.info.mockClear();
+  await createGatewayWorkerDispatchAdmission(async () => runtime)(
+    REQUEST,
+    async (_signal, preparation) => {
+      owner = preparation;
+      preparation!.track(background.promise);
+      return undefined;
+    },
+  );
+  expect(owner!.signal.aborted).toBe(false);
+  const reason = Object.assign(new Error("synthetic-private-stop-reason"), { code: "ABORT_ERR" });
+  const interruption = startSessionWorkAdmissionInterruption({
+    scope: target.storePath,
+    identities: [REQUEST.sessionKey],
+    reason,
+  });
+  startSessionWorkAdmissionInterruption({
+    scope: target.storePath,
+    identities: [REQUEST.sessionKey],
+    reason,
+  });
+  expect(owner!.signal.aborted).toBe(true);
+  expect(owner!.signal.reason).toBe(reason);
+  expect(() => owner!.assertCurrent()).toThrow(reason);
+  const events = diagnostics.info.mock.calls.filter(
+    ([message, facts]) =>
+      message === "worker placement stage" && facts.stage === "repository_preparation_interrupted",
+  );
+  expect(events).toHaveLength(1);
+  expect(events[0]![1]).toMatchObject({
+    sessionId: REQUEST.sessionId,
+    cancellationOwner: "session_lifecycle",
+    preparationPhase: "background",
+    innerDiagnosticCode: "ABORT_ERR",
+  });
+  expect(JSON.stringify(events)).not.toContain("synthetic-private-stop-reason");
+  background.resolve();
+  await interruption.released;
+});
+
+it.each(["completed", "failed"] as const)(
+  "reports the stalled reclaim phase and its %s outcome without changing custody",
+  async (outcome) => {
+    const root = telemetryDirs.make("worker-reclaim-telemetry-");
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const failure = new Error("Synthetic private reclaim failure must not enter stage metadata");
+    const harness = createHarness(database, placementStore, {
+      workspacePath: root,
+      afterReconcile: async () => {
+        entered.resolve();
+        await resume.promise;
+        if (outcome === "failed") {
+          throw failure;
+        }
+      },
+    });
+    await harness.service.dispatch(REQUEST);
+    diagnostics.info.mockClear();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+    const pending = harness.service.reclaim(REQUEST).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    const stages = () =>
+      diagnostics.info.mock.calls
+        .filter(([message]) => message === "worker placement stage")
+        .map(([, facts]) => facts);
+    try {
+      await entered.promise;
+      expect(stages().at(-1)).toMatchObject({
+        sessionId: REQUEST.sessionId,
+        stage: "reclaim_snapshot_reconcile_started",
+        environmentId: harness.ready.environmentId,
+        ownerEpoch: 2,
+      });
+      expect(stages().some((facts) => facts.stage === "reclaim_snapshot_reconcile_completed")).toBe(
+        false,
+      );
+      clock.mockReturnValue(350);
+      resume.resolve();
+      if (outcome === "failed") {
+        expect(await pending).toEqual({ error: failure });
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
+      } else {
+        expect(await pending).toMatchObject({ result: { state: "reclaimed" } });
+        expect(harness.environments.destroy).toHaveBeenCalledOnce();
+      }
+      expect(stages()).toContainEqual(
+        expect.objectContaining({
+          stage: `reclaim_snapshot_reconcile_${outcome}`,
+          elapsedMs: 250,
+          ...(outcome === "failed" ? { diagnosticCode: "operation_failed" } : {}),
+        }),
+      );
+      expect(JSON.stringify(stages())).not.toContain(failure.message);
+    } finally {
+      resume.resolve();
+      await pending;
+      clock.mockRestore();
+    }
+  },
+);
 
 async function scenario(
   name: string,
@@ -579,6 +720,67 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
   expect(cancel).not.toHaveBeenCalled();
 });
 
+it("retained recovery preserves the incoming admission without Stop cancellation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "retained-recovery-admission-"));
+  roots.push(root);
+  const storePath = path.join(root, "sessions.sqlite");
+  const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
+  const target = {
+    storePath,
+    canonicalKey: REQUEST.sessionKey,
+    storeKeys: [REQUEST.sessionKey],
+    agentId: REQUEST.agentId,
+    store: { [REQUEST.sessionKey]: entry },
+  };
+  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  const placements = createWorkerSessionPlacementStore({ database });
+  await placements.startDispatch(REQUEST);
+  await placements.fail({ sessionId: REQUEST.sessionId, recoveryError: "lost worker" });
+  const cancel = vi.fn();
+  const interrupted = vi.fn();
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [REQUEST.sessionKey, REQUEST.sessionId],
+    assertAllowed: () => {},
+    onInterrupt: interrupted,
+  });
+  const barriers = createGatewayWorkerPlacementReclaimBarriers({
+    placements,
+    loadSessionRuntime: async () => ({
+      managedWorktrees: { findLiveByOwner: () => undefined },
+      resolveGatewaySessionStoreTargetWithStore: () => target,
+      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+    }),
+    cancelSessionWork: cancel,
+    revokeSessionAuthority: vi.fn(),
+  });
+  try {
+    await admission.run(async () =>
+      barriers.runFailedReclaimBarrier({
+        ...REQUEST,
+        preserveCurrentAdmission: true,
+        reclaim: async () => {
+          expect(interrupted).not.toHaveBeenCalled();
+          const placement = await placements.transition({
+            sessionId: REQUEST.sessionId,
+            from: "failed",
+            to: "local",
+            expectedGeneration: placements.get(REQUEST.sessionId)!.generation,
+          });
+          if (placement.state !== "local") {
+            throw new Error("Expected retained recovery to restore local placement");
+          }
+          return placement;
+        },
+      }),
+    );
+    expect(cancel).not.toHaveBeenCalled();
+    expect(interrupted).not.toHaveBeenCalled();
+  } finally {
+    admission.release();
+  }
+});
+
 it("Stop preserves RPC cancellation and buffered output while Move waits behind same-session recovery", async () => {
   const r = await scenario("queued-move-partial", { blockedInspection: true, pendingMove: true });
   expect(r.cancellationLoadEntered).toBe(true);
@@ -608,6 +810,7 @@ it("Stop preserves RPC cancellation and buffered output while Move waits behind 
 it.each(["missing", "local"] as const)(
   "Stop records RPC cancellation for local chat before unrelated inspection completes (%s placement)",
   async (state) => {
+    diagnostics.info.mockClear();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-local-"));
     roots.push(root);
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -690,6 +893,7 @@ it.each(["missing", "local"] as const)(
     });
     const sweep = coordinated.reconcileActive();
     await entered.promise;
+    const clock = vi.spyOn(performance, "now").mockReturnValue(100);
     let dispatchSettled = false;
     const dispatch = coordinated
       .dispatch(REQUEST)
@@ -709,6 +913,20 @@ it.each(["missing", "local"] as const)(
       );
       expect(cancel).toHaveBeenCalledOnce();
       expect(controller.controller.signal.aborted).toBe(false);
+      const stages = diagnostics.info.mock.calls
+        .filter(
+          ([message, facts]) =>
+            message === "worker placement stage" && facts.stage.startsWith("reclaim_"),
+        )
+        .map(([, facts]) => facts);
+      expect(stages.at(-1)).toMatchObject({
+        sessionId: REQUEST.sessionId,
+        stage: "reclaim_cancel_session_work_started",
+      });
+      expect(stages.some((facts) => facts.stage === "reclaim_cancel_session_work_completed")).toBe(
+        false,
+      );
+      clock.mockReturnValue(350);
       cancellationLoad.resolve();
       await aborted.promise;
       expect(controller.abortStopReason).toBe("rpc");
@@ -716,10 +934,19 @@ it.each(["missing", "local"] as const)(
       await stopping;
       expect(dispatchSettled).toBe(true);
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+      expect(diagnostics.info.mock.calls).toContainEqual([
+        "worker placement stage",
+        expect.objectContaining({
+          sessionId: REQUEST.sessionId,
+          stage: "reclaim_cancel_session_work_completed",
+          elapsedMs: 250,
+        }),
+      ]);
     } finally {
       cancellationLoad.resolve();
       release.resolve();
       await Promise.all([sweep, dispatch, stopping]);
+      clock.mockRestore();
       admitted.value.cleanupAdmittedRun();
       clearAgentRunContext(runId, admitted.value.lifecycleGeneration);
     }

@@ -1,14 +1,40 @@
 import type { WorkerExecutionMode } from "../../plugins/capability-provider.types.js";
 import { isBundledManifestOwner } from "../../plugins/manifest-owner-policy.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 
-/** Selects node runtime packages from the Gateway's already validated plugin generation. */
-export function resolveNodeBootstrapPlugins(params: {
-  registry: Pick<PluginRegistry, "plugins" | "agentHarnesses" | "nodeHostCommands">;
-  metadata: Pick<PluginMetadataSnapshot, "byPluginId">;
+/** Data projection of a validated generation, with no executable plugin callbacks. */
+export type NodeBootstrapPluginSelection = {
+  registry: {
+    plugins: readonly Pick<
+      PluginRegistry["plugins"][number],
+      "id" | "enabled" | "status" | "rootDir" | "packageName" | "packageVersion"
+    >[];
+    agentHarnesses: readonly {
+      pluginId: string;
+      harness: Pick<PluginRegistry["agentHarnesses"][number]["harness"], "cloudPlacement">;
+    }[];
+    nodeHostCommands: readonly {
+      pluginId: string;
+      command: Pick<PluginRegistry["nodeHostCommands"][number]["command"], "command">;
+    }[];
+  };
+  metadata: {
+    byPluginId: ReadonlyMap<
+      string,
+      Pick<
+        PluginManifestRecord,
+        "origin" | "trustedOfficialInstall" | "rootDir" | "packageName" | "packageVersion"
+      >
+    >;
+  };
   executionMode?: WorkerExecutionMode;
-}): Array<{ id: string; root: string }> {
+};
+
+/** Selects node runtime packages from the Gateway's already validated plugin generation. */
+export function resolveNodeBootstrapPlugins(
+  params: NodeBootstrapPluginSelection,
+): Array<{ id: string; root: string }> {
   if (params.executionMode !== "remote-exec") {
     return [];
   }

@@ -1,11 +1,15 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
 import {
   nextGeneration,
   normalizeEpoch,
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
   required,
+  isCurrentPlacementTurnClaim,
+  type WorkerSessionTurnClaim,
   type WorkerSessionPlacementTransitionPatch,
 } from "./placement-record.js";
 import { getRequired, query, transitionValues, updateTransition } from "./placement-row-codec.js";
@@ -18,19 +22,110 @@ import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
 } from "./placement-state.js";
+import {
+  isNeverActivatedWorkerPlacement,
+  isFencedPreactivationEnvironment,
+  type WorkerPreactivationRetirement,
+} from "./placement-target.js";
 import type { PlacementTurnClaimReceipt } from "./placement-turn-claims.types.js";
-import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
+import {
+  createPlacementWorkspaceResultOps,
+  hasCurrentWorkspaceResultClaim,
+  hasWorkerWorkspacePendingResult,
+} from "./placement-workspace-result.js";
+import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
   const { now, write } = runtime;
   return {
+    completeUnreadyRepositoryTurn(input: {
+      claim: WorkerSessionTurnClaim;
+    }): PlacementTurnClaimReceipt {
+      return write((db) => {
+        const current = getRequired(db, input.claim.sessionId);
+        if (
+          !isCurrentPlacementTurnClaim(current, input.claim) ||
+          !hasCurrentWorkspaceResultClaim(db, input.claim)
+        ) {
+          throw new Error("Unready repository terminal lost its turn owner");
+        }
+        if (current.workspaceBaseManifestRef !== null || !current.repositoryPreparation) {
+          return { placement: current };
+        }
+        if (current.executionMode !== "remote-exec" || input.claim.owner.kind !== "local") {
+          throw new Error("Unready repository terminal requires the hosted native execution owner");
+        }
+        assertNoRunningWorkerSessionToolOperations(db, {
+          sessionId: current.sessionId,
+          claimId: input.claim.claimId,
+        });
+        createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim);
+        return { placement: getRequired(db, current.sessionId) };
+      });
+    },
+    settleRepository(input: {
+      sessionId: string;
+      sessionKey: string;
+      agentId: string;
+      environmentId: string;
+      ownerEpoch: number;
+      expectedGeneration: number;
+      status: "ready" | "failed";
+      manifestRef?: string;
+    }): PlacementTurnClaimReceipt {
+      return write((db) => {
+        const current = getRequired(db, input.sessionId);
+        if (
+          current.state !== "active" ||
+          current.generation !== input.expectedGeneration ||
+          current.sessionKey !== input.sessionKey ||
+          current.agentId !== input.agentId ||
+          current.environmentId !== input.environmentId ||
+          current.activeOwnerEpoch !== input.ownerEpoch ||
+          (input.status === "ready"
+            ? current.repositoryPreparation !== "pending" ||
+              current.workspaceBaseManifestRef !== null
+            : current.repositoryPreparation !== "pending" &&
+              current.repositoryPreparation !== "ready" &&
+              current.repositoryPreparation !== "failed")
+        ) {
+          throw new Error("Repository preparation lost its exact active placement");
+        }
+        if (input.status === "ready" && !/^sha256:[a-f0-9]{64}$/u.test(input.manifestRef ?? "")) {
+          throw new Error("Repository preparation has no verified manifest");
+        }
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_session_placements")
+            .set({
+              repository_preparation: input.status,
+              workspace_base_manifest_ref:
+                input.status === "ready" ? input.manifestRef! : current.workspaceBaseManifestRef,
+              updated_at_ms: now(),
+            })
+            .where("session_id", "=", input.sessionId)
+            .where("state", "=", "active")
+            .where("transition_generation", "=", input.expectedGeneration)
+            .where("repository_preparation", "=", current.repositoryPreparation!)
+            .where("environment_id", "=", input.environmentId)
+            .where("active_owner_epoch", "=", input.ownerEpoch),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error("Repository preparation publication owner changed");
+        }
+        return { placement: getRequired(db, input.sessionId) };
+      });
+    },
     transition(input: {
       sessionId: string;
       from: WorkerSessionPlacementState;
       to: WorkerSessionPlacementState;
       expectedGeneration: number;
       patch?: WorkerSessionPlacementTransitionPatch;
+      preactivationRetirement?: WorkerPreactivationRetirement;
     }): PlacementTurnClaimReceipt {
       if (!canTransitionWorkerSessionPlacement(input.from, input.to)) {
         throw new Error(
@@ -53,6 +148,40 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
         }
         if (current.turnClaim) {
           throw new Error(`Cannot transition session ${sessionId} during an active turn`);
+        }
+        if (input.preactivationRetirement) {
+          const receipt = input.preactivationRetirement;
+          const facts = readWorkerEnvironmentFacts(db, [receipt.environmentId]);
+          const environment = facts.environments[0];
+          const journal = executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<Pick<DB, "worker_workspace_reconciliations">>(db)
+              .selectFrom("worker_workspace_reconciliations")
+              .select("session_id")
+              .where("session_id", "=", sessionId),
+          ).rows[0];
+          assertSessionWorkspaceUnreserved(db, sessionId);
+          if (
+            input.from !== "failed" ||
+            input.to !== "local" ||
+            !isNeverActivatedWorkerPlacement(current) ||
+            current.sessionId !== receipt.sessionId ||
+            current.sessionKey !== receipt.sessionKey ||
+            current.agentId !== receipt.agentId ||
+            current.environmentId !== receipt.environmentId ||
+            !environment ||
+            !isFencedPreactivationEnvironment(environment) ||
+            environment.ownerEpoch !== receipt.ownerEpoch ||
+            environment.provisionOperationId !== receipt.provisionOperationId ||
+            environment.nodeSetupId !== receipt.nodeSetupId ||
+            facts.credentials.length > 0 ||
+            facts.attachments.length > 0 ||
+            journal ||
+            hasWorkerWorkspacePendingResult(db, sessionId) ||
+            readWorkerPlacementMovesReadOnly(db, [sessionId]).has(sessionId)
+          ) {
+            throw new Error("Failed preactivation retirement lost its exact fenced owner");
+          }
         }
         let environmentActivation: PlacementTurnClaimReceipt["environmentActivation"];
         const placement = updateTransition(

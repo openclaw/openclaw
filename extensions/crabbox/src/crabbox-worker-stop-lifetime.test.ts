@@ -30,31 +30,34 @@ const HELD_STOP = `
 `;
 
 describe("Crabbox stop lifetime", () => {
-  it("explicitly recovers an Azure fixed lease after local create-intent loss", async () => {
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(
-        commandResult({
-          code: 4,
-          stderr: "Azure fixed lease cannot be adopted without its create intent",
-        }),
-      )
-      .mockResolvedValueOnce(commandResult());
+  it.each(["", `${LEASE_ID}: `])(
+    "explicitly recovers an Azure fixed lease after local create-intent loss (prefix: %j)",
+    async (prefix) => {
+      const runCommand = vi
+        .fn()
+        .mockResolvedValueOnce(
+          commandResult({
+            code: 4,
+            stderr: `${prefix}Azure fixed lease cannot be adopted without its create intent`,
+          }),
+        )
+        .mockResolvedValueOnce(commandResult());
 
-    await expect(
-      stopCrabboxLease({
-        binary: "crabbox",
-        id: LEASE_ID,
-        provider: "azure",
-        runCommand,
-        warn: vi.fn(),
-      }),
-    ).resolves.toBeUndefined();
-    expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([
-      ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID],
-      ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID, "--force"],
-    ]);
-  });
+      await expect(
+        stopCrabboxLease({
+          binary: "crabbox",
+          id: LEASE_ID,
+          provider: "azure",
+          runCommand,
+          warn: vi.fn(),
+        }),
+      ).resolves.toBeUndefined();
+      expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([
+        ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID],
+        ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID, "--force"],
+      ]);
+    },
+  );
 
   it.each([60_000, CRABBOX_STOP_TIMEOUT_MS])(
     "keeps Azure recovery within the original stop deadline after %i ms",

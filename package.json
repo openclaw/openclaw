@@ -462,6 +462,10 @@
   "type": "module",
   "main": "dist/index.js",
   "exports": {
+    "./runtime-artifacts": {
+      "types": "./dist/runtime-artifacts.d.ts",
+      "default": "./dist/runtime-artifacts.js"
+    },
     ".": "./dist/index.js",
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",

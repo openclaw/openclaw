@@ -22,8 +22,9 @@ export function canPrepareRepositoryConcurrently(
     workspace.kind === "repository" &&
     request.executionMode === "remote-exec" &&
     !request.deviceId &&
-    request.devicePlacement?.requiredNodeCommands.some((command) =>
-      command.startsWith("codex.app-server."),
+    request.devicePlacement?.requiredNodeCommands.some(
+      (command) =>
+        command.startsWith("codex.app-server.") || command === "codex.exec-server.stdio.v1",
     ) === true &&
     Boolean(request.operatorAuthority?.retain && request.trackRepositoryPreparation)
   );
@@ -69,6 +70,12 @@ export async function prepareActiveRepository(params: {
     ownerEpoch: placement.activeOwnerEpoch,
     expectedGeneration: placement.generation,
   };
+  let preparationPhase:
+    | "intent"
+    | "source_validation"
+    | "workspace_sync"
+    | "post_sync_validation"
+    | "ready_publication" = "intent";
   try {
     assertCurrent();
     const intent = await params.environments.prepareProjectIntent(request.profileId, {
@@ -93,6 +100,7 @@ export async function prepareActiveRepository(params: {
         }),
     });
     assertCurrent();
+    preparationPhase = "source_validation";
     params.environments.assertPreparedIntentCurrent(request.profileId, intent);
     await params.environments.revalidatePreparedIntentRepository(
       request.profileId,
@@ -109,17 +117,20 @@ export async function prepareActiveRepository(params: {
     ) {
       throw new Error("Repository admission changed its exact source or pinned head");
     }
+    preparationPhase = "workspace_sync";
     const result = await params.sync({ ...repository, baseCommit: admitted.baseCommit });
     assertCurrent();
     if (result.mode !== "repository") {
       throw new Error("Repository synchronization returned no branch proof");
     }
+    preparationPhase = "post_sync_validation";
     await params.environments.revalidatePreparedIntentRepository(
       request.profileId,
       intent,
       request.repositoryPreparationSignal,
     );
     assertCurrent();
+    preparationPhase = "ready_publication";
     const ready = await params.placements.settleRepository(
       { ...owner, status: "ready", manifestRef: result.manifestRef },
       assertCurrent,
@@ -132,27 +143,27 @@ export async function prepareActiveRepository(params: {
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
       diagnosticCode: "operation_failed",
+      preparationPhase,
+      preparationSignalAborted: request.repositoryPreparationSignal?.aborted ?? false,
+      operatorSignalAborted: request.operatorAuthority?.signal?.aborted ?? false,
       error,
     });
     try {
       params.assertCleanupCurrent();
-      const settled = await Promise.allSettled([
-        params.tunnel.settleRepositoryWorkspace!("failed"),
-        params.placements.settleRepository(
-          { ...owner, status: "failed" },
-          params.assertCleanupCurrent,
-        ),
-      ]);
-      const placementOutcome = settled[1];
-      if (placementOutcome.status === "rejected") {
-        throw placementOutcome.reason;
-      }
-      const failed = placementOutcome.value;
+      // Node failure wakes blocked commands immediately. Publish durable placement
+      // custody first so their terminal result cannot race its pending publication.
+      const failed = await params.placements.settleRepository(
+        { ...owner, status: "failed" },
+        params.assertCleanupCurrent,
+      );
       reportPlacementTransition(params.onTransition, failed);
-      if (settled[0].status === "rejected") {
+      try {
+        params.assertCleanupCurrent();
+        await params.tunnel.settleRepositoryWorkspace!("failed");
+      } catch (publicationError) {
         params.assertCleanupCurrent();
         await params.environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
-        throw settled[0].reason;
+        throw publicationError;
       }
     } catch (settlementError) {
       recordWorkerPlacementStage(request.sessionId, "workspace_sync_failed", {

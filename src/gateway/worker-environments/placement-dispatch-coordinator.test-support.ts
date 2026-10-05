@@ -93,6 +93,8 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     throw new Error("Unexpected placement fixture operation");
   };
   return {
+    canRecoverFailedPlacement: () => false,
+    recoverFailedPlacement: unexpected,
     dispatch: unexpected,
     move: unexpected,
     reclaim: unexpected,

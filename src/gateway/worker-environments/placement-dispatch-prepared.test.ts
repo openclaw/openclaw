@@ -3,9 +3,17 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  appendTranscriptMessageSync,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { FEATURES, preparedHarness } from "./placement-dispatch-prepared.harness.js";
-import { MANIFEST_REF, REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { MANIFEST_REF, REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { prepareRepositoryRefRecovery } from "./repository-recovery-checkpoint.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import {
   readSessionRepositoryArtifacts,
@@ -36,6 +44,7 @@ vi.mock("./worker-github-binding.js", async (importOriginal) => ({
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   getRuntimeConfig: () => ({
+    ...support.testState.config,
     gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
   }),
 }));
@@ -43,6 +52,252 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 describe("prepared worker dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite();
   beforeEach(() => diagnostics.info.mockClear());
+
+  it.each(["warm", "cold", "authority lost", "missing branch"] as const)(
+    "recovers the same ephemeral session from its exact repository branch: %s",
+    async (mode) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+      });
+      support.getDevelopmentProfile().lostWorkerRecovery = "repository-ref";
+      const scope = {
+        agentId: REQUEST.agentId,
+        sessionKey: REQUEST.sessionKey,
+        sessionId: REQUEST.sessionId,
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: REQUEST.sessionId,
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "synthetic-original-issuer" },
+        goal: {
+          schemaVersion: 1,
+          id: "original-goal",
+          objective: "Keep the original session",
+          status: "paused",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      });
+      appendTranscriptMessageSync(scope, {
+        message: { role: "user", content: "Synthetic accepted history", timestamp: 1 },
+      });
+      const originalEntry = await readSessionEntryReadOnlyInWorker(scope);
+      const originalHistory = await loadTranscriptEvents(scope);
+      const root = path.join(support.testState.root, "published-repository");
+      await fs.mkdir(root);
+      await fs.writeFile(path.join(root, "published.txt"), "Only GitHub-published bytes\n");
+      await requireWorkspaceResultGit(root, ["init", "--quiet"]);
+      await requireWorkspaceResultGit(root, ["add", "."]);
+      await requireWorkspaceResultGit(root, [
+        "-c",
+        "user.name=Recovery Fixture",
+        "-c",
+        "user.email=recovery@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "published",
+      ]);
+      const head = await requireWorkspaceResultGit(root, ["rev-parse", "HEAD"]);
+      const base = await captureWorkspaceManifest({ root, baseCommit: head });
+      const repositories = getSessionRepositoryWorkspaceStore();
+      let repository = await repositories.create({
+        ...scope,
+        url: "https://github.com/example/project.git",
+        requestedRef: "refs/heads/main",
+        branch: "session/original",
+        assertCurrent: () => {},
+      });
+      repository = await repositories.bindBase({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        baseCommit: "a".repeat(40),
+        baseManifestHash: MANIFEST_REF,
+        assertCurrent: () => {},
+      });
+      repository = await repositories.acceptCheckpoint({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        checkpointRef: "refs/openclaw/worker-results/ephemeral-old",
+        manifestHash: MANIFEST_REF,
+        assertCurrent: () => {},
+      });
+      let current = true;
+      const paths: string[] = [];
+      // GitHub and node transport are synthetic leaves; source admission, registry,
+      // provider/placement custody, repository SQL and checkpoint bytes use their real owners.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+          const pathname = new URL(new Request(input).url).pathname;
+          paths.push(pathname);
+          if (pathname.includes("/commits/")) {
+            if (mode === "authority lost") {
+              current = false;
+            }
+            if (mode === "missing branch") {
+              return new Response(null, { status: 404 });
+            }
+            return new Response(
+              JSON.stringify({ sha: head, commit: { tree: { sha: "b".repeat(40) } } }),
+            );
+          }
+          if (pathname.includes("/git/commits/")) {
+            return new Response(JSON.stringify({ sha: head, tree: { sha: "b".repeat(40) } }));
+          }
+          if (pathname.includes("/git/trees/")) {
+            return new Response(
+              JSON.stringify({ sha: "b".repeat(40), truncated: false, tree: [] }),
+            );
+          }
+          if (pathname === "/repos/example/project") {
+            return new Response(
+              JSON.stringify({
+                node_id: "R_recovery",
+                clone_url: repository.url,
+                private: false,
+                default_branch: "main",
+              }),
+            );
+          }
+          throw new Error("Unexpected synthetic repository request");
+        }),
+      );
+      const { harness, placements, workerService, ready, request } = await preparedHarness({
+        repository,
+        reserve: mode !== "cold",
+        reserveBaseCommit: head,
+        boundWorkspace: {
+          workspaceDir: "/worker/published",
+          sourceManifestRef: base.manifestRef,
+          preparedManifestRef: base.manifestRef,
+        },
+        prepareRepositoryRefRecovery,
+        resolveWorkspace: async () => ({
+          kind: "repository",
+          repository: (await repositories.get(repository.workspaceId))!,
+        }),
+      });
+      const oldId = "ephemeral-original-worker";
+      await support.seedReadyNodeDesktop(oldId);
+      await support.testState.store.ensureNodeEnrollment(oldId);
+      const attached = await support.testState.store.transition({
+        environmentId: oldId,
+        from: "ready",
+        to: "attached",
+        patch: { ...support.attachedPatch(oldId, request.sessionId), sharedHost: false },
+      });
+      await seedActivePlacement(placements, {
+        environmentId: oldId,
+        ownerEpoch: attached.ownerEpoch,
+        executionMode: request.executionMode,
+      });
+      const claim = await placements.claimTurn({
+        ...request,
+        claimId: "old-claim",
+        runId: "old-run",
+        owner: { kind: "worker", environmentId: oldId, ownerEpoch: attached.ownerEpoch },
+      });
+      await placements.markWorkspaceResultPending(claim);
+      await placements.handoffWorkspaceResultRecovery(claim);
+      await placements.startWorkspaceResultDrain(claim);
+      await workerService.destroy(oldId);
+      await harness.service.reconcileActive(oldId);
+      expect(support.testState.store.getCredential(oldId)).toBeUndefined();
+      expect(placements.validateTurnClaim(claim)).toBe(false);
+      await expect(
+        placements.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/late"),
+      ).rejects.toThrow();
+      const failed = placements.get(request.sessionId)!;
+      const start = vi.mocked(harness.environments.startTunnel);
+      const ordinary = start.getMockImplementation()!;
+      start.mockImplementation(async (identity) => {
+        const tunnel = await ordinary(identity);
+        vi.spyOn(tunnel, "syncWorkspace").mockImplementation(async ({ source }) => {
+          expect(source).toMatchObject({
+            kind: "repository",
+            branch: repository.branch,
+            baseCommit: head,
+          });
+          expect(source).not.toHaveProperty("checkpoint");
+          return {
+            mode: "repository",
+            baseCommit: head,
+            remoteWorkspaceDir: "/worker/published",
+            baseManifestRef: base.manifestRef,
+            manifestRef: base.manifestRef,
+          };
+        });
+        vi.spyOn(tunnel, "reconcileWorkspace").mockImplementation(async ({ source }) => {
+          if (source.kind !== "repository") {
+            throw new Error("Expected repository owner");
+          }
+          const checkpoint = await source.prepareCheckpoint({
+            stagingRoot: root,
+            baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+            currentManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+            baseManifestRef: base.manifestRef,
+            currentManifestRef: base.manifestRef,
+          });
+          return {
+            manifestRef: base.manifestRef,
+            changed: false,
+            verifyStable: async () => {},
+            verifyLocalStable: () => checkpoint.verify(),
+            publishStagedResult: () => checkpoint.publish().then(() => {}),
+            discardPreparedStagedResult: () => checkpoint.discard(),
+          };
+        });
+        return tunnel;
+      });
+      const run = harness.service.dispatch(
+        { ...request, expectedPlacement: failed, readNativeCredential: async () => undefined },
+        undefined,
+        () => {
+          if (!current) {
+            throw new Error("Original issuer authority changed");
+          }
+        },
+      );
+      if (mode === "authority lost" || mode === "missing branch") {
+        await expect(run).rejects.toThrow();
+        expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+        expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
+        expect(await repositories.get(repository.workspaceId)).toEqual(repository);
+      } else {
+        await expect(run).resolves.toMatchObject({
+          state: "active",
+          sessionId: request.sessionId,
+          environmentId:
+            mode === "cold"
+              ? deriveEnvironmentIntent(
+                  `session-dispatch:${request.sessionId}:${failed.generation + 1}`,
+                ).environmentId
+              : ready.environmentId,
+        });
+        expect(harness.environments.createWithRequest).toHaveBeenCalledTimes(
+          mode === "cold" ? 1 : 0,
+        );
+        expect(await repositories.get(repository.workspaceId)).toMatchObject({
+          workspaceId: repository.workspaceId,
+          branch: repository.branch,
+          requestedRef: repository.requestedRef,
+          baseCommit: head,
+        });
+      }
+      expect(paths).toContain("/repos/example/project/commits/heads%2Fsession%2Foriginal");
+      expect(paths).not.toContain("/repos/example/project/commits/heads%2Fmain");
+      expect(await readSessionEntryReadOnlyInWorker(scope)).toEqual(originalEntry);
+      expect(await loadTranscriptEvents(scope)).toEqual(originalHistory);
+    },
+  );
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "consumes the existing environment and binds its workspace for %s",
@@ -79,15 +334,17 @@ describe("prepared worker dispatch", () => {
         )
         .map(([, facts]) => facts.stage);
       expect(stages).toEqual([
+        "dispatch_repository_ref_preparation_started",
+        "dispatch_repository_ref_preparation_completed",
         "local_barrier_started",
         "local_barrier_completed",
         "workspace_resolve_started",
         "workspace_resolve_completed",
         "intent_prepare_started",
         "intent_prepare_completed",
+        "prepared_selection_started",
         "dispatch_prepared_repository_revalidation_started",
         "dispatch_prepared_repository_revalidation_completed",
-        "prepared_selection_started",
         "prepared_claimed",
         "prepared_selection_completed",
         "environment_ready",
@@ -204,14 +461,18 @@ describe("prepared worker dispatch", () => {
     const active = await harness.service.dispatch(request);
 
     expect(active.environmentId).toBe(ready.environmentId);
-    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
-      profileId: request.profileId,
-      idempotencyKey: expect.any(String),
-      executionMode: request.executionMode,
-      projectPath: "/gateway/workspace",
-      admittedIntent: intent,
-    });
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: request.profileId,
+        idempotencyKey: expect.any(String),
+        executionMode: request.executionMode,
+        projectPath: "/gateway/workspace",
+        admittedIntent: intent,
+      }),
+    );
     expect(store.get(ready.environmentId)?.preparation).toBeNull();
+    // A canonical empty pool takes cold admission; only its final access fence runs here.
+    expect(harness.environments.revalidatePreparedIntentRepository).toHaveBeenCalledOnce();
     expect(harness.environments.bindPreparedWorkspace).toHaveBeenCalledOnce();
     expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
       harness.log.indexOf("sync"),

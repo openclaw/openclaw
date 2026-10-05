@@ -279,6 +279,11 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.publicationKind === "shared" ||
           input.command.publicationKind === "personal") &&
         typeof input.command.requestId === "string") ||
+      (input.command.type === "githubRepository.branch" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.workspaceId === "string" &&
+        typeof input.command.input.branch === "string" &&
+        typeof input.command.input.pushRepository === "string") ||
       ((input.command.type === "githubPublication.request" ||
         input.command.type === "githubRepository.request") &&
         typeof input.command.requestId === "string") ||

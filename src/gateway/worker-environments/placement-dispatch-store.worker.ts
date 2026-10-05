@@ -21,6 +21,8 @@ import {
 import { ensureLocal, getRequired, query, updateTransition } from "./placement-row-codec.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
+  isUnallocatedWorkerPlacementFailure,
+  isWorkerPlacementDestroyedBeforeActivation,
   matchesWorkerPlacementTarget,
 } from "./placement-target.js";
 import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
@@ -75,22 +77,13 @@ function startWorkerPlacementDispatchInWorker(
             `Worker placement ${identity.sessionId} still has pending workspace recovery`,
           );
         }
-        if (current.state === "failed") {
+        if (current.state === "failed" && !isUnallocatedWorkerPlacementFailure(current)) {
           const environment = current.environmentId
             ? findWorkerEnvironment(db, current.environmentId)
             : undefined;
-          // A rejected first bind never activated a session owner. Its exact destroyed
-          // allocation can retry after cleanup without inventing an execution epoch.
-          const destroyedBeforeActivation =
-            current.activeOwnerEpoch === null &&
-            environment?.state === "destroyed" &&
-            environment.recoveryHold === undefined &&
-            current.workspaceBaseManifestRef === null &&
-            current.remoteWorkspaceDir === null &&
-            current.lastTranscriptAckCursor === null &&
-            current.lastLiveEventAckCursor === null;
           if (
-            (current.activeOwnerEpoch === null && !destroyedBeforeActivation) ||
+            (current.activeOwnerEpoch === null &&
+              !isWorkerPlacementDestroyedBeforeActivation(current, environment)) ||
             !environment ||
             !isFailedWorkerPlacementEnvironmentGone({
               environmentService: { get: () => environment },
@@ -115,6 +108,7 @@ function startWorkerPlacementDispatchInWorker(
             transition_generation: nextGeneration(current.generation),
             active_owner_epoch: null,
             workspace_base_manifest_ref: null,
+            repository_preparation: null,
             remote_workspace_dir: null,
             worker_bundle_hash: null,
             last_transcript_ack_cursor: null,

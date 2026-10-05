@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -151,7 +152,10 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
       return await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, () =>
         run({
           workspace,
-          assertCurrent,
+          assertCurrent: () => {
+            assertCurrent();
+            resolved.assertCurrent(options.getConfig());
+          },
           ...createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertCurrent),
         }),
       );
@@ -276,6 +280,30 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   const prepared = initialIdentity.repositoryWorkspaceId
     ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
     : undefined;
+  let expectedRepository = prepared?.workspace;
+  const acceptCheckpoint = (accepted: NonNullable<typeof expectedRepository>) => {
+    const previous = expectedRepository;
+    const current = prepared?.current();
+    // The native checkpoint owner returns a settled receipt, not a later row selected
+    // by matching ref text. Foreign publications and indeterminate commits stay fenced.
+    if (
+      !previous ||
+      !isDeepStrictEqual(current, accepted) ||
+      accepted.workspaceId !== previous.workspaceId ||
+      accepted.agentId !== previous.agentId ||
+      accepted.sessionKey !== previous.sessionKey ||
+      accepted.url !== previous.url ||
+      accepted.requestedRef !== previous.requestedRef ||
+      accepted.runSetupScript !== previous.runSetupScript ||
+      accepted.baseCommit !== previous.baseCommit ||
+      accepted.baseManifestHash !== previous.baseManifestHash ||
+      (accepted.revision !== previous.revision + 1 && !isDeepStrictEqual(accepted, previous))
+    ) {
+      throw targetChangedError();
+    }
+    resolveBinding();
+    expectedRepository = accepted;
+  };
   const resolveBinding = (config = params.config) => {
     const target = resolveTarget(config);
     const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
@@ -312,7 +340,11 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         target,
         entry,
         worktree: undefined,
-        workspace: { kind: "repository", repository } satisfies WorkerSessionWorkspace,
+        workspace: {
+          kind: "repository",
+          repository,
+          acceptCheckpoint,
+        } satisfies WorkerSessionWorkspace,
       };
     }
     const worktree = params.sessionRuntime.managedWorktrees.findLiveByOwner(
@@ -339,7 +371,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     const selected = resolveBinding(config);
     if (
       selected.workspace.kind === "repository" &&
-      prepared?.current()?.revision !== selected.workspace.repository.revision
+      !isDeepStrictEqual(prepared?.current(), expectedRepository)
     ) {
       throw targetChangedError();
     }
@@ -433,6 +465,11 @@ export function createWorkerPlacementNodeWorkspaceBindingResolver(options: {
       placement.activeOwnerEpoch !== binding.ownerEpoch
     ) {
       return undefined;
+    }
+    if (!placement.workspaceBaseManifestRef) {
+      throw new Error(
+        "Repository preparation has no current owner; inspect recovery before using its workspace",
+      );
     }
     const workspace = await options.resolveWorkspace({
       sessionId: placement.sessionId,

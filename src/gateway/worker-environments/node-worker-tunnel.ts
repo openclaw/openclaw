@@ -20,10 +20,7 @@ import {
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../../worker/node-workspace-protocol.js";
-import {
-  NODE_WORKSPACE_TRANSFER_ERROR_CODE,
-  NodeWorkerWorkspaceTransferError,
-} from "../../worker/node-workspace-transfer-protocol.js";
+import { NODE_WORKSPACE_TRANSFER_ERROR_CODE } from "../../worker/node-workspace-transfer-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -39,7 +36,14 @@ import {
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import { createNodeWorkerProcessObserver } from "./node-worker-process-observation.js";
-import { parseNodeWorkerResponse } from "./node-worker-response.js";
+import { nativeRepositoryWorkspaceInput } from "./node-worker-repository-readiness.js";
+import { parseNodeWorkerResponse, workspaceCommandError } from "./node-worker-response.js";
+import {
+  createNodeWorkspaceRpcFailureReporter,
+  createNodeWorkspaceCommandSignals,
+  reportNodeTunnelRetired,
+  type NodeTunnelRetirementReason,
+} from "./node-worker-tunnel-diagnostics.js";
 import {
   createNodeWorkerWorkspaceActions,
   type NodeWorkerWorkspaceBinding,
@@ -63,7 +67,6 @@ import { workerWorkspaceCommandSucceeded } from "./workspace-sync-helpers.js";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_RESULT_GRACE_MS = 5_000;
 const RETRY_DELAY_MS = 100;
-const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
 const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 
 export type NodeWorkerWorkspaceBindingResolver = (binding: {
@@ -177,23 +180,23 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       command.assertCurrent?.();
     };
     const commandTimeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
-    // Keep the subprocess deadline authoritative while allowing its terminal result to cross the
-    // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
+    // Transport grace lets the subprocess deadline publish its terminal result.
     const transportTimeoutMs =
       addTimerTimeoutGraceMs(commandTimeoutMs, COMMAND_RESULT_GRACE_MS) ?? commandTimeoutMs;
     const deadline = Date.now() + transportTimeoutMs;
-    const signals = [entry.abortController.signal, AbortSignal.timeout(transportTimeoutMs)];
-    if (command.signal) {
-      signals.push(command.signal);
-    }
-    const signal = AbortSignal.any(signals);
+    const { signal, deadlineSignal } = createNodeWorkspaceCommandSignals(
+      entry.abortController.signal,
+      command.signal,
+      transportTimeoutMs,
+    );
     const preparationKey = readPreparation(entry)?.key;
     let nativeContractError: Error | undefined;
     const input: NodeWorkerWorkspaceExecInput = {
       gatewayNamespace,
       environmentId: entry.environmentId,
       sessionId: entry.sessionId,
-      ...(preparationKey === undefined ? {} : { preparationKey, sessionKey: command.sessionKey }),
+      preparationKey,
+      sessionKey: command.sessionKey,
       generation: entry.ownerEpoch,
       argv: [...command.argv],
       ...(command.input === undefined ? {} : { input: command.input }),
@@ -210,6 +213,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       if (remainingMs <= 0 || signal.aborted) {
         throw signal.reason ?? new Error("node worker workspace command timed out");
       }
+      const rpcFailure = createNodeWorkspaceRpcFailureReporter(
+        entry,
+        command.signal,
+        deadlineSignal,
+      );
       let result: Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>;
       try {
         const { node, transport } = await findNode(entry, signal);
@@ -225,17 +233,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           }
         };
         assertNativeContract();
-        const params: NodeWorkerWorkspaceExecInput = {
-          ...input,
-          ...(nativeOwnership &&
-          !command.legacyQuiescence &&
-          !input.quiescence &&
-          !input.process &&
-          !input.transfer &&
-          !input.seed
-            ? { nativeProcessOwner: true }
-            : {}),
-        };
+        const params = nativeRepositoryWorkspaceInput(input, command, node);
+        rpcFailure.state.phase = "invoke";
         result = await transport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -243,6 +242,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           timeoutMs: remainingMs,
           signal,
           onDispatchReady: () => {
+            rpcFailure.state.dispatchStarted = true;
             if (input.quiescence?.action === "acquire") {
               // An unacknowledged acquisition can still own a helper. Keep its contract
               // until this exact nonce is released, not merely until this request ends.
@@ -257,6 +257,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           },
         });
       } catch (error) {
+        rpcFailure.report(error);
         assertCurrent();
         if (
           (nativeContractError !== undefined && error === nativeContractError) ||
@@ -269,15 +270,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         await sleepWithAbort(Math.min(RETRY_DELAY_MS, Math.max(1, deadline - Date.now())), signal);
         continue;
       }
+      assertCurrent();
       if (!result.ok) {
+        rpcFailure.state.phase = "response";
+        rpcFailure.report(result.error);
         const code = result.error?.code ?? "UNAVAILABLE";
         if (code === NODE_WORKSPACE_TRANSFER_ERROR_CODE) {
-          throw new NodeWorkerWorkspaceTransferError(
-            boundedWorkerError(
-              result.error?.message ?? "workspace-transfer-failed: transfer did not complete",
-              WORKSPACE_DIAGNOSTIC_MAX_CHARS,
-            ),
-          );
+          throw workspaceCommandError(result.error);
         }
         if (
           command.transportRetry === "idempotent" &&
@@ -286,11 +285,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           await sleepWithAbort(Math.min(RETRY_DELAY_MS, remainingMs), signal);
           continue;
         }
-        throw new Error(
-          result.error?.message
-            ? `node workspace command failed (${code}): ${boundedWorkerError(result.error.message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`
-            : `node workspace command failed (${code})`,
-        );
+        throw workspaceCommandError(result.error);
       }
       const parsed = parseNodeWorkerWorkspaceExecResult(
         parseNodeWorkerResponse(result.payloadJSON, "node workspace command"),
@@ -319,7 +314,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           // Keep the caller's lifecycle lock until an unknown result has physically settled.
           await drainWorkspace(entry, () => isEnvironmentOwner(entry));
         } catch (drainError) {
-          retireEntry(entry);
+          retireEntry(entry, "workspace_drain_failed");
           throw drainError;
         }
       }
@@ -422,7 +417,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     return { handle, validateRestoredWorkspace };
   };
 
-  function retireEntry(entry: NodeTunnelEntry): void {
+  function retireEntry(entry: NodeTunnelEntry, reason: NodeTunnelRetirementReason): void {
+    reportNodeTunnelRetired(entry, reason);
     if (entries.get(entry.environmentId) === entry) {
       entries.delete(entry.environmentId);
     }
@@ -432,7 +428,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   }
 
   function stopEntry(entry: NodeTunnelEntry, reason?: WorkerTunnelStopReason): Promise<void> {
-    retireEntry(entry);
+    retireEntry(entry, reason ?? "owner_stop");
     return stopEnvironmentOwner(entry, reason);
   }
 
@@ -732,6 +728,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       if (failure) {
         throw failure.reason;
       }
+    },
+    async isNodeConnected(deviceId: string): Promise<boolean> {
+      return Boolean(await options.getTransport()?.getCurrentNode(deviceId));
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);

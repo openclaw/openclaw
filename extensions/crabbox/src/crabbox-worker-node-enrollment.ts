@@ -46,21 +46,61 @@ export function createCrabboxNodeRuntimeSetup(params: {
   return createCrabboxNodeSetup(params);
 }
 
-function createCrabboxNodeSetup(params: {
-  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
-  leaseId: string;
-  enrollment?: CrabboxWorkerNodeEnrollment;
-  workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
-  workerCodex?: CrabboxWorkerNodeEnrollment["workerCodex"];
-  desktop?: boolean;
-  desktopSetup?: string;
+/** Populate verified caches from local archives without enrollment or a logical lease. */
+export function createCrabboxOfflineRuntimeSetup(params: {
+  nodeBootstrap: {
+    localPath: string;
+    sha256: string;
+    bytes: number;
+    openclawVersion: string;
+    enabledPluginIds: readonly string[];
+  };
+  workerBundle: { localPath: string; sha256: string; bytes: number; packageRelativePath: string };
   target?: CrabboxOperatingSystem;
-}): { command: string; forwardedEnv: Record<string, string> } {
+}) {
+  for (const artifact of [params.nodeBootstrap, params.workerBundle]) {
+    if (
+      !/^[a-f0-9]{64}$/u.test(artifact.sha256) ||
+      !Number.isSafeInteger(artifact.bytes) ||
+      artifact.bytes <= 0
+    ) {
+      throw new Error("Offline runtime archive identity is invalid");
+    }
+  }
+  return createCrabboxNodeSetup({ ...params, offline: true });
+}
+
+function createCrabboxNodeSetup(
+  params: {
+    enrollment?: CrabboxWorkerNodeEnrollment;
+    workerCodex?: CrabboxWorkerNodeEnrollment["workerCodex"];
+    desktop?: boolean;
+    desktopSetup?: string;
+    target?: CrabboxOperatingSystem;
+  } & (
+    | {
+        offline: true;
+        leaseId?: never;
+        nodeBootstrap: Parameters<typeof createCrabboxOfflineRuntimeSetup>[0]["nodeBootstrap"];
+        workerBundle: Parameters<typeof createCrabboxOfflineRuntimeSetup>[0]["workerBundle"];
+      }
+    | {
+        offline?: false;
+        leaseId: string;
+        nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+        workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
+      }
+  ),
+): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, ...nodeBootstrap } = params.nodeBootstrap;
-  const workerBundle = params.workerBundle
-    ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
-    : undefined;
+  const token = params.offline ? undefined : params.nodeBootstrap.token;
+  const nodeBootstrap = !params.offline
+    ? (({ token: _token, ...artifact }) => artifact)(params.nodeBootstrap)
+    : params.nodeBootstrap;
+  const workerBundle =
+    !params.offline && params.workerBundle
+      ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
+      : params.workerBundle;
   const desktopTarget = params.desktop ? (params.target ?? "linux") : undefined;
   const desktopEnvironment =
     desktopTarget === "linux"
@@ -117,7 +157,7 @@ setPhase("preparation");
   try { tokens = JSON.parse(credentials || "{}"); }
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
-  const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const stateDir = mode ? path.join(home, ".openclaw", "cloud-workers", leaseId) : undefined;
   const stageWorkerCodex = () => {
     if (!workerCodexBase64) return;
     let settings;
@@ -148,10 +188,10 @@ setPhase("preparation");
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
-  const pidFile = path.join(stateDir, "node.pid");
-  const launchFile = path.join(stateDir, "node-launch.json");
-  const setupFile = path.join(stateDir, "setup-code");
-  const runtimeLink = path.join(stateDir, "runtime");
+  const pidFile = mode ? path.join(stateDir, "node.pid") : undefined;
+  const launchFile = mode ? path.join(stateDir, "node-launch.json") : undefined;
+  const setupFile = mode ? path.join(stateDir, "setup-code") : undefined;
+  const runtimeLink = mode ? path.join(stateDir, "runtime") : undefined;
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   // Tools travel inside the verified full-node artifact and share its preparation identity.
   if (process.platform !== "win32") {
@@ -203,9 +243,9 @@ setPhase("preparation");
     if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
     stageWorkerCodex();
   }
-  ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  ${params.offline ? "const desktopTarget = undefined;" : createCrabboxNodeProcessRuntime(desktopTarget, params.leaseId)}
   if (desktopTarget === "macos") finishDesktopSetup();
-  if (reuseNodeProcess()) {
+  if (mode && reuseNodeProcess()) {
     if (desktopTarget !== "macos") finishDesktopSetup();
     setPhase("complete");
     return;
@@ -326,6 +366,15 @@ setPhase("preparation");
     let retainedAnyBytes = false;
     const partial = archive + ".partial";
     try {
+      if (artifact.localPath !== undefined) {
+        progress("local archive verification");
+        const source = path.resolve(artifact.localPath);
+        const stat = fs.lstatSync(source);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size !== artifact.bytes || fs.realpathSync(source) !== source) throw new Error("Cloud worker local archive path or length is unsafe");
+        fs.copyFileSync(source, archive, fs.constants.COPYFILE_EXCL);
+        await verifyArchive(fs.createReadStream(archive), artifact);
+        return;
+      }
       origin = new URL(artifact.url).origin;
       for (;;) {
         try {
@@ -404,9 +453,18 @@ setPhase("preparation");
     }
   };
   fs.mkdirSync(runtimeRoot, { recursive: true, ...directoryOptions });
+  const cacheStartedAt = performance.now();
+  const reportCache = (cacheHit, missReason, outcome = "completed") => console.error("CRABBOX_WORKER_STAGE:" + JSON.stringify({ leaseId, stage: "cache", elapsedMs: Math.round(performance.now() - cacheStartedAt), totalElapsedMs: Math.round(performance.now() - bootstrapStartedAt), outcome, runtimeCache: { expectedSha256: bootstrap.sha256, homeCategory: home === "/root" ? "root" : "other", uidCategory: typeof process.getuid === "function" ? (process.getuid() === 0 ? "root" : "non-root") : "unavailable", cacheHit, missReason } }));
   const existingRuntime = fs.existsSync(runtimeDir);
-  if (existingRuntime) verifyRuntime(runtimeDir);
-  if (existingRuntime && (!workerBundle || await verifyWorkerArchive(runtimeDir))) {
+  let completeCache = false;
+  try {
+    if (existingRuntime) {
+      verifyRuntime(runtimeDir);
+      completeCache = !workerBundle || await verifyWorkerArchive(runtimeDir);
+    }
+  } catch (error) { reportCache(false, "verification_failed", "failed"); throw error; }
+  reportCache(completeCache, completeCache ? "none" : existingRuntime ? "worker_archive_missing" : "runtime_missing");
+  if (completeCache) {
     publishWorkerArchive(runtimeDir);
   } else {
   const stage = fs.mkdtempSync(path.join(runtimeRoot, "node-bootstrap-"));
@@ -518,20 +576,24 @@ setPhase("preparation");
       params.target,
       "CRABBOX_NODE_ENROLLMENT_SCRIPT",
     ),
-    forwardedEnv: {
-      [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
-        nodeBootstrap: token,
-        workerBundle: params.workerBundle?.token,
-      }),
-      ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
-      ...(params.workerCodex
-        ? {
-            [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
-              JSON.stringify(params.workerCodex),
-              "utf8",
-            ).toString("base64"),
-          }
-        : {}),
-    },
+    forwardedEnv: params.offline
+      ? {}
+      : {
+          [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
+            nodeBootstrap: token,
+            workerBundle: params.workerBundle?.token,
+          }),
+          ...(enrollment?.mode === "connect"
+            ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode }
+            : {}),
+          ...(params.workerCodex
+            ? {
+                [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
+                  JSON.stringify(params.workerCodex),
+                  "utf8",
+                ).toString("base64"),
+              }
+            : {}),
+        },
   };
 }

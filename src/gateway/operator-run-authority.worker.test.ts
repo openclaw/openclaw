@@ -4,17 +4,24 @@ import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPublishedOperatorPairingIdentity } from "../infra/device-pairing-publication.js";
+import { listDevicePairingStoreRecordsReadOnly } from "../infra/device-pairing-store-readonly.js";
+import { requestDevicePairing, removePairedDevice } from "../infra/device-pairing.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { captureGatewayDeviceRevocation } from "./device-revocation.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   invalidateOperatorRolePolicy,
@@ -31,6 +38,115 @@ import {
   createContext,
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
+
+it("refreshes Factory pairing publication for a fresh original issuer without granting a removed device", async () => {
+  vi.stubEnv("FACTORY_AUTH_MODE", "github");
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("github:microsoft.ghe.com:700151");
+      setUserProfileRole(profile.id, "reader");
+      const config: OpenClawConfig = {
+        agents: { defaults: { model: "fixture/a" } },
+        gateway: {
+          github: { host: "microsoft.ghe.com" },
+          auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-fixture-user" } },
+          roles: {
+            definitions: {
+              reader: {
+                scopes: ["operator.read"],
+                agents: ["main"],
+                sessions: { others: "none" },
+                modelPolicy: { allow: ["fixture/a"] },
+              },
+            },
+          },
+        },
+      };
+      const context = createContext();
+      context.getRuntimeConfig = () => config;
+      const pending = await requestDevicePairing({
+        deviceId: "fresh-issuer-device",
+        publicKey: "synthetic-public-key",
+        role: "operator",
+        scopes: ["operator.read"],
+      });
+      await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
+      const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
+      client.authenticatedFactoryGitHubAccountId = 700151;
+      client.authPolicy = captureGatewayAuthPolicy(config, {
+        role: "operator",
+        verifiedIdentity: "github:microsoft.ghe.com:700151",
+        authMethod: "trusted-proxy",
+      });
+      client.internal = {
+        authenticatedOperator: true,
+        operatorAccessAuthority: null,
+        operatorPairingIdentity:
+          getPublishedOperatorPairingIdentity("fresh-issuer-device") ?? undefined,
+      };
+      const deviceSource = captureGatewayDeviceRevocation(
+        context,
+        { deviceId: "fresh-issuer-device", role: "operator" },
+        () => true,
+        undefined,
+        {
+          isCurrent: () => true,
+          subscribe: () => () => {},
+          dependencies: {
+            client,
+            context,
+            authPolicyGeneration: client.authPolicy.grantGeneration,
+          },
+        },
+      );
+      const capture = () =>
+        captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority: deviceSource.isCurrent,
+        });
+      const original = await capture();
+      let fresh: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>> = undefined;
+      try {
+        const originalIssuer = original!.authority.captureRestartRecoveryIssuer?.();
+        expect(originalIssuer).toMatchObject({ version: 1, profileId: profile.id });
+        const unavailable = vi
+          .spyOn(stateReads, "executeExistingOpenClawStateRead")
+          .mockRejectedValueOnce(new Error("synthetic pairing read unavailable"));
+        try {
+          await expect(listDevicePairingStoreRecordsReadOnly(undefined, true)).rejects.toThrow(
+            "synthetic pairing read unavailable",
+          );
+        } finally {
+          unavailable.mockRestore();
+        }
+        fresh = await capture();
+        expect(fresh?.authority.captureRestartRecoveryIssuer?.()).toEqual(originalIssuer);
+        const warmRead = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+        try {
+          const warm = await capture();
+          try {
+            expect(warm?.authority.captureRestartRecoveryIssuer?.()).toEqual(originalIssuer);
+            expect(warmRead).not.toHaveBeenCalled();
+          } finally {
+            warm?.release();
+          }
+        } finally {
+          warmRead.mockRestore();
+        }
+        await removePairedDevice("fresh-issuer-device");
+        expect(() => fresh?.authority.captureRestartRecoveryIssuer?.()).toThrow();
+        await expect(capture()).rejects.toThrow();
+      } finally {
+        fresh?.release();
+        original?.release();
+        deviceSource.release();
+      }
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 
 it("preserves the live operator source through principal capture without trusting copied labels", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -456,5 +572,15 @@ it.each([
   "workspace changed during lookup",
 ] as const)(
   "carries the retained Factory issuer through reclaimed intent: %s",
+  exerciseReclaimedFactoryCredential,
+);
+
+it.each([
+  "setup administrator",
+  "setup unprivileged",
+  "setup actor changed",
+  "setup role revoked during lookup",
+] as const)(
+  "projects current original-issuer setup authority through repository sync: %s",
   exerciseReclaimedFactoryCredential,
 );

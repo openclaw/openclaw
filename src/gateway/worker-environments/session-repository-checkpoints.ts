@@ -36,6 +36,7 @@ export type SessionRepositoryCheckpointPayload = CheckpointSnapshot & {
   stagingRoot: string;
   publicationStagingRoot?: string;
   publicationDigest?: string;
+  publicationBranch?: string;
 };
 const publicationRef = (ref: string) =>
   workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
@@ -169,6 +170,7 @@ export async function withSessionRepositoryCheckpoint<T>(
             ...snapshot,
             publicationStagingRoot: publication.stagingRoot,
             publicationDigest: binding.publicationDigest,
+            publicationBranch: binding.snapshot.branch,
           });
         },
       );
@@ -190,6 +192,7 @@ export async function recoverSessionRepositoryCheckpoint(
   params: CheckpointOwner & {
     checkpointRef: string;
     expectedRevision?: number;
+    reconcileBranch?: boolean;
     assertCurrent: () => void;
   },
 ): Promise<SessionRepositoryWorkspaceRecord> {
@@ -203,11 +206,18 @@ export async function recoverSessionRepositoryCheckpoint(
   ) {
     return current;
   }
+  const branch = params.reconcileBranch
+    ? await withSessionRepositoryCheckpoint(
+        { ...params, includePublication: true },
+        async (payload) => payload.publicationBranch,
+      )
+    : undefined;
   return store.acceptCheckpoint({
     workspaceId: params.workspaceId,
     expectedRevision: params.expectedRevision ?? workspace.revision,
     checkpointRef: params.checkpointRef,
     manifestHash: snapshot.currentManifestRef,
+    ...(branch ? { branch } : {}),
     assertCurrent: params.assertCurrent,
   });
 }
@@ -215,6 +225,7 @@ export async function recoverSessionRepositoryCheckpoint(
 export async function stageSessionRepositoryCheckpoint(
   params: CheckpointOwner & {
     expectedRevision: number;
+    reconcileBranch?: boolean;
     checkpointRef?: string;
     stagingRoot: string;
     baseManifestRaw: string;
@@ -339,40 +350,44 @@ export async function stageSessionRepositoryCheckpoint(
       assertRevision();
     };
     await verify();
+    const publishArtifacts = async () => {
+      await withWorkspaceResultRefMutation(root, async (baseEnv) => {
+        const updates: string[] = [];
+        const targets = [
+          [ref, objectId],
+          [publicationRef(ref), companionId],
+        ] as const;
+        const existingObjects = await refObjects(
+          root,
+          targets.map(([target]) => target),
+          baseEnv,
+        );
+        for (const [target, expected] of targets) {
+          const existing = existingObjects.get(target);
+          if (existing !== undefined && existing !== expected) {
+            throw new Error("Repository checkpoint identity already contains a different result");
+          }
+          if (expected !== undefined && existing === undefined) {
+            updates.push(`create ${target}\0${expected}\0`);
+          }
+        }
+        assertRevision();
+        if (updates.length) {
+          await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
+            input: Buffer.from(updates.join("")),
+            baseEnv,
+            beforeInput: assertRevision,
+          });
+        }
+      });
+    };
     return {
       checkpointRef: ref,
       verify,
       discard,
+      publishArtifacts,
       publish: async () => {
-        await withWorkspaceResultRefMutation(root, async (baseEnv) => {
-          const updates: string[] = [];
-          const targets = [
-            [ref, objectId],
-            [publicationRef(ref), companionId],
-          ] as const;
-          const existingObjects = await refObjects(
-            root,
-            targets.map(([target]) => target),
-            baseEnv,
-          );
-          for (const [target, expected] of targets) {
-            const existing = existingObjects.get(target);
-            if (existing !== undefined && existing !== expected) {
-              throw new Error("Repository checkpoint identity already contains a different result");
-            }
-            if (expected !== undefined && existing === undefined) {
-              updates.push(`create ${target}\0${expected}\0`);
-            }
-          }
-          assertRevision();
-          if (updates.length) {
-            await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
-              input: Buffer.from(updates.join("")),
-              baseEnv,
-              beforeInput: assertRevision,
-            });
-          }
-        });
+        await publishArtifacts();
         // Publish immutable artifacts before the SQLite pointer: if the commit
         // fence fails or the Gateway exits, the pending turn can recover this ref.
         const accepted = await recoverSessionRepositoryCheckpoint({
@@ -380,7 +395,13 @@ export async function stageSessionRepositoryCheckpoint(
           store,
           checkpointRef: ref,
         });
-        await discard();
+        // The native commit already owns its immutable result. Candidate cleanup
+        // cannot hide that receipt and leave the pending result unacknowledged.
+        await discard().catch((error: unknown) => {
+          workspaceLog.warn(
+            `Repository checkpoint candidate cleanup failed: ${boundedWorkerError(error)}`,
+          );
+        });
         return accepted;
       },
     };
@@ -394,6 +415,7 @@ export async function forkSessionRepositoryWorkspace(params: {
   sourceWorkspaceId: string;
   agentId: string;
   sessionKey: string;
+  branchPrefix?: string;
   assertCurrent: () => void;
   store?: SessionRepositoryWorkspaceStore;
 }): Promise<SessionRepositoryWorkspaceRecord> {

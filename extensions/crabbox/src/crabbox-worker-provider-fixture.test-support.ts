@@ -135,14 +135,12 @@ export function heartbeatFixture(run: CrabboxCommandRunner) {
   vi.useFakeTimers();
   const heartbeat = vi.fn(run);
   const warnings: string[] = [];
-  const provider = providerWithRunner(
-    async (argv, options) => {
-      if (argv[1] === "heartbeat") {
-        return heartbeat(argv, options);
-      }
-      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
-    },
-    (message) => warnings.push(message),
-  );
-  return { provider, heartbeat, warnings };
+  const runCommand = vi.fn<CrabboxCommandRunner>(async (argv, options) => {
+    if (argv[1] === "heartbeat") {
+      return heartbeat(argv, options);
+    }
+    return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
+  });
+  const provider = providerWithRunner(runCommand, (message) => warnings.push(message));
+  return { provider, heartbeat, warnings, runCommand };
 }

@@ -401,7 +401,8 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (
     command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls"
+    command.type === "githubRepository.knownPullRequestUrls" ||
+    command.type === "githubRepository.branch"
   ) {
     return Object.values(command.input).reduce<number>(
       (total, value) => total + (typeof value === "string" ? Buffer.byteLength(value, "utf8") : 8),

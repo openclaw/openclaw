@@ -18,7 +18,7 @@ import type {
 } from "./service-contract.js";
 
 export type SessionWorkerPlacementContext = {
-  workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get">;
+  workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readRecoveryHold">;
   workerPlacementDispatchService?: Pick<WorkerPlacementDispatchContract, "reclaim">;
   workerSessionPlacementService?: Pick<WorkerSessionPlacementStore, "getMany"> &
     Partial<
@@ -272,6 +272,15 @@ export function prepareSessionWorkerPlacementStop(params: {
   sessionKey: string;
 }): { stop: () => Promise<void>; startBeforeDrain: boolean } {
   const { agentId, context, sessionId, sessionKey } = params;
+  if (
+    (params.action === "delete" || params.action === "recover") &&
+    sessionId &&
+    context.workerEnvironmentService?.readRecoveryHold?.(sessionId)
+  ) {
+    throw new Error(
+      `Session ${sessionKey} has a retained worker source with uncertain edits. Salvage that source before resetting or deleting the session.`,
+    );
+  }
   const expected = readSessionWorkerPlacement(params);
   // Cron run aliases share their base's physical session, even after session-id adoption.
   const matches = (candidate: Placement) =>

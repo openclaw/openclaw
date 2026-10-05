@@ -24,6 +24,11 @@ export type RepositoryWorkspaceCreate = RepositoryWorkspaceOwner & {
   branchPrefix?: string;
 };
 export type RepositoryWorkspaceMutation = { workspaceId: string; expectedRevision: number };
+export type RepositoryWorkspacePublishedHead = RepositoryWorkspaceMutation & {
+  branch: string;
+  headCommit: string;
+  preserveRequestedRef?: true;
+};
 export type RepositoryWorkspaceBase = RepositoryWorkspaceMutation & {
   baseCommit: string;
   baseManifestHash?: string;

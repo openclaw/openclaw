@@ -236,12 +236,17 @@ describe("worker turn launcher claim admission", () => {
 
       // Prove the wait boundary first: a resolved claim wait must not trigger a retry loop.
       await expect(
-        waitForPendingWorkerResult({ placements, sessionId: SESSION_ID }),
+        waitForPendingWorkerResult({
+          placements,
+          sessionId: SESSION_ID,
+          reconcilePending: async () => {},
+        }),
       ).rejects.toThrow("Workspace recovery is still pending");
       const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
       const provider = createWorkerSessionTurnPlacementProvider({
         environments: unusedEnvironments(),
         placements,
+        reconcileActivePlacement: async () => {},
       });
       await expect(
         provider.executeTurn({ ...sessionTarget, runId }, turn(runId), runLocal),
@@ -402,6 +407,119 @@ describe("worker turn launcher claim admission", () => {
     ).rejects.toThrow("redispatch reached");
     expect(redispatchPlacement).toHaveBeenCalledOnce();
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
+  });
+
+  it("joins restart-cleared reclaim recovery before redispatching the admitted turn", async () => {
+    await seedActivePlacement("remote-exec");
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const priorClaim = await placements.claimTurn({
+      ...sessionTarget,
+      claimId: "reclaim-interrupted",
+      runId: "reclaim-interrupted",
+      owner: {
+        kind: "local",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    await placements.markWorkspaceResultPending(priorClaim);
+    await placements.startWorkspaceResultDrain(priorClaim);
+    placements.clearLocalTurnClaimsAfterRestart();
+    expect(placements.validateTurnClaim(priorClaim)).toBe(false);
+    const recover = vi.fn(async () => {
+      await placements.updateWorkspaceBaseManifest({
+        claim: priorClaim,
+        manifestRef: MANIFEST_REF,
+      });
+      await placements.acceptWorkspaceResult(priorClaim);
+      await completeReclaimedWorkspaceTeardown({
+        placements,
+        turnClaim: priorClaim,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      });
+    });
+    const redispatchPlacement = vi.fn(async () => {
+      expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toEqual([]);
+      throw new Error("redispatch reached");
+    });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      reconcileActivePlacement: recover,
+      redispatchPlacement,
+    });
+    await expect(
+      provider.executeTurn(
+        { ...sessionTarget, runId: "next-after-restart" },
+        turn("next-after-restart"),
+        runLocal,
+      ),
+    ).rejects.toThrow("redispatch reached");
+    expect(recover).toHaveBeenCalledOnce();
+    expect(redispatchPlacement).toHaveBeenCalledOnce();
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
+  });
+
+  it("cancels the admitted recovery wait without releasing its unresolved old workspace", async () => {
+    await seedActivePlacement("remote-exec");
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const priorClaim = await placements.claimTurn({
+      ...sessionTarget,
+      claimId: "reclaim-cancelled-wait",
+      runId: "reclaim-cancelled-wait",
+      owner: {
+        kind: "local",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    await placements.markWorkspaceResultPending(priorClaim);
+    placements.clearLocalTurnClaimsAfterRestart();
+    const pending = await placements.listPendingWorkspaceResultsAsync(SESSION_ID);
+    const entered = createDeferred();
+    const settled = createDeferred();
+    const cancel = new AbortController();
+    const redispatchPlacement = vi.fn(async () => {
+      throw new Error("unexpected redispatch");
+    });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      redispatchPlacement,
+      reconcileActivePlacement: async () => {
+        entered.resolve();
+        await settled.promise;
+      },
+    });
+    const request = { ...turn("cancelled-recovery-wait"), abortSignal: cancel.signal };
+    const result = provider.executeTurn(
+      { ...sessionTarget, runId: request.runId },
+      request,
+      runLocal,
+    );
+    void result.catch(() => {});
+    try {
+      await entered.promise;
+      const reason = new Error("caller cancelled recovery wait");
+      cancel.abort(reason);
+      await expect(result).rejects.toMatchObject({ name: "AbortError", cause: reason });
+      expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toEqual(pending);
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      expect(redispatchPlacement).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+    } finally {
+      settled.resolve();
+    }
   });
 
   it("waits for an exact cancelled worker turn and preserves its placement for the next run", async () => {

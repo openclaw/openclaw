@@ -42,6 +42,7 @@ describe("worker environment owner revocation", () => {
     const stop = vi.fn(async () => {});
     const service = support.createService(support.createProvider(), {
       nodeTunnelManager: {
+        isNodeConnected: async () => true,
         status: () => "stopped",
         observeProcesses: vi.fn(async () => {
           throw new Error("Process observation is not configured in this fixture");

@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
+import { prepareRepositoryRecoveryCheckout } from "./repository-git-pack.js";
 import {
   AUTHORIZATION,
   TOKEN,
@@ -11,8 +12,86 @@ import {
   fixture,
 } from "./repository-git-pack.test-support.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
+import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
+import { applyStagedWorkerWorkspace } from "./workspace-reconcile-apply.js";
 
 describe("private repository preparation", () => {
+  it("verifies newer history through a retired branch fallback in temporary custody and detects remote movement", async () => {
+    const f = await fixture();
+    const branch = await requireGit(f.source, ["symbolic-ref", "--short", "HEAD"]);
+    await fs.writeFile(path.join(f.source, "remote-only.txt"), "new remote work\n");
+    await requireGit(f.source, ["add", "remote-only.txt"]);
+    await requireGit(f.source, ["commit", "--quiet", "-m", "remote recovery work"]);
+    const remoteHead = await requireGit(f.source, ["rev-parse", "HEAD"]);
+    await requireGit(f.source, ["push", "--quiet", f.remote, `HEAD:refs/heads/${branch}`]);
+    const prepared = await prepareRepositoryRecoveryCheckout({
+      url: URL,
+      baseCommit: f.baseCommit,
+      branch: "retired-session-branch",
+      requestedRef: branch,
+      token: TOKEN,
+      temporaryRoot: f.scratch,
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    expect(prepared.remoteHeadCommit).toBe(remoteHead);
+    expect(await fs.readFile(path.join(prepared.root, "input.txt"), "utf8")).toBe(
+      "later private content\n",
+    );
+    expect(path.dirname(prepared.root)).toBe(f.scratch);
+    const accepted = path.join(f.root, "accepted-checkpoint");
+    await requireGit(f.source, ["worktree", "add", "--detach", accepted, f.baseCommit]);
+    const base = await captureWorkspaceSnapshot({ root: accepted, baseCommit: f.baseCommit });
+    await fs.writeFile(path.join(accepted, "accepted-only.txt"), "accepted worker edit\n");
+    await fs.writeFile(path.join(accepted, "input.txt"), "conflicting accepted work\n");
+    const current = await captureWorkspaceSnapshot({ root: accepted, baseCommit: f.baseCommit });
+    const remote = await captureWorkspaceSnapshot({
+      root: prepared.root,
+      baseCommit: f.baseCommit,
+    });
+    const applied = await applyStagedWorkerWorkspace({
+      root: prepared.root,
+      stagingRoot: accepted,
+      base: base.manifest,
+      current: current.manifest,
+      baseManifestRef: base.manifestRef,
+      currentManifestRef: current.manifestRef,
+      journal: {
+        load: async () => undefined,
+        begin: async () => {},
+        commit: async () => {},
+        abort: async () => {},
+      },
+      acceptance: { kind: "reconcile" },
+      assertCurrent: () => {},
+    });
+    expect(applied.conflictPaths).toEqual(["input.txt"]);
+    await applied.verifyLocalStable();
+    const reconciled = await captureWorkspaceSnapshot({
+      root: prepared.root,
+      baseCommit: f.baseCommit,
+      includePaths: new Set(
+        [...remote.manifest.entries, ...current.manifest.entries].map((entry) => entry.path),
+      ),
+    });
+    expect(reconciled.manifest.entries.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining(["remote-only.txt", "accepted-only.txt"]),
+    );
+    expect(await fs.readFile(path.join(prepared.root, "remote-only.txt"), "utf8")).toBe(
+      "new remote work\n",
+    );
+    expect(await fs.readFile(path.join(prepared.root, "accepted-only.txt"), "utf8")).toBe(
+      "accepted worker edit\n",
+    );
+    await prepared.verifyRemote();
+    await requireGit(f.remote, ["update-ref", `refs/heads/${branch}`, f.baseCommit]);
+    await expect(prepared.verifyRemote()).rejects.toThrow("Remote branch changed");
+    expect(await fs.readFile(path.join(prepared.root, "input.txt"), "utf8")).toBe(
+      "later private content\n",
+    );
+    await assertNoCredentialFiles(f.scratch);
+  });
+
   it("fetches only the pinned tree under its selected identity without inherited credentials or hooks", async () => {
     const f = await fixture();
     const poisonHome = path.join(f.root, "unrelated-home");

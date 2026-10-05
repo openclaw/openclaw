@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getRuntimeConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { supportsCurrentWorkerLaunch } from "./admission.js";
@@ -21,6 +22,7 @@ import {
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
+  REPOSITORY_REF_WORKER_RECOVERY_ERROR,
 } from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
@@ -28,6 +30,7 @@ import type {
 } from "./placement-recovery-contract.js";
 import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
+import { usesRepositoryRefWorkerRecovery } from "./service-validation.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 const log = createSubsystemLogger("gateway/worker-placement");
@@ -60,7 +63,7 @@ function activePlacementExecutionError(
 }
 
 export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
-  const { environments, failure, placements } = deps;
+  const { environments, failure, placements, workspaceOperations } = deps;
   const interruptedClaims = new Set(
     placements.list().flatMap((placement) => {
       const claim = projectWorkerSessionTurnClaim(placement);
@@ -201,6 +204,87 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     resultsOnly?: "results-only",
   ): Promise<void> => {
     let facts = await placements.readProjection([sessionId], { current: true });
+    const source = facts.placements.get(sessionId);
+    const released = source?.environmentId ? environments.get(source.environmentId) : undefined;
+    if (
+      source &&
+      source.state !== "local" &&
+      source.state !== "reclaimed" &&
+      source.activeOwnerEpoch !== null &&
+      released &&
+      (released.sharedHost === false ||
+        released.state === "destroyed" ||
+        (released.state === "failed" && released.leaseId === null)) &&
+      (released.destroyRequestedAtMs !== null || released.state === "orphaned") &&
+      (!environmentId || source.environmentId === environmentId) &&
+      !facts.moves.has(sessionId) &&
+      usesRepositoryRefWorkerRecovery(getRuntimeConfig(), released)
+    ) {
+      const assertCurrent = () => {
+        const current = placements.get(sessionId);
+        const environment = environments.get(released.environmentId);
+        if (
+          !current ||
+          current.sessionKey !== source.sessionKey ||
+          current.agentId !== source.agentId ||
+          current.environmentId !== source.environmentId ||
+          current.activeOwnerEpoch !== source.activeOwnerEpoch ||
+          placements.getPlacementMove(sessionId) ||
+          environment?.ownerEpoch !== released.ownerEpoch ||
+          environment.leaseId !== released.leaseId ||
+          !usesRepositoryRefWorkerRecovery(getRuntimeConfig(), environment)
+        ) {
+          throw new Error("Ephemeral worker recovery source changed after cleanup");
+        }
+      };
+      await workspaceOperations.run(released.environmentId, async () => {
+        assertCurrent();
+        // This opt-in abandons worker files, not external-effect uncertainty. Existing tool
+        // settlement checks still refuse unfinished session effects; no input is replayed here.
+        if (
+          !(
+            source.state === "failed" &&
+            source.recoveryError === REPOSITORY_REF_WORKER_RECOVERY_ERROR
+          )
+        ) {
+          await forceAbandonWorkerEnvironment({
+            ...deps,
+            environmentId: released.environmentId,
+            sessionId,
+            recoveryError: REPOSITORY_REF_WORKER_RECOVERY_ERROR,
+            assertCurrent,
+          });
+        }
+        assertCurrent();
+        const failed = placements.get(sessionId);
+        if (
+          failed?.state === "failed" &&
+          released.leaseId &&
+          released.state !== "destroyed" &&
+          (!released.recoveryHold || released.recoveryHold.phase === "requested") &&
+          deps.environments.holdFailedEnvironment &&
+          deps.environments.supportsFailedLeaseHold?.(released.environmentId) === true &&
+          failed.activeOwnerEpoch === released.ownerEpoch
+        ) {
+          await deps.environments.holdFailedEnvironment(
+            {
+              sessionId,
+              sessionKey: source.sessionKey,
+              agentId: source.agentId,
+              environmentId: released.environmentId,
+              ownerEpoch: released.ownerEpoch,
+              placementGeneration: failed.generation,
+              executionMode: source.executionMode,
+            },
+            assertCurrent,
+          );
+          assertCurrent();
+        }
+      });
+      // Held companions keep their existing cleanup owner; a confirmed absent VM may
+      // admit a later original-authority turn without falsely claiming full destruction.
+      return;
+    }
     const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
     if (resultsOnly === "results-only") {
       return;

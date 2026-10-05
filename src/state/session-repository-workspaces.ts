@@ -30,6 +30,7 @@ import type {
   RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
+  RepositoryWorkspacePublishedHead,
   SessionRepositoryWorkspaceRecord,
 } from "./session-repository-workspaces.types.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
@@ -357,9 +358,7 @@ export function createSessionRepositoryWorkspaceStore(
         ),
       );
     },
-    async advanceToPublishedHead(
-      input: Guarded<RepositoryWorkspaceMutation & { branch: string; headCommit: string }>,
-    ) {
+    async advanceToPublishedHead(input: Guarded<RepositoryWorkspacePublishedHead>) {
       return requireWorkspace(
         await mutate(
           {
@@ -369,6 +368,7 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               branch: input.branch,
               headCommit: input.headCommit,
+              preserveRequestedRef: input.preserveRequestedRef,
               nowMs: now?.(),
             },
           },

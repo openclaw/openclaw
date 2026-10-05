@@ -14,6 +14,7 @@ import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
 } from "../operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -104,46 +105,11 @@ function resolveWorkerSessionTarget(
   return {
     cfg,
     entry,
-    session: { sessionId, sessionKey, agentId: target.target.agentId },
+    session: { sessionId, sessionKey: target.canonicalKey, agentId: target.target.agentId },
     dispatchTarget: destination.value,
     service,
     reader,
   };
-}
-
-async function validateDispatchExecutionMode(params: {
-  context: GatewayRequestContext;
-  executionMode: "worker-turn" | "remote-exec";
-  sessionRuntime: string;
-  devicePlacement: ReturnType<typeof resolveWorkerPlacementCapabilities>["devicePlacement"];
-  target: { profileId: string; deviceId?: string };
-  respond: RespondFn;
-}): Promise<boolean> {
-  if (params.target.deviceId !== undefined) {
-    const eligibility = await resolveDevicePlacementEligibility({
-      environmentService: params.context.workerEnvironmentService,
-      deviceId: params.target.deviceId,
-      runtimeId: params.sessionRuntime,
-      executionMode: params.executionMode,
-      requirement: params.devicePlacement,
-      config: params.context.getRuntimeConfig(),
-      currentNode: params.context.nodeRegistry?.get?.(params.target.deviceId),
-    });
-    if (eligibility.ok) {
-      return true;
-    }
-    respondInvalidWorkerSession(params.respond, eligibility.error);
-    return false;
-  }
-  const environmentService = params.context.workerEnvironmentService;
-  if (environmentService?.supportsExecutionMode(params.target.profileId, params.executionMode)) {
-    return true;
-  }
-  respondInvalidWorkerSession(
-    params.respond,
-    `runtime ${params.sessionRuntime} requires a cloud worker provider that supports ${params.executionMode}; choose a compatible provider, or select an agent/model route with agentRuntime.id "openclaw"`,
-  );
-  return false;
 }
 
 export const sessionDispatchHandlers: GatewayRequestHandlers = {
@@ -153,6 +119,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     context,
     client,
     signal,
+    hasCurrentClientAuthority,
     sessionMutationAuthorization,
   }) => {
     if (
@@ -210,6 +177,17 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         throw new SessionMutationAuthorizationChangedError(profileAccessError());
       }
     };
+    await using operatorCapture = {
+      preparation: captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        hasCurrentClientAuthority,
+      }),
+      async [Symbol.asyncDispose]() {
+        (await this.preparation.catch(() => undefined))?.release();
+      },
+    };
+    void operatorCapture.preparation.catch(() => undefined);
     let { dispatchTarget } = resolved;
     const autoDevice = params.autoDevice === true;
     const canUseProjectProfile =
@@ -303,6 +281,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
     if (
       existingPlacement?.state === "failed" &&
+      context.workerPlacementDispatchService?.canRecoverFailedPlacement?.(existingPlacement) !==
+        true &&
       !isFailedWorkerPlacementEnvironmentGone({
         environmentService: context.workerEnvironmentService,
         placement: existingPlacement,
@@ -423,6 +403,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         const placement = await dispatchService.dispatch(
           {
             ...session,
+            operatorAuthority: (await operatorCapture.preparation)?.authority,
             executionMode,
             runSetupScript,
             ...(readNativeCredential ? { readNativeCredential } : {}),
@@ -523,7 +504,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             client,
             sessionId,
             sessionKey,
-            agentId,
+            agentId: session.agentId,
             repositoryUrl: workspace.kind === "repository" ? workspace.repository.url : undefined,
             assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
           }),
@@ -613,7 +594,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             client,
             sessionId,
             sessionKey,
-            agentId,
+            agentId: session.agentId,
             repositoryUrl: workspace?.kind === "repository" ? workspace.repository.url : undefined,
             assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
           }),

@@ -3,6 +3,7 @@ import type {
   WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { WorkerPlacementCancellationTarget } from "./placement-target.js";
+import type { RetainedWorkerRecoveryAcceptance } from "./recovery-hold-store.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementReclaimRequest,
@@ -13,12 +14,18 @@ import type {
   WorkspaceResultConflictLookup,
 } from "./workspace-conflicts.js";
 
+export type WorkerWorkspaceRetentionNotice = Pick<
+  RetainedWorkerRecoveryAcceptance,
+  "environmentId" | "previousCheckpointRef" | "checkpointRef" | "manifestHash"
+> & { message: string };
+
 export type PreparedWorkerWorkspaceRecovery = {
   readonly workspace: WorkerSessionWorkspace;
   assertCurrent: () => void;
   resolveConflict: () => Promise<WorkspaceResultConflictLookup>;
   reportConflict: (report: WorkerWorkspaceConflictReport) => Promise<void>;
   reportFailure: (error: string) => Promise<void>;
+  reportRetention?: (notice: WorkerWorkspaceRetentionNotice) => Promise<void>;
 };
 
 export type WithPreparedWorkerWorkspaceRecovery = <T>(
@@ -67,6 +74,8 @@ export type WorkerPlacementReclaimBarriers = {
   ) => Promise<WorkerReclaimPlacement>;
   runFailedReclaimBarrier: (
     params: WorkerPlacementReclaimRequest & {
+      /** Recovery is requested by a new turn; fence the old lease without aborting that turn. */
+      preserveCurrentAdmission?: true;
       authorize?: WorkerPlacementAuthorization;
       reclaim: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
     },

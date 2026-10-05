@@ -17,6 +17,7 @@ import {
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
+import { prepareWorkerCapacitySettlement } from "./provider-lease-destroy.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
@@ -66,6 +67,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     preserveIndeterminateProvisionCleanup,
     destroy,
     retireMismatchedLease,
+    holdFailedEnvironment,
+    reconcileRecoveryHold,
+    supportsFailedLeaseHold,
+    expirePrepared,
   } = createWorkerProviderOwnerLifecycle({
     ...options,
     providerFor,
@@ -305,6 +310,23 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       // A cancelled attempt may already own a paid allocation, even when its late
       // provider error looks permanent. Keep it available for canonical teardown.
       cancellation?.assertActive();
+      if (WorkerProviderError.isCapacityShortage(error)) {
+        const assertShortageCurrent = await prepareWorkerCapacitySettlement(
+          record,
+          provider,
+          error,
+          () => {
+            cancellation?.assertActive();
+            beforeProvision?.();
+            return requireCurrentOwner(record);
+          },
+        );
+        return await finishConfirmedProvisionCleanup(
+          record,
+          WorkerProviderError.cleanupComplete(error.receipt.leaseId, error),
+          assertShortageCurrent,
+        );
+      }
       if (WorkerProviderError.isCleanupComplete(error)) {
         return await finishConfirmedProvisionCleanup(record, error);
       }
@@ -464,6 +486,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     beforeProvision?: () => void,
   ): Promise<void> => {
     let record = initialRecord;
+    if (record.recoveryHold) {
+      await reconcileRecoveryHold(record, "unknown", signal);
+      return;
+    }
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void (await finishDestroy(record));
     }
@@ -508,6 +534,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const lease = lifecycleLease(record, leaseId);
     const inspection = await dedicatedLeases.inspect(record, provider, lease);
     if (!inspection) {
+      await reconcileRecoveryHold(record, undefined, signal);
       return;
     }
     requireCurrentOwner(record);
@@ -532,6 +559,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await finishProvenDestroy(draining).catch(async (error: unknown) => {
         await saveError(draining, error);
       });
+      return;
+    }
+    if (await reconcileRecoveryHold(record, status, signal)) {
       return;
     }
     if (status === "unknown") {
@@ -653,6 +683,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   });
 
   return {
+    resumeNodeLease: nodeProvisioning.resume,
     getDedicatedNodeLeaseSignal: dedicatedLeases.signal,
     clearDedicatedNodeLeases: () => dedicatedLeases.clear(),
     createWithProfile,
@@ -689,8 +720,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         return store.get(record.environmentId);
       }),
     destroy,
+    stopOwner,
     identityResolverFor,
+    holdFailedEnvironment,
     ...machineCatalog,
+    supportsFailedLeaseHold,
     providerFor,
     reconcileRecord,
     readRuntimeRefresh: runtimeRefresher.read,

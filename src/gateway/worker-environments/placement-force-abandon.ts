@@ -28,12 +28,18 @@ export async function forceAbandonWorkerEnvironment(
   params: Pick<PlacementRecoveryDeps, "placements" | "resolveWorkspace"> & {
     environmentId: string;
     onCleanupError?: (error: unknown) => void;
+    recoveryError?: string;
+    assertCurrent?: () => void;
+    sessionId?: string;
   },
 ): Promise<void> {
   const { environmentId, placements } = params;
-  const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
+  const recoveryError = params.recoveryError ?? FORCED_WORKER_ABANDONMENT_ERROR;
+  params.assertCurrent?.();
   const journalOwners = (await params.placements.listWorkspaceReconciliationOwners()).filter(
-    (owner) => owner.environmentId === environmentId,
+    (owner) =>
+      owner.environmentId === environmentId &&
+      (!params.sessionId || owner.sessionId === params.sessionId),
   );
   const journalCleanups: Array<{
     owner: (typeof journalOwners)[number];
@@ -42,6 +48,7 @@ export async function forceAbandonWorkerEnvironment(
   }> = [];
   const retainedJournalSessions = new Set<string>();
   for (const owner of journalOwners) {
+    params.assertCurrent?.();
     const placement = placements.get(owner.sessionId);
     const isCurrentOwner =
       (placement?.state === "active" || placement?.state === "draining") &&
@@ -76,7 +83,11 @@ export async function forceAbandonWorkerEnvironment(
     repositoryWorkspaceId?: string;
   }> = [];
   for (const pending of await placements.listPendingWorkspaceResultsAsync()) {
-    if (pending.environmentId === environmentId) {
+    params.assertCurrent?.();
+    if (
+      pending.environmentId === environmentId &&
+      (!params.sessionId || pending.sessionId === params.sessionId)
+    ) {
       const placement = placements.get(pending.sessionId);
       if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {
         const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
@@ -95,6 +106,7 @@ export async function forceAbandonWorkerEnvironment(
             owner: placementTurnOwner(placement),
           });
         }
+        params.assertCurrent?.();
         await placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
       } else {
         await placements.abandonWorkspaceResult(pending);
@@ -102,7 +114,11 @@ export async function forceAbandonWorkerEnvironment(
     }
   }
   for (const placement of placements.listForReconcile()) {
-    if (placement.environmentId !== environmentId) {
+    params.assertCurrent?.();
+    if (
+      placement.environmentId !== environmentId ||
+      (params.sessionId && placement.sessionId !== params.sessionId)
+    ) {
       continue;
     }
     let current = placements.get(placement.sessionId);
@@ -115,6 +131,7 @@ export async function forceAbandonWorkerEnvironment(
       });
     }
     if (current?.state === "draining") {
+      params.assertCurrent?.();
       if (current.turnClaim) {
         await placements.closeWorkerTurnToolState({
           sessionId: current.sessionId,
@@ -124,6 +141,7 @@ export async function forceAbandonWorkerEnvironment(
           owner: placementTurnOwner(current),
         });
       }
+      params.assertCurrent?.();
       current = await placements.startReconcile({
         sessionId: current.sessionId,
         environmentId: current.environmentId,
@@ -132,6 +150,7 @@ export async function forceAbandonWorkerEnvironment(
         forceLocalClaim: true,
       });
     }
+    params.assertCurrent?.();
     if (current && (current.state !== "failed" || current.recoveryError !== recoveryError)) {
       await placements.fail({
         sessionId: current.sessionId,
@@ -144,6 +163,7 @@ export async function forceAbandonWorkerEnvironment(
   // The durable fence is now closed. Filesystem rollback and ref cleanup are
   // useful hygiene, but a changed or missing workspace must not revive it.
   for (const cleanup of journalCleanups) {
+    params.assertCurrent?.();
     if (cleanup.journal.appliedManifestRef) {
       continue;
     }
@@ -164,12 +184,14 @@ export async function forceAbandonWorkerEnvironment(
   // Placement failure is durable before journal removal. A crash during the
   // best-effort rollback therefore leaves a fenced placement and retriable journal.
   for (const owner of journalOwners) {
+    params.assertCurrent?.();
     if (retainedJournalSessions.has(owner.sessionId)) {
       continue;
     }
     await placements.abortWorkspaceReconciliation(owner, { force: true });
   }
   for (const cleanup of stagedResultCleanups) {
+    params.assertCurrent?.();
     try {
       // Repository refs remain the durable session data even when the operator
       // abandons a worker; only the repository workspace deletion owns them.

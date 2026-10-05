@@ -33,7 +33,12 @@ type PreparationRow = Pick<
   | "preparation_consumed_at_ms"
 >;
 const query = (db: DatabaseSync) =>
-  getNodeSqliteKysely<Pick<DB, "worker_environments" | "worker_session_placements">>(db);
+  getNodeSqliteKysely<
+    Pick<
+      DB,
+      "worker_environments" | "worker_session_placements" | "worker_environment_recovery_holds"
+    >
+  >(db);
 
 export function readWorkerEnvironmentPreparation(
   row: PreparationRow,
@@ -121,6 +126,7 @@ type PreparedReservationCandidate = Pick<
   | "leaseId"
   | "state"
   | "preparation"
+  | "recoveryHold"
   | "destroyRequestedAtMs"
   | "createdAtMs"
 >;
@@ -131,9 +137,13 @@ export function selectPreparedEnvironmentReservations(
   return records
     .filter(
       (record) =>
-        record.preparation !== null &&
+        (record.preparation !== null || record.recoveryHold !== undefined) &&
+        !record.recoveryHold?.receipt?.resources.some(
+          (resource) => resource.kind === "vm" && resource.state === "absent",
+        ) &&
         !["failed", "destroyed"].includes(record.state) &&
-        (record.preparation.consumedAtMs === null ||
+        (record.recoveryHold !== undefined ||
+          record.preparation?.consumedAtMs === null ||
           record.destroyRequestedAtMs !== null ||
           record.state === "orphaned"),
     )
@@ -143,8 +153,10 @@ export function selectPreparedEnvironmentReservations(
       leaseId: record.leaseId,
       cleanupOrder: record.destroyRequestedAtMs !== null || record.state === "orphaned" ? 0 : 1,
       state: record.state,
-      purpose: record.preparation!.purpose,
-      projectKey: snapshotProjectKey(record.profileSnapshot),
+      purpose: record.preparation?.purpose ?? "reserve",
+      projectKey: record.recoveryHold
+        ? `retained:${record.recoveryHold.kind === "prepared" ? record.environmentId : record.recoveryHold.sessionId}`
+        : snapshotProjectKey(record.profileSnapshot),
       createdAtMs: record.createdAtMs,
     }))
     .toSorted(
@@ -162,8 +174,26 @@ function readPreparedReservations(db: DatabaseSync): Reservations {
       db,
       query(db)
         .selectFrom("worker_environments")
-        .selectAll()
-        .where("preparation_key", "is not", null),
+        .selectAll("worker_environments")
+        .select((eb) =>
+          eb
+            .selectFrom("worker_environment_recovery_holds")
+            .select("hold_json")
+            .whereRef("environment_id", "=", "worker_environments.environment_id")
+            .$asScalar()
+            .as("recovery_hold_json"),
+        )
+        .where((eb) =>
+          eb.or([
+            eb("preparation_key", "is not", null),
+            eb.exists(
+              eb
+                .selectFrom("worker_environment_recovery_holds")
+                .select("environment_id")
+                .whereRef("environment_id", "=", "worker_environments.environment_id"),
+            ),
+          ]),
+        ),
     ).rows.map((row) => ({
       environmentId: row.environment_id,
       profileId: row.profile_id,
@@ -171,6 +201,9 @@ function readPreparedReservations(db: DatabaseSync): Reservations {
       leaseId: row.lease_id,
       state: parseWorkerEnvironmentState(row.state),
       preparation: readWorkerEnvironmentPreparation(row),
+      recoveryHold: row.recovery_hold_json
+        ? (JSON.parse(row.recovery_hold_json) as WorkerEnvironmentCustodyHold) // SAFETY: The admitted hold bytes come only from the typed retained-source worker.
+        : undefined,
       destroyRequestedAtMs: row.destroy_requested_at_ms,
       createdAtMs: row.created_at_ms,
     })),
@@ -416,7 +449,6 @@ export function consumePreparedEnvironment(
   ) {
     return undefined;
   }
-  input.assertCurrent();
   executeSqliteQuerySync(
     db,
     query(db)

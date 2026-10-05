@@ -274,6 +274,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/crabbox/src/crabbox-worker-prepared-image.test.ts",
   "extensions/crabbox/src/crabbox-worker-project.test.ts",
   "extensions/crabbox/src/crabbox-worker-provider-desktop.test.ts",
+  "extensions/crabbox/src/crabbox-worker-provider-heartbeat.test.ts",
   "extensions/crabbox/src/crabbox-worker-provider.test.ts",
   "extensions/crabbox/src/crabbox-worker-coordinator-retry.test.ts",
   "extensions/crabbox/src/crabbox-worker-stop.test.ts",

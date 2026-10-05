@@ -12,6 +12,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as command from "../process/exec.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -35,6 +36,7 @@ import {
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createWorkerProviderIntent } from "./worker-environments/provider-intent.js";
+import { syncSessionRepositoryWorkspace } from "./worker-environments/repository-workspace-startup.js";
 import { createProvider } from "./worker-environments/service.test-support.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
@@ -62,8 +64,14 @@ export type ReclaimedFactoryCredentialVariant =
   | "placement replaced during lookup"
   | "workspace changed during lookup";
 
+export type ReclaimedFactorySetupVariant =
+  | "setup administrator"
+  | "setup unprivileged"
+  | "setup actor changed"
+  | "setup role revoked during lookup";
+
 export async function exerciseReclaimedFactoryCredential(
-  variant: ReclaimedFactoryCredentialVariant,
+  variant: ReclaimedFactoryCredentialVariant | ReclaimedFactorySetupVariant,
 ) {
   onTestFinished(() => {
     vi.restoreAllMocks();
@@ -85,8 +93,13 @@ export async function exerciseReclaimedFactoryCredential(
       vi.stubEnv(key, undefined);
     }
     const actorId = 17235;
+    const setupCase = variant.startsWith("setup ");
+    const setupAdministrator = setupCase && variant !== "setup unprivileged";
     const profile = ensureProfileForEmail(`github:microsoft.ghe.com:${actorId}`);
-    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] });
+    const client = createOperatorClient({
+      profileId: profile.id,
+      scopes: [setupAdministrator ? "operator.admin" : "operator.write"],
+    });
     client.authenticatedFactoryGitHubAccountId = actorId;
     client.internal = { authenticatedOperator: true };
     if (variant === "unattested") {
@@ -101,12 +114,38 @@ export async function exerciseReclaimedFactoryCredential(
     const config: OpenClawConfig = {
       gateway: {
         github: { host: "microsoft.ghe.com", apiBaseUrl: "https://api.microsoft.ghe.com" },
+        ...(setupCase
+          ? {
+              roles: {
+                default: "engineer",
+                definitions: {
+                  engineer: {
+                    scopes: ["operator.write" as const],
+                    sessions: { others: "none" as const },
+                    agents: ["main"],
+                  },
+                  administrator: {
+                    scopes: ["operator.admin" as const],
+                    sessions: { others: "write" as const },
+                    agents: ["main"],
+                  },
+                },
+              },
+            }
+          : {}),
       },
       cloudWorkers: {
         profiles: { development: { provider: "fake", settings: { region: "test" } } },
       },
     };
     setRuntimeConfigSnapshot(config);
+    if (setupCase) {
+      await setCanonicalUserProfileRole(
+        profile.id,
+        setupAdministrator ? "administrator" : "engineer",
+        { onCommitted: invalidateOperatorRolePolicy },
+      );
+    }
     const context = createContext();
     context.getRuntimeConfig = () => config;
     const captured = expectDefined(
@@ -161,9 +200,21 @@ export async function exerciseReclaimedFactoryCredential(
       sessionKey: REQUEST.sessionKey,
       url: "https://microsoft.ghe.com/acme/project.git",
       requestedRef: "main",
-      runSetupScript: false,
+      runSetupScript: setupCase,
       assertCurrent,
     });
+    if (setupCase) {
+      await upsertSessionEntryCore(
+        { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey },
+        {
+          sessionId: REQUEST.sessionId,
+          updatedAt: Date.now(),
+          lifecycleRevision: "setup-issuer-lifecycle",
+          repositoryWorkspaceId: repository.workspaceId,
+          createdActor: { type: "human", source: "profile", id: profile.id },
+        },
+      );
+    }
     const resolveWorkspace = async (identity: {
       agentId: string;
       sessionKey: string;
@@ -319,7 +370,10 @@ export async function exerciseReclaimedFactoryCredential(
           admission.close();
         } else if (variant === "grant revoked during lookup") {
           grant.abort(new Error("grant ended"));
-        } else if (variant === "role revoked during lookup") {
+        } else if (
+          variant === "role revoked during lookup" ||
+          variant === "setup role revoked during lookup"
+        ) {
           await setCanonicalUserProfileRole(profile.id, "revoked", {
             onCommitted: invalidateOperatorRolePolicy,
           });
@@ -385,12 +439,46 @@ export async function exerciseReclaimedFactoryCredential(
       return Response.json(body);
     });
     vi.stubGlobal("fetch", fetchFixture);
+    const setupEffects: Array<{ profileId: string; sessionId: string }> = [];
+    const setupDispatch: typeof harness.service.dispatch = async (
+      request,
+      _onTransition,
+      authorize,
+      signal,
+    ) => {
+      await syncSessionRepositoryWorkspace({
+        repository,
+        sessionId: request.sessionId,
+        sessionKey: request.sessionKey,
+        agentId: request.agentId,
+        generation: placement.generation,
+        runSetupScript: request.runSetupScript,
+        operatorAuthority: request.operatorAuthority,
+        readNativeCredential: request.readNativeCredential,
+        signal,
+        assertCurrent: authorize ?? assertCurrent,
+        tunnel: {
+          ...harness.tunnelHandle(ready.ownerEpoch),
+          syncWorkspace: async (input) => {
+            input.authorize?.();
+            originalAuthority.assertCurrent();
+            expect(input.source).toMatchObject({ kind: "repository", runSetupScript: true });
+            setupEffects.push({
+              profileId: originalAuthority.profileId,
+              sessionId: input.sessionId,
+            });
+            throw new Error("authorized setup native leaf entered");
+          },
+        },
+      });
+      throw new Error("setup fixture unexpectedly completed");
+    };
     const dependencies = {
-      dispatch: harness.service.dispatch,
+      dispatch: setupCase ? setupDispatch : harness.service.dispatch,
       placements,
     };
     const redispatch = createWorkerPlacementRedispatch(dependencies);
-    if (variant === "actor changed") {
+    if (variant === "actor changed" || variant === "setup actor changed") {
       client.authenticatedFactoryGitHubAccountId = actorId + 1;
     } else if (variant === "released") {
       admission.close();
@@ -409,7 +497,12 @@ export async function exerciseReclaimedFactoryCredential(
         operatorAuthority,
         signal: cancellation.signal,
       });
-      if (variant === "current") {
+      if (variant === "setup administrator") {
+        await expect(result).rejects.toThrow("authorized setup native leaf entered");
+        expect(setupEffects).toEqual([{ profileId: profile.id, sessionId: REQUEST.sessionId }]);
+        expect(proofs.size).toBeGreaterThan(0);
+        expect(await repositoryStore.get(repository.workspaceId)).toEqual(repository);
+      } else if (variant === "current") {
         await expect(result).rejects.toThrow("create failed");
         expect(proofs.size).toBeGreaterThan(1);
         expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
@@ -422,7 +515,12 @@ export async function exerciseReclaimedFactoryCredential(
         await expect(reader({})).rejects.toThrow("already settled");
         expect(native).toHaveBeenCalledTimes(calls);
       } else {
-        await expect(result).rejects.toThrow();
+        if (variant === "setup unprivileged") {
+          await expect(result).rejects.toThrow("Repository setup requires administrator");
+        } else {
+          await expect(result).rejects.toThrow();
+        }
+        expect(setupEffects).toEqual([]);
         expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
         expect(fetchFixture).not.toHaveBeenCalled();
         expect(proofs.size).toBe(variant.includes("during lookup") ? 1 : 0);

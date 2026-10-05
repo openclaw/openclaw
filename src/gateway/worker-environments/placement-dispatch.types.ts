@@ -40,6 +40,9 @@ export type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
   > & {
     prepareRetainedRecoveryCheckpoint?: PrepareRetainedRecoveryCheckpoint;
     prepareFailedDisposalCheckpoint?: PrepareRetainedRecoveryCheckpoint;
+    prepareRepositoryRefRecovery?: (
+      request: WorkerPlacementDispatchRequest & { assertCurrent: () => void; signal?: AbortSignal },
+    ) => Promise<void>;
     environments: WorkerDispatchEnvironmentService &
       Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> &
       Partial<

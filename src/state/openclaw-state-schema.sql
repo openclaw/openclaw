@@ -2011,6 +2011,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
 CREATE INDEX IF NOT EXISTS idx_worker_environments_terminal_changed
   ON worker_environments(state_changed_at_ms, environment_id);
 
+-- Session sources stay unique; unattached preparation custody has no session identity.
+CREATE TABLE IF NOT EXISTS worker_environment_recovery_holds (
+  environment_id TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT UNIQUE,
+  hold_json TEXT NOT NULL CHECK (json_valid(hold_json)),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE RESTRICT
+) STRICT;
+
 -- A dedicated node registers its fixed build paths before ready, then binds
 -- them once. The environment belongs to the Gateway's separate database.
 CREATE TABLE IF NOT EXISTS node_worker_prepared_workspaces (
@@ -2171,6 +2179,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   transition_generation INTEGER NOT NULL DEFAULT 0 CHECK (transition_generation >= 0),
   active_owner_epoch INTEGER CHECK (active_owner_epoch IS NULL OR active_owner_epoch >= 1),
   workspace_base_manifest_ref TEXT,
+  repository_preparation TEXT CHECK (repository_preparation IN ('pending', 'ready', 'failed')),
   remote_workspace_dir TEXT,
   worker_bundle_hash TEXT,
   last_transcript_ack_cursor INTEGER CHECK (
@@ -2194,6 +2203,11 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   state_changed_at_ms INTEGER NOT NULL,
   terminal_reason TEXT,
   terminal_at_ms INTEGER,
+  CHECK (repository_preparation IS NULL OR
+    (repository_preparation = 'ready' AND workspace_base_manifest_ref IS NOT NULL) OR
+    (repository_preparation = 'failed' AND state IN ('starting', 'active', 'draining', 'reconciling', 'reclaimed', 'failed')) OR
+    (repository_preparation = 'pending' AND workspace_base_manifest_ref IS NULL
+      AND state IN ('starting', 'active', 'draining', 'reconciling', 'reclaimed', 'failed'))),
   CHECK (
     (state IN ('local', 'requested')
       AND environment_id IS NULL AND active_owner_epoch IS NULL
@@ -2218,19 +2232,19 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
     OR
     (state IS 'starting'
       AND environment_id IS NOT NULL AND active_owner_epoch IS NULL
-      AND workspace_base_manifest_ref IS NOT NULL AND remote_workspace_dir IS NOT NULL
+      AND (workspace_base_manifest_ref IS NOT NULL OR repository_preparation IS 'pending' OR repository_preparation IS 'failed') AND remote_workspace_dir IS NOT NULL
       AND worker_bundle_hash IS NOT NULL
       AND last_transcript_ack_cursor IS NULL AND last_live_event_ack_cursor IS NULL
       AND recovery_error IS NULL)
     OR
     (state IN ('active', 'draining', 'reconciling')
       AND environment_id IS NOT NULL AND active_owner_epoch IS NOT NULL
-      AND workspace_base_manifest_ref IS NOT NULL AND remote_workspace_dir IS NOT NULL
+      AND (workspace_base_manifest_ref IS NOT NULL OR repository_preparation IS 'pending' OR repository_preparation IS 'failed') AND remote_workspace_dir IS NOT NULL
       AND worker_bundle_hash IS NOT NULL AND recovery_error IS NULL)
     OR
     (state IS 'reclaimed'
       AND environment_id IS NOT NULL AND active_owner_epoch IS NOT NULL
-      AND workspace_base_manifest_ref IS NOT NULL AND remote_workspace_dir IS NOT NULL
+      AND (workspace_base_manifest_ref IS NOT NULL OR repository_preparation IS 'pending' OR repository_preparation IS 'failed') AND remote_workspace_dir IS NOT NULL
       AND worker_bundle_hash IS NOT NULL AND recovery_error IS NULL
       AND turn_claim_owner IS NULL AND turn_claim_id IS NULL AND turn_claim_run_id IS NULL
       AND turn_claim_generation IS NULL AND turn_claim_owner_epoch IS NULL)

@@ -113,6 +113,7 @@ export async function resolveRepositoryWorkspaceAccess(
         const tunnel = await environments.startTunnel({
           environmentId: placement.environmentId,
           ownerEpoch: placement.activeOwnerEpoch,
+          authorize: assertOperation,
         });
         assertOperation();
         if (

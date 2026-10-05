@@ -8,8 +8,13 @@ import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-mig
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { readStateLeaseProcessOwnerStatus } from "../infra/state-lease-process-owner.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
@@ -17,6 +22,7 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -102,10 +108,21 @@ export async function assertDoctorMaintenanceReady(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   log: (message: string) => void,
-  databaseTargets?: readonly { path: string; realPath?: string }[],
+  completion?: { signal: AbortSignal; assertCurrent: () => void },
 ): Promise<{ schemaPublicationDeferred: boolean }> {
   let schemaPublicationDeferred = false;
   let refusedDatabasePaths: string[] = [];
+  let discovery: PreparedAgentDatabaseMigrationDiscovery | undefined;
+  const resources = completion ? getOpenClawDatabaseMaintenanceScope() : undefined;
+  if (completion && !resources) {
+    throw new Error("Doctor canonical completion requires its live maintenance scope");
+  }
+  const assertCompletionCurrent = () => {
+    completion?.signal.throwIfAborted();
+    completion?.assertCurrent();
+    resources?.assertAdmission();
+  };
+  assertCompletionCurrent();
   const { assertSessionStoreMigrationComplete } =
     await import("../config/sessions/startup-migration.js");
   assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" });
@@ -123,26 +140,60 @@ export async function assertDoctorMaintenanceReady(
       refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
     },
     configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+    ...(completion
+      ? {
+          signal: completion.signal,
+          onAgentDatabaseDiscovery: (prepared: PreparedAgentDatabaseMigrationDiscovery) => {
+            discovery = prepared;
+          },
+        }
+      : {}),
   });
+  assertCompletionCurrent();
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   await assertConfiguredWorkspaceStateReady({ cfg, operation: "doctor" });
   const { assertNoPendingLegacyExecApprovals } =
     await import("../infra/exec-approvals-migration-gate.js");
   assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
-  if (!schemaPublicationDeferred && databaseTargets) {
+  if (!schemaPublicationDeferred && completion) {
+    if (!resources || !discovery) {
+      throw new Error("Doctor canonical completion requires its current maintenance inventory");
+    }
+    const targets = discovery.discovery.targets.filter(
+      (target) =>
+        !refusedDatabasePaths.some(
+          (refused) => refused === target.path || refused === target.realPath,
+        ),
+    );
+    const { certifySessionCanonicalValidationPending } =
+      await import("../config/sessions/session-canonical-validation-readiness.js");
+    const { withSqliteCanonicalValidationWorker } =
+      await import("../config/sessions/session-accessor.sqlite-reclamation-worker.js");
+    await withSqliteCanonicalValidationWorker(async (withWorker) => {
+      for (const target of targets) {
+        const identity = readDatabasePathIdentitySync(target.path);
+        const assertCurrent = () => {
+          assertCompletionCurrent();
+          // The maintenance owner holds shared state; the certifier claims the agent file.
+          resources.assertDatabaseAccess(resolveOpenClawStateSqlitePath(env));
+          assertExistingDatabaseIdentity(target.path, identity.key, identity.birthtime);
+        };
+        assertCurrent();
+        await certifySessionCanonicalValidationPending(
+          { agentId: target.agentId, path: target.path, env },
+          withWorker,
+          assertCurrent,
+        );
+        assertCurrent();
+      }
+    });
+    assertCompletionCurrent();
     const { completeDoctorMigrationBackups } =
       await import("./doctor-migration-backup-artifacts.js");
     try {
       completeDoctorMigrationBackups(
         env,
-        databaseTargets
-          .filter(
-            (target) =>
-              !refusedDatabasePaths.some(
-                (refused) => refused === target.path || refused === target.realPath,
-              ),
-          )
-          .map((target) => target.path),
+        targets.map((target) => target.path),
       );
     } catch (error) {
       log(`Migration backups remain protected; completion registration failed: ${String(error)}`);

@@ -8,10 +8,19 @@ import type {
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
+  parseRemoteWorkspaceManifestEnvelope,
+  replaceWorkerWorkspaceHashMemoEntries,
+  serializeRemoteWorkspaceHashMemo,
+  type WorkspaceHashMemo,
+} from "./workspace-hash-memo.js";
+import {
   workerWorkspaceCommandSucceeded as succeeded,
   workspaceSyncError,
 } from "./workspace-sync-helpers.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+import {
+  createRemoteWorkspaceManifestScript,
+  REMOTE_WORKSPACE_MANIFEST_JS,
+} from "./workspace-sync-scripts.js";
 
 const GIT_TIMEOUT_MS = 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
@@ -111,6 +120,7 @@ function gitFailure(
 export function createNodeWorkerRepositoryPreparation(
   run: NodeWorkerRepositoryExec,
   authorize?: () => void,
+  memo?: { hashes: WorkspaceHashMemo; maxBytes: number },
 ) {
   // Invocation-owned preparation must not lend its authority to retained workspace custody.
   const exec: NodeWorkerRepositoryExec = async (command) => {
@@ -136,19 +146,37 @@ export function createNodeWorkerRepositoryPreparation(
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "never",
     });
-  const capture = async (dir: string, base: string | null, reference?: string) =>
-    await exec({
+  const capture = async (dir: string, base: string | null, reference?: string) => {
+    const captured = await exec({
       argv: [
         "node",
         "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
+        memo ? createRemoteWorkspaceManifestScript(memo.maxBytes) : REMOTE_WORKSPACE_MANIFEST_JS,
         dir,
         ...(base ? [base, "eligible"] : ["", "all"]),
         ...(reference ? [reference.slice("sha256:".length)] : []),
+        ...(memo ? ["memo-v1"] : []),
       ],
+      ...(memo ? { input: serializeRemoteWorkspaceHashMemo(memo.hashes, memo.maxBytes) } : {}),
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "idempotent",
     });
+    if (!memo) {
+      return { ...captured, manifestRef: captured.stdout.trim() };
+    }
+    let response;
+    try {
+      response = succeeded(captured)
+        ? parseRemoteWorkspaceManifestEnvelope(captured.stdout)
+        : undefined;
+    } catch {
+      // Preserve the original command outcome; an invalid envelope cannot attest a manifest.
+    }
+    if (response) {
+      replaceWorkerWorkspaceHashMemoEntries(memo.hashes, response.memo);
+    }
+    return { ...captured, manifestRef: response?.manifestRef ?? "" };
+  };
   const fetchRevision = async (
     identity: RepositoryIdentity,
   ): Promise<
@@ -216,7 +244,7 @@ export function createNodeWorkerRepositoryPreparation(
       );
     }
     const captured = await capture(checkedOut.workspaceDir, revision);
-    const manifestRef = captured.stdout.trim();
+    const manifestRef = captured.manifestRef;
     if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
       return { kind: "failed", reason: "manifest-capture-failed" };
     }
@@ -250,7 +278,7 @@ export function createNodeWorkerRepositoryPreparation(
       return bound;
     }
     const captured = await capture(bound.remoteWorkspaceDir, revision);
-    const manifestRef = captured.stdout.trim();
+    const manifestRef = captured.manifestRef;
     if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
       throw new Error("Bound prepared repository manifest could not be verified");
     }
@@ -359,7 +387,7 @@ export function createNodeWorkerRepositoryPreparation(
     },
     captureManifest: async (dir: string, base: string | null, reference: string) => {
       const captured = await capture(dir, base, reference);
-      const manifestRef = captured.stdout.trim();
+      const manifestRef = captured.manifestRef;
       if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
         const detail = boundedWorkerError(
           captured.stderr.trim() ||
@@ -468,6 +496,30 @@ export function createNodeWorkerRepositoryPreparation(
         }
       }
       return outcome;
+    },
+    async alignRecoveryHead(
+      identity: RepositoryIdentity,
+      expectedHead: string,
+      recoveryHead: string,
+    ) {
+      if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(recoveryHead)) {
+        throw new Error("Invalid repository recovery head");
+      }
+      const current = await git(identity, ["rev-parse", "--verify", "HEAD^{commit}"]);
+      if (succeeded(current) && current.stdout.trim() === recoveryHead) {
+        return;
+      }
+      if (!succeeded(current) || current.stdout.trim() !== expectedHead) {
+        throw new Error("Recovery checkout history changed before alignment");
+      }
+      const fetched = await fetchRevision({ ...identity, commit: recoveryHead });
+      if (fetched.kind === "failed") {
+        throw new Error("Verified recovery history is unavailable on the replacement worker");
+      }
+      const aligned = await git(identity, ["reset", "--mixed", "--no-refresh", recoveryHead]);
+      if (!succeeded(aligned)) {
+        throw new Error("Replacement worker could not align verified recovery history");
+      }
     },
   };
 }

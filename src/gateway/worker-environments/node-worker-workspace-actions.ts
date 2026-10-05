@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
@@ -6,13 +7,17 @@ import {
 } from "../../worker/node-workspace-protocol.js";
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
 import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
+import { createNodeWorkerAttachmentStager } from "./node-worker-attachments.js";
 import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
+import { createNodeRepositoryReadiness } from "./node-worker-repository-readiness.js";
+import { summarizeWorkerSetupMarkers } from "./node-worker-setup-diagnostics.js";
 import {
   createNodeWorkerWorkspaceFallback,
   recordNodeSyncPath,
 } from "./node-worker-workspace-fallback.js";
 import { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { recordWorkerPlacementAwait } from "./placement-diagnostics.js";
 import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerLocalWorkspaceSyncRequest,
@@ -20,7 +25,6 @@ import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncResult,
   WorkerWorkspaceSyncRequest,
-  WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
@@ -73,6 +77,19 @@ export function createNodeWorkerWorkspaceActions(params: {
   };
   let workspaceReady = restoredWorkspace !== undefined;
   let sessionKey = restoredWorkspace?.sessionKey;
+  const repositoryReadiness = createNodeRepositoryReadiness({
+    signal: params.ownerSignal,
+    assertCurrent: () => {
+      if (!params.isOwnerCurrent()) {
+        throw new Error("Repository worker owner changed");
+      }
+    },
+    run: params.runWorkspaceCommand,
+    onPrepared: (key) => {
+      sessionKey = key;
+      workspaceReady = true;
+    },
+  });
   const exec = async (command: WorkerWorkspaceCommand & { resetWorkspace?: boolean }) => {
     if (!workspaceReady) {
       throw new Error("node worker workspace is unavailable before sync");
@@ -378,7 +395,8 @@ export function createNodeWorkerWorkspaceActions(params: {
       throw new Error("Repository source is required");
     }
     const source = request.source;
-    const repository = createNodeWorkerRepositoryPreparation(exec, request.authorize);
+    const memo = { hashes: placementHashMemo, maxBytes: NODE_WORKSPACE_HASH_MEMO_BYTES };
+    const repository = createNodeWorkerRepositoryPreparation(exec, request.authorize, memo);
     const identity = {
       origin: source.url,
       ref: source.ref,
@@ -386,35 +404,45 @@ export function createNodeWorkerWorkspaceActions(params: {
       branch: source.branch,
       gitToken: source.gitToken,
     };
-    let baseline: WorkerWorkspaceSyncResult & { baseCommit: string };
-    if (source.prepared) {
-      if (source.runSetupScript) {
-        throw new Error("Prepared repository requires completed setup");
-      }
-      const bound = await repository.bindPreparedRepository(
-        {
-          ...identity,
-          commit: source.prepared.baseCommit,
-          allowRefRefresh: source.preparedRefMode !== undefined,
-        },
-        source.prepared,
-        request.gitAuthor,
-      );
-      baseline =
-        source.preparedRefMode === "fetch"
-          ? await repository.refreshBoundPreparedRepository(identity, bound)
-          : source.preparedRefMode === "recover"
-            ? await repository.observeBoundPreparedRepository(bound)
-            : bound;
-    } else {
-      const prepared = await repository.prepareRepository(identity);
-      if (prepared.kind === "failed") {
-        throw new Error(
-          `Cloud repository preparation failed: ${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ""}`,
-        );
-      }
-      baseline = prepared.result;
-    }
+    const syncFacts = {
+      generation: request.generation,
+      environmentId: params.environmentId,
+      ownerEpoch: params.ownerEpoch,
+    };
+    const baseline = await recordWorkerPlacementAwait(
+      params.sessionId,
+      "repository_prepare",
+      async (): Promise<WorkerWorkspaceSyncResult & { baseCommit: string }> => {
+        if (source.prepared) {
+          if (source.runSetupScript) {
+            throw new Error("Prepared repository requires completed setup");
+          }
+          const bound = await repository.bindPreparedRepository(
+            {
+              ...identity,
+              commit: source.prepared.baseCommit,
+              allowRefRefresh: source.preparedRefMode !== undefined,
+            },
+            source.prepared,
+            request.gitAuthor,
+          );
+          return source.preparedRefMode === "fetch"
+            ? await repository.refreshBoundPreparedRepository(identity, bound)
+            : source.preparedRefMode === "recover"
+              ? await repository.observeBoundPreparedRepository(bound)
+              : bound;
+        }
+        const prepared = await repository.prepareRepository(identity);
+        if (prepared.kind === "failed") {
+          throw new Error(
+            `Cloud repository preparation failed: ${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ""}`,
+          );
+        }
+        return prepared.result;
+      },
+      syncFacts,
+      "placement",
+    );
     const baseManifestRef =
       baseline.mode === "repository" ? baseline.baseManifestRef : baseline.manifestRef;
     const baseCommit = baseline.baseCommit;
@@ -422,73 +450,100 @@ export function createNodeWorkerWorkspaceActions(params: {
     if (request.gitAuthor && !source.prepared) {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
-    await params.workspaceTransfer.prepareRepository({
-      ...transferOwner,
-      baseCommit,
-      baseManifestRef,
-      authorize: request.authorize,
-    });
+    await recordWorkerPlacementAwait(
+      params.sessionId,
+      "repository_transfer_bind",
+      () =>
+        params.workspaceTransfer.prepareRepository({
+          ...transferOwner,
+          baseCommit,
+          baseManifestRef,
+          authorize: request.authorize,
+        }),
+      syncFacts,
+      "placement",
+    );
     let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
       const checkpoint = source.checkpoint;
-      const decodedBase = await decodeWorkspaceManifest(
-        checkpoint.baseManifestRaw,
-        undefined,
-        params.ownerSignal,
-      );
-      if (decodedBase.manifestRef !== baseManifestRef) {
-        throw new Error("Repository checkpoint baseline differs from its cloned commit");
-      }
-      const decoded = await decodeWorkspaceManifest(
-        checkpoint.currentManifestRaw,
-        undefined,
-        params.ownerSignal,
-      );
-      manifestRef = decoded.manifestRef;
-      const manifest = decoded.manifest;
-      const base = decodedBase.manifest;
-      const token = params.workspaceTransfer.publishSnapshot(
-        params.environmentId,
-        {
-          manifest,
-          manifestRef,
-          rawManifest: checkpoint.currentManifestRaw,
-          root: checkpoint.stagingRoot,
-          blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, params.ownerSignal)),
-        },
-        request.authorize,
-      );
-      try {
-        await transfer(
-          {
-            direction: "download",
-            token,
-            manifestRef,
-            checkpointBaseManifestRef: baseManifestRef,
-          },
-          "Repository checkpoint restore failed",
-          { assertCurrent: request.authorize },
-        );
-        for (const command of await prepareRepositoryPublicationRestore({
-          ...checkpoint,
-          current: manifest,
-        })) {
-          const restored = await exec({
-            ...command,
-            timeoutMs: 60_000,
-            transportRetry: "never",
-            assertCurrent: request.authorize,
-          });
-          if (restored.code !== 0 || restored.termination !== "exit") {
-            throw new Error(
-              "Repository publication paths could not be restored; retry workspace preparation",
-            );
+      await recordWorkerPlacementAwait(
+        params.sessionId,
+        "repository_checkpoint_restore",
+        async () => {
+          const decodedBase = await decodeWorkspaceManifest(
+            checkpoint.baseManifestRaw,
+            undefined,
+            params.ownerSignal,
+          );
+          if (decodedBase.manifestRef !== baseManifestRef) {
+            throw new Error("Repository checkpoint baseline differs from its cloned commit");
           }
-        }
-      } finally {
-        await params.workspaceTransfer.revoke(params.environmentId, token);
-      }
+          const decoded = await decodeWorkspaceManifest(
+            checkpoint.currentManifestRaw,
+            undefined,
+            params.ownerSignal,
+          );
+          manifestRef = decoded.manifestRef;
+          const manifest = decoded.manifest;
+          const base = decodedBase.manifest;
+          const token = params.workspaceTransfer.publishSnapshot(
+            params.environmentId,
+            {
+              manifest,
+              manifestRef,
+              rawManifest: checkpoint.currentManifestRaw,
+              root: checkpoint.stagingRoot,
+              blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, params.ownerSignal)),
+            },
+            request.authorize,
+          );
+          try {
+            await transfer(
+              {
+                direction: "download",
+                token,
+                manifestRef,
+                checkpointBaseManifestRef: baseManifestRef,
+              },
+              "Repository checkpoint restore failed",
+              { assertCurrent: request.authorize },
+            );
+            for (const command of await prepareRepositoryPublicationRestore({
+              ...checkpoint,
+              current: manifest,
+            })) {
+              const restored = await exec({
+                ...command,
+                timeoutMs: 60_000,
+                transportRetry: "never",
+                assertCurrent: request.authorize,
+              });
+              if (restored.code !== 0 || restored.termination !== "exit") {
+                throw new Error(
+                  "Repository publication paths could not be restored; retry workspace preparation",
+                );
+              }
+            }
+          } finally {
+            await params.workspaceTransfer.revoke(params.environmentId, token);
+          }
+          if (source.recoveryHeadCommit) {
+            await repository.alignRecoveryHead(identity, baseCommit, source.recoveryHeadCommit);
+            const afterAlignment = await repository.captureManifest(
+              remoteWorkspaceDir,
+              baseCommit,
+              manifestRef,
+            );
+            if (afterAlignment !== manifestRef) {
+              throw new Error("Recovery history alignment changed accepted workspace bytes");
+            }
+          }
+        },
+        syncFacts,
+        "placement",
+      );
     } else if (source.runSetupScript) {
+      const setupStartedAt = performance.now();
       const setup = await exec({
         argv: [
           "node",
@@ -512,7 +567,42 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         transportRetry: "never",
         assertCurrent: request.authorize,
       });
-      if (setup.code !== 0 || setup.termination !== "exit") {
+      const failed = setup.code !== 0 || setup.termination !== "exit";
+      try {
+        const facts = {
+          phase: "repository_setup",
+          environmentId: params.environmentId,
+          ownerEpoch: params.ownerEpoch,
+          sessionId: params.sessionId,
+          sessionKey,
+          placementGeneration: request.generation,
+          baseCommit,
+          baseManifestRef,
+          scriptPath: ".openclaw/worktree-setup.sh",
+          configuredTimeoutMs: 120_000,
+          elapsedMs: Math.round(performance.now() - setupStartedAt),
+          exitCode: setup.code,
+          termination: setup.termination,
+          signal:
+            setup.signal && Object.hasOwn(osConstants.signals, setup.signal)
+              ? setup.signal
+              : undefined,
+          killed: setup.killed,
+          timedOut: setup.termination === "timeout" || setup.termination === "no-output-timeout",
+          stdoutTruncatedBytes: setup.stdoutTruncatedBytes,
+          stderrTruncatedBytes: setup.stderrTruncatedBytes,
+          outputLimitExceeded: setup.outputLimitExceeded,
+          ...summarizeWorkerSetupMarkers(setup.stderr),
+        };
+        if (failed) {
+          workspaceLog.warn("worker repository setup failed", facts);
+        } else {
+          workspaceLog.info("worker repository setup completed", facts);
+        }
+      } catch {
+        // Diagnostics cannot replace the validated command failure or decide its cleanup.
+      }
+      if (failed) {
         throw new Error("Repository setup script failed");
       }
       manifestRef = await repository.captureManifest(
@@ -531,38 +621,18 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
     };
   };
   return {
+    prepareRepositoryWorkspace: repositoryReadiness.prepare,
+    settleRepositoryWorkspace: repositoryReadiness.settle,
     getSessionKey: () => sessionKey,
     validateRestoredWorkspace,
-    runWorkspaceCommand: exec,
-    stageAttachments: async (
-      request: Parameters<NonNullable<WorkerWorkspaceTunnelHandle["stageAttachments"]>>[0],
-    ) => {
-      const prepared = await params.workspaceTransfer.prepareAttachments({
-        ...request,
-        environmentId: params.environmentId,
-      });
-      try {
-        await transfer(
-          {
-            direction: "download",
-            token: prepared.token,
-            manifestRef: prepared.snapshot.manifestRef,
-            attachments: true,
-          },
-          "Worker attachment transfer failed",
-          {
-            assertCurrent: () => {
-              if (!request.isAuthorized()) {
-                throw new Error("Worker attachment transfer authority closed");
-              }
-            },
-            signal: request.signal,
-          },
-        );
-      } finally {
-        await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
-      }
-    },
+    runWorkspaceCommand: (command: WorkerWorkspaceCommand) =>
+      repositoryReadiness.execute(command, exec),
+    stageAttachments: createNodeWorkerAttachmentStager({
+      environmentId: params.environmentId,
+      workspaceTransfer: params.workspaceTransfer,
+      transfer,
+      waitRepository: repositoryReadiness.wait,
+    }),
     syncWorkspace: async (request: WorkerWorkspaceSyncRequest) => {
       request.authorize?.();
       if (
@@ -632,7 +702,10 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         throw error;
       }
     },
-    quiesceWorkspace,
+    quiesceWorkspace: async (remoteWorkspaceDir: string) => {
+      await repositoryReadiness.wait();
+      return quiesceWorkspace(remoteWorkspaceDir);
+    },
     reconcileWorkspace,
   };
 }

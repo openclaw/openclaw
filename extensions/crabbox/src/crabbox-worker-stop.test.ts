@@ -11,6 +11,27 @@ import {
 const lease = { leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } };
 
 describe("Crabbox worker stop confirmation", () => {
+  it.each(["coordinator", "local claim"])(
+    "does not release Azure resource custody from missing %s metadata",
+    async (source) => {
+      const stderr =
+        source === "coordinator"
+          ? `coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}\ncoordinator POST /v1/leases/${LEASE_ID}/release: http 404: {"error":"not_found"}`
+          : `lease/server not found: ${LEASE_ID}`;
+      const { provider, calls } = createWarmProvider(() =>
+        commandResult({ code: source === "coordinator" ? 1 : 4, stderr }),
+      );
+      await expect(
+        provider.destroy({
+          leaseId: LEASE_ID,
+          profile: { ...PROFILE, provider: "azure", warmImage: false },
+        }),
+      ).rejects.toThrow("stop failed");
+      expect(calls.map(({ argv }) => argv)).toEqual([
+        ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID],
+      ]);
+    },
+  );
   it.each([
     {
       code: 5,

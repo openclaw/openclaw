@@ -45,6 +45,10 @@ import type {
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
 import type {
+  RepositoryGitHubPublicationBranchInput,
+  readRepositoryGitHubPublicationBranchInDatabase,
+} from "../gateway/github-repository-publication-store.js";
+import type {
   CronStandingGrantListing,
   CronStandingGrantLookupInput,
   ConsumeCronStandingGrantResult,
@@ -252,6 +256,7 @@ export type OpenClawStateReadCommand =
   | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
   | { type: "githubRepository.request"; requestId: string }
+  | { type: "githubRepository.branch"; input: RepositoryGitHubPublicationBranchInput }
   | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
   | {
       type: "githubRepository.knownPullRequestUrls";
@@ -404,6 +409,10 @@ export type OpenClawStateReadResult =
       row: RepositoryGitHubPublicationRow | undefined;
     }
   | {
+      type: "githubRepository.branch";
+      branch: ReturnType<typeof readRepositoryGitHubPublicationBranchInDatabase>;
+    }
+  | {
       type: "githubPublication.knownPullRequestUrls";
       urls: string[];
     }
@@ -483,6 +492,7 @@ export type OpenClawStateReadResult =
       profile: ProfileDisplayRow | undefined;
       emailBindings: UserProfileEmailBinding[];
     }
+  | { type: "userProfiles.email.resolve"; profileId: string | undefined }
   | UserProfileAvatarReadReply
   | {
       type: "userProfiles.channelIdentity.list";

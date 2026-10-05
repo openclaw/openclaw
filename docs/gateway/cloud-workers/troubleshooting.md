@@ -12,7 +12,40 @@ Gateway logs under `gateway/worker-placement` record fixed `worker placement sta
 timestamps for dispatch receipt and admission, workspace and intent preparation,
 prepared selection and claim, attachment, transport, workspace sync, and activation.
 Time between these wall-clock stages includes admission and preparation waits;
-it is not all provider provisioning time. Prepared selection logs at most eight
+it is not all provider provisioning time.
+
+The existing placement logger also records monotonic awaited durations for
+prepared and cold repository revalidation, prepared workspace binding, complete
+workspace sync, checkpoint acceptance, post-sync revalidation and activation.
+Each span records started/completed/failed with the session and placement
+generation; failure records omit error payloads. These measurements preserve
+existing authority checks, effects, retry and timeout policy.
+
+Turn preparation also records `turn_placement_read`, `turn_workspace_resolve`,
+`turn_workspace_recovery`, `turn_tunnel`, `turn_attachments`, `turn_skill_resources`
+and `turn_computer` spans. They bind the run to its session and, after claiming,
+its placement generation, environment, owner epoch and claim. `turn_runner_invoked`
+marks the callback invocation after these preparations; it does not certify model
+readiness. Compare it with the embedded runner and model-call stages to separate
+repository readiness waits from later model preparation. The records contain no
+prompt, repository URL, command payload or raw error.
+
+Repository setup records successful and failed command results under
+`gateway/worker-workspace`. The existing `TEAMCLAW_SETUP_V1` parser accepts legacy
+complete lines and optional trailing `elapsedMs` integers from 0 through
+2147483647, with only the existing stages plus `credential_transport`. Exit codes
+remain 0–255 and only belong to failed markers. Invalid, out-of-order or partial
+fields are ignored. Records retain the total valid marker count and last 24
+sanitized markers, plus the legacy last-stage fields. Missing elapsed values stay
+unknown. No raw script output or credentials enter these observations.
+
+The Node credential transport uses its monotonic performance clock; shell stages
+use boot-monotonic uptime, with coarser precision and suspend time included.
+Credential transport is nested inside credential acquisition. Compare those
+durations separately rather than adding parent and child. Extended markers need
+the paired native consumer; older parsers reject timing suffixes.
+
+Prepared selection logs at most eight
 candidate rejections and an aggregate `rejectedCount`. Pool rejections count only
 the requested profile's unconsumed preparations outside failed or destroyed states;
 the count is not a rejection census of the entire environment inventory.
@@ -25,6 +58,17 @@ local origin, settlement outcome, and framed readiness. An `owner_signal` may
 combine several owners and does not identify which one initiated cancellation.
 A remote rejection alone does not establish the worker process's exit code or
 underlying cause. These records omit raw commands, payloads, results, and errors.
+
+Stream failures also record `node invoke stream failed`, correlated by node and
+invocation ID. The fixed phase identifies node-result, connection, delivery,
+deadline, policy, completion-authority, or signal settlement. Known failure codes
+are allowlisted; unknown node codes and callback errors stay `unclassified`.
+Monotonic lifetime and last ordered progress age accompany the next progress
+sequence and buffered progress count. Empty authenticated heartbeats count as
+progress, independently of model or tool output. These observations do not change
+timeouts, authority, cancellation, or late-result handling. The duplex close
+record's `rejectionCategory` distinguishes a preserved Gateway response from a
+local error without exposing either payload.
 
 - **`Crabbox profile setup failed`, `Crabbox node runtime preparation failed`, or `Crabbox node enrollment setup failed` with `coordinator read retry N/M reason=timeout` and `context deadline exceeded`** — OpenClaw retries the same fixed lease command up to three times with backoff inside the existing phase budget when every output line is a coordinator timeout diagnostic. Any script output prevents retry. Exhausted errors retain the coordinator diagnostic and attempt count; inspect coordinator availability before dispatching again.
 - **`provider=<backend> does not support fixed idempotent lease IDs`** — OpenClaw cloud workers need a Crabbox backend with fixed lease ID support. Select a compatible backend; do not remove `--lease-id`. This exact exit-2 refusal occurs before Crabbox requests a machine, so a fresh dispatch fails permanently without a cleanup request. Other exit-2 failures and refusals during replay retain possible allocation responsibility.
@@ -68,3 +112,10 @@ underlying cause. These records omit raw commands, payloads, results, and errors
 - **GitHub publication failed** — for Gateway-brokered publication through **Publish PR** or remote-exec `github_publish`, open **Agents → Tools → GitHub Identity** and confirm the effective `@login`, selected scope, access expiry, and refresh state. Reconnect GitHub when refresh is expired or unavailable; use a managed PAT only as the explicit fallback. For push rejection, inspect repository write access and branch drift; `/user` verification does not prove repository write access and the broker never rewrites published history. If the published branch no longer fits the accepted history, preserve local work and apply the intended edits on top of the published head to refresh the existing PR, or use a new session branch and replacement PR for intentionally rewritten history. Do not repeatedly publish the same divergence or merge old history merely to make a rebased branch pushable. Failed branch observation requires restoring read access/connectivity, not assuming the branch is absent. For pull request rejection, grant pull-request write access and retry **Publish PR** or call `github_publish` again with a new tool call.
 - **Repository publication is unavailable** — Git clean filters, unsafe Git configuration, or failed publication-snapshot validation can prevent preparing a publishable checkpoint. Raw recovery checkpoints and normal Stop still preserve accepted changes. Correct the repository configuration, then run another turn or save an edit to prepare a new checkpoint before requesting publication again.
 - **Lease housekeeping** — `crabbox list --provider <backend> --json` is a read-only inventory. `crabbox stop --provider <backend> --id <lease>` and `crabbox release --provider <backend> --id <lease>` are destructive and release a lease manually. OpenClaw keeps the lease alive while its session is placed, then stops heartbeating during teardown so genuinely idle leases expire on the profile's `idleTimeout`. A temporary heartbeat failure, including a lease claim conflict, warns and keeps the next scheduled renewal. Backends that do not support lease heartbeat produce a warning; the plugin ensures the CLI itself supports the command before use.
+
+The recovery hold table is an optional worker-store companion. Its absence on an
+existing database does not block Gateway startup. Worker-store initialization
+creates it on first use; `openclaw doctor --fix` can also create it through the
+canonical database repair. Stop the Gateway through its service owner before
+running offline repair, and preserve the current state and recovery backup.
+Malformed tables and invalid retained custody still require diagnosis.

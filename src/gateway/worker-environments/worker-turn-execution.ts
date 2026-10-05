@@ -3,11 +3,6 @@ import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-proto
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import {
-  copyAgentToolMetadata,
-  getAgentToolExecutionLocation,
-} from "../../agents/agent-tool-metadata.js";
-import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import type { EmbeddedAttemptSteeringLease } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
@@ -16,20 +11,13 @@ import {
   ackPendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
-import { resolveProviderThinkingLevel } from "../../auto-reply/thinking.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import {
-  prepareGitHubPublicationAvailability,
-  prepareGitHubPullRequestReadAvailability,
-} from "../github-publication-availability.js";
 import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./admission.js";
 import { workerInferencePlacement } from "./inference-placement.js";
-import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   bindWorkerTurnCapabilities,
@@ -39,7 +27,7 @@ import {
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import {
-  prepareWorkerGitHubBindingGrant,
+  prepareWorkerTurnGitHub,
   revokeWorkerGitHubBindingGrant,
   type WorkerGitHubBindingGrant,
 } from "./worker-github-binding.js";
@@ -133,28 +121,10 @@ export async function executeWorkerTurn(
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
   params.assertRunCurrent?.();
   turn.abortSignal?.throwIfAborted();
-  // Shared account refresh and repository lookup own their own lifetime. A
-  // cancelled turn may stop waiting, but cannot consume late publication availability.
-  const githubContext = {
-    ...placement,
-    assertCurrent: () =>
-      !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
-  };
-  const githubPublicationAvailable = await raceNodeWorkerOperation(
-    prepareGitHubPublicationAvailability(githubContext),
-    turn.abortSignal,
-  );
-  params.assertRunCurrent?.();
-  turn.abortSignal?.throwIfAborted();
-  const githubPullRequestReadAvailable = await raceNodeWorkerOperation(
-    prepareGitHubPullRequestReadAvailability({ ...githubContext, githubPublicationAvailable }),
-    turn.abortSignal,
-  );
-  params.assertRunCurrent?.();
-  turn.abortSignal?.throwIfAborted();
-
   const startedAt = Date.now();
-  await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
+  if (!nodeLaunch) {
+    await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
+  }
   params.assertRunCurrent?.();
   turn.abortSignal?.throwIfAborted();
   if (!params.placements.validateTurnClaim(params.turnClaim)) {
@@ -246,6 +216,8 @@ export async function executeWorkerTurn(
       params.environments.startTunnel({
         environmentId: placement.environmentId,
         ownerEpoch: placement.activeOwnerEpoch,
+        authorize: assertContextCurrent,
+        signal: turn.abortSignal,
       }),
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
@@ -276,15 +248,7 @@ export async function executeWorkerTurn(
     assertCurrent: assertContextCurrent,
     computerAvailable: Boolean(computer),
   });
-  const {
-    authProfileStoreSource,
-    capabilityProfile,
-    policy: toolPolicy,
-    exec,
-    execUnavailable,
-    presentation,
-    installedSkills,
-  } = toolAuthority;
+  const { exec } = toolAuthority;
   const {
     admittedRunContext,
     operationalRunInstance,
@@ -366,7 +330,7 @@ export async function executeWorkerTurn(
         return false;
       }
     };
-    githubGrant = await prepareWorkerGitHubBindingGrant({
+    const preparedGitHub = await prepareWorkerTurnGitHub({
       operatorAuthority,
       signal,
       sessionId: placement.sessionId,
@@ -374,6 +338,8 @@ export async function executeWorkerTurn(
       agentId: placement.agentId,
       assertCurrent: isAuthorized,
     });
+    githubGrant = preparedGitHub.grant;
+    const { githubPublicationAvailable, githubPullRequestReadAvailable } = preparedGitHub;
     assertActive();
     signal.throwIfAborted();
     const github = githubGrant?.binding;
@@ -397,93 +363,7 @@ export async function executeWorkerTurn(
       githubPublicationAvailable,
       githubPullRequestReadAvailable,
       signal,
-      prepare: async (identity) => {
-        const placementTools = createWorkerPlacementTools({
-          ...turn,
-          ...placement,
-          policy: toolPolicy,
-          cwd: placement.remoteWorkspaceDir,
-          containmentRoot: placement.remoteWorkspaceDir,
-          execAuthority: execUnavailable ? undefined : exec,
-          sessionId: turn.sessionId,
-        });
-        placementTools.push(...desktop.tools);
-        const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
-        const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-          params.environments.createGatewayTools?.({
-            identity,
-            inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
-            skillWorkshop,
-            portalAvailable,
-            prepareTools: async (adapters) => {
-              const prepared = await createOpenClawCodingToolsInternalAsync(
-                {
-                  ...turn,
-                  authProfileStoreSource,
-                  agentId: placement.agentId,
-                  conversationCapabilityProfile: capabilityProfile,
-                  preparedModelRuntime: preparedRuntime.snapshot,
-                  installedSkills,
-                  githubPublicationAvailable,
-                  githubPullRequestReadAvailable,
-                  cronCreatorAuthorityUnavailableReason: undefined,
-                  runSessionKey: placement.sessionKey,
-                  sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
-                  policyAgentId: turn.sandboxAgentId ?? turn.agentId,
-                  operationalRunInstance,
-                  sessionPermissionPolicy: turn.permissionMode
-                    ? { mode: turn.permissionMode, root: turn.workspaceDir }
-                    : undefined,
-                  modelProvider: modelRef.provider,
-                  modelId: modelRef.model,
-                  modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
-                  runtimeToolAllowlist: turn.toolsAllow,
-                  skillWorkshop: undefined,
-                  computerTransport: null,
-                },
-                undefined,
-                undefined,
-                { tools: [...placementTools, ...adapters], policy: toolPolicy },
-                { assertCurrent: assertToolSurfaceCurrent, signal },
-              );
-              if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
-                return [];
-              }
-              return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
-                const location = getAgentToolExecutionLocation(tool);
-                const reason =
-                  location.kind === "gateway"
-                    ? location.unavailableReason
-                    : !availablePlacementTools.has(tool.name) ||
-                        !launchToolNames.includes(tool.name)
-                      ? "the placement has no available execution capability"
-                      : undefined;
-                if (reason) {
-                  logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
-                }
-                return !reason;
-              });
-            },
-          }),
-        );
-        if (!tools) {
-          throw new Error("Gateway tool surface is unavailable");
-        }
-        assertToolSurfaceCurrent();
-        return {
-          policy: toolPolicy,
-          presentation,
-          tools: tools.map((tool) =>
-            copyAgentToolMetadata(tool, {
-              ...tool,
-              execute: (...args) =>
-                withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-                  tool.execute(...args),
-                ),
-            }),
-          ),
-        };
-      },
+      assertCurrent: assertToolSurfaceCurrent,
     });
     const prepareReplyMedia = createWorkerReplyMedia({
       turn,
@@ -664,7 +544,9 @@ export async function executeWorkerTurn(
     if (steering.lease && !steering.lease.isCurrent()) {
       throw new Error("Queued child results lost authority before worker prompt injection");
     }
-    recorder?.markSentToProvider?.();
+    if (!nodeLaunch) {
+      recorder?.markSentToProvider?.();
+    }
     turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend });
     const handoffAbort = new AbortController();
     let handoffError: Error | undefined;
@@ -680,7 +562,9 @@ export async function executeWorkerTurn(
           ? { requiresTerminalReceipt: true }
           : undefined,
       );
-      turn.onExecutionPhase?.({ phase: "process_spawned", backend });
+      if (!nodeLaunch) {
+        turn.onExecutionPhase?.({ phase: "process_spawned", backend });
+      }
       handoffPending = (async () => {
         try {
           if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {

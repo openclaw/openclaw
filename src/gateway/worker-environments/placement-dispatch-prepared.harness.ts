@@ -6,6 +6,7 @@ import {
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -25,6 +26,7 @@ import type { GatewayWsClient } from "../server/ws-types.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { MANIFEST_REF, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import type { WorkerPlacementDispatchOptions } from "./placement-dispatch.types.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
@@ -34,6 +36,7 @@ import {
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import * as repositoryAdmission from "./repository-project-admission.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
@@ -41,6 +44,7 @@ const PREPARATION_KEY = "c".repeat(64);
 export const FEATURES = [
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
 ];
 
 export async function preparedHarness(
@@ -52,6 +56,8 @@ export async function preparedHarness(
     reserveBaseCommit?: string;
     reserveSourceUrl?: string;
     imageReserve?: boolean;
+    prepareRepositoryRefRecovery?: WorkerPlacementDispatchOptions["prepareRepositoryRefRecovery"];
+    resolveWorkspace?: WorkerPlacementDispatchOptions["resolveWorkspace"];
     boundWorkspace?: Pick<
       NodeWorkerPreparedWorkspaceResult,
       "workspaceDir" | "sourceManifestRef" | "preparedManifestRef"
@@ -72,12 +78,14 @@ export async function preparedHarness(
     now: () => support.testState.nowMs,
   });
   const harness = createHarness(support.testState.stateDb, placements, {
+    prepareRepositoryRefRecovery: options.prepareRepositoryRefRecovery,
     ...(options.repository
       ? {
           requiresNodeEnrollment: true,
           resolveWorkspace: async () => ({ kind: "repository", repository: options.repository! }),
         }
       : {}),
+    ...(options.resolveWorkspace ? { resolveWorkspace: options.resolveWorkspace } : {}),
     isCurrentNodePlacement: (proof, requirement, mode) =>
       nodeCurrent &&
       transport.isCurrent(
@@ -145,13 +153,13 @@ export async function preparedHarness(
     : intent.profileSnapshot;
   const store = support.testState.store;
   let ready = options.seeded?.ready[0];
-  if (!ready) {
+  const createReady = async (readyEnvironmentId: string) => {
     await store.createIntent({
-      environmentId,
+      environmentId: readyEnvironmentId,
       profileId: REQUEST.profileId,
       providerId: intent.providerId,
       profileSnapshot: storedProfile,
-      provisionOperationId: `provision:${environmentId}`,
+      provisionOperationId: `provision:${readyEnvironmentId}`,
       ...(reserve
         ? {
             preparation: {
@@ -163,21 +171,29 @@ export async function preparedHarness(
           }
         : {}),
     });
-    await store.transition({ environmentId, from: "requested", to: "provisioning" });
-    ready = await store.transition({
-      environmentId,
+    await store.transition({
+      environmentId: readyEnvironmentId,
+      from: "requested",
+      to: "provisioning",
+    });
+    const created = await store.transition({
+      environmentId: readyEnvironmentId,
       from: "provisioning",
       to: "ready",
       patch: {
-        leaseId: `lease:${environmentId}`,
+        leaseId: `lease:${readyEnvironmentId}`,
         nodeDeviceId: "prepared-node",
         sharedHost: false,
-        ...support.readyPatch(environmentId, {
+        ...support.readyPatch(readyEnvironmentId, {
           ...support.BOOTSTRAP_RECEIPT,
           protocolFeatures,
         }),
       },
     });
+    return created;
+  };
+  if (!ready) {
+    ready = await createReady(environmentId);
   }
   vi.mocked(support.testState.prepareInstallation).mockResolvedValue({
     ...support.BUNDLE_ARTIFACT,
@@ -248,7 +264,13 @@ export async function preparedHarness(
     return { ...(await ordinaryBind(request)), ...options.boundWorkspace };
   });
   if (!reserve) {
-    vi.mocked(harness.environments.createWithRequest).mockResolvedValue(projected);
+    vi.mocked(harness.environments.createWithRequest).mockImplementation(async (request) => {
+      const expected = deriveEnvironmentIntent(request.idempotencyKey).environmentId;
+      if (!workerService.get(expected)) {
+        await createReady(expected);
+      }
+      return workerService.get(expected)!;
+    });
   }
   const node: NodeWorkerSupervisorNodeProof = {
     nodeId: "prepared-node",
@@ -264,6 +286,7 @@ export async function preparedHarness(
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION,
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands: ["codex.exec-server.stdio.v1"],
   };

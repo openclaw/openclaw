@@ -17,7 +17,10 @@ import {
   type WorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
-import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerPlacementDispatchContract,
+} from "../worker-environments/service-contract.js";
 import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
@@ -25,6 +28,10 @@ type PlacementReadContext = {
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
   workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
+  workerPlacementDispatchService?: Pick<
+    WorkerPlacementDispatchContract,
+    "canRecoverFailedPlacement"
+  >;
 };
 
 /** Acquire row facts once; selected rows refresh placement facts after owner publications. */
@@ -57,17 +64,6 @@ export function readSessionRowFacts(params: {
           environment ?? null,
         )
       : undefined;
-    const failedRecoveryAction: "restart" | "stop-first" | undefined =
-      placement?.state === "failed"
-        ? isFailedWorkerPlacementEnvironmentGone({
-            environmentService: context.workerEnvironmentService
-              ? { get: () => environment }
-              : undefined,
-            placement,
-          })
-          ? "restart"
-          : "stop-first"
-        : undefined;
     const retryOnSend =
       placement?.state === "failed" &&
       !move &&
@@ -79,7 +75,6 @@ export function readSessionRowFacts(params: {
       workspaceResultReconciling,
       environment,
       identity,
-      failedRecoveryAction,
       retryOnSend,
     };
   };
@@ -101,15 +96,20 @@ export function readSessionRowFacts(params: {
         placementSource = currentSource;
         placementFacts = readPlacementFacts();
       }
-      const {
-        placement,
-        move,
-        workspaceResultReconciling,
-        environment,
-        identity,
-        failedRecoveryAction,
-        retryOnSend,
-      } = placementFacts;
+      const { placement, move, workspaceResultReconciling, environment, identity, retryOnSend } =
+        placementFacts;
+      const failedRecoveryAction: "restart" | "stop-first" | undefined =
+        placement?.state === "failed"
+          ? isFailedWorkerPlacementEnvironmentGone({
+              environmentService: context.workerEnvironmentService
+                ? { get: () => environment }
+                : undefined,
+              placement,
+            }) ||
+            context.workerPlacementDispatchService?.canRecoverFailedPlacement?.(placement) === true
+            ? "restart"
+            : "stop-first"
+          : undefined;
       return {
         ...(placement
           ? {

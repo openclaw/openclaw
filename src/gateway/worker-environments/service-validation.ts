@@ -9,6 +9,7 @@ import {
   validateProviderSettings,
   WORKER_PROFILE_SETTINGS_JSON_LIMITS,
 } from "../../config/provider-settings.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -23,7 +24,19 @@ import {
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { normalizeWorkerSshEndpoint } from "./store-validation.js";
+
+export function usesRepositoryRefWorkerRecovery(
+  config: OpenClawConfig,
+  environment: Pick<WorkerEnvironmentRecord, "profileId" | "providerId">,
+): boolean {
+  const profile = config.cloudWorkers?.profiles?.[environment.profileId];
+  return (
+    profile?.lostWorkerRecovery === "repository-ref" &&
+    normalizeCapabilityProviderId(profile.provider) === environment.providerId
+  );
+}
 
 export function requireWorkerProfile(value: unknown): WorkerProfile {
   const error = validateProviderSettings(

@@ -26,8 +26,14 @@ export type PlacementRecoveryDeps = {
     | "reconcileEnvironment"
     | "reconcileOnce"
     | "supportsProviderExecutionMode"
-  >;
-  failure: Omit<PlacementFailureActions, "cancelProvisioning">;
+  > &
+    Partial<
+      Pick<
+        import("./service.js").WorkerEnvironmentService,
+        "holdFailedEnvironment" | "supportsFailedLeaseHold"
+      >
+    >;
+  failure: Omit<PlacementFailureActions, "cancelProvisioning" | "retireSetup">;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspace: (params: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
   withPreparedRecovery: WithPreparedWorkerWorkspaceRecovery;
@@ -40,7 +46,7 @@ export type PlacementRecoveryDeps = {
   prepareGatewayMove?: (
     params: WorkerSessionPlacementIdentity & {
       assertCurrent: () => void;
-      readNativeCredential?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
+      readNativeCredential?: import("../../agents/github-credential-reader.js").GitHubCredentialReader;
     },
   ) => Promise<void>;
 };

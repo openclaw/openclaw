@@ -4,6 +4,8 @@ import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 
 export const FORCED_WORKER_ABANDONMENT_ERROR =
   "Worker result abandoned by forced operator teardown";
+export const REPOSITORY_REF_WORKER_RECOVERY_ERROR =
+  "Ephemeral worker lost; recover from the recorded repository branch";
 
 export function isForceAbandonedWorkerPlacement(
   placement: WorkerSessionPlacementRecord | undefined,
@@ -113,6 +115,7 @@ type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
     stateChangedAtMs: number;
     /** Process-local UI projection; deliberately absent from SQLite. */
     workspaceResultConflict?: WorkerWorkspaceResultConflict;
+    repositoryPreparation?: "pending" | "ready" | "failed" | null;
   };
 
 type UnclaimedPlacementRecordBase = PlacementRecordBase<null>;
@@ -138,7 +141,7 @@ type StartingPlacementMetadata = Omit<
   SyncingPlacementMetadata,
   "workspaceBaseManifestRef" | "remoteWorkspaceDir"
 > & {
-  workspaceBaseManifestRef: string;
+  workspaceBaseManifestRef: string | null;
   remoteWorkspaceDir: string;
 };
 
@@ -229,7 +232,10 @@ export function projectWorkerSessionTurnClaim(
 }
 
 export type WorkerSessionPlacementTransitionPatch = Partial<
-  Omit<TerminalPlacementMetadata, "terminalAtMs"> & { recoveryError: string | null }
+  Omit<TerminalPlacementMetadata, "terminalAtMs"> & {
+    recoveryError: string | null;
+    repositoryPreparation: "pending" | "ready" | "failed" | null;
+  }
 >;
 
 export function required(value: string, field: string): string {
@@ -254,6 +260,17 @@ export function normalizeWorkerPlacementExecutionMode(
 
 export function nullableRequired(value: string | null, field: string): string | null {
   return value === null ? null : required(value, field);
+}
+
+export function requireAcceptedWorkspaceManifest(
+  placement: Pick<WorkerSessionPlacementRecord, "workspaceBaseManifestRef">,
+): string {
+  if (!placement.workspaceBaseManifestRef) {
+    throw new Error(
+      "Repository preparation is pending or failed; accepted workspace effects remain fenced",
+    );
+  }
+  return placement.workspaceBaseManifestRef;
 }
 
 export function normalizeEpoch(value: number, field: string): number {
@@ -305,7 +322,11 @@ export function nextGeneration(generation: number): number {
 
 type PlacementRecordShape = Pick<
   WorkerSessionPlacementRecord,
-  "state" | "executionMode" | "turnClaim" | keyof EmptyWorkerPlacementMetadata
+  | "state"
+  | "executionMode"
+  | "turnClaim"
+  | "repositoryPreparation"
+  | keyof EmptyWorkerPlacementMetadata
 >;
 
 type ValidatedPlacementRecordShape = {
@@ -334,11 +355,16 @@ export function assertRecordShape(
     record.workspaceBaseManifestRef === null && record.remoteWorkspaceDir === null;
   const completeWorkspace =
     record.environmentId &&
-    record.workspaceBaseManifestRef &&
+    (record.workspaceBaseManifestRef ||
+      record.repositoryPreparation === "pending" ||
+      record.repositoryPreparation === "failed") &&
     record.remoteWorkspaceDir &&
     record.workerBundleHash;
   const emptyCursors =
     record.lastTranscriptAckCursor === null && record.lastLiveEventAckCursor === null;
+  if (record.repositoryPreparation === "pending" && record.workspaceBaseManifestRef !== null) {
+    throw new Error("Unready repository placement cannot attest an accepted manifest");
+  }
   if (record.state === "local" || record.state === "requested") {
     if (
       record.environmentId !== null ||

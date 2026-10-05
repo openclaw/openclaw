@@ -16,6 +16,7 @@ import {
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
@@ -430,12 +431,7 @@ async function runDoctorHealthFlowWithResult(
         const { assertDoctorMaintenanceReady } =
           await import("../commands/doctor-maintenance-inspection.js");
         const readiness = await measureGatewayBootstrapStep("doctor.maintenance-ready", () =>
-          assertDoctorMaintenanceReady(
-            ctx.cfg,
-            process.env,
-            effectiveRuntime.log,
-            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [],
-          ),
+          assertDoctorMaintenanceReady(ctx.cfg, process.env, effectiveRuntime.log),
         );
         if (!readiness.schemaPublicationDeferred) {
           sqliteReclamationAgents =
@@ -447,9 +443,6 @@ async function runDoctorHealthFlowWithResult(
             await initializeDebugProxyCaptureAsync("cli");
           }
         }
-        const { repairGatewayMaintenanceStartupFailures } =
-          await import("../infra/gateway-boot-lifecycle.js");
-        repairGatewayMaintenanceStartupFailures();
       }
       return ctx;
     };
@@ -474,6 +467,41 @@ async function runDoctorHealthFlowWithResult(
           await maintenance.enableSqliteReclamation(sqliteReclamationAgents);
         }
         await maintenance.cleanupRetainedRuntimes();
+        if (
+          sqliteReclamationAgents &&
+          (!isDoctorUpdateRepairMode(ctx.prompter.repairMode) ||
+            writeAuthority?.postCoreSchemaRepair)
+        ) {
+          // Physical repair and cleanup can replace handles; certify only the final cut.
+          const completionOwner = maintenance;
+          const completedConfig = ctx.cfg;
+          await completionOwner.run(async () => {
+            try {
+              const { assertDoctorMaintenanceReady } =
+                await import("../commands/doctor-maintenance-inspection.js");
+              await assertDoctorMaintenanceReady(
+                completedConfig,
+                process.env,
+                effectiveRuntime.log,
+                {
+                  signal: completionOwner.signal,
+                  assertCurrent: () => writeAuthority?.assertCurrent(),
+                },
+              );
+            } catch (cause) {
+              throw new DoctorMaintenanceRefusalError(
+                `Doctor could not complete canonical session readiness: ${formatErrorMessage(cause)} Keep the repaired state and resolve this refusal before restarting.`,
+                { kind: "data-at-risk", reason: "incomplete-migration" },
+                { cause },
+              );
+            }
+          });
+        }
+        await maintenance.run(async () => {
+          const { repairGatewayMaintenanceStartupFailures } =
+            await import("../infra/gateway-boot-lifecycle.js");
+          repairGatewayMaintenanceStartupFailures();
+        });
       }
     } catch (error) {
       failure = error;

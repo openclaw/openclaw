@@ -12,6 +12,7 @@ import type {
   RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
+  RepositoryWorkspacePublishedHead,
   SessionRepositoryWorkspaceRecord,
 } from "./session-repository-workspaces.types.js";
 
@@ -233,7 +234,7 @@ export function discardSessionRepositoryWorkspaceCheckpointInDatabase(
 
 export function advanceSessionRepositoryWorkspaceToPublishedHeadInDatabase(
   db: DatabaseSync,
-  input: RepositoryWorkspaceMutation & { branch: string; headCommit: string },
+  input: RepositoryWorkspacePublishedHead,
   nowMs: number,
 ): RepositoryWorkspaceMutationResult {
   const branch = bounded(input.branch, "branch", 256);
@@ -245,7 +246,7 @@ export function advanceSessionRepositoryWorkspaceToPublishedHeadInDatabase(
       throw new Error("Repository workspace publication branch changed");
     }
     return {
-      requested_ref: branch,
+      requested_ref: input.preserveRequestedRef ? current.requestedRef : branch,
       base_commit: input.headCommit,
       base_manifest_hash: null,
       checkpoint_ref: null,

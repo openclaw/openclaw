@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
 import { createStoppedTunnelManager } from "./environment-access.test-support.js";
+import { registerEnvironmentResumeTests } from "./environment-resume.suite.js";
 import * as support from "./service.test-support.js";
 import { measureLaunchTurn, readLaunchToolNames } from "./worker-turn-launcher.test-support.js";
+
+registerEnvironmentResumeTests();
 
 describe("worker environment startup authority", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -62,6 +65,7 @@ describe("worker environment startup authority", () => {
         stop: vi.fn(async () => {}),
       };
       const nodeTunnelManager = {
+        isNodeConnected: async () => true,
         status: () => "stopped" as const,
         observeProcesses: vi.fn(async () => {
           throw new Error("Process observation is not configured in this fixture");

@@ -128,6 +128,7 @@ describe("worker environment runtime upgrades", () => {
     const nodeTunnelManager: NonNullable<
       support.WorkerEnvironmentServiceOptions["nodeTunnelManager"]
     > = {
+      isNodeConnected: async () => true,
       status: () => "stopped",
       observeProcesses: vi.fn(async () => {
         throw new Error("Process observation is not configured in this fixture");

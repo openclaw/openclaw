@@ -71,6 +71,7 @@ export class WorkerRunnerCapacityError extends Error {
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
+  signal?: AbortSignal;
   /** Initiating-operation authority; established tunnel custody is independent. */
   authorize?: () => void;
 };
@@ -79,6 +80,7 @@ export type WorkerTunnelRequest = {
 export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed";
 
 export type WorkerWorkspaceCommand = {
+  repositoryPreparation?: import("../../worker/node-workspace-protocol.js").NodeWorkerRepositoryPreparationInput;
   argv: readonly string[];
   transportRetry: "idempotent" | "never";
   /** Local owner guard revalidated after transport awaits, immediately before dispatch. */
@@ -251,6 +253,13 @@ type WorkerTurnLaunchRequest = {
 };
 
 export type WorkerWorkspaceTunnelHandle = {
+  prepareRepositoryWorkspace?: (request: {
+    sessionKey: string;
+    repository: import("../../state/session-repository-workspaces.types.js").SessionRepositoryWorkspaceRecord;
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+  }) => Promise<string>;
+  settleRepositoryWorkspace?: (status: "ready" | "failed", baseCommit?: string) => Promise<void>;
   environmentId: string;
   ownerEpoch: number;
   launchTurn?: never;

@@ -93,6 +93,9 @@ describe("prepared repository source access", () => {
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       bindPreparedWorkspace: bind,
+      resumeNodeLease: async () => {
+        throw new Error("No node should resume during source admission");
+      },
       prepareCurrentBundle: async () => {
         throw new Error("No tunnel should start during source admission");
       },

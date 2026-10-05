@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, expect } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -7,8 +7,14 @@ import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import type { createNodeCarrier } from "./skill-resource-transfer.test-support.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
-import { measureLaunchTurn, readLaunchToolNames } from "./worker-turn-launcher.test-support.js";
+import {
+  measureLaunchTurn,
+  readLaunchToolNames,
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+} from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
@@ -19,6 +25,7 @@ export function createProviderReplayNodeTunnel() {
     manifestRef: `sha256:${"b".repeat(64)}`,
   }));
   const nodeTunnelManager = {
+    isNodeConnected: async () => true,
     status: () => "stopped" as const,
     observeProcesses: vi.fn<WorkerEnvironmentNodeTunnel["observeProcesses"]>(),
     start: vi.fn<WorkerEnvironmentNodeTunnel["start"]>(async ({ environmentId, ownerEpoch }) => ({
@@ -41,6 +48,7 @@ export function createProviderReplayNodeTunnel() {
 
 export function bindProviderReplayNodeAvailability(
   service: Parameters<typeof bindDeviceWorkerAvailability>[0],
+  commands: string[] = [],
 ) {
   bindDeviceWorkerAvailability(service, async (nodeId) => ({
     available: true,
@@ -58,7 +66,7 @@ export function bindProviderReplayNodeAvailability(
         capturedExecPolicy: true,
         promptContext: 1,
       },
-      commands: [],
+      commands,
     },
   }));
 }
@@ -85,4 +93,51 @@ export function createProviderReplayDispatch(
     }),
     ...options,
   });
+}
+
+export function createProviderReplayNodeCarrierTunnel(
+  carrier: Awaited<ReturnType<typeof createNodeCarrier>>,
+  sessionId: string,
+) {
+  const { nodeTunnelManager } = createProviderReplayNodeTunnel();
+  nodeTunnelManager.start.mockImplementation(async ({ environmentId, ownerEpoch }) => {
+    const remoteWorkspaceDir = await carrier.bindWorkspace({
+      gatewayNamespace: "gateway",
+      environmentId,
+      sessionId,
+      generation: ownerEpoch,
+    });
+    return {
+      ...createWorkerTurnTunnel({
+        launchTurn: async () => {
+          throw new Error("Remote exec must not launch a worker-turn child");
+        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+      }),
+      environmentId,
+      ownerEpoch,
+      syncWorkspace: async () => ({
+        mode: "git",
+        remoteWorkspaceDir,
+        manifestRef: `sha256:${"b".repeat(64)}`,
+      }),
+      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+      quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+      stop: async () => {},
+      runWorkspaceCommand: (command) => carrier.runWorkspaceCommand(command),
+    };
+  });
+  return { nodeTunnelManager };
+}
+
+export async function executeProviderReplayNativeEffect(
+  carrier: Awaited<ReturnType<typeof createNodeCarrier>>,
+  assertCurrent: () => void,
+) {
+  const outcome = await carrier.runWorkspaceCommand({
+    argv: ["node", "-e", "process.stdout.write('native-effect')"],
+    transportRetry: "never",
+    assertCurrent,
+  });
+  expect(outcome).toMatchObject({ code: 0, stdout: "native-effect" });
 }

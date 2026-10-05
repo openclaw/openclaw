@@ -1,30 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  type WorkerProfile,
-  type WorkerProvider,
-  WorkerProviderError,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { type WorkerProfile, WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import {
+  OPERATION_ID,
+  LEASE_ID,
+  SIBLING_BINARY,
+  INSPECT_FAILURE_PREFIX,
+  CLASSLESS_PROFILE,
+  PROFILE,
+  NON_RUNNABLE_STATES,
+  tempDirs,
+  inspectJson,
+  lifecycleLease,
+  providerWithRawRunner,
+  providerWithRunner,
+  failedNodeEnrollment,
+  heartbeatFixture,
+} from "./crabbox-worker-provider-fixture.test-support.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import {
   active,
   catalogJson,
   classProfile,
   commandResult,
-  createProviderFixtures,
   nodeEnrollmentFixture,
-  OPENCLAW_ROOT,
   WORKER_WALLPAPER_PATH,
   inspectCases,
   mappedCatalog,
@@ -41,138 +48,189 @@ vi.mock("./crabbox-managed-binary.js", () => ({
   ensureManagedCrabboxBinary: vi.fn(),
 }));
 
-const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
-const LEASE_ID = "cbx_6071fc2062a6";
-const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
-
-const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
-const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
-const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: false };
-const NON_RUNNABLE_STATES = [
-  "archived",
-  "deleted",
-  "deleting",
-  "destroyed",
-  "expired",
-  "failed",
-  "missing",
-  "released",
-  "stopped",
-  "stopped_with_code",
-  "terminated",
-];
-const { providers, createProvider } = createProviderFixtures({
-  isExecutable: (candidate) => candidate === SIBLING_BINARY,
-});
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...providers].map((provider) => provider.dispose()));
-    } finally {
-      providers.clear();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      vi.unstubAllEnvs();
-      cleanup();
-    }
-  }),
-);
-beforeEach(() => {
-  vi.mocked(ensureManagedCrabboxBinary)
-    .mockReset()
-    .mockImplementation(async (params) => ({
-      binary: params?.binary ?? "crabbox",
-      version: "999.0.0",
-    }));
-  // Provider instances share durable state within a replay test, never across test cases.
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-provider-"));
-});
-
-function inspectJson(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({
-    id: LEASE_ID,
-    providerMetadata: { instanceProfileAttached: false },
-    state: "running",
-    sshUser: "openclaw",
-    ready: true,
-    ...overrides,
-  });
-}
-
-function lifecycleLease(leaseId = LEASE_ID, profile: WorkerProfile = PROFILE) {
-  return { leaseId, profile };
-}
-
-function providerWithRawRunner(
-  runCommand: CrabboxCommandRunner,
-  warn?: (message: string) => void,
-  sleep: (milliseconds: number) => Promise<void> = async () => {},
-): WorkerProvider {
-  const provider = createProvider({
-    runCommand,
-    sleep,
-    ...(warn ? { warn } : {}),
-  });
-  return {
-    ...provider,
-    provision: (profile, operationId, options) =>
-      provider.provision(profile, operationId, {
-        assertCurrent: () => {},
-        nodeRuntimeIdentity: {
-          nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
-          executionMode: options?.executionMode ?? "worker-turn",
+describe("failed lease recovery hold", () => {
+  it.each(["exact", "wrong operation", "authority lost"] as const)(
+    "binds the legacy allocation operation to nondestructive held custody: %s",
+    async (variant) => {
+      const operationId =
+        "provision:v2:009ef1cb84ac69801cf2a2b56bbd57008b418a2e0049b047dacbf1699f7c5366";
+      const leaseId = "cbx_b409decfbde2";
+      let current = true;
+      const run = vi.fn<CrabboxCommandRunner>(async () => {
+        if (variant === "authority lost") {
+          current = false;
+        }
+        return commandResult({
+          stdout: JSON.stringify({
+            schema: "crabbox.lease-hold.v1",
+            provider: "azure",
+            status: "held",
+            leaseId,
+            unacceptedChanges: "unknown",
+            resources: ["vm", "nic", "public-ip", "disk", "nsg"].map((kind) => ({
+              kind,
+              id: `/subscriptions/synthetic-fixture/resources/${kind}`,
+              immutableId: `${kind}-observed`,
+              state: kind === "vm" ? "absent" : "retained",
+            })),
+          }),
+        });
+      });
+      const provider = providerWithRawRunner(run);
+      const result = provider.holdFailedLease!(
+        {
+          leaseId,
+          profile: { ...PROFILE, provider: "azure" },
+          operationId: variant === "wrong operation" ? `${operationId}-other` : operationId,
         },
-        ...options,
-        beginNodeEnrollment:
-          options?.beginNodeEnrollment ??
-          (async () => nodeEnrollmentFixture("secret-setup-value", "Cloud worker test")),
-      }),
-  };
-}
-
-function providerWithRunner(
-  runCommand: CrabboxCommandRunner,
-  warn?: (message: string) => void,
-  sleep?: (milliseconds: number) => Promise<void>,
-) {
-  return providerWithRawRunner(
-    async (argv, options) => {
-      if (argv[1] === "config" && argv[2] === "show") {
-        return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+        {
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Original hold authority closed");
+            }
+          },
+        },
+      );
+      if (variant === "exact") {
+        await expect(result).resolves.toMatchObject({ status: "held", leaseId });
+      } else {
+        await expect(result).rejects.toThrow(
+          variant === "wrong operation" ? "original fixed lease" : "authority closed",
+        );
       }
-      return runCommand(argv, options);
-    },
-    warn,
-    sleep,
-  );
-}
-
-function failedNodeEnrollment(
-  error: Error,
-): NonNullable<Parameters<WorkerProvider["provision"]>[2]> {
-  return {
-    beginNodeEnrollment: async () =>
-      nodeEnrollmentFixture("secret-setup-value", "Cloud worker test", async () => {
-        throw error;
-      }),
-  };
-}
-
-function heartbeatFixture(run: CrabboxCommandRunner) {
-  vi.useFakeTimers();
-  const heartbeat = vi.fn(run);
-  const warnings: string[] = [];
-  const provider = providerWithRunner(
-    async (argv, options) => {
-      if (argv[1] === "heartbeat") {
-        return heartbeat(argv, options);
+      if (variant === "wrong operation") {
+        expect(run).not.toHaveBeenCalled();
+      } else {
+        expect(run.mock.calls[0]?.[0]).toEqual([
+          SIBLING_BINARY,
+          "hold",
+          "--provider",
+          "azure",
+          "--id",
+          leaseId,
+          "--slug",
+          "openclaw-65b6a7f68571da432882f0015d600457",
+          "--json",
+        ]);
       }
-      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
     },
-    (message) => warnings.push(message),
   );
-  return { provider, heartbeat, warnings };
-}
+  it.each([
+    "settled",
+    "wrong-lease",
+    "unsupported",
+    "duplicate",
+    "truncated",
+    "cancelled",
+    "lost",
+    "wrong-attempt",
+    "pending",
+    "malformed",
+    "wrong-schema",
+    "wrong-provider",
+    "duplicate-property",
+    "stdout-duplicate",
+    "timeout",
+    "unsettled-companions",
+  ] as const)(
+    "projects only an exact settled CLI shortage into provider capacity (%s)",
+    async (change) => {
+      // Synthetic process transport carrying the qualified fixed-allocation v1 wire.
+      const wire = JSON.stringify({
+        schema: change === "wrong-schema" ? "future-schema" : "crabbox.fixed-allocation-result.v1",
+        capability: change === "unsupported" ? "future-capability" : "azure-fixed-vm-capacity-v1",
+        provider: change === "wrong-provider" ? "aws" : "azure",
+        leaseId: change === "wrong-lease" ? "cbx_other" : LEASE_ID,
+        attemptName: change === "wrong-attempt" ? "" : "crabbox-fixture-01234567",
+        attemptNonce: "ABCD1234",
+        category: "capacity_shortage",
+        providerCode: "AllocationFailed",
+        allocation: change === "pending" ? "pending" : "settled_nonallocation",
+        companions: change === "unsettled-companions" ? "unknown" : "settled",
+      });
+      const encoded =
+        change === "duplicate-property"
+          ? wire.replace('"provider":"azure"', '"provider":"aws","provider":"azure"')
+          : wire;
+      const frame = `crabbox-allocation-result ${change === "malformed" ? "{" : encoded}\n`;
+      const runCommand = vi.fn<CrabboxCommandRunner>(async () =>
+        commandResult({
+          code: 1,
+          stderr:
+            change === "lost" ? "AllocationFailed" : change === "duplicate" ? frame + frame : frame,
+          ...(change === "truncated" ? { stderrTruncatedBytes: 1 } : {}),
+          ...(change === "cancelled" ? { killIssuedByAbort: true } : {}),
+          ...(change === "stdout-duplicate" ? { stdout: frame } : {}),
+          ...(change === "timeout" ? { termination: "timeout", code: null } : {}),
+        }),
+      );
+      const provider = providerWithRawRunner(runCommand);
+      const failure = await provider
+        .provision({ ...PROFILE, provider: "azure" }, OPERATION_ID)
+        .catch((error: unknown) => error);
+      expect(WorkerProviderError.isCapacityShortage(failure)).toBe(change === "settled");
+      if (WorkerProviderError.isCapacityShortage(failure)) {
+        expect(failure.receipt).toEqual({
+          operationId: OPERATION_ID,
+          leaseId: LEASE_ID,
+          attemptName: "crabbox-fixture-01234567",
+          attemptNonce: "ABCD1234",
+          providerCode: "AllocationFailed",
+        });
+        expect(runCommand).toHaveBeenCalledOnce();
+      }
+    },
+  );
+  it.each(["exact", "wrong-lease", "live-vm"] as const)(
+    "accepts only an exact durable absent-VM receipt: %s",
+    async (variant) => {
+      const profile = { ...PROFILE, provider: "azure" };
+      const resources = ["vm", "nic", "public-ip", "disk", "nsg"].map((kind) => ({
+        kind,
+        id: `/subscriptions/synthetic-fixture/resources/${kind}`,
+        immutableId: `${kind}-original`,
+        state: kind === "vm" && variant !== "live-vm" ? "absent" : "retained",
+      }));
+      const runCommand = vi.fn<CrabboxCommandRunner>(async () =>
+        commandResult({
+          stdout: JSON.stringify({
+            schema: "crabbox.lease-hold.v1",
+            provider: "azure",
+            status: "held",
+            leaseId: variant === "wrong-lease" ? "cbx_other" : LEASE_ID,
+            unacceptedChanges: "unknown",
+            resources,
+          }),
+        }),
+      );
+      const provider = providerWithRawRunner(runCommand);
+      const result = provider.holdFailedLease!(lifecycleLease(LEASE_ID, profile), {
+        assertCurrent: () => {},
+      });
+      if (variant === "exact") {
+        await expect(result).resolves.toMatchObject({
+          status: "held",
+          leaseId: LEASE_ID,
+          resources,
+        });
+      } else {
+        await expect(result).rejects.toThrow(
+          /exact failed-lease hold receipt|retained-resource identity/u,
+        );
+      }
+      expect(runCommand).toHaveBeenCalledOnce();
+      expect(runCommand.mock.calls[0]?.[0]).toEqual([
+        SIBLING_BINARY,
+        "hold",
+        "--provider",
+        "azure",
+        "--id",
+        LEASE_ID,
+        "--json",
+      ]);
+    },
+  );
+});
 
 describe("Crabbox worker provider", () => {
   it("uses the managed binary for discovery and the complete worker lifecycle", async () => {
@@ -1401,43 +1459,6 @@ describe("Crabbox worker provider", () => {
       message: expect.stringContaining(message),
     });
     expect(runCommand).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { idleTimeout: "1s", interval: 500, timeout: 500 },
-    { idleTimeout: "12s", interval: 5_000, timeout: 6_000 },
-    { idleTimeout: "30s", interval: 10_000, timeout: 15_000 },
-    { idleTimeout: "6m", interval: 60_000, timeout: 150_000 },
-  ])("renews before idle expiry ($idleTimeout)", async ({ idleTimeout, interval, timeout }) => {
-    const { provider, heartbeat } = heartbeatFixture(async () => commandResult());
-    const profile = { ...PROFILE, idleTimeout };
-    try {
-      await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
-        leaseId: LEASE_ID,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(heartbeat).toHaveBeenCalledExactlyOnceWith(
-        [
-          SIBLING_BINARY,
-          "heartbeat",
-          "--provider",
-          "aws",
-          "--id",
-          LEASE_ID,
-          "--idle-timeout",
-          idleTimeout,
-          "--json",
-        ],
-        expect.objectContaining({ timeoutMs: timeout }),
-      );
-      await vi.advanceTimersByTimeAsync(interval - 1);
-      expect(heartbeat).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(heartbeat).toHaveBeenCalledTimes(2);
-    } finally {
-      await provider.destroy(lifecycleLease(LEASE_ID, profile));
-      vi.useRealTimers();
-    }
   });
 
   it("fences heartbeat before a delayed or failed teardown binary acquisition", async () => {

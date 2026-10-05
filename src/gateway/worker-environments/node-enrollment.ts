@@ -31,6 +31,7 @@ import {
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
+import { reportWorkerProvisionAbort } from "./provider-provision-telemetry.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -41,7 +42,9 @@ type NodeEnrollmentBinding = {
   record: WorkerEnvironmentRecord;
   signal: AbortSignal;
   setupCredential?: { setupId: string; token: string; digest: string };
-  close: () => void;
+  close: (
+    cause?: "binding-closed" | "binding-replaced" | "environment-retired" | "host-stopping",
+  ) => void;
 };
 
 async function readWorkerCodexConfiguration() {
@@ -92,12 +95,20 @@ type WorkerNodeEnrollmentManagerOptions = {
   now?: () => number;
 };
 
-function isProvisioningOwner(
+function isNodeEnrollmentOwner(
   current: WorkerEnvironmentRecord | undefined,
   owner: WorkerEnvironmentRecord,
 ): current is WorkerEnvironmentRecord {
   return (
-    current?.state === "provisioning" &&
+    (current?.state === "provisioning" ||
+      (current?.state === owner.state &&
+        ["ready", "idle", "attached"].includes(owner.state) &&
+        owner.leaseId !== null &&
+        current.leaseId === owner.leaseId &&
+        owner.nodeDeviceId !== null &&
+        current.nodeDeviceId === owner.nodeDeviceId &&
+        owner.nodeSetupId !== null &&
+        current.nodeSetupId === owner.nodeSetupId)) &&
     current.destroyRequestedAtMs === null &&
     current.provisionOperationId === owner.provisionOperationId &&
     current.ownerEpoch === owner.ownerEpoch
@@ -156,12 +167,12 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     const admission = options.store.get(record.environmentId);
-    if (!isProvisioningOwner(admission, record)) {
+    if (!isNodeEnrollmentOwner(admission, record)) {
       throw new Error("Worker node enrollment is no longer provisioning");
     }
     // Reserve the generation before asynchronous preparation, so a stale completion
     // cannot cancel or replace an enrollment admitted after it.
-    active.get(record.environmentId)?.close();
+    active.get(record.environmentId)?.close("binding-replaced");
     const enrollmentAbort = new AbortController();
     const enrollmentSignal = AbortSignal.any([
       signal,
@@ -171,10 +182,11 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const binding: NodeEnrollmentBinding = {
       record,
       signal: enrollmentSignal,
-      close: () => {
+      close: (cause = "binding-closed") => {
         if (active.get(record.environmentId) === binding) {
           active.delete(record.environmentId);
         }
+        reportWorkerProvisionAbort(record, "node-enrollment", cause, enrollmentAbort.signal);
         enrollmentAbort.abort();
         const credential = binding.setupCredential;
         binding.setupCredential = undefined;
@@ -192,7 +204,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const current = () => {
       enrollmentSignal.throwIfAborted();
       const live = options.store.get(record.environmentId);
-      if (active.get(record.environmentId) !== binding || !isProvisioningOwner(live, record)) {
+      if (active.get(record.environmentId) !== binding || !isNodeEnrollmentOwner(live, record)) {
         throw new Error("Worker node enrollment is no longer provisioning");
       }
       return live;
@@ -283,7 +295,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       requireCurrent();
       let current = await options.store.ensureNodeEnrollment(record.environmentId);
       requireCurrent();
-      if (!isProvisioningOwner(current, record)) {
+      if (!isNodeEnrollmentOwner(current, record)) {
         throw new Error("Worker node enrollment is no longer provisioning");
       }
       let mode:
@@ -292,6 +304,18 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       let gatewayUrl = prepared.url;
       let tlsFingerprint = prepared.tlsFingerprint;
       if (current.nodeDeviceId) {
+        if (current.state !== "provisioning") {
+          const availability = await options.resolveAvailability(current.nodeDeviceId);
+          requireCurrent();
+          if (
+            !availability.available &&
+            availability.unavailableReason !== "disconnected" &&
+            availability.unavailableReason !== "hosting-unavailable" &&
+            availability.unavailableReason !== "at-capacity"
+          ) {
+            throw new Error("Worker resumption requires its current paired node identity");
+          }
+        }
         mode = { mode: "resume", deviceId: current.nodeDeviceId };
       } else {
         if (!current.nodeSetupId) {
@@ -350,7 +374,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         return (
           active.get(owner.environmentId) === binding &&
           !enrollmentSignal.aborted &&
-          isProvisioningOwner(live, record) &&
+          isNodeEnrollmentOwner(live, record) &&
           live.nodeSetupId === owner.nodeSetupId &&
           live.nodeDeviceId === owner.nodeDeviceId
         );
@@ -374,7 +398,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             enrollmentSignal.throwIfAborted();
             const live = options.store.get(owner.environmentId);
             if (
-              !isProvisioningOwner(live, owner) ||
+              !isNodeEnrollmentOwner(live, owner) ||
               live.nodeSetupId !== owner.nodeSetupId ||
               active.get(owner.environmentId) !== binding
             ) {
@@ -385,7 +409,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
               enrollmentSignal.throwIfAborted();
               const latest = options.store.get(owner.environmentId);
               if (
-                !isProvisioningOwner(latest, owner) ||
+                !isNodeEnrollmentOwner(latest, owner) ||
                 latest.nodeSetupId !== owner.nodeSetupId ||
                 latest.nodeDeviceId !== live.nodeDeviceId ||
                 active.get(owner.environmentId) !== binding
@@ -410,7 +434,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   };
 
   const retire = async (record: WorkerEnvironmentRecord): Promise<void> => {
-    active.get(record.environmentId)?.close();
+    active.get(record.environmentId)?.close("environment-retired");
     const deviceId = record.nodeDeviceId;
     if (!deviceId) {
       return;
@@ -471,7 +495,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     stop: () => {
       controller.abort();
       for (const binding of active.values()) {
-        binding.close();
+        binding.close("host-stopping");
       }
       options.transfer.closeAll();
     },

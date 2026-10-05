@@ -61,7 +61,12 @@ afterEach(async () => {
   nodeDatabasePath = undefined;
 });
 
-async function fixture(runSetupScript = false, preparedNode = false, ephemeralArtifacts = false) {
+async function fixture(
+  runSetupScript = false,
+  preparedNode = false,
+  ephemeralArtifacts = false,
+  setupChangesFiles = true,
+) {
   state = await createOpenClawTestState({
     label: "repository-startup",
     layout: "state-only",
@@ -140,7 +145,7 @@ async function fixture(runSetupScript = false, preparedNode = false, ephemeralAr
     if (request.source.kind !== "repository") {
       throw new Error("Expected repository source");
     }
-    if (request.source.runSetupScript) {
+    if (request.source.runSetupScript && setupChangesFiles) {
       await fs.writeFile(path.join(remote, "setup.txt"), "setup complete\n");
     }
     const manifest = await captureWorkspaceManifest({ root: remote, baseCommit });
@@ -322,10 +327,109 @@ it("reconstructs from the pinned branch when an ephemeral checkpoint was lost", 
     baseCommit: accepted.baseCommit,
   });
   expect(f.syncWorkspace.mock.calls[0]?.[0].source).not.toHaveProperty("checkpoint");
+  expect((await f.store.get(accepted.workspaceId))?.revision).toBe(accepted.revision + 1);
   expect((await f.store.get(accepted.workspaceId))?.checkpointRef).toMatch(
     /^refs\/openclaw\/worker-results\//u,
   );
 });
+
+it.each(["changed", "unknown base"] as const)(
+  "preserves an unavailable ephemeral checkpoint with %s accepted state before effects",
+  async (change) => {
+    const f = await fixture(change === "changed", false, true);
+    await f.start({ runSetupScript: true });
+    const accepted = (await f.store.get(f.repository.workspaceId))!;
+    await fs.rm(f.store.artifactPath(accepted.workspaceId), { recursive: true, force: true });
+    f.syncWorkspace.mockClear();
+    vi.mocked(prepareWorkerRepositoryGitHubIdentity).mockClear();
+
+    await expect(
+      f.start({
+        repository: change === "unknown base" ? { ...accepted, baseManifestHash: null } : accepted,
+        recovery: true,
+        runSetupScript: true,
+      }),
+    ).rejects.toThrow("Accepted repository checkpoint is unavailable");
+    expect(await f.store.get(accepted.workspaceId)).toEqual(accepted);
+    expect(prepareWorkerRepositoryGitHubIdentity).not.toHaveBeenCalled();
+    expect(f.syncWorkspace).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  "authorized",
+  "unprivileged",
+  "sync failed",
+  "publication failed",
+  "revision changed",
+  "stale",
+] as const)(
+  "retains a clean ephemeral checkpoint until authorized reconstruction publishes: %s",
+  async (outcome) => {
+    const f = await fixture(true, false, true, false);
+    await f.start({ runSetupScript: true });
+    const accepted = (await f.store.get(f.repository.workspaceId))!;
+    expect(accepted.manifestHash).toBe(accepted.baseManifestHash);
+    await fs.rm(f.store.artifactPath(accepted.workspaceId), { recursive: true, force: true });
+    f.syncWorkspace.mockClear();
+    vi.mocked(prepareWorkerRepositoryGitHubIdentity).mockClear();
+    if (outcome === "sync failed") {
+      f.syncWorkspace.mockRejectedValueOnce(new Error("reconstruction sync failed"));
+    } else if (outcome === "publication failed") {
+      f.publish.mockRejectedValueOnce(new Error("reconstruction publication failed"));
+    } else if (outcome === "revision changed") {
+      f.verifyStable.mockImplementationOnce(async () => {
+        await f.store.acceptCheckpoint({
+          workspaceId: accepted.workspaceId,
+          expectedRevision: accepted.revision,
+          checkpointRef: accepted.checkpointRef!,
+          manifestHash: `sha256:${"c".repeat(64)}`,
+          assertCurrent: f.assertCurrent,
+        });
+      });
+    } else if (outcome === "stale") {
+      f.closeAuthority();
+    }
+    const pending = f.start({
+      repository: accepted,
+      recovery: true,
+      runSetupScript: outcome !== "unprivileged",
+    });
+    if (outcome === "authorized") {
+      await expect(pending).resolves.toMatchObject({ baseCommit: accepted.baseCommit });
+      expect(f.syncWorkspace).toHaveBeenCalledOnce();
+      expect(f.syncWorkspace.mock.calls[0]?.[0].source).toMatchObject({ runSetupScript: true });
+      const replacement = (await f.store.get(accepted.workspaceId))!;
+      expect(replacement.revision).toBe(accepted.revision + 1);
+      expect(replacement.checkpointRef).not.toBe(accepted.checkpointRef);
+      expect(replacement.manifestHash).toBe(accepted.manifestHash);
+    } else {
+      await expect(pending).rejects.toThrow(
+        outcome === "unprivileged"
+          ? "administrator authorization"
+          : outcome === "stale"
+            ? "placement authority closed"
+            : outcome === "revision changed"
+              ? "Repository workspace revision changed"
+              : `reconstruction ${outcome}`,
+      );
+      expect(await f.store.get(accepted.workspaceId)).toEqual(
+        outcome === "revision changed"
+          ? {
+              ...accepted,
+              revision: accepted.revision + 1,
+              manifestHash: `sha256:${"c".repeat(64)}`,
+              updatedAtMs: expect.any(Number),
+            }
+          : accepted,
+      );
+      if (outcome === "unprivileged" || outcome === "stale") {
+        expect(prepareWorkerRepositoryGitHubIdentity).not.toHaveBeenCalled();
+        expect(f.syncWorkspace).not.toHaveBeenCalled();
+      }
+    }
+  },
+);
 
 it("does not run setup when the repository did not request it", async () => {
   const f = await fixture(false);

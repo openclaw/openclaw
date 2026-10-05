@@ -11,6 +11,10 @@ import {
   readWorkerWorkspaceReconciliationFacts,
 } from "./placement-workspace-result.js";
 import { assertPreparedEnvironmentAttachment } from "./prepared-environment-store.js";
+import {
+  requestRetainedWorkerDisposal,
+  settleRetainedWorkerDisposal,
+} from "./recovery-hold-store.js";
 import { hasWorkerEnvironmentSessionAttachment } from "./session-attachment-store.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
 import { canTransitionWorkerEnvironment } from "./state.js";
@@ -138,6 +142,17 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
       const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
       const updatedAtMs = now();
       const current = getRequiredWorkerEnvironment(db, environmentId);
+      if (current.recoveryHold) {
+        if (
+          from !== "destroying" ||
+          to !== "destroyed" ||
+          !current.recoveryHold.cleanup ||
+          Object.keys(patch).some((key) => key !== "lastError")
+        ) {
+          throw new Error("Held worker custody cannot be changed by an environment transition");
+        }
+        requestRetainedWorkerDisposal(db, environmentId, updatedAtMs);
+      }
       if (current.state !== from) {
         throw new Error(
           `Worker environment ${environmentId} state conflict: expected ${from}, found ${current.state}`,
@@ -350,6 +365,9 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
             nowMs: updatedAtMs,
           }),
         );
+      }
+      if (current.recoveryHold) {
+        settleRetainedWorkerDisposal(db, environmentId, updatedAtMs);
       }
       return getRequiredWorkerEnvironment(db, environmentId);
     },

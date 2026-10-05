@@ -382,6 +382,15 @@ reports that outcome as `uncertain`; it must not be treated as proof of cancella
 or permission to retry with a new request ID. Pre-dispatch authority checks and
 the adapter's final page-session and URL checks remain required.
 
+## Worker provider failed-lease holds
+
+A worker provider may implement `holdFailedLease(lease, { assertCurrent, signal })` and `supportsFailedLeaseHold(profile)`. The hold must durably exclude the exact lease from reuse and destructive cleanup before returning a receipt. Report independently verified absent or retained resource identities, including immutable identities for retained resources, and keep unaccepted edits `unknown`. Recheck `assertCurrent()` after awaits and immediately before provider state changes. OpenClaw reserves the retained source through its existing worker lifecycle before invoking the provider; a lost reply remains pending for an idempotent retry. Providers that cannot attest this contract leave recovery blocked.
+
+The hold's lease input can include `operationId`, the original persisted allocation
+operation. It carries neither new authority nor an original resource deletion
+grant. Core verifies that the frozen profile and operation still resolve the same
+lease; providers must keep that binding when using it to locate retained resources.
+
 ## Worker provider allocation authority
 
 The Gateway supplies `assertCurrent()` in the options passed to worker providers'
@@ -492,6 +501,10 @@ The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow
 `openclaw/plugin-sdk/github-worker-runtime` is a private-local host composition seam used by bundled worker and Codex node execution. `prepareWorkerGitHubBindingGrant` returns a run-scoped launch binding and an asynchronous `revoke` operation. The caller owns closure on every launch failure and at process or lease completion. Closure retires the execution copy and settles in-flight delivery; it does not revoke the selected account's GitHub authorization. `writeManagedGitHubProfileFiles` writes the private `gh` profile in the worker's owned state. These helpers do not authorize an arbitrary plugin to mint or retain worker credentials; callers must preserve their admitted run and placement authority at launch and cleanup.
 
 ### Node command features
+
+An asynchronously acquired managed workspace lease may expose a host-local `processEnvironment` capability. It prepares a strictly sanitized child environment with provider transport admitted by the node runtime, revalidates lease and invocation ownership immediately before spawn, and redacts that transport from returned output. Plugins must call `assertCurrent` again after awaited preparation at the final process effect; neither a request placement flag nor ambient node variables authorize inheritance. The capability contains closures rather than serialized credentials and cannot prepare or authorize a process after lease release, invocation settlement, cancellation, or environment retirement. Generic, paired-device, restricted, and nested-container contexts retain their existing environment policy.
+
+A managed workspace lease may also expose `repositoryReadiness`. Native process and filesystem operations await its `wait(signal)` and recheck `assertCurrent()` immediately before execution. Native conversation startup does not wait for repository synchronization. A pending metadata probe reports unready state without reading an unverified checkout. The closure remains bound to the exact session, workspace revision, branch, worker epoch, and lease incarnation; cancellation, replacement, failed synchronization, or lease release refuses dependent operations. It grants neither GitHub access nor execution permission.
 
 A node-host command may declare optional `features` separately from its approved capability and command. When the Gateway hello advertises `node-command-features`, the connection's existing optional publisher sends bounded `node.command.features` metadata through `node.event`. The Gateway retains it only on that exact live NodeSession; it does not persist it or change pairing or command permission. Older Gateways receive no publication, and older nodes declare no features.
 

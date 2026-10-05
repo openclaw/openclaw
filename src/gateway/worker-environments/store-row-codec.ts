@@ -41,12 +41,16 @@ type WorkerDb = Pick<
   | "worker_environment_credentials"
   | "worker_environment_ssh_fallback_ports"
   | "worker_environments"
+  | "worker_environment_recovery_holds"
   | "worker_session_placement_moves"
   | "worker_session_placements"
   | "worker_transcript_commit_heads"
 >;
 type Row = Selectable<WorkerEnvironments>;
-type RowWithFallbackPorts = Row & { ssh_fallback_ports_json: string };
+type RowWithFallbackPorts = Row & {
+  ssh_fallback_ports_json: string;
+  recovery_hold_json: string | null;
+};
 type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
 function teardownTerminalStateFrom(
   value: string | null,
@@ -171,6 +175,14 @@ function environmentRows(db: DatabaseSync) {
     .selectAll("worker_environments")
     .select((eb) =>
       eb
+        .selectFrom("worker_environment_recovery_holds")
+        .select("hold_json")
+        .whereRef("environment_id", "=", "worker_environments.environment_id")
+        .$asScalar()
+        .as("recovery_hold_json"),
+    )
+    .select((eb) =>
+      eb
         .selectFrom("worker_environment_ssh_fallback_ports")
         .select(({ fn }) =>
           fn.agg<string>("json_group_array", ["port"]).orderBy("position").as("ports"),
@@ -185,10 +197,15 @@ function environmentRows(db: DatabaseSync) {
     );
 }
 function recordsFromRows(rows: readonly RowWithFallbackPorts[]): WorkerEnvironmentRecord[] {
-  return rows.map((row) =>
+  return rows.map((row) => ({
     // SAFETY: SQLite aggregates the numeric port column; endpointFrom validates the decoded ports.
-    decodeWorkerEnvironmentRow(row, JSON.parse(row.ssh_fallback_ports_json) as number[]),
-  );
+    ...decodeWorkerEnvironmentRow(row, JSON.parse(row.ssh_fallback_ports_json) as number[]),
+    ...(row.recovery_hold_json
+      ? {
+          recoveryHold: JSON.parse(row.recovery_hold_json) as WorkerEnvironmentCustodyHold, // SAFETY: The admitted hold bytes come only from the typed retained-source worker.
+        }
+      : {}),
+  }));
 }
 export function findWorkerEnvironment(db: DatabaseSync, environmentId: string) {
   const rows = executeSqliteQuerySync(
@@ -214,10 +231,14 @@ export function getRequiredWorkerEnvironment(db: DatabaseSync, environmentId: st
   }
   return record;
 }
-export function listRows(db: DatabaseSync): WorkerEnvironmentRecord[] {
+export function listRows(db: DatabaseSync, ids?: readonly string[]): WorkerEnvironmentRecord[] {
+  if (ids?.length === 0) {
+    return [];
+  }
+  const rowsQuery = environmentRows(db);
   const rows = executeSqliteQuerySync(
     db,
-    environmentRows(db)
+    (ids ? rowsQuery.where("worker_environments.environment_id", "in", ids) : rowsQuery)
       .orderBy("worker_environments.created_at_ms")
       .orderBy("worker_environments.environment_id"),
   ).rows;

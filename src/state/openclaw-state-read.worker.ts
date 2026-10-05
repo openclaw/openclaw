@@ -32,6 +32,7 @@ import {
 import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
+  readRepositoryGitHubPublicationBranchInDatabase,
 } from "../gateway/github-repository-publication-store.js";
 import {
   listCronStandingGrantsInDatabase,
@@ -488,6 +489,12 @@ serveOwnedWorkerTasks(
                 row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
               };
             }
+            if (command.type === "githubRepository.branch") {
+              return {
+                type: command.type,
+                branch: readRepositoryGitHubPublicationBranchInDatabase(db, command.input),
+              };
+            }
             if (command.type === "githubRepository.request") {
               return {
                 type: command.type,
@@ -567,6 +574,12 @@ serveOwnedWorkerTasks(
                 links: runSqliteDeferredTransactionSync(db, () =>
                   listUserProfileAuthLinksInDatabase(db, command.profileId),
                 ),
+              };
+            }
+            if (command.type === "userProfiles.email.resolve") {
+              return {
+                type: command.type,
+                profileId: readUserProfileIdForEmail(db, command.email),
               };
             }
             if (command.type === "userProfiles.authenticationAlias.resolve") {

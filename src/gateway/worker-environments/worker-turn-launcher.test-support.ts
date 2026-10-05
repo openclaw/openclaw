@@ -147,7 +147,7 @@ export async function acknowledgeCompletedWorkerTurn(
   };
 }
 
-let testState: OpenClawTestState;
+export let testState: OpenClawTestState;
 export let database: OpenClawStateDatabase;
 let cleanupAdmissionSink: (() => void) | undefined;
 
@@ -343,6 +343,7 @@ export async function seedActivePlacement(
   executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   remoteWorkspaceDir = "/worker/workspace",
   workspaceBaseManifestRef = MANIFEST_REF,
+  repositoryPreparation?: "pending",
 ): Promise<void> {
   await advancePlacementFixtureToActive(
     placements,
@@ -359,6 +360,7 @@ export async function seedActivePlacement(
       workerBundleHash: BUNDLE_HASH,
       remoteWorkspaceDir,
       workspaceBaseManifestRef,
+      ...(repositoryPreparation ? { repositoryPreparation, workspaceBaseManifestRef: null } : {}),
     },
   );
 }

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { ensureWorkerEnvironmentRecoveryHoldSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -29,6 +30,7 @@ export function ensureWorkerEnvironmentStoreSchema(database: OpenClawStateDataba
       db.exec(
         `${WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL}\n${WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL}`,
       );
+      ensureWorkerEnvironmentRecoveryHoldSchema(db);
     },
     { database },
     { operationLabel: "worker-environments.companion.schema.ensure" },

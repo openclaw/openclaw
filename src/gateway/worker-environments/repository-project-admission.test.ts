@@ -180,6 +180,10 @@ describe("repository project admission", () => {
 
   it.each([
     "unpublished",
+    "uninitialized",
+    "uninitialized original branch",
+    "uninitialized attempted",
+    "uninitialized checkpoint",
     "attempted",
     "deleted",
     "unknown effect",
@@ -189,7 +193,7 @@ describe("repository project admission", () => {
     "recovers only a proven generated local branch from its original immutable base: %s",
     async (state) => {
       const workspaceId = "db9ec53a-081a-4343-8bf8-64810cf01793";
-      const branch = `clawson/${workspaceId}`;
+      const branch = state === "uninitialized original branch" ? "main" : `clawson/${workspaceId}`;
       const workspace: SessionRepositoryWorkspaceRecord = {
         workspaceId,
         agentId: "main",
@@ -197,11 +201,12 @@ describe("repository project admission", () => {
         url: repositoryUrl,
         requestedRef: state === "external branch" ? `refs/heads/${branch}` : "main",
         branch,
-        baseCommit: commit,
+        baseCommit: state.startsWith("uninitialized") ? null : commit,
         runSetupScript: false,
-        revision: 4,
+        revision: state.startsWith("uninitialized") ? 0 : 4,
         baseManifestHash: null,
-        checkpointRef: null,
+        checkpointRef:
+          state === "uninitialized checkpoint" ? "refs/openclaw/worker-results/held" : null,
         manifestHash: null,
         createdAtMs: 1,
         updatedAtMs: 1,
@@ -209,7 +214,11 @@ describe("repository project admission", () => {
       mocks.workspace.mockResolvedValue(workspace);
       mocks.publication.mockResolvedValue({
         current: () => ({
-          attempted: state === "attempted" || state === "deleted" || state === "unknown effect",
+          attempted:
+            state === "attempted" ||
+            state === "uninitialized attempted" ||
+            state === "deleted" ||
+            state === "unknown effect",
           unsettled: state === "unknown effect",
           head: state === "deleted" ? { pushed_head_commit: "e".repeat(40) } : undefined,
         }),
@@ -233,18 +242,28 @@ describe("repository project admission", () => {
         sessionId: "original",
         assertCurrent: () => {},
       });
-      if (state === "unpublished") {
+      if (
+        state === "unpublished" ||
+        state === "uninitialized" ||
+        state === "uninitialized original branch"
+      ) {
         await recovered;
         expect(mocks.advance).toHaveBeenCalledWith(
           expect.objectContaining({
             workspaceId,
-            expectedRevision: 4,
+            expectedRevision: workspace.revision,
             branch,
             headCommit: commit,
             preserveRequestedRef: true,
           }),
         );
-        expect(requestPaths()).toContain(`/repos/acme/project/git/commits/${commit}`);
+        expect(requestPaths()).toContain(
+          state === "uninitialized original branch"
+            ? "/repos/acme/project/commits/heads%2Fmain"
+            : state === "uninitialized"
+              ? "/repos/acme/project/commits/main"
+              : `/repos/acme/project/git/commits/${commit}`,
+        );
         expect(requestPaths().some((value) => value.includes("/commits/heads%2Fclawson"))).toBe(
           false,
         );
@@ -257,10 +276,39 @@ describe("repository project admission", () => {
           );
         }
       }
-      expect(workspace).toMatchObject({ revision: 4, branch, baseCommit: commit });
+      expect(workspace).toMatchObject({
+        revision: state.startsWith("uninitialized") ? 0 : 4,
+        branch,
+        baseCommit: state.startsWith("uninitialized") ? null : commit,
+      });
       expect(mocks.release).toHaveBeenCalledOnce();
     },
   );
+
+  it("correlates exact source-ref422 with safe request ID and no raw error or credential", async () => {
+    const transport = fetchImpl.getMockImplementation()!;
+    fetchImpl.mockImplementation(async (input, init) =>
+      new Request(input).url.includes("/commits/")
+        ? new Response(JSON.stringify({ message: "synthetic-private-error" }), {
+            status: 422,
+            headers: { "x-github-request-id": "ABCD:1234" },
+          })
+        : transport(input, init),
+    );
+    await expect(prepareRepositoryWorkerProjectSource(initial)).rejects.toThrow();
+    expect(mocks.phaseLog).toHaveBeenCalledWith(
+      "repository admission request",
+      expect.objectContaining({
+        operation: "source_ref",
+        status: 422,
+        githubRequestId: "ABCD:1234",
+        outcome: "rejected",
+      }),
+    );
+    const raw = JSON.stringify(mocks.phaseLog.mock.calls);
+    expect(raw).not.toContain("synthetic-private-error");
+    expect(raw).not.toContain(token);
+  });
 
   it.each(["current", "credential changed", "authority revoked", "caller aborted"] as const)(
     "bounds metadata credential verification while preserving %s refusal",

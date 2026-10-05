@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { sql, type Expression } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -15,7 +16,25 @@ import type {
 const TERMINAL_ENVIRONMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const TERMINAL_ENVIRONMENT_PRUNE_LIMIT = 256;
 
-type RetentionDatabase = Pick<StateDatabase, "worker_environments" | "worker_session_placements">;
+type RetentionDatabase = Pick<
+  StateDatabase,
+  "worker_environments" | "worker_session_placements" | "worker_environment_recovery_holds"
+>;
+
+// Missing or malformed lifecycle facts retain custody, including legacy holds.
+function settledDisposal(state: Expression<string>) {
+  /* kysely-allow-raw: qualify JSON receipt fields inside the existing native retention query. */
+  return sql<number>`(
+    ${state} = 'destroyed'
+    AND json_type(hold_json, '$.cleanup.requestedAtMs') = 'integer'
+    AND json_type(hold_json, '$.cleanup.providerReleasedAtMs') = 'integer'
+    AND json_type(hold_json, '$.cleanup.settledAtMs') = 'integer'
+    AND json_extract(hold_json, '$.cleanup.requestedAtMs') >= 0
+    AND json_extract(hold_json, '$.cleanup.providerReleasedAtMs') >= json_extract(hold_json, '$.cleanup.requestedAtMs')
+    AND json_extract(hold_json, '$.cleanup.settledAtMs') >= json_extract(hold_json, '$.cleanup.providerReleasedAtMs')
+    AND json_extract(hold_json, '$.cleanup.settledAtMs') <= ${Number.MAX_SAFE_INTEGER}
+  )`;
+}
 
 function normalizeLimit(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > 1_000) {
@@ -42,6 +61,17 @@ export function readTerminalWorkerEnvironmentPrunePage(
       "worker_environments.environment_id",
     )
     .selectAll("worker_environments")
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("worker_environment_recovery_holds")
+            .select("environment_id")
+            .whereRef("environment_id", "=", "worker_environments.environment_id")
+            .where(settledDisposal(eb.ref("worker_environments.state")), "is not", 1),
+        ),
+      ),
+    )
     .where("worker_environments.state", "in", WORKER_ENVIRONMENT_TERMINAL_STATES)
     .where("worker_environments.state_changed_at_ms", "<=", cutoffMs)
     .where("worker_session_placements.session_id", "is", null)
@@ -94,6 +124,17 @@ export function pruneObservedTerminalWorkerEnvironments(
           eb.not(
             eb.exists(
               eb
+                .selectFrom("worker_environment_recovery_holds")
+                .select("environment_id")
+                .whereRef("environment_id", "=", "worker_environments.environment_id")
+                .where(settledDisposal(eb.ref("worker_environments.state")), "is not", 1),
+            ),
+          ),
+        )
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
                 .selectFrom("worker_session_placements")
                 .select("session_id")
                 .whereRef("environment_id", "=", "worker_environments.environment_id"),
@@ -105,6 +146,13 @@ export function pruneObservedTerminalWorkerEnvironments(
     // including the profile, activation and terminal age, under the write lock.
     // Worker transport drops the SQLite driver's null prototype; all column values stay exact.
     if (current && isDeepStrictEqual({ ...current }, { ...observed })) {
+      executeSqliteQuerySync(
+        db,
+        currentQuery
+          .deleteFrom("worker_environment_recovery_holds")
+          .where("environment_id", "=", observed.environment_id)
+          .where(settledDisposal(sql.val(current.state)), "is", 1),
+      );
       const result = executeSqliteQuerySync(
         db,
         currentQuery

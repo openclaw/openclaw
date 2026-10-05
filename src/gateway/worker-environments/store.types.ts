@@ -1,12 +1,17 @@
 import type { Selectable } from "kysely";
 import type { WorkerEnvironments } from "../../state/openclaw-state-db.generated.js";
+import type { RepositoryWorkspaceMutationResult } from "../../state/session-repository-workspaces.types.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type {
   WorkerEnvironmentIntentInput,
   WorkerEnvironmentPreparationIntent,
   WorkerEnvironmentRecord,
+  WorkerEnvironmentRecoveryHold,
+  WorkerEnvironmentPreparedRecoveryHold,
   WorkerEnvironmentTeardownTerminalState,
 } from "./environment-record.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type { RetainedWorkerRecoveryAcceptance } from "./recovery-hold-store.js";
 import type {
   WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionIdentity,
@@ -19,6 +24,10 @@ import type {
   TransitionInput,
 } from "./store-write-types.js";
 
+export type WorkerRecoveryPublication = {
+  workspace: RepositoryWorkspaceMutationResult;
+  placement: Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+};
 export type WorkerEnvironmentFacts = {
   ids: string[];
   environments: WorkerEnvironmentRecord[];
@@ -50,6 +59,15 @@ export type WorkerEnvironmentPrunePage = {
 
 /** Native mutation signatures own the host callbacks and the worker's serializable contract. */
 export type WorkerEnvironmentMutationMethods = {
+  retainPreparedEnvironment(
+    input: WorkerEnvironmentPreparedRecoveryHold & { capacity: number; assertCurrent?: () => void },
+  ): WorkerEnvironmentRecord;
+  retainFailedEnvironment(
+    input: WorkerEnvironmentRecoveryHold & { capacity: number; assertCurrent?: () => void },
+  ): WorkerEnvironmentRecord;
+  acceptRetainedRecovery(
+    input: RetainedWorkerRecoveryAcceptance & { assertCurrent?: () => void },
+  ): Extract<WorkerSessionPlacementRecord, { state: "failed" | "reclaimed" }>;
   createIntent(input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord;
   ensureNodeEnrollment(environmentId: string): WorkerEnvironmentRecord;
   revokeEnvironmentCredential(input: CredentialRevocationInput): void;
@@ -63,6 +81,8 @@ export type WorkerEnvironmentMutationMethods = {
     environmentId: string;
     leaseId: string;
     lastError: string;
+    terminalState?: WorkerEnvironmentTeardownTerminalState;
+    assertCurrent?: () => void;
   }): WorkerEnvironmentRecord;
   requestDestroy(input: {
     environmentId: string;
@@ -70,6 +90,8 @@ export type WorkerEnvironmentMutationMethods = {
     terminalState?: WorkerEnvironmentTeardownTerminalState;
     assertCurrent?: () => void;
     lastError?: string;
+    /** Facts captured only after the exact provider destroy call settles. */
+    providerRelease?: { leaseId: string; ownerEpoch: number };
   }): WorkerEnvironmentRecord;
   refreshBootstrapReceipt(input: BootstrapRefreshInput): WorkerEnvironmentRecord;
   transition(input: TransitionInput): WorkerEnvironmentRecord;

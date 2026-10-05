@@ -21,6 +21,18 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+Successful `doctor --fix` now joins canonical session validation after all repairs,
+including database file rewrites, before recording completed migration backups and
+releasing maintenance ownership. This applies to ordinary repair callers as well
+as externally supervised maintenance jobs. Existing admitted custom and registered
+stores are validated without adding retained agents to the configured roster.
+Invalid rows or lost database ownership prevent successful completion and retain
+the pending validation work; read-only lint and deferred updater passes do not
+gain repair authority. A versioned deployment should qualify this completion
+behavior on its preserved migration fixture before publication. Rollback uses the
+verified pre-migration backup with its matching build, not deleted pending markers
+or lowered schema versions.
+
 ## Postures
 
 Doctor supports these postures:
