@@ -227,13 +227,40 @@ export function projectTranscriptChain(
       return value;
     }
   }
-  const frames = coalesceAgentRunFrames(
-    coalesceActivityRuns(
-      collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options),
-      options,
-    ),
-    options,
-  );
+  // Set execution/display ownership before any rollup can erase it. Completion
+  // changes the disclosure, never which run owns earlier tools or failures.
+  const frames: ChatRenderItem[] = [];
+  let unframed: Parameters<typeof collapseCompletedTurnWork>[0] = [];
+  const flushUnframed = () => {
+    frames.push(...coalesceActivityRuns(collapseCompletedTurnWork(unframed, options), options));
+    unframed = [];
+  };
+  for (const item of coalesceAgentRunFrames(coalesceStreamRuns(chatItems), options)) {
+    if (item.kind !== "agent-run-frame") {
+      // The raw projection has not created work or activity rollups yet.
+      if (item.kind === "work-group" || item.kind === "activity-run") {
+        unframed.push(...item.groups);
+      } else {
+        unframed.push(item);
+      }
+      continue;
+    }
+    flushUnframed();
+    const parts = item.parts.flatMap((part) =>
+      part.kind === "work-group" || part.kind === "activity-run" ? part.groups : [part],
+    );
+    frames.push({
+      ...item,
+      parts: coalesceActivityRuns(
+        collapseCompletedTurnWork(parts, {
+          ...options,
+          runWorking: item.outcome.kind === "active",
+        }),
+        options,
+      ),
+    });
+  }
+  flushUnframed();
   const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {

@@ -26,9 +26,12 @@ import {
   hasForwardedSource,
   isInterSessionMessage,
 } from "./chat-turn-boundary.ts";
-import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
+  if (assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error") {
+    return "failed";
+  }
   return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
 }
 
@@ -58,6 +61,22 @@ type ReplyState = {
   turnSource?: MessageGroup["replyTurnSource"];
 };
 
+function replyStateForRun(
+  state: ReplyState,
+  runId: string | undefined,
+  runStates?: ReadonlyMap<string, ReplyState>,
+): ReplyState {
+  const confirmed = runId && runStates?.get(runId);
+  if (confirmed) {
+    return { ...confirmed, turnSource: state.turnSource };
+  }
+  const prompt = state.turnSource?.message;
+  const promptRunId = userTurnRunId(prompt);
+  // Only output without execution facts may use legacy transcript context.
+  // A known execution needs a matching prompt or confirmed steer.
+  return runId && promptRunId !== runId && persistedSteerTargetRunId(prompt) !== runId ? {} : state;
+}
+
 /**
  * Reply context comes from the full transcript, not the rendered rows: search
  * renders a subset that can drop the other speaker or the prompt a reply answers.
@@ -65,13 +84,14 @@ type ReplyState = {
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
   context: Array<ChatItem | MessageGroup>,
-  { people: sessionPeople, localPerson }: ReplyAttributionContext,
+  { people: sessionPeople, localPerson, activeInput }: ReplyAttributionContext,
 ): Array<ChatItem | MessageGroup> {
   const people = new Set(sessionPeople);
   const untypedSenders: SenderIdentity[] = [];
   // reply_to_current names the prompt that started the run. Only the persisted
   // user-turn run identity resolves it; an ambiguous owner stays unresolved.
   const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const runStates = new Map<string, ReplyState>();
   const stateBefore = new Map<string, ReplyState>();
   let state: ReplyState = {};
   for (const item of context) {
@@ -79,23 +99,18 @@ function stampReplyAttribution(
     // previous prompt before recording reply state for their output.
     if (chatItemStartsUserTurn(item) && !(item.kind === "group" && item.role === "user")) {
       state = {};
+      runStates.clear();
     }
     if (item.kind === "stream") {
-      stateBefore.set(item.key, state);
+      stateBefore.set(item.key, replyStateForRun(state, item.runId, runStates));
     }
     if (item.kind !== "group") {
       continue;
     }
     for (const source of item.messages) {
-      stateBefore.set(source.key, state);
+      stateBefore.set(source.key, replyStateForRun(state, item.runId, runStates));
     }
     if (item.role === "user") {
-      for (const source of item.messages) {
-        const runId = userTurnRunId(source.message);
-        if (runId) {
-          runPrompts.set(runId, runPrompts.has(runId) ? null : source);
-        }
-      }
       // A local message carries no sender metadata: its author is the signed-in
       // viewer, one person for counting, never a name for this message.
       if (item.sender?.identity) {
@@ -109,9 +124,23 @@ function stampReplyAttribution(
       // mislabeling the reply as addressed to the previous participant.
       const last = item.messages.at(-1);
       state = { sender: item.sender, message: item.sender ? last : undefined, turnSource: last };
+      for (const source of item.messages) {
+        const promptRunId =
+          userTurnRunId(source.message) ??
+          (activeInput && source.message === activeInput.message ? activeInput.runId : null);
+        if (promptRunId) {
+          runPrompts.set(promptRunId, runPrompts.has(promptRunId) ? null : source);
+        }
+        for (const runId of [promptRunId, persistedSteerTargetRunId(source.message)]) {
+          if (runId) {
+            runStates.set(runId, state);
+          }
+        }
+      }
     } else if (item.role === "assistant" && hasForwardedSource(item)) {
       // Forwarded input starts a turn without a local human reply recipient.
       state = {};
+      runStates.clear();
     }
   }
   // Untyped senders resolve after every typed person is known, so order never splits one.
@@ -133,7 +162,12 @@ function stampReplyAttribution(
         : item.kind === "stream"
           ? stateBefore.get(item.key)
           : undefined;
-    states[index] = known ?? next;
+    states[index] =
+      known ??
+      replyStateForRun(
+        next,
+        item.kind === "group" || item.kind === "stream" ? item.runId : undefined,
+      );
     if (known) {
       next = known;
     }
@@ -154,7 +188,7 @@ function stampReplyAttribution(
     if (shared) {
       item.replyShared = true;
     }
-    if (item.role !== "assistant" || hasForwardedSource(item)) {
+    if ((item.role !== "assistant" && item.role !== "tool") || hasForwardedSource(item)) {
       continue;
     }
     const currentSource =
@@ -183,6 +217,8 @@ export type ReplyAttributionContext = {
   people?: readonly string[];
   /** Key of the signed-in viewer, who authors local user messages without a sender. */
   localPerson?: string;
+  /** Exact active-run/custody match; submission correlation is not persisted execution identity. */
+  activeInput?: { runId: string; message: unknown };
 };
 
 export function groupMessages(
@@ -375,8 +411,6 @@ export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
-  /** Terminal reply owning this rollup’s presentation, not its nested execution identities. */
-  replyRunId?: string;
   /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
   previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
@@ -435,32 +469,28 @@ function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
   );
 }
 
-function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
-  const boundary = turn[0];
-  if (!boundary || boundary.kind === "stream-run") {
-    return [];
-  }
-  if (boundary.kind === "group") {
-    return boundary.role.toLowerCase() === "user"
-      ? boundary.messages.map(({ message }) => message)
-      : [];
-  }
-  return boundary.kind === "message" && chatItemStartsUserTurn(boundary) ? [boundary.message] : [];
-}
-
 /**
  * Once a turn is done, collect its activity above the preserved answers in one
  * "Worked for X" disclosure. Each partition retains source order without changing
  * the stored transcript. Live turns stay expanded; structural markers stay anchored.
  */
+type CompletedTurnOptions = {
+  sessionKey: string;
+  runWorking: boolean;
+  searchActive?: boolean;
+  session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+};
+export function collapseCompletedTurnWork(
+  items: Array<MessageGroup | StreamRunRenderItem>,
+  opts: CompletedTurnOptions,
+): Array<MessageGroup | StreamRunRenderItem | WorkGroupRenderItem>;
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
-  opts: {
-    sessionKey: string;
-    runWorking: boolean;
-    searchActive?: boolean;
-    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
-  },
+  opts: CompletedTurnOptions,
+): Array<TurnRenderItem | WorkGroupRenderItem>;
+export function collapseCompletedTurnWork(
+  items: TurnRenderItem[],
+  opts: CompletedTurnOptions,
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
   const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
     opts.sessionKey,
@@ -489,44 +519,13 @@ export function collapseCompletedTurnWork(
     turns.push(currentTurn);
   }
 
-  const { continuationTurnIndexes, precedingContinuationTurnIndexes } = indexTurnContinuations(
-    turns,
-    turnUserMessages,
-  );
-  const terminalReplies = turns.map((turn, turnIndex) =>
-    continuationTurnIndexes.has(turnIndex) ? undefined : turn.findLast(isFinalReplyGroup),
-  );
-  const finalReplyIndexes = turns.map((turn, index) => {
-    const reply = terminalReplies[index];
-    return reply ? turn.lastIndexOf(reply) : -1;
-  });
-  for (let turnIndex = turns.length - 2; turnIndex >= 0; turnIndex -= 1) {
-    const continuationTurnIndex = continuationTurnIndexes.get(turnIndex);
-    if (!terminalReplies[turnIndex] && continuationTurnIndex !== undefined) {
-      terminalReplies[turnIndex] = terminalReplies[continuationTurnIndex];
-    }
-  }
-  const liveTurnIndexes = new Set<number>();
-  if (opts.runWorking) {
-    let liveTurnIndex = turns.length - 1;
-    liveTurnIndexes.add(liveTurnIndex);
-    for (;;) {
-      const precedingTurnIndex = precedingContinuationTurnIndexes.get(liveTurnIndex);
-      if (precedingTurnIndex === undefined) {
-        break;
-      }
-      liveTurnIndex = precedingTurnIndex;
-      liveTurnIndexes.add(liveTurnIndex);
-    }
-  }
-
   const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
   for (const [turnIndex, turn] of turns.entries()) {
     // In-flight content (stream runs, streaming groups) marks the turn live.
     // While the run works, the trailing turn also stays expanded so activity
     // is watchable until the terminal rebuild collapses it.
     const isLive =
-      liveTurnIndexes.has(turnIndex) ||
+      (opts.runWorking && turnIndex === turns.length - 1) ||
       turn.some(
         (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
       );
@@ -534,17 +533,17 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    const finalReplyIndex = finalReplyIndexes[turnIndex] ?? -1;
-    const terminalReply = terminalReplies[turnIndex];
+    const finalReplyIndex = turn.findLastIndex(isFinalReplyGroup);
+    const terminalReply = turn[finalReplyIndex];
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
-    if (!terminalReply) {
+    if (!terminalReply || !isFinalReplyGroup(terminalReply)) {
       result.push(...turn);
       continue;
     }
     // Partition the answer's output segment, including work after the last answer.
     // Never move activity across a user, forwarded input, or structural marker.
-    let segmentStart = finalReplyIndex >= 0 ? finalReplyIndex : turn.length - 1;
+    let segmentStart = finalReplyIndex;
     let segmentEnd = segmentStart;
     while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
       segmentStart -= 1;
@@ -570,8 +569,7 @@ export function collapseCompletedTurnWork(
       if (
         index !== finalReplyIndex &&
         isCollapsibleWorkGroup(item) &&
-        (finalReplyIndex < 0 ||
-          index < finalReplyIndex ||
+        (index < finalReplyIndex ||
           !item.messages.some(({ message }) =>
             extractToolCardsCached(message).some(isToolCardError),
           ))
@@ -607,32 +605,12 @@ export function collapseCompletedTurnWork(
       runtimeMs >= 0
         ? runtimeMs
         : null;
-    const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
-    // A completed rollup may span automatic resumptions. Its reply owns the
-    // display only when reaching it crosses neither another answer’s run nor a steer.
-    const replyRunId =
-      finalReplyIndex >= 0 &&
-      !hasForwardedSource(terminalReply) &&
-      !groups.some(hasForwardedSource) &&
-      answers
-        .slice(0, answers.indexOf(terminalReply))
-        .every(
-          (answer) =>
-            answer.kind === "group" &&
-            !hasForwardedSource(answer) &&
-            answer.runId === terminalReply.runId,
-        )
-        ? terminalReply.runId
-        : undefined;
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
       // The final reply survives older-history prepends; the first work row does not.
-      key: `work:${
-        finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
-      }`,
+      key: `work:${terminalReply.key}`,
       groups,
-      ...(replyRunId ? { replyRunId } : {}),
       ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
@@ -669,15 +647,22 @@ function runIdsWithVisibleReplies(items: CompletedTurnRenderItem[]): Set<string>
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
 export function coalesceActivityRuns(
+  items: Array<MessageGroup | StreamRunRenderItem | WorkGroupRenderItem>,
+  opts?: { searchActive?: boolean },
+): Array<MessageGroup | StreamRunRenderItem | WorkGroupRenderItem | ActivityRunRenderItem>;
+export function coalesceActivityRuns(
+  items: CompletedTurnRenderItem[],
+  opts?: { searchActive?: boolean },
+): Array<CompletedTurnRenderItem | ActivityRunRenderItem>;
+export function coalesceActivityRuns(
   items: CompletedTurnRenderItem[],
   opts: { searchActive?: boolean } = {},
 ): Array<CompletedTurnRenderItem | ActivityRunRenderItem> {
   if (opts.searchActive) {
     return items;
   }
-  // Adjacent activity is one disclosure even when automatic continuations use
-  // new run IDs. Visible content, not other output elsewhere in those runs,
-  // bounds the log. Reuse prepared visibility and cached cards in this pass.
+  // The transcript projection has already bounded execution/display ownership.
+  // Within that segment, visible content separates activity disclosures.
   const isActivity = (group: MessageGroup): boolean => {
     if (group.isStreaming || group.visibleContent === "non-text" || hasForwardedSource(group)) {
       return false;

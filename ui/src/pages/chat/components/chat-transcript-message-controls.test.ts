@@ -182,6 +182,58 @@ describe("chat transcript message controls", () => {
     }
   });
 
+  it("keeps a focused post-steer reply control when earlier same-run history loads", async () => {
+    const message = (id: string, role: string, timestamp: number, metadata = {}) => ({
+      role,
+      content: id,
+      timestamp,
+      __openclaw: { id, runId: "run", ...metadata },
+    });
+    const earlier = [message("prompt", "user", 1), message("earlier answer", "assistant", 2)];
+    const tail = [
+      message("steer", "user", 3, { runId: "steer-run", steerTargetRunId: "run" }),
+      message("later answer", "assistant", 4),
+    ];
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const onSetReply = vi.fn();
+    const update = (messages: typeof tail) => {
+      render(
+        renderChatThread(
+          {
+            ...threadProps("steer-prepend", "agent:main:dashboard:steer-prepend", messages),
+            onSetReply,
+          },
+          transcript,
+        ),
+        container,
+      );
+      transcript.hostUpdated();
+    };
+    try {
+      transcript.hostConnected();
+      update(tail);
+      await flushDeferredRowPrune();
+      const group = requireElement(container, ".chat-group.assistant");
+      const reply = requireElement(group, ".chat-reply-btn");
+      reply.focus();
+      update([...earlier, ...tail]);
+      await flushDeferredRowPrune();
+      const restored = [...container.querySelectorAll(".chat-group.assistant")].find((element) =>
+        element.textContent?.includes("later answer"),
+      );
+      expect(restored).toBe(group);
+      expect(document.activeElement).toBe(reply);
+      reply.click();
+      expect(onSetReply).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sourceMessageId: "later answer", text: "later answer" }),
+      );
+    } finally {
+      transcript.hostDisconnected();
+      container.remove();
+    }
+  });
+
   it.each(["indexed", "keyed"] as const)(
     "keeps a settled %s stream replyable while search separates its following tool row",
     async (kind) => {

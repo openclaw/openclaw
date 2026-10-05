@@ -43,54 +43,6 @@ export function persistedSteerTargetRunId(message: unknown): string | null {
   return normalizeOptionalString(metadata?.steerTargetRunId) ?? null;
 }
 
-export function indexTurnContinuations<T>(
-  turns: T[][],
-  userMessagesForTurn: (turn: T[]) => unknown[],
-): {
-  continuationTurnIndexes: Map<number, number>;
-  precedingContinuationTurnIndexes: Map<number, number>;
-} {
-  const runTurnIndexes = new Map<string, number>();
-  const steerTurnIndexesByTarget = new Map<string, number[]>();
-  for (const [turnIndex, turn] of turns.entries()) {
-    let runId: string | null = null;
-    let targetRunId: string | null = null;
-    for (const message of userMessagesForTurn(turn)) {
-      runId ??= userTurnRunId(message);
-      targetRunId ??= persistedSteerTargetRunId(message);
-      if (runId && targetRunId) {
-        break;
-      }
-    }
-    if (runId && !runTurnIndexes.has(runId)) {
-      runTurnIndexes.set(runId, turnIndex);
-    }
-    if (targetRunId) {
-      const steerTurns = steerTurnIndexesByTarget.get(targetRunId) ?? [];
-      steerTurns.push(turnIndex);
-      steerTurnIndexesByTarget.set(targetRunId, steerTurns);
-    }
-  }
-
-  const continuationTurnIndexes = new Map<number, number>();
-  const precedingContinuationTurnIndexes = new Map<number, number>();
-  for (const [targetRunId, steerTurnIndexes] of steerTurnIndexesByTarget) {
-    let previousTurnIndex = runTurnIndexes.get(targetRunId);
-    if (previousTurnIndex === undefined) {
-      continue;
-    }
-    for (const steerTurnIndex of steerTurnIndexes) {
-      if (steerTurnIndex <= previousTurnIndex) {
-        continue;
-      }
-      continuationTurnIndexes.set(previousTurnIndex, steerTurnIndex);
-      precedingContinuationTurnIndexes.set(steerTurnIndex, previousTurnIndex);
-      previousTurnIndex = steerTurnIndex;
-    }
-  }
-  return { continuationTurnIndexes, precedingContinuationTurnIndexes };
-}
-
 export function latestPersistedSteerBoundary(
   messages: readonly unknown[],
   activeRunId: string,

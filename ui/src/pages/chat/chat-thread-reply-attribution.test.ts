@@ -24,6 +24,46 @@ function messageGroups(props: Partial<Props>) {
 }
 beforeEach(() => resetChatThreadState());
 describe("reply attribution grouping", () => {
+  it.each(["assistant", "toolResult"])(
+    "does not bind a known %s run to an unbound prompt",
+    (role) => {
+      const items = buildCachedChatItems(
+        createProps({
+          replyPeople: ["alice", "bob"].map((id) =>
+            sessionParticipantIdentityKey({ type: "profile", id }),
+          ),
+          messages: [
+            userMessage("Legacy prompt", 1000, {
+              __openclaw: { senderId: "alice", senderName: "Alice" },
+            }),
+            {
+              role,
+              content: "Independent work",
+              toolName: "read",
+              toolCallId: "independent",
+              timestamp: 1001,
+              __openclaw: { id: "independent", runId: "background-run" },
+            },
+          ],
+          runId: "background-run",
+          runWorking: true,
+          stream: "Still checking",
+          streamStartedAt: 1002,
+        }),
+      );
+      const output = items.filter(
+        (item) => item.kind === "stream" || (item.kind === "group" && item.role !== "user"),
+      );
+      expect(output.length).toBeGreaterThan(0);
+      for (const item of output) {
+        if (item.kind === "stream" || item.kind === "group") {
+          expect(item.replyToSender).toBeUndefined();
+          expect(item.replyToMessage).toBeUndefined();
+        }
+      }
+    },
+  );
+
   it.each([
     ...[
       { boundary: "sender-less user", message: userMessage("Local follow-up", 1006) },

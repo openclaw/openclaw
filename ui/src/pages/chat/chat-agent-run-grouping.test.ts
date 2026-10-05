@@ -97,7 +97,6 @@ describe("coalesceAgentRunFrames", () => {
 
     expect(streaming.key).toBe(tooling.key);
     expect(tooling.key).toBe(history.key);
-    expect(history.key).toContain(JSON.stringify([runId, "send:send-1"]));
     expect(tooling.parts.map((part) => part.key)).toEqual([stream.key, activity.key]);
     expect(history.parts.map((part) => part.key)).toEqual([work.key, final.key]);
   });
@@ -549,7 +548,7 @@ describe("coalesceAgentRunFrames", () => {
       ],
     };
     const items = coalesceAgentRunFrames([tool, stream]);
-    expect(items[0]).toBe(tool);
+    expect(requireFrame(items[0]).parts).toEqual([tool]);
     expect(requireFrame(items[1])).toMatchObject({
       boundaryId: "send:steer",
       outcome: { kind: "active" },
