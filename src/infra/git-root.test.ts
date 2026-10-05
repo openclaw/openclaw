@@ -39,6 +39,36 @@ async function expectGitRootResolution(params: {
 }
 
 describe("git-root", () => {
+  it.skipIf(process.platform === "win32").each(["HEAD", "refs/heads/main", "packed-refs"])(
+    "refuses a FIFO %s instead of consuming ref bytes from a writer",
+    async (name) => {
+      await withTestDir({ prefix: "openclaw-git-fifo-" }, async (root) => {
+        const directory = path.join(root, ".git");
+        await fs.mkdir(path.join(directory, "refs", "heads"), { recursive: true });
+        if (name !== "HEAD") {
+          await fs.writeFile(path.join(directory, "HEAD"), "ref: refs/heads/main\n");
+        }
+        const fifo = path.join(directory, name);
+        await execFileAsync("mkfifo", [fifo]);
+        const contents = `${"a".repeat(40)}${name === "packed-refs" ? " refs/heads/main" : ""}\n`;
+        // A writer lets the old blocking reader finish too, without a timer or a hung worker.
+        const writer = execFileAsync(process.execPath, [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], process.argv[2])",
+          fifo,
+          contents,
+        ]);
+        const settled = writer.catch(() => undefined);
+        try {
+          expect(() => readGitHead(root, { maxDepth: 1 })).toThrow("regular file");
+        } finally {
+          writer.child.kill();
+          await settled;
+        }
+      });
+    },
+  );
+
   it.each([
     {
       name: "starting at the repo root itself",
