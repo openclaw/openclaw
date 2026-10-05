@@ -47,7 +47,7 @@ export async function syncImportedSourcePages(params: {
     prepareWrite: () => Promise<unknown>;
   }) => Promise<ImportedSourceBatch>;
   canPrune?: () => boolean;
-  logDetails: (batch: ImportedSourceBatch) => Record<string, number>;
+  logDetails: Record<string, number>;
 }): Promise<BridgeMemoryWikiResult> {
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;
@@ -86,7 +86,7 @@ export async function syncImportedSourcePages(params: {
       timestamp: new Date().toISOString(),
       details: {
         sourceType: `memory-${params.group}`,
-        ...params.logDetails(batch),
+        ...params.logDetails,
         artifactCount: batch.artifactCount,
         importedCount,
         updatedCount,

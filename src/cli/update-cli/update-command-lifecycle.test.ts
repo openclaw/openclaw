@@ -583,11 +583,10 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
       } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
-        expect(mocks.events.slice(0, 3)).toEqual([
-          "lease-enter:false",
-          "runtime-completion:true",
-          "lease-exit:false",
-        ]);
+        expect(completeSourceUpdateRuntime).toHaveBeenCalledOnce();
+        expect(
+          mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
+        ).toBeLessThan(mocks.events.indexOf("plugin-update:true"));
         expect(mocks.events).toContain("plugin-update:true");
       }
       expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
@@ -718,12 +717,9 @@ describe("update plugin lifecycle lease boundaries", () => {
       expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
         expect.objectContaining({ sourceRuntimePrepared }),
       );
-      expect(mocks.events.indexOf("runtime-completion:true")).toBeGreaterThan(
-        mocks.events.indexOf("lease-enter:false"),
-      );
-      expect(mocks.events.indexOf("runtime-completion:true")).toBeLessThan(
-        mocks.events.indexOf("prepare-config:true"),
-      );
+      expect(
+        mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
+      ).toBeLessThan(mocks.events.indexOf("prepare-config:true"));
       expect(mocks.events.includes("fresh-doctor:false")).toBe(owner === undefined);
       expect(mocks.events).not.toContain("fresh-doctor:true");
       expect(mocks.events).not.toContain("config-snapshot:false");

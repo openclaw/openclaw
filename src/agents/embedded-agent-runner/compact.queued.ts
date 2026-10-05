@@ -1,9 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  loadSessionEntryReadOnly,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -162,7 +160,11 @@ export async function compactEmbeddedAgentSession(
         : undefined;
     try {
       // Resolve the storage address first, then freeze its owner before runtime/plugin awaits.
-      const entry = loadSessionEntryReadOnly({ ...runtimeTarget, readConsistency: "latest" });
+      const entry = await readSessionEntryReadOnlyInWorker(
+        { ...runtimeTarget, readConsistency: "latest" },
+        () => assertQueuedCompactionPreparationActive(params, host),
+      );
+      assertQueuedCompactionPreparationActive(params, host);
       const expectedEntry = {
         sessionId: runtimeTarget.sessionId,
         lifecycleRevision: entry?.lifecycleRevision,

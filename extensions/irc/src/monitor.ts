@@ -112,7 +112,7 @@ export async function monitorIrcProvider(
           if (!message.isGroup && context.connectionEpoch !== activeConnectionEpoch) {
             throw new Error("IRC connection changed before private reply send.");
           }
-          replyClient.sendPrivmsg(target, text);
+          await replyClient.sendPrivmsg(target, text);
           opts.statusSink?.({ lastOutboundAt: Date.now() });
           core.channel.activity.record({
             channel: "irc",

@@ -11,6 +11,7 @@ export const AGENT_VALUE_PREFIX = "agent:";
 export type SidebarAgentMenuSwitcherParams = {
   activeId: string;
   allAgentsScope: boolean;
+  query: string;
   openMode: "hover" | "click";
   agents: readonly GatewayAgentRow[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
@@ -54,7 +55,11 @@ function renderAgentGroupAvatar(
   return html`
     <span
       class="sidebar-agent-menu__agent-avatar sidebar-agent-menu__avatar-group ${
-        agents.length === 2 ? "sidebar-agent-menu__avatar-group--pair" : ""
+        agents.length === 2
+          ? "sidebar-agent-menu__avatar-group--pair"
+          : agents.length === 3
+            ? "sidebar-agent-menu__avatar-group--triple"
+            : ""
       }"
       aria-hidden="true"
     >
@@ -78,13 +83,14 @@ function renderAgentRow(
   agent: GatewayAgentRow,
   params: SidebarAgentMenuSwitcherParams,
   autofocus: boolean,
+  duplicateName: boolean,
 ) {
   const agentId = normalizeAgentId(agent.id);
   const identity = params.identities.get(agentId) ?? null;
   const label = normalizeAgentLabel(agent, identity);
   const active = agentId === params.activeId && !params.allAgentsScope;
   const unread = agentId === params.activeId ? 0 : params.agentUnreadCount(agentId);
-  const option = { value: agentId, label, agent };
+  const option = { value: agentId, label, agent, description: duplicateName ? agentId : undefined };
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${
@@ -94,7 +100,7 @@ function renderAgentRow(
       aria-current=${active ? "true" : nothing}
       ?autofocus=${autofocus}
     >
-      <span class="sidebar-agent-menu__agent-tile">
+      <span class="sidebar-agent-menu__agent-row">
         <span class="sidebar-agent-menu__agent-avatar"> ${renderAgentAvatar(agent, params)} </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">
@@ -115,6 +121,20 @@ function renderAgentRow(
 
 export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherParams) {
   const agents = sidebarAgentMenuRows(params);
+  const query = params.query.trim().toLocaleLowerCase();
+  const nameCounts = new Map<string, number>();
+  for (const agent of agents) {
+    const label = normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id)));
+    nameCounts.set(label, (nameCounts.get(label) ?? 0) + 1);
+  }
+  const visibleAgents = agents.filter((agent) => {
+    const label = normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id)));
+    return (
+      !query ||
+      label.toLocaleLowerCase().includes(query) ||
+      agent.id.toLocaleLowerCase().includes(query)
+    );
+  });
   const autofocusAll = params.openMode === "click" && params.allAgentsScope && agents.length > 1;
   const autofocusAgent =
     params.openMode === "click" && !autofocusAll
@@ -124,10 +144,9 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
     ${
       params.agents.length > 0
         ? html`
-            <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
-            <div class="sidebar-agent-menu__agent-grid">
+            <div class="sidebar-agent-menu__agent-list">
               ${
-                params.agents.length > 1
+                params.agents.length > 1 && !query
                   ? html`
                       <wa-dropdown-item
                         class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch ${
@@ -137,7 +156,7 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
                         aria-current=${params.allAgentsScope ? "true" : nothing}
                         ?autofocus=${autofocusAll}
                       >
-                        <span class="sidebar-agent-menu__agent-tile">
+                        <span class="sidebar-agent-menu__agent-row">
                           ${renderAgentGroupAvatar(agents, params)}
                           <span class="agent-select__option-copy"
                             ><span class="agent-select__option-label"
@@ -149,7 +168,8 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
                     `
                   : nothing
               }
-              ${agents.map((entry) => renderAgentRow(entry, params, entry === autofocusAgent))}
+              ${visibleAgents.map((entry) => renderAgentRow(entry, params, entry === autofocusAgent, (nameCounts.get(normalizeAgentLabel(entry, params.identities.get(normalizeAgentId(entry.id)))) ?? 0) > 1))}
+              ${visibleAgents.length === 0 ? html`<div class="sidebar-agent-menu__empty" role="status">${t("agentChip.noMatches")}</div>` : nothing}
             </div>
           `
         : nothing

@@ -32,10 +32,20 @@ export class XAllowlistChangedError extends Error {
 }
 
 // Only mutation lifetimes live here; SQLite remains the owner of allowlist entries.
-const mutations = resolveGlobalMap<string, { generation: object; pending: number }>(
-  Symbol.for("openclaw.x.allowlist-mutations"),
-  "close-and-restart",
-);
+const mutations = resolveGlobalMap<
+  string,
+  { generation: object; pending: number; allowFrom?: readonly string[] }
+>(Symbol.for("openclaw.x.allowlist-mutations"), "close-and-restart");
+
+export function readPublishedXAllowlist(
+  runtime: {
+    state: Pick<PluginRuntime["state"], "resolveStateDir">;
+  },
+  accountId: string,
+): readonly string[] {
+  const state = mutations.get(JSON.stringify([runtime.state.resolveStateDir(), accountId]));
+  return state && !state.pending ? (state.allowFrom ?? []) : [];
+}
 
 export function openXAllowlist(runtime: {
   state: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir">;
@@ -64,6 +74,7 @@ export function openXAllowlist(runtime: {
     assertCurrent?.();
     const { state } = mutationState(accountId);
     state.generation = {};
+    state.allowFrom = undefined;
     state.pending++;
     try {
       return await write();
@@ -92,6 +103,7 @@ export function openXAllowlist(runtime: {
       assertCurrent();
       const allowFrom = (await list(accountId)).map((entry) => entry.userId);
       assertCurrent();
+      state.allowFrom = allowFrom;
       return { allowFrom, assertCurrent };
     },
     async put(accountId: string, entry: XAllowlistEntry, assertCurrent?: () => void) {

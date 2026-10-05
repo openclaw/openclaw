@@ -108,6 +108,7 @@ export function runOpenClawAgentWorkerWrite<T>(
 export async function runOpenClawAgentWriteAdmissions<T>(
   options: readonly OpenClawAgentDatabaseOptions[],
   run: () => Promise<T> | T,
+  reentrant = false,
 ): Promise<T> {
   const selected = new Map(
     options.map((option) => [resolveOpenClawAgentSqlitePath(option), option]),
@@ -116,7 +117,14 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   const inherited = [...admission.queues.keys()].filter((pathname) =>
     isActiveStoreWriter(admission.queues, pathname),
   );
-  if (paths.some((pathname) => inherited.includes(pathname))) {
+  // A nested reader may share one foreground FIFO, never a reserved worker transaction.
+  if (
+    paths.some(
+      (pathname) =>
+        inherited.includes(pathname) &&
+        (!reentrant || paths.length !== 1 || admission.workers.has(pathname)),
+    )
+  ) {
     throw new Error("Session read batch cannot reenter an active SQLite writer admission");
   }
   if (paths.some((pathname) => inherited.some((held) => held > pathname))) {

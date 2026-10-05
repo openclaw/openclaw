@@ -41,7 +41,6 @@ const GRAPH_TOKEN_TIMEOUT_LABEL = "MS Teams Graph token acquisition";
 async function requestSharePointJson<T>(
   params: {
     tokenProvider: MSTeamsAccessTokenProvider;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
   request: {
     url: string;
@@ -76,7 +75,6 @@ async function requestSharePointJson<T>(
           },
           signal,
         },
-        fetchImpl: params.fetchFn,
         mode: "trusted_env_proxy",
         beforeRequest: () => assertMSTeamsSendHandoff(params),
         // Preserve fetch's redirect limit, method/body replay, and cross-origin
@@ -106,7 +104,6 @@ async function uploadToSharePoint(
     contentType?: string;
     tokenProvider: MSTeamsAccessTokenProvider;
     siteId: string;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<DriveUploadResult> {
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
@@ -154,7 +151,6 @@ export async function getDriveItemProperties(
     siteId: string;
     itemId: string;
     tokenProvider: MSTeamsAccessTokenProvider;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<DriveItemProperties> {
   const data = await requestSharePointJson<Partial<DriveItemProperties>>(params, {
@@ -178,7 +174,6 @@ async function getChatMemberIds(
   params: {
     chatId: string;
     tokenProvider: MSTeamsAccessTokenProvider;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<string[]> {
   const data = await requestSharePointJson<{ value?: Array<{ userId?: string }> }>(params, {
@@ -204,23 +199,18 @@ async function createSharePointSharingLink(
     siteId: string;
     itemId: string;
     tokenProvider: MSTeamsAccessTokenProvider;
-    /** Sharing scope: "organization" (default) or "users" (per-user with recipients) */
-    scope?: "organization" | "users";
-    /** Required when scope is "users": AAD object IDs of recipients */
+    /** AAD object IDs for a per-user link; omitted for an organization link. */
     recipientObjectIds?: string[];
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<string> {
-  const scope = params.scope ?? "organization";
-
-  const apiRoot = scope === "users" ? GRAPH_BETA : GRAPH_ROOT;
+  const apiRoot = params.recipientObjectIds ? GRAPH_BETA : GRAPH_ROOT;
 
   const body: Record<string, unknown> = {
     type: "view",
-    scope: scope === "users" ? "users" : "organization",
+    scope: params.recipientObjectIds ? "users" : "organization",
   };
 
-  if (scope === "users" && params.recipientObjectIds?.length) {
+  if (params.recipientObjectIds) {
     body.recipients = params.recipientObjectIds.map((id) => ({ objectId: id }));
   }
 
@@ -257,7 +247,6 @@ export async function uploadAndShareSharePoint(
     siteId: string;
     chatId?: string;
     usePerUserSharing?: boolean;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<{
   itemId: string;
@@ -267,29 +256,24 @@ export async function uploadAndShareSharePoint(
 }> {
   const uploaded = await uploadToSharePoint(params);
 
-  let scope: "organization" | "users" = "organization";
   let recipientObjectIds: string[] | undefined;
 
   if (params.usePerUserSharing && params.chatId) {
     recipientObjectIds = await getChatMemberIds({
       chatId: params.chatId,
       tokenProvider: params.tokenProvider,
-      fetchFn: params.fetchFn,
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
     if (recipientObjectIds.length === 0) {
       throw new Error("MS Teams chat member lookup returned no recipients");
     }
-    scope = "users";
   }
 
   const shareUrl = await createSharePointSharingLink({
     siteId: params.siteId,
     itemId: uploaded.id,
     tokenProvider: params.tokenProvider,
-    scope,
     recipientObjectIds,
-    fetchFn: params.fetchFn,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
 

@@ -241,13 +241,17 @@ describe("mattermost websocket monitor", () => {
 
     const connectErrors: string[] = [];
     const reconnectDelays: number[] = [];
+    const abort = new AbortController();
     await runWithReconnect(connectOnce, {
       initialDelayMs: 10,
       maxDelayMs: 1000,
       jitterRatio: 0,
-      shouldReconnect: ({ attempt }) => attempt < 2,
+      abortSignal: abort.signal,
       onError: (err) => {
         connectErrors.push(err instanceof Error ? err.name : String(err));
+        if (connectErrors.length === 3) {
+          abort.abort();
+        }
       },
       onReconnect: (delayMs) => reconnectDelays.push(delayMs),
     });
@@ -801,14 +805,18 @@ describe("mattermost websocket monitor", () => {
         }) as ReturnType<MattermostWebSocketFactory>,
     });
 
+    const abort = new AbortController();
     try {
       await runWithReconnect(connectOnce, {
         initialDelayMs: 50,
         maxDelayMs: 50,
         jitterRatio: 0,
-        shouldReconnect: ({ attempt }) => attempt < 1,
+        abortSignal: abort.signal,
         onError: (err) => {
           connectErrors.push(err instanceof Error ? err.name : String(err));
+          if (connectErrors.length === 2) {
+            abort.abort();
+          }
         },
         onReconnect: (delayMs) => {
           reconnectDelays.push(delayMs);

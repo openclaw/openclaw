@@ -10,7 +10,7 @@ import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import { Agent, type AgentEvent } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { wrapToolDefinitions } from "../../sessions/tools/tool-definition-wrapper.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
@@ -111,7 +111,7 @@ describe("runEmbeddedAttempt tool boundaries", () => {
           if (!options?.customTools) {
             throw new Error("Expected the embedded attempt to supply custom tools");
           }
-          const allTools = wrapToolDefinitions(options.customTools);
+          const allTools = options.customTools.map((definition) => wrapToolDefinition(definition));
           expect(allTools.map((tool) => tool.name)).toContain(code ? "exec" : toolName);
           let turn = 0;
           const agent = new Agent({

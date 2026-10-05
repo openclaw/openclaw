@@ -2,7 +2,10 @@ import path from "node:path";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
-import type { IncognitoHistoryTarget } from "./session-incognito-history-contract.js";
+import type {
+  IncognitoHistoryOperations,
+  IncognitoHistoryTarget,
+} from "./session-incognito-history-contract.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
 export type IncognitoSessionHistoryBinding = {
@@ -10,6 +13,19 @@ export type IncognitoSessionHistoryBinding = {
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
 };
+
+export async function readIncognitoSessionHistory<Key extends keyof IncognitoHistoryOperations>(
+  binding: IncognitoSessionHistoryBinding,
+  scope: SessionTranscriptReadScope,
+  command: (target: IncognitoHistoryTarget) => {
+    type: Key;
+    input: IncognitoHistoryOperations[Key]["input"];
+  },
+  signal?: AbortSignal,
+): Promise<IncognitoHistoryOperations[Key]["output"]> {
+  const prepared = prepareIncognitoSessionHistoryRead(binding, scope, signal);
+  return prepared.actor.sessions.history(prepared.authority, command(prepared.target), signal);
+}
 
 /** Inactive until atomic activation supplies the original actor instead of native routing. */
 export function prepareIncognitoSessionHistoryRead(

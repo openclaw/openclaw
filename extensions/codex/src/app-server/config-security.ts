@@ -153,10 +153,6 @@ export function withMcpElicitationsApprovalPolicy(
   };
 }
 
-export function resolveTransport(value: unknown): CodexAppServerTransportMode {
-  return value === "websocket" || value === "unix" ? value : "stdio";
-}
-
 export function inferCodexAppServerConnectionClass(params: {
   transport: CodexAppServerTransportMode;
   url?: string;

@@ -481,12 +481,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   gap: 20px;
 }
 
-.login-gate__status-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
 .login-gate__status-icon {
   flex: 0 0 auto;
   display: inline-flex;
@@ -497,11 +491,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   border-radius: var(--radius-full);
   color: var(--login-gate-tone, var(--accent));
   background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
-}
-
-.login-gate__status-icon svg {
-  width: 20px;
-  height: 20px;
 }
 
 .login-gate__failure[data-tone="pending"] {
@@ -544,14 +533,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .login-gate__hero {
   display: grid;
   gap: 6px;
-}
-
-.login-gate__hero-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
 }
 
 .login-gate__command {
@@ -912,6 +893,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   box-shadow: var(--shadow-lg);
 }
 
+.login-gate__status-head,
 .gateway-switch__head {
   display: flex;
   align-items: flex-start;
@@ -930,15 +912,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
+.login-gate__status-icon svg,
 .gateway-switch__icon svg {
   width: 20px;
   height: 20px;
-}
-
-.gateway-switch__text {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
 }
 
 .gateway-switch__title {
@@ -978,6 +955,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
 }
 
+.login-gate__hero-label,
 .gateway-switch__label {
   font-size: 11px;
   font-weight: 600;
@@ -1348,11 +1326,6 @@ openclaw-toast-host[data-toast-placement="shell"]
   color: var(--info);
 }
 
-.app-toast__icon svg {
-  width: 16px;
-  height: 16px;
-}
-
 /* Recovery copy and rich links remain readable at narrow widths and enlarged
  * text sizes. Do not clamp away the instruction the operator needs next. */
 .app-toast__message {
@@ -1392,11 +1365,6 @@ openclaw-toast-host[data-toast-placement="shell"]
   place-items: center;
   background: transparent;
   color: var(--muted);
-}
-
-.app-toast__dismiss svg {
-  width: 14px;
-  height: 14px;
 }
 
 .app-toast__action:hover {
@@ -1482,10 +1450,7 @@ openclaw-toast-host[data-toast-placement="shell"]
   stroke-linejoin: round;
 }
 
-openclaw-link-reader-hovercard-provider {
-  display: contents;
-}
-
+openclaw-link-reader-hovercard-provider,
 openclaw-session-progress-hovercard-provider {
   display: contents;
 }
@@ -1584,6 +1549,7 @@ openclaw-session-progress-hovercard-provider {
   padding: 15px 16px 12px;
 }
 
+.gateway-switch__text,
 .person-activity-card__header > div {
   display: grid;
   gap: 4px;
@@ -2006,11 +1972,6 @@ select.input {
   outline-offset: -3px;
 }
 
-.oc-sensitive-toggle svg {
-  width: 16px;
-  height: 16px;
-}
-
 @media (forced-colors: active) {
   .oc-sensitive-mask {
     display: none;
@@ -2172,11 +2133,7 @@ select.input {
   display: block;
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .callout.danger {
@@ -2314,11 +2271,7 @@ select.input {
 .lazy-view-error__icon svg {
   width: 22px;
   height: 22px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .lazy-view-error__title {
@@ -2588,10 +2541,6 @@ select.input {
   list-style: none;
 }
 
-.code-block-json-node > summary::-webkit-details-marker {
-  display: none;
-}
-
 .code-block-json-node > summary::before {
   position: static;
   content: "▸";
@@ -2837,8 +2786,6 @@ select.input {
 .data-table-sort-icon svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.5px;
 }
 
@@ -2948,11 +2895,6 @@ td.data-table-key-col {
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
-}
-
-.data-table-bulk-bar .btn svg {
-  width: 14px;
-  height: 14px;
 }
 
 .data-table-pagination {
@@ -3593,11 +3535,6 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.agent-select__option-check svg {
-  width: 14px;
-  height: 14px;
-}
-
 .agent-select__separator {
   height: 1px;
   margin: 6px 4px;
@@ -3788,10 +3725,7 @@ td.data-table-key-col {
   text-decoration: underline;
 }
 
-.agent-file-field {
-  min-height: clamp(320px, 56vh, 720px);
-}
-
+.agent-file-field,
 .field textarea.agent-file-textarea {
   min-height: clamp(320px, 56vh, 720px);
 }
@@ -3862,11 +3796,6 @@ td.data-table-key-col {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--muted);
-}
-
-.md-preview-dialog__eyebrow svg {
-  width: 14px;
-  height: 14px;
 }
 
 .md-preview-dialog__title-wrap {
@@ -3947,6 +3876,8 @@ td.data-table-key-col {
   justify-content: center;
 }
 
+.app-toast__icon svg,
+.oc-sensitive-toggle svg,
 .md-preview-icon-btn svg {
   width: 16px;
   height: 16px;
@@ -4444,16 +4375,6 @@ td.data-table-key-col {
   overflow: hidden;
 }
 
-.agent-tools-group summary::-webkit-details-marker,
-.agent-tool-summary::-webkit-details-marker {
-  display: none;
-}
-
-.agent-tools-group summary::marker,
-.agent-tool-summary::marker {
-  content: "";
-}
-
 .agent-tools-group__summary {
   display: flex;
   align-items: flex-start;
@@ -4474,21 +4395,8 @@ td.data-table-key-col {
   transition: transform var(--duration-fast) var(--ease-in-out);
 }
 
-.agent-tools-group[open] .agent-tools-group__summary::before {
-  transform: rotate(90deg);
-}
-
 .agent-tools-group__summary:hover {
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--text) 4%);
-}
-
-.agent-tools-group__summary:hover::before {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
-}
-
-.agent-tools-group__summary:focus-visible {
-  outline: none;
-  box-shadow: inset var(--focus-ring);
 }
 
 .agent-tools-group__title {
@@ -4592,35 +4500,25 @@ td.data-table-key-col {
   transition: transform var(--duration-fast) var(--ease-in-out);
 }
 
-.agent-tool-card[open] .agent-tool-summary::after {
-  transform: rotate(90deg);
-}
-
 .agent-tool-summary:hover {
   background: color-mix(in srgb, var(--card) 97%, var(--text) 3%);
 }
 
+.agent-tools-group__summary:hover::before,
 .agent-tool-summary:hover::after {
   color: color-mix(in srgb, var(--text) 78%, var(--muted));
 }
 
+.agent-tools-group__summary:focus-visible,
 .agent-tool-summary:focus-visible {
   outline: none;
   box-shadow: inset var(--focus-ring);
-}
-
-.agent-tool-summary__main {
-  min-width: 0;
 }
 
 .agent-tool-summary__title-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
-}
-
-.agent-tool-summary__badges {
   min-width: 0;
 }
 
@@ -4634,10 +4532,6 @@ td.data-table-key-col {
   gap: 8px 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
-  min-width: 0;
-}
-
-.agent-tool-summary__fact {
   min-width: 0;
 }
 
@@ -4698,6 +4592,9 @@ td.data-table-key-col {
   padding-top: 10px;
 }
 
+.agent-tool-summary__main,
+.agent-tool-summary__badges,
+.agent-tool-summary__fact,
 .agent-tool-detail {
   min-width: 0;
 }
@@ -4816,10 +4713,15 @@ td.data-table-key-col {
   margin-left: auto;
 }
 
+.code-block-json-node > summary::-webkit-details-marker,
+.agent-tools-group summary::-webkit-details-marker,
+.agent-tool-summary::-webkit-details-marker,
 .agent-skills-group summary::-webkit-details-marker {
   display: none;
 }
 
+.agent-tools-group summary::marker,
+.agent-tool-summary::marker,
 .agent-skills-group summary::marker {
   content: "";
 }
@@ -4832,6 +4734,8 @@ td.data-table-key-col {
   margin-left: 8px;
 }
 
+.agent-tools-group[open] .agent-tools-group__summary::before,
+.agent-tool-card[open] .agent-tool-summary::after,
 .agent-skills-group[open] .agent-skills-header::after {
   transform: rotate(90deg);
 }
@@ -5094,10 +4998,6 @@ td.data-table-key-col {
 .device-pair-setup__phone svg {
   width: 22px;
   height: 22px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
   stroke-width: 1.5px;
 }
 
@@ -5418,6 +5318,10 @@ td.data-table-key-col {
   display: inline-flex;
 }
 
+.app-toast__dismiss svg,
+.data-table-bulk-bar .btn svg,
+.agent-select__option-check svg,
+.md-preview-dialog__eyebrow svg,
 .device-pair-setup__external-icon svg {
   width: 14px;
   height: 14px;
@@ -5552,8 +5456,6 @@ td.data-table-key-col {
 .sidebar-session-fork-indicator svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
 }
 

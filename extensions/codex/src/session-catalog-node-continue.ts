@@ -255,16 +255,7 @@ async function continueNodeCodexSessionInner(params: {
   nodeId: string;
   threadId: string;
   sourceHomeId?: string;
-}): Promise<{
-  sessionKey: string;
-  disposition: CodexSessionDisposition;
-  conversationBinding: {
-    summary: string;
-    detachHint: string;
-    data: Record<string, unknown>;
-  };
-  afterConversationBound: () => Promise<void>;
-}> {
+}) {
   const { nodeId } = params;
   await requireNodeForCodexContinue({
     runtime: params.api.runtime,

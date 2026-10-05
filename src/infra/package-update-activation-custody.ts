@@ -10,7 +10,6 @@ import {
   resolvePackageActivationControl,
   type PackageActivationJournal,
   type PackageActivationRecord,
-  type PackageActivationIntent,
 } from "./package-update-activation-journal.js";
 
 export function packageActivationIdentityOrAbsent(file: string, directory: boolean | "launcher") {
@@ -187,14 +186,22 @@ export async function supersedePackageActivationCustody(
   journal: PackageActivationJournal,
   initial: PackageActivationRecord,
   assertion: () => void,
-  reason: Extract<PackageActivationIntent, { replacementIdentity: string }>["kind"],
+  settlement:
+    | { kind: "publication-settled-external-change"; detail: string }
+    | {
+        kind:
+          | "superseded-by-manual-install"
+          | "recovery-lease-identity-changed"
+          | "recovery-lease-missing";
+        detail?: string;
+      },
 ) {
   let record = initial;
   const descriptor = record.descriptor;
   const live = descriptor.authority.installKey;
   const replacementIdentity = packageActivationIdentity(live, true);
   if (
-    reason === "superseded-by-manual-install" &&
+    settlement.kind === "superseded-by-manual-install" &&
     [descriptor.previous.identity, descriptor.candidate.identity].includes(replacementIdentity)
   ) {
     throw new Error("A recorded package generation still requires its original recovery.");
@@ -233,14 +240,21 @@ export async function supersedePackageActivationCustody(
   for (const entry of transfers) {
     inspectTransfer(entry);
   }
-  if (record.phase !== "superseded") {
+  if (settlement.kind === "publication-settled-external-change") {
+    // A lost launcher rename acknowledgement must be durable before disarming recovery.
+    assertSupersession();
+    const outcome = await syncDirectory(descriptor.binDir);
+    assertSupersession();
+    requireDirectorySync(outcome, "Package settlement launcher directory");
+  }
+  if (record.phase !== "superseded" || record.intent?.kind !== settlement.kind) {
     // Disarm even an old sealed helper before moving evidence. No old package
     // or launcher is restored over the operator's manual installation.
     record = journal.transition(
       record,
       "superseded",
       {
-        kind: reason,
+        ...settlement,
         replacementIdentity,
         settled: false,
       },
@@ -264,6 +278,7 @@ export async function supersedePackageActivationCustody(
   if (
     record.intent?.kind !== "superseded-by-manual-install" &&
     record.intent?.kind !== "recovery-lease-identity-changed" &&
+    record.intent?.kind !== "publication-settled-external-change" &&
     record.intent?.kind !== "recovery-lease-missing"
   ) {
     throw new Error("Package supersession fact is missing.");

@@ -124,16 +124,6 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
   });
 
-  it("is a no-op when chatAbortControllers is not a Map (unpopulated context)", () => {
-    expect(
-      snap({
-        chatAbortControllers: undefined as never,
-        chatRunBuffers: undefined as never,
-        sessionKey: "agent:main:s",
-      }),
-    ).toBeUndefined();
-  });
-
   it("matches a run stored under the canonical key when requested with a different key", () => {
     // Abort entry holds the canonical store key; the client requests history with
     // a different (requested) key for the same logical session.

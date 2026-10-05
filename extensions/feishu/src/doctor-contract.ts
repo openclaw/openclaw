@@ -188,6 +188,27 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
+function resolveHistoricalWebhookAccountIds(cfg: OpenClawConfig): string[] {
+  return cfg.channels?.feishu?.enabled === false
+    ? []
+    : listFeishuAccountIds(cfg).filter((accountId) => {
+        const account = mergeFeishuAccountConfig(cfg, accountId);
+        return account.enabled !== false && account.connectionMode === "webhook";
+      });
+}
+
+export function normalizeHistoricalWebhookConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const listener = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
+  return {
+    ...listener,
+    historicalWebhookAccountIds: resolveHistoricalWebhookAccountIds(listener.config),
+  };
+}
+
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
@@ -201,12 +222,6 @@ export function normalizeCompatibilityConfig({
   return {
     config: stray.config,
     changes: [...changes, ...stray.changes],
-    historicalWebhookAccountIds:
-      stray.config.channels?.feishu?.enabled === false
-        ? []
-        : listFeishuAccountIds(stray.config).filter((accountId) => {
-            const account = mergeFeishuAccountConfig(stray.config, accountId);
-            return account.enabled !== false && account.connectionMode === "webhook";
-          }),
+    historicalWebhookAccountIds: resolveHistoricalWebhookAccountIds(stray.config),
   };
 }

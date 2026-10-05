@@ -250,8 +250,6 @@
 .settings-theme-card__icon svg {
   width: 18px;
   height: 18px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .settings-theme-card__label {
@@ -603,8 +601,6 @@
 .settings-theme-import__external svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   flex: 0 0 auto;
 }
 

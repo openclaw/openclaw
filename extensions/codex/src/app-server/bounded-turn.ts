@@ -39,10 +39,10 @@ import {
   isCodexAppServerStartSelectionChangedError,
   type createIsolatedCodexAppServerClient,
 } from "./shared-client.js";
-import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
+  buildCodexRuntimeThreadConfig,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";

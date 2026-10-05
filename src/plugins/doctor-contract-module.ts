@@ -214,6 +214,8 @@ export type PluginDoctorStateMigrationEntry = {
 
 export type PluginDoctorContractModule = {
   historicalWebhookListener?: unknown;
+  /** Retained host artifacts can migrate listener settings while plugin repairs stay deferred. */
+  normalizeHistoricalWebhookConfig?: unknown;
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
   resolveSessionStoreAgentIds?: unknown;
@@ -314,6 +316,9 @@ export function coercePluginDoctorContractModule(
   const normalizeCompatibilityConfig = coerceNormalizeCompatibilityConfig(
     mod.normalizeCompatibilityConfig ?? defaultExport?.normalizeCompatibilityConfig,
   );
+  const normalizeHistoricalWebhookConfig = coerceNormalizeCompatibilityConfig(
+    mod.normalizeHistoricalWebhookConfig ?? defaultExport?.normalizeHistoricalWebhookConfig,
+  );
   const resolveSessionStoreAgentIds = coerceSessionStoreAgentIdsResolver(
     mod.resolveSessionStoreAgentIds ?? defaultExport?.resolveSessionStoreAgentIds,
   );
@@ -331,6 +336,7 @@ export function coercePluginDoctorContractModule(
   };
   return {
     historicalWebhookListener,
+    normalizeHistoricalWebhookConfig,
     rules,
     normalizeCompatibilityConfig,
     resolveSessionStoreAgentIds,

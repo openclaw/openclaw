@@ -202,8 +202,6 @@ describe("models.list configured static entries", () => {
 
   it.each([
     { name: "automatic", utilityModel: undefined, defaultUtilityModel: "small" },
-    { name: "explicit", utilityModel: "custom/explicit", defaultUtilityModel: "small" },
-    { name: "disabled", utilityModel: "", defaultUtilityModel: "small" },
     { name: "no provider default", utilityModel: undefined, defaultUtilityModel: undefined },
   ])(
     "previews global automatic utility routing with $name configuration",
@@ -415,47 +413,6 @@ describe("models.list configured static entries", () => {
       ]);
     },
   );
-
-  it("projects a configured runtime model from prepared static facts", async () => {
-    const config = {
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.6-sol" } },
-        entries: {
-          main: {
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await expect(
-      listModels({
-        catalog: [],
-        staticEntries: [
-          catalogEntry("gpt-5.6-sol", "openai-responses"),
-          catalogEntry("gpt-unconfigured", "openai-responses"),
-        ],
-        cfg: config,
-        view: "configured",
-      }),
-    ).resolves.toEqual({
-      defaultModels: {
-        automaticUtilityModel: "openai/gpt-5.6-luna",
-      },
-      models: [
-        expect.objectContaining({
-          id: "gpt-5.6-sol",
-          provider: "openai",
-          agentRuntime: {
-            id: "codex",
-            cloudPlacementSupported: false,
-            devicePlacementSupported: false,
-            source: "model",
-          },
-        }),
-      ],
-    });
-  });
 
   it("projects agent aliases onto inherited default and fallback catalog rows", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {

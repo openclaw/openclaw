@@ -185,7 +185,12 @@
   opacity: 1;
 }
 
-.chat-activity-group__body .chat-tool-row__chevron {
+/* A lone step is the disclosure itself, so only the rows beneath it hide their chevrons.
+   :where() keeps this below the reveal rules that follow, whatever their order. */
+.chat-activity-group:where(:not(.chat-activity-group--step))
+  > .chat-activity-group__body
+  .chat-tool-row__chevron,
+.chat-activity-group--step .chat-tool-children .chat-tool-row__chevron {
   opacity: 0;
 }
 
@@ -1254,6 +1259,7 @@
     max-height: min(360px, 55vh);
   }
 }
+.chat-activity-group__outcome,
 .chat-tool-failure,
 .chat-tool-skipped {
   flex: none;

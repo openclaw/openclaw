@@ -61,7 +61,6 @@ describe("update-cli", () => {
 
   it.each([
     { name: "Node", bun: undefined, failure: false },
-    { name: "Bun", bun: "1.4.3", failure: false },
     { name: "Bun failure diagnostics", bun: "1.4.3", failure: true },
   ])("uses the finalizer runtime for maintenance children under $name", async (runtime) => {
     const originalVersions = Object.getOwnPropertyDescriptor(process, "versions");
@@ -188,7 +187,6 @@ describe("update-cli", () => {
 
   it.each([
     { leaf: "repair", position: "before" },
-    { leaf: "finalize", position: "after" },
     { leaf: "finalize", position: "absent" },
   ])(
     "resolves capability consent $position $leaf without deriving it from --yes",

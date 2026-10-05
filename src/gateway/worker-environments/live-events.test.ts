@@ -952,9 +952,7 @@ describe("worker live events", () => {
       .spyOn(liveProjection, "recordWorkerLiveTrajectoryEvent")
       .mockImplementation((...params) => {
         const write = record(...params);
-        if (write) {
-          writes.push(write);
-        }
+        writes.push(write);
         return write;
       });
     const writer = holdWorkerTranscriptWriter(store);

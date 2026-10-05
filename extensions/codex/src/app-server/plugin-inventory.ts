@@ -57,8 +57,6 @@ export type CodexPluginOwnedApp = {
   id: string;
   name: string;
   accessible: boolean;
-  enabled: boolean;
-  needsAuth: boolean;
   /** Current non-read-only tool keys; absent when Codex omits tool metadata. */
   approvalOverrideToolConfigKeys?: readonly string[];
 };
@@ -68,7 +66,6 @@ type CodexPluginInventoryRecord = {
   summary: v2.PluginSummary;
   detail?: v2.PluginDetail;
   activationRequired: boolean;
-  authRequired: boolean;
   appOwnership: "proven" | "ambiguous" | "none";
   ownedAppIds: string[];
   apps: CodexPluginOwnedApp[];
@@ -228,7 +225,6 @@ export async function readCodexPluginInventory(
       activationRequired:
         pluginPolicy.enabled &&
         (unavailableByMarketplacePolicy || !summary.installed || !summary.enabled),
-      authRequired: apps.some((app) => app.needsAuth || !app.accessible),
       appOwnership,
       ownedAppIds: Array.from(new Set([...ownedAppIds, ...apps.map((app) => app.id)])).toSorted(),
       apps,
@@ -484,7 +480,6 @@ function resolveOwnedApps(params: {
     return [];
   }
   const appInfos = params.appInventory?.snapshot?.apps ?? [];
-  const installedApps = params.appInventory?.snapshot?.installedApps ?? [];
   return detailApps
     .map((app) => {
       const info = findCodexAppById(appInfos, app.id);
@@ -493,30 +488,22 @@ function resolveOwnedApps(params: {
           id: app.id,
           name: app.name,
           accessible: false,
-          enabled: false,
-          needsAuth: true,
         };
       }
-      return Object.assign(
-        toCodexPluginOwnedAccountApp(info, findCodexAppById(installedApps, info.id)),
-        { name: app.name },
-      );
+      const ownedApp = toCodexPluginOwnedAccountApp(info);
+      ownedApp.name = app.name;
+      return ownedApp;
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 export function toCodexPluginOwnedAccountApp(
   app: CodexAppInventorySnapshot["apps"][number],
-  installedApp: v2.InstalledApp | undefined,
 ): CodexPluginOwnedApp {
   return {
     id: app.id,
     name: app.name,
     accessible: true,
-    enabled: installedApp?.enabled ?? false,
-    // Modern plugin summaries carry no auth bit; account-authorized
-    // app/read metadata is the canonical connector access proof.
-    needsAuth: false,
     ...resolveOwnedAppApprovalOverrideKeys(app),
   };
 }

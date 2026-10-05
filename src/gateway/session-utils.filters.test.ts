@@ -33,6 +33,53 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId: "inventory-session", updatedAt: 1, ...overrides };
 }
 
+it("excludes dock conversations before ownership, people counts, and pagination", async () => {
+  const store = {
+    "agent:main:board-agent": entry({
+      updatedAt: 3,
+      createdVia: "operator",
+      createdSurface: "plugin-dock",
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
+    }),
+    "agent:main:first": entry({
+      updatedAt: 2,
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
+    }),
+    "agent:main:second": entry({
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
+    }),
+  };
+  const opts = {
+    excludeDock: true,
+    includePeople: true,
+    includeOwnerSessionCounts: true,
+    limit: 1,
+  };
+  const first = await listSessionFixture({ cfg, storePath, store, opts });
+  expect(first.sessions.map((row) => row.key)).toEqual(["agent:main:first"]);
+  expect(first).toMatchObject({
+    totalCount: 2,
+    peopleSessionCount: 2,
+    nextOffset: 1,
+    hasMore: true,
+  });
+  expect(first.owners?.map((owner) => owner.id)).toEqual(["profile-ada"]);
+  expect(first.people?.map((person) => [person.identity.id, person.sessionCount])).toEqual([
+    ["profile-ada", 2],
+  ]);
+  expect(first.ownerSessionCounts).toEqual([{ profileId: "profile-ada", open: 2, running: 0 }]);
+  const second = await listSessionFixture({ cfg, storePath, store, opts: { ...opts, offset: 1 } });
+  expect(second.sessions.map((row) => row.key)).toEqual(["agent:main:second"]);
+  expect(second).toMatchObject({ totalCount: 2, nextOffset: null, hasMore: false });
+  const explicit = await listSessionFixture({
+    cfg,
+    storePath,
+    store,
+    opts: { excludeDock: false },
+  });
+  expect(explicit.sessions[0]).toMatchObject({ key: "agent:main:board-agent", isDock: true });
+});
+
 it("reuses involvement facts until session replacement or profile publication", () => {
   const identityProjection = sessionIdentity.createSessionIdentityProjection();
   const rowContext = { ...buildSessionListRowMetadataContext({ now: 1 }), identityProjection };

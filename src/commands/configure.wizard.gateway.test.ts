@@ -13,6 +13,7 @@ import {
   setupBaseWizardTestState as setupBaseWizardState,
   wizardTestMocks as mocks,
 } from "./configure.wizard.test-support.js";
+import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 
 const { maybeInstallDaemon, formatHealthCheckFailure } = mocks;
 
@@ -280,8 +281,7 @@ describe("runConfigureWizard", () => {
         url: "ws://127.0.0.1:18789",
         token: "configured-token",
         password: undefined,
-        deadlineMs: 90_000,
-        probeTimeoutMs: 15_000,
+        ...resolveGatewayStartupTiming("win32"),
       }),
     );
     expect(mocks.healthCommand).toHaveBeenCalledWith(

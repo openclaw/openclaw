@@ -1,6 +1,6 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
-import type { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -8,10 +8,15 @@ import {
   hasOrphanedTranscriptIndexRows,
 } from "../config/sessions/session-transcript-index.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import {
+  migrateSessionWatchCursorProvenance,
+  needsSessionWatchCursorProvenanceMigration,
+} from "./openclaw-state-db-session-watch-migration.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -64,6 +69,44 @@ afterEach(() => {
 });
 
 describe("sqlite hot query plans", () => {
+  it("bounds absent legacy watch detection and migration by the cursor index", () => {
+    const { db } = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+    const plans: string[] = [];
+    const prototype = requireNodeSqlite().StatementSync.prototype;
+    const observers = (["get", "all", "iterate"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver: StatementSync, params) {
+            if (/^select .* from "session_watch_cursors" /i.test(receiver.sourceSQL)) {
+              plans.push(explainQueryPlan(db, receiver.sourceSQL, params));
+            }
+            return Reflect.apply(target, receiver, params);
+          },
+        }),
+      );
+    });
+    try {
+      expect(needsSessionWatchCursorProvenanceMigration(db, 4)).toBe(false);
+      expect(migrateSessionWatchCursorProvenance(db)).toEqual({
+        addedColumn: false,
+        migratedAmbientWatches: 0,
+        removedLegacySentinels: 0,
+      });
+    } finally {
+      observers.forEach((observer) => observer.mockRestore());
+    }
+    expect(plans).toHaveLength(2);
+    for (const plan of plans) {
+      expect(plan).toMatch(
+        /SEARCH session_watch_cursors .*\(watcher_session_key>\? AND watcher_session_key<\?\)/,
+      );
+      expect(plan).not.toContain("SCAN");
+    }
+  });
+
   it.each(["missing", "production", "stale"])(
     "checks orphan-query plans and preserves live rows with %s statistics",
     (statistics) => {

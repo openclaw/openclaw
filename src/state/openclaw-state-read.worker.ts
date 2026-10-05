@@ -1,9 +1,5 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import {
-  acpSessionRowMatchesEntry,
-  selectAcpSessionRows,
-  selectAcpSessionRowsByKeys,
-} from "../acp/runtime/session-meta-keys.js";
+import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   loadVersionedSubagentRunsInDatabase,
@@ -62,6 +58,7 @@ import { inspectGatewayOwnerLeaseForMaintenance } from "../infra/gateway-owner-l
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -86,7 +83,7 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import { readAgentDatabaseDeletionSnapshotInDatabase } from "./agent-deletion-journal.read.js";
+import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import {
   isConfigMachineStateReadCommand,
@@ -124,13 +121,10 @@ import {
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
 import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
-import {
-  readUserProfileGitHubCommand,
-  selectProfileAccessEntries,
-} from "./user-profile-github-identity.js";
+import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
   readUserProfileAuthorityInDatabase,
-  readUserProfileEmailBindings,
+  readUserProfileSnapshotCommand,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
 import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
@@ -147,7 +141,7 @@ serveOwnedWorkerTasks(
       if (prepared) {
         return prepared.then(() => read(input));
       }
-      const reply = runWithSqliteWorkerStateContext(input.context, (): OpenClawStateReadReply => {
+      const executeRead = (): OpenClawStateReadReply => {
         if (input.checkFreshAdmission) {
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
             input.databasePath,
@@ -242,7 +236,7 @@ serveOwnedWorkerTasks(
             if (command.type === "agentDatabaseDeletion.snapshot") {
               return {
                 type: command.type,
-                snapshot: readAgentDatabaseDeletionSnapshotInDatabase(
+                snapshot: readAgentDatabaseDeletionWorkerSnapshot(
                   db,
                   input.databasePath,
                   command.purpose,
@@ -261,30 +255,12 @@ serveOwnedWorkerTasks(
                 entries: readOutboundDeliveriesInDatabase({ db }, command),
               };
             }
-            if (command.type === "acpSessions.list") {
-              return {
-                type: command.type,
-                rows: selectAcpSessionRows(db),
-              };
-            }
-            if (command.type === "acpSessions.metadata") {
-              const cohortKeys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
-              const rows = new Map(
-                [...selectAcpSessionRowsByKeys(db, cohortKeys)].map((row) => [
-                  row.session_key,
-                  row,
-                ]),
-              );
-              return {
-                type: command.type,
-                rows: command.entries.map(
-                  ({ keys, entry }) =>
-                    keys
-                      .map((key) => rows.get(key))
-                      .find((row) => row && (!entry || acpSessionRowMatchesEntry(row, entry))) ??
-                    null,
-                ),
-              };
+            if (
+              command.type === "acpSessions.resume" ||
+              command.type === "acpSessions.list" ||
+              command.type === "acpSessions.metadata"
+            ) {
+              return readAcpSessionCommand(db, command);
             }
             if (isChannelIngressReadCommand(command)) {
               return readChannelIngressInDatabase(db, command);
@@ -327,7 +303,9 @@ serveOwnedWorkerTasks(
                   ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
                 };
               }
-              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
+              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, {
+                db,
+              });
               return {
                 type: command.type,
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),
@@ -583,25 +561,17 @@ serveOwnedWorkerTasks(
                 linked: resolveUserChannelIdentityInDatabase(db, command.identity),
               };
             }
-            if (command.type === "userProfiles.reconcile") {
-              const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profile: selectProfileAccessEntries(db, [command.profileId])[0]?.[1],
-                emailBindings: readUserProfileEmailBindings(db, command.profileId),
-              }));
-              return { type: command.type, ...facts };
+            if (
+              command.type === "userProfiles.reconcile" ||
+              command.type === "userProfiles.catalog"
+            ) {
+              return readUserProfileSnapshotCommand(db, command);
             }
             if (
               command.type === "userProfiles.avatar.inspect" ||
               command.type === "userProfiles.avatar.read"
             ) {
               return readUserProfileAvatarCommand(db, command);
-            }
-            if (command.type === "userProfiles.catalog") {
-              const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
-                emailBindings: readUserProfileEmailBindings(db),
-              }));
-              return { type: command.type, ...facts };
             }
             if (command.type === "userPreferences.values") {
               return {
@@ -680,7 +650,11 @@ serveOwnedWorkerTasks(
           ...locationArgs,
         );
         return { ok: true, sourceAdmitted: true, ...result };
-      });
+      };
+      const reply = withSqliteReaderOwner(
+        { operation: input.command.type, ownerKind: "worker" },
+        () => runWithSqliteWorkerStateContext(input.context, executeRead),
+      );
       if (
         !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
         bunSqliteNativeCleanupPending

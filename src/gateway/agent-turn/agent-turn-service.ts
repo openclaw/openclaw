@@ -24,7 +24,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
-import { replayAgentTurnIfCached } from "./agent-dedupe.js";
+import { AgentRequestReservationEndedError, replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { AgentRequestPreflight } from "./agent-request-preflight.js";
@@ -159,6 +159,7 @@ export function createAgentTurnService(
     let preparedOffloadedRefs: OffloadedRef[] = [];
     let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
     let releaseGatewayAdmission = () => {};
+    let respondToAdmissionOutcome = () => false;
     const cronContinuation = createCronContinuationController({
       runId,
       lifecycleGeneration,
@@ -252,6 +253,10 @@ export function createAgentTurnService(
         },
       });
       releaseGatewayAdmission = admissionController.release;
+      respondToAdmissionOutcome = () => {
+        admissionController.assertAllowed();
+        return admissionController.respondToOutcome();
+      };
       const resetPhase = await runAgentResetPhase({
         assertAdmissionCurrent: assertRequestCurrent,
         request,
@@ -283,7 +288,7 @@ export function createAgentTurnService(
       }
 
       if (requestedSessionKey) {
-        const preparedSession = prepareAgentSession({
+        const preparedSession = await prepareAgentSession({
           cfg,
           requestedSessionKey,
           requestedSessionId,
@@ -297,6 +302,7 @@ export function createAgentTurnService(
           preAttachmentSession,
           respond,
         });
+        assertRequestCurrent();
         if (!preparedSession) {
           return;
         }
@@ -378,7 +384,8 @@ export function createAgentTurnService(
             touchInteraction,
             failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
           });
-        const patchBuild = buildSessionPatch(entry);
+        const patchBuild = await buildSessionPatch(entry);
+        assertRequestCurrent();
         isNewSession = patchBuild.isNewSession;
         sessionEntry = mergeSessionEntry(entry, patchBuild.patch);
         resolvedSessionId = sessionEntry?.sessionId ?? sessionId;
@@ -621,6 +628,13 @@ export function createAgentTurnService(
           context.logGateway.warn(`agent execution cleanup failed: ${String(error)}`);
         });
       mainRestartRecoveryOwnerLease = undefined;
+    } catch (error) {
+      if (!(error instanceof AgentRequestReservationEndedError)) {
+        throw error;
+      }
+      if (!respondToAdmissionOutcome()) {
+        dedupeLifecycle.handlePreparationFailure(assertAdmissionCurrent)(error);
+      }
     } finally {
       try {
         if (!gatewayAdmissionTransferred) {

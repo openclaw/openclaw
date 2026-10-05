@@ -18,8 +18,13 @@ import {
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createPreparedReadHandler } from "./server-methods/prepared-read.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { dispatchSharedRead, invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 const mocks = vi.hoisted(() => ({
   createRuntime: vi.fn(),
@@ -27,7 +32,6 @@ const mocks = vi.hoisted(() => ({
   invalidate: vi.fn(),
   read: vi.fn(),
   readStartup: vi.fn(),
-  refreshPreparedModels: vi.fn(),
   refresh: vi.fn(),
   stop: vi.fn(),
   registerAuthListener: vi.fn(),
@@ -48,7 +52,6 @@ vi.mock("../agents/auth-profiles/runtime-snapshots.js", async (importOriginal) =
 }));
 vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
-  refreshPreparedModelRuntimeSnapshots: mocks.refreshPreparedModels,
   registerPreparedModelRuntimePublicationListener: mocks.registerModelListener,
 }));
 vi.mock("../skills/runtime/refresh.js", async (importOriginal) => ({
@@ -93,13 +96,12 @@ beforeEach(() => {
   mocks.registerSkillsListener.mockReturnValue(mocks.unregisterSkillsListener);
 });
 
-function createLifecycle(minimalTestGateway: boolean, warn = vi.fn()) {
+function createLifecycle(warn = vi.fn()) {
   const sidecarOwner = createGatewaySidecarStopOwner();
   sidecarOwners.add(sidecarOwner);
   return {
     lifecycle: createGatewayChatMetadataLifecycle({
       getConfig: () => config,
-      minimalTestGateway,
       log: { warn } as never,
     }),
     sidecarOwner,
@@ -111,16 +113,11 @@ it.each([false, true])(
   "publishes usage completion (failed: %s) without rebuilding metadata and retires its listener on stop",
   async (failed) => {
     const broadcast = vi.fn();
-    const { lifecycle: pending, sidecarOwner } = createLifecycle(true);
+    const { lifecycle: pending, sidecarOwner } = createLifecycle();
     const lifecycle = await pending;
     await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
-    expect(mocks.createRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ beforeRefresh: expect.any(Function), refreshOnRead: true }),
-    );
-    expect(mocks.refresh).not.toHaveBeenCalled();
-    expect(mocks.registerAuthListener).not.toHaveBeenCalled();
-    expect(mocks.registerModelListener).not.toHaveBeenCalled();
-    expect(mocks.registerSkillsListener).not.toHaveBeenCalled();
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    mocks.refresh.mockClear();
     expect(sidecarOwner.snapshot()).toHaveLength(1);
     publishSessionCostUsageUpdated("main", failed);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
@@ -137,6 +134,9 @@ it.each([false, true])(
     expect(mocks.refresh).not.toHaveBeenCalled();
     await sidecarOwner.stop();
     expect(mocks.stop).toHaveBeenCalledOnce();
+    expect(mocks.unregisterAuthListener).toHaveBeenCalledOnce();
+    expect(mocks.unregisterModelListener).toHaveBeenCalledOnce();
+    expect(mocks.unregisterSkillsListener).toHaveBeenCalledOnce();
     publishSessionCostUsageUpdated("main");
     expect(broadcast).toHaveBeenCalledTimes(1);
   },
@@ -156,7 +156,7 @@ it("retires model choices at its config commit before pending metadata settles",
     entered.resolve();
     return release.promise;
   });
-  const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
+  const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
   const lifecycle = await pendingLifecycle;
   const attaching = lifecycle.attachContext(ownedContext, sidecarOwner.publish);
   try {
@@ -251,7 +251,7 @@ async function createRealMetadataLifecycle(
       return { ...runtime, refresh };
     },
   );
-  const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
+  const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle();
   const lifecycle = await pendingLifecycle;
   const attach = () =>
     lifecycle.attachContext(
@@ -636,7 +636,7 @@ describe("gateway chat metadata lifecycle", () => {
         },
       }),
     );
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
     const lifecycle = await pendingLifecycle;
     const outcomes: unknown[] = [];
     const reads: Promise<void>[] = [];
@@ -715,100 +715,88 @@ describe("gateway chat metadata lifecycle", () => {
     );
   });
 
-  it.each([true, false])(
-    "joins pending metadata work before Gateway lifetime shutdown (minimal=%s)",
-    async (minimalTestGateway) => {
-      const actual = await vi.importActual<
-        typeof import("./server-methods/chat-metadata-runtime.js")
-      >("./server-methods/chat-metadata-runtime.js");
-      const entered = createDeferred();
-      const release = createDeferred();
-      const events: string[] = [];
-      const owner = createChatMetadataOwner(config, "shutdown-model");
-      let ownerAvailable = true;
-      let revision = 0;
-      let held = false;
-      const holdWork = async () => {
-        if (held) {
-          entered.resolve();
-          await release.promise;
-          events.push("work settled");
-        }
+  it("joins pending metadata work before Gateway lifetime shutdown", async () => {
+    const actual = await vi.importActual<
+      typeof import("./server-methods/chat-metadata-runtime.js")
+    >("./server-methods/chat-metadata-runtime.js");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const events: string[] = [];
+    const owner = createChatMetadataOwner(config, "shutdown-model");
+    let ownerAvailable = true;
+    let revision = 0;
+    let held = false;
+    const holdWork = async () => {
+      if (held) {
+        entered.resolve();
+        await release.promise;
+        events.push("work settled");
+      }
+    };
+    const buildProjection = vi.fn(async () => {
+      await holdWork();
+      return {
+        modelCatalog: owner.modelCatalog.entries,
+        read: () => ({ models: owner.modelCatalog.entries }),
+        isCurrent: () => true,
       };
-      mocks.refreshPreparedModels.mockImplementation(holdWork);
-      const buildProjection = vi.fn(async () => {
-        if (!minimalTestGateway) {
-          await holdWork();
-        }
-        return {
-          modelCatalog: owner.modelCatalog.entries,
-          read: () => ({ models: owner.modelCatalog.entries }),
-          isCurrent: () => true,
-        };
+    });
+    mocks.createRuntime.mockImplementation(
+      (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) =>
+        actual.createGatewayChatMetadataRuntime({
+          ...params,
+          deps: {
+            getPreparedOwner: () => (ownerAvailable ? owner : undefined),
+            getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
+            getAuthStoreRevision: () => revision,
+            getSkillsVersion: () => 0,
+            getPluginRegistryVersion: () => 0,
+            buildCommands: async () => ({ commands: [] }),
+            buildProjection,
+          },
+        }),
+    );
+    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle();
+    const lifecycle = await pendingLifecycle;
+    const broadcast = vi.fn();
+    await lifecycle.attachContext(
+      { broadcast } as unknown as GatewayRequestContext,
+      sidecarOwner.publish,
+    );
+    held = true;
+    revision += 1;
+    mocks.registerModelListener.mock.calls[0]![0]({ phase: "published" });
+    const read = lifecycle.read({ agentId: "main" }).then(
+      (result) => {
+        events.push("read settled");
+        return result;
+      },
+      (error: unknown) => {
+        events.push("read settled");
+        return error;
+      },
+    );
+    try {
+      await entered.promise;
+      const stopping = sidecarOwner.stop().then(() => {
+        ownerAvailable = false;
+        events.push("shutdown completed");
       });
-      mocks.createRuntime.mockImplementation(
-        (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) =>
-          actual.createGatewayChatMetadataRuntime({
-            ...params,
-            deps: {
-              getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-              getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
-              getAuthStoreRevision: () => revision,
-              getSkillsVersion: () => 0,
-              getPluginRegistryVersion: () => 0,
-              buildCommands: async () => ({ commands: [] }),
-              buildProjection,
-            },
-          }),
-      );
-      const {
-        lifecycle: pendingLifecycle,
-        sidecarOwner,
-        warn,
-      } = createLifecycle(minimalTestGateway);
-      const lifecycle = await pendingLifecycle;
-      const broadcast = vi.fn();
-      await lifecycle.attachContext(
-        { broadcast } as unknown as GatewayRequestContext,
-        sidecarOwner.publish,
-      );
-      held = true;
-      revision += 1;
-      if (!minimalTestGateway) {
-        mocks.registerModelListener.mock.calls[0]![0]({ phase: "published" });
-      }
-      const read = lifecycle.read({ agentId: "main" }).then(
-        (result) => {
-          events.push("read settled");
-          return result;
-        },
-        (error: unknown) => {
-          events.push("read settled");
-          return error;
-        },
-      );
-      try {
-        await entered.promise;
-        const stopping = sidecarOwner.stop().then(() => {
-          ownerAvailable = false;
-          events.push("shutdown completed");
-        });
-        release.resolve();
-        await stopping;
-        const result = await read;
+      release.resolve();
+      await stopping;
+      const result = await read;
 
-        expect(events).toEqual(["work settled", "read settled", "shutdown completed"]);
-        expect(result).toBeInstanceOf(ChatMetadataSnapshotUnavailableError);
-        await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("stopped");
-        await expect(lifecycle.refresh()).rejects.toThrow("stopped");
-        await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toBeUndefined();
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await read;
-      }
-    },
-  );
+      expect(events).toEqual(["work settled", "read settled", "shutdown completed"]);
+      expect(result).toBeInstanceOf(ChatMetadataSnapshotUnavailableError);
+      await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("stopped");
+      await expect(lifecycle.refresh()).rejects.toThrow("stopped");
+      await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await read;
+    }
+  });
 
   it.each(["published", "build failed", "catalog during attachment", "owner invalidated"] as const)(
     "refreshes subordinate changes after %s catch-up",
@@ -825,7 +813,7 @@ describe("gateway chat metadata lifecycle", () => {
           return release.promise;
         });
       }
-      const { lifecycle: pending, sidecarOwner, warn } = createLifecycle(false);
+      const { lifecycle: pending, sidecarOwner, warn } = createLifecycle();
       const lifecycle = await pending;
       const attachment = lifecycle.attachContext(context, sidecarOwner.publish);
       try {
@@ -879,26 +867,68 @@ describe("gateway chat metadata lifecycle", () => {
     { modelFactsChanged: false, refreshStatusChanged: false, refreshes: false },
     { modelFactsChanged: undefined, refreshStatusChanged: false, refreshes: true },
     { modelFactsChanged: false, refreshStatusChanged: true, refreshes: true },
+    {
+      phase: "catalog-status",
+      modelFactsChanged: false,
+      refreshStatusChanged: false,
+      refreshes: false,
+    },
   ])(
     "refreshes catalog metadata only for a change (%j)",
-    async ({ modelFactsChanged, refreshStatusChanged, refreshes }) => {
-      const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
+    async ({ phase = "catalog-published", modelFactsChanged, refreshStatusChanged, refreshes }) => {
+      const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
       const lifecycle = await pendingLifecycle;
+      const requestContext = { ...context, broadcast: vi.fn(), getRuntimeConfig: () => config };
+      let pending = true;
+      let payloadJson: string | undefined;
+      const produce = vi.fn(() => ({ pendingProviders: pending ? ["synthetic"] : undefined }));
+      const handler = createPreparedReadHandler(() => ({
+        run: (respond) => respond(true, produce()),
+      }));
+      const options = {
+        req: { type: "req", id: "catalog", method: "models.list" },
+        params: {},
+        client: null,
+        context: requestContext,
+        isWebchatConnect: () => false,
+        respond: (_ok, payload) => {
+          payloadJson = JSON.stringify(payload);
+        },
+      } satisfies GatewayRequestHandlerOptions;
+      const sharing = {
+        shareKey: () => "catalog",
+        shareInvalidationEvents: ["chat.metadata.changed"],
+        shareMaxAgeMs: 1_000,
+      };
+      const read = () => dispatchSharedRead(handler, options, sharing, () => {});
+      vi.useFakeTimers();
+      try {
+        await lifecycle.attachContext(requestContext, sidecarOwner.publish);
+        const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+        modelListener({ phase: "published" });
+        expect(mocks.refresh).toHaveBeenCalledTimes(2);
+        mocks.invalidate.mockClear();
+        await read();
+        await read();
+        expect(produce).toHaveBeenCalledOnce();
+        expect(payloadJson).toBe('{"pendingProviders":["synthetic"]}');
 
-      await lifecycle.attachContext(context, sidecarOwner.publish);
-      const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-      modelListener({ phase: "published" });
-      await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-      mocks.invalidate.mockClear();
+        pending = false;
+        modelListener({ phase, modelFactsChanged, refreshStatusChanged });
+        await read();
 
-      modelListener({ phase: "catalog-published", modelFactsChanged, refreshStatusChanged });
-
-      expect(mocks.invalidate).not.toHaveBeenCalled();
-      expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
-      if (refreshes) {
-        expect(mocks.refresh).toHaveBeenLastCalledWith({
-          notifyIfUnchanged: refreshStatusChanged,
-        });
+        expect(payloadJson).toBe("{}");
+        expect(produce).toHaveBeenCalledTimes(2);
+        expect(mocks.invalidate).not.toHaveBeenCalled();
+        expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
+        if (refreshes) {
+          expect(mocks.refresh).toHaveBeenLastCalledWith({
+            notifyIfUnchanged: refreshStatusChanged,
+          });
+        }
+      } finally {
+        invalidateSharedReadResponses(requestContext.broadcast);
+        vi.useRealTimers();
       }
     },
   );

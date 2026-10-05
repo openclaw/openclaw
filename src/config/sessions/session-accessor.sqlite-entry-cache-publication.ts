@@ -12,10 +12,12 @@ import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
+  applyPendingSessionEntryOwnerChanges,
   pendingSessionEntryPublications,
   preparedSharingReads,
   recordCommittedSessionEntryPublication,
   recordCommittedSessionMetadataPublication,
+  recordCommittedSessionOwnerPublication,
   retainedSharingReads,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
@@ -371,15 +373,7 @@ function publishSessionSharingFieldChange(
     database,
     () => {
       if (change.kind === "owner") {
-        const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
-        if (typeof identity === "string") {
-          for (const pending of pendingSessionEntryPublications.get(
-            `file:${identity}\0${sessionKey}`,
-          ) ?? []) {
-            // A field update supersedes its value, not the pending entry's generation fence.
-            pending.ownerChanges.set(sessionKey, structuredClone(change));
-          }
-        }
+        recordCommittedSessionOwnerPublication(database, sessionKey, change);
       }
       for (const read of retainedSharingReads(database, sessionKey) ?? []) {
         if (read.acquisition) {
@@ -569,26 +563,10 @@ export function retainSessionEntryWorkerPublication(params: {
       if (!pending) {
         return undefined;
       }
-      let replacement = receipt?.kind === "session-entry-replacements" ? receipt : undefined;
-      if (replacement && owner.ownerChanges.size > 0) {
-        const current = new Map(replacement.current);
-        for (const [sessionKey, change] of owner.ownerChanges) {
-          const entry = current.get(sessionKey);
-          if (
-            !entry ||
-            entry.sessionId !== change.sessionId ||
-            (entry.lifecycleRevision ?? null) !== change.lifecycleRevision
-          ) {
-            continue;
-          }
-          const { owner: _previousOwner, ...metadata } = entry;
-          current.set(
-            sessionKey,
-            freezeJsonSnapshot({ ...metadata, ...(change.owner ? { owner: change.owner } : {}) }),
-          );
-        }
-        replacement = { ...replacement, current };
-      }
+      const replacement = applyPendingSessionEntryOwnerChanges(
+        receipt?.kind === "session-entry-replacements" ? receipt : undefined,
+        owner.ownerChanges,
+      );
       const initialization =
         receipt?.kind === "session-transcript-initialized" ? receipt : undefined;
       const current = (sessionKey: string) => !owner.superseded.has(sessionKey);

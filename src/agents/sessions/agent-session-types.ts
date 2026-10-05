@@ -7,7 +7,6 @@ import type {
   ExtensionRunner,
   ExtensionUIContext,
   InputSource,
-  SessionStartEvent,
   ShutdownHandler,
   ToolDefinition,
 } from "./extensions/index.js";
@@ -73,8 +72,6 @@ export interface AgentSessionConfig {
   allowedToolNames: string[];
   /** Mutable reference used by Agent to access the current extension runner. */
   extensionRunnerRef?: { current?: ExtensionRunner };
-  /** Session start metadata emitted when extensions bind to this runtime. */
-  sessionStartEvent?: SessionStartEvent;
   /** Settlement boundary for session writes and write-capable hooks. */
   withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   /** Owner of reactive context-overflow recovery. Defaults to the session. */

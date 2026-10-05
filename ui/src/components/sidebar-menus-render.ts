@@ -115,6 +115,8 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
     agents,
     identities,
     pinnedAgentIds: host.pinnedAgentIds,
+    query: controller.agentMenuQuery,
+    onQueryChange: (query) => controller.setAgentMenuQuery(query),
     rosterMode: host.sidebarAgentsMode === "roster",
     onToggleRoster: () => {
       host.sidebarAgentsMode = host.sidebarAgentsMode === "roster" ? "chip" : "roster";

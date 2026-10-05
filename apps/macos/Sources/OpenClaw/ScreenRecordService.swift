@@ -32,8 +32,7 @@ final class ScreenRecordService {
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
     {
         guard AppLaunchRuntimePlan.current.allowsActivation ||
             PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
@@ -45,13 +44,8 @@ final class ScreenRecordService {
         let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
         let includeAudio = includeAudio ?? false
 
-        let outURL: URL = {
-            if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return URL(fileURLWithPath: outPath)
-            }
-            return FileManager().temporaryDirectory
-                .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
-        }()
+        let outURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
         try? FileManager().removeItem(at: outURL)
 
         let content = try await SCShareableContent.current

@@ -1299,7 +1299,7 @@ describe("installPluginFromDir", () => {
     expect(serialized).not.toContain(extensionsDir);
   });
 
-  it("emits git source family for git-backed installed package installs", async () => {
+  it("leaves install success emission to the caller that commits the staged package", async () => {
     const caseDir = suiteTempRootTracker.makeTempDir();
     const pluginDir = path.join(caseDir, "repo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -1321,16 +1321,7 @@ describe("installPluginFromDir", () => {
     }
 
     expect(result!.ok).toBe(true);
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      action: "plugin.installed",
-      outcome: "success",
-      target: { kind: "plugin", name: "git-backed-plugin" },
-      attributes: {
-        source_family: "git",
-        mode: "install",
-      },
-    });
+    expect(captured.events).toHaveLength(0);
   });
 
   it("ignores installed managed npm peer dependency code during install-time code scans", async () => {

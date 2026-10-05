@@ -46,10 +46,10 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type {
+  CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadFinalConfigPatchDecision,
 } from "./thread-lifecycle-types.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,
@@ -499,7 +499,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       threadId: thread.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       assertCurrent,
-      withCurrent: connection.withCurrent,
+      withCurrent: cleanupAuthority.withCurrent,
     });
     if (!released) {
       await closeCodexStartupClientBestEffort(client);

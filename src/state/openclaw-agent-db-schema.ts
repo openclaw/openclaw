@@ -12,7 +12,7 @@ import {
 } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
-  canDeferSqliteIntegrityAfterProcessDeath,
+  sqliteProcessDeathIntegrityRefusal,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
@@ -131,9 +131,27 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   const hasPendingCurrentVersionMigration =
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
     hasPendingCurrentVersionAgentDatabaseMigration(database);
+  const startedAt = performance.now();
+  const processDeathRefusal = processDeath
+    ? migrationPending || hasPendingCurrentVersionMigration
+      ? "schema-migration-pending"
+      : sqliteProcessDeathIntegrityRefusal(database, pathname)
+    : undefined;
+  if (processDeath && diagnostics) {
+    diagnostics.because = processDeathRefusal;
+  }
+  if (diagnostics?.integrityGateReason === "stale-lease-full" && diagnostics.because) {
+    agentDbLog.info(
+      `agent database integrityGateReason=stale-lease-full because=${diagnostics.because}`,
+      {
+        agentId,
+        path: pathname,
+        ...diagnostics,
+      },
+    );
+  }
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
-    const startedAt = performance.now();
-    const deferred = processDeath && canDeferSqliteIntegrityAfterProcessDeath(database, pathname);
+    const deferred = processDeath && !processDeathRefusal;
     const reuseIntegrity =
       deferred ||
       reuseRuntimeIntegrity ||
@@ -170,6 +188,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       diagnostics.integrityGateReason = "process-death";
       diagnostics.integrityGateMode = "deferred";
       diagnostics.integrityGateOutcome = "pending";
+      diagnostics.because = "same-boot-dead-owner-wal-recovered";
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
     }
   } else if (

@@ -425,9 +425,11 @@ export function readSessionStoreTargetInventory(
             physical.storePath,
             request.candidates,
           );
+          const selected =
+            request.selection === "recovery" ? { ...target, agentId: physical.agentId } : target;
           agents.push({
-            agentId: target.agentId,
-            result: { available: true, targets: [target] },
+            agentId: selected.agentId,
+            result: { available: true, targets: [selected] },
             reads: [
               {
                 target: physical,
@@ -446,7 +448,13 @@ export function readSessionStoreTargetInventory(
         },
       };
       if (request.selection === "recovery") {
-        resolveAllAgentSessionStoreTargetsSync(config, options);
+        const selected = new Set(request.agentIds);
+        resolveAllAgentSessionStoreTargetsSync(config, {
+          ...options,
+          ...(isPerAgentSessionStoreConfig(config.session?.store)
+            ? { agentIds: selected }
+            : { fixedStoreAgentIds: selected }),
+        });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
           resolveConfiguredSessionStoreTargets(config, env, request.paths),

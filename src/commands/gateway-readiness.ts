@@ -1,6 +1,7 @@
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { promptYesNo } from "../cli/prompt.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
 import { gatewayProbeResultSawGateway } from "./gateway-health-auth-diagnostic.js";
 
 type GatewayReadinessResult =
@@ -156,9 +157,7 @@ export async function ensureDashboardGatewayReady(
 
   let recoveredStatus = await gatherStatus();
   for (let attempt = 1; attempt < 20 && !gatewayIsReady(recoveredStatus); attempt += 1) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
     recoveredStatus = await gatherStatus();
   }
   if (gatewayIsReady(recoveredStatus)) {

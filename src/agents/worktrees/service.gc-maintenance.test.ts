@@ -51,7 +51,7 @@ it("maintains each shared repository and suspends failures until explicitly retr
     const name = `manual-${index}`;
     const worktreePath = path.join(repoRoot, name);
     await fs.mkdir(worktreePath);
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: name,
       name,
       repoFingerprint: name,
@@ -139,7 +139,7 @@ it.each([false, true])(
   async (removedRecord) => {
     const root = tempDirs.make("worktree-gc-no-maintenance-");
     if (removedRecord) {
-      insertRegistryWorktree(env, {
+      await insertRegistryWorktree(env, {
         id: "removed",
         name: "removed",
         repoFingerprint: "fixture",

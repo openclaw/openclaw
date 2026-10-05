@@ -241,12 +241,21 @@ final class ScreenRecordService: @unchecked Sendable {
         includeAudio: Bool?,
         outPath: String?) async throws -> String
     {
-        let config = try self.makeRecordConfig(
-            screenIndex: screenIndex,
-            durationMs: durationMs,
-            fps: fps,
-            includeAudio: includeAudio,
-            outPath: outPath)
+        if let idx = screenIndex, idx != 0 {
+            throw ScreenRecordError.invalidScreenIndex(idx)
+        }
+        let outURL = if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            URL(fileURLWithPath: outPath)
+        } else {
+            FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
+        }
+        let config = RecordConfig(
+            durationMs: CaptureRateLimits.clampDurationMs(durationMs),
+            fpsValue: Double(Int32(CaptureRateLimits.clampFps(fps, maxFps: 30).rounded())),
+            includeAudio: includeAudio ?? true,
+            outURL: outURL)
+        try? FileManager().removeItem(at: outURL)
 
         let state = CaptureState()
         do {
@@ -271,41 +280,6 @@ final class ScreenRecordService: @unchecked Sendable {
         let fpsValue: Double
         let includeAudio: Bool
         let outURL: URL
-    }
-
-    private func makeRecordConfig(
-        screenIndex: Int?,
-        durationMs: Int?,
-        fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) throws -> RecordConfig
-    {
-        if let idx = screenIndex, idx != 0 {
-            throw ScreenRecordError.invalidScreenIndex(idx)
-        }
-
-        let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
-        let fps = CaptureRateLimits.clampFps(fps, maxFps: 30)
-        let fpsInt = Int32(fps.rounded())
-        let fpsValue = Double(fpsInt)
-        let includeAudio = includeAudio ?? true
-
-        let outURL = self.makeOutputURL(outPath: outPath)
-        try? FileManager().removeItem(at: outURL)
-
-        return RecordConfig(
-            durationMs: durationMs,
-            fpsValue: fpsValue,
-            includeAudio: includeAudio,
-            outURL: outURL)
-    }
-
-    private func makeOutputURL(outPath: String?) -> URL {
-        if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: outPath)
-        }
-        return FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
     }
 
     @MainActor

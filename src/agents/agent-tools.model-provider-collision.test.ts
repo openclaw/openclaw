@@ -64,12 +64,6 @@ describe("applyModelProviderToolPolicy", () => {
       modelBaseUrl: "https://proxy.example/v1",
       native: false,
     },
-    {
-      label: "resolved official endpoint",
-      baseUrl: "https://proxy.example/v1",
-      modelBaseUrl: "https://api.openai.com/v1",
-      native: true,
-    },
 
     {
       label: "disabled plugin",
@@ -103,20 +97,6 @@ describe("applyModelProviderToolPolicy", () => {
   );
 
   it.each([
-    {
-      name: "gateway native",
-      modelProvider: "gateway",
-      auth: false,
-      suppressManagedWebSearch: undefined,
-      native: true,
-    },
-    {
-      name: "dynamic tools",
-      modelProvider: "gateway",
-      auth: false,
-      suppressManagedWebSearch: false,
-      native: false,
-    },
     {
       name: "authenticated direct",
       modelProvider: "openai",

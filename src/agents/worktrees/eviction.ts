@@ -131,11 +131,11 @@ async function evictAcceptedWorktree(
               });
               snapshotRef = snapshot.snapshotRef;
               beforeRun();
-              updateRegistryWorktree(
+              await updateRegistryWorktree(
                 env,
                 record.id,
                 { snapshotRef, provisionedState: snapshot.provisionedState },
-                { assertCurrent: beforeRun },
+                { assertCurrent: beforeRun, workerAuthority: heldClaimsAuthority() },
               );
               dirty = Boolean(
                 await git.require(
@@ -157,7 +157,7 @@ async function evictAcceptedWorktree(
                   ["rev-parse", `${snapshotRef}^{commit}`],
                   { signal, beforeRun },
                 );
-                await accepted.prepareArchive(snapshotCommit);
+                await accepted.prepareArchive?.(snapshotCommit);
               }
             },
           );
@@ -234,11 +234,18 @@ async function evictAcceptedWorktree(
         );
         settleGuard();
         const removedAt = params.now();
-        updateRegistryWorktree(
+        await updateRegistryWorktree(
           env,
           record.id,
           { removedAt, snapshotRef },
-          { assertCurrent: settleGuard },
+          {
+            assertCurrent: settleGuard,
+            removalToken: token,
+            workerAuthority: {
+              leaseSet: authority.leaseSet,
+              predicates: [{ kind: "binding", record }, claimsPredicate()],
+            },
+          },
         );
         await finalizeWorktreeRemoval(
           env,

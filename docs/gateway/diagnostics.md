@@ -191,6 +191,8 @@ waits; `session.discussion.info` and `session.discussion.open` report `provider`
 time, including remote provider requests. Phase names use the method as their
 prefix and contain no session keys or response data. Membership evidence uses
 the existing projection worker lane so full transcript reads do not block it.
+The membership `projection` phase prepares creator selection metadata without
+waiting for unrelated session display rows or worker-placement details.
 
 With diagnostics and warning logs enabled, `sessions.create` calls lasting at
 least one second emit `slow session create`. Its `elapsedMs` and
@@ -201,6 +203,19 @@ These are elapsed times, including waits, with fixed phase names and no session
 keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
+
+Managed worktree preparation emits one info-level `managed worktree preparation`
+record on return or failure. `kind=managed` covers checkout creation;
+`kind=sandbox` covers a managed guest projection through backend readiness,
+including workspace/skill layout and container provisioning. `durationMs` measures
+the whole operation. `phaseDurationsMs` attributes allocation admission, checkout,
+setup execution, template preparation and application, snapshot capture, synchronization in each
+direction, workspace layout, and container startup. Phases include nested work
+and asynchronous waits, so do not add them to the total. Unentered phases are
+absent. `template` is `warm`, `cold`, `unavailable`, or `reused` for an existing
+projection; records contain no repository paths, session keys, or setup output.
+With diagnostics enabled, the same observation feeds the
+[worktree preparation histogram](/gateway/prometheus#worktree-preparation).
 
 Two related info-level records help attribute slow worktree cleanup:
 `slow managed worktree removal` separates allocation admission, callback work,

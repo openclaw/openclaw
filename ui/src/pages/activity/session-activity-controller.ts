@@ -498,6 +498,7 @@ export class SessionActivityController implements ReactiveController {
     }
     const request = {
       source: "activity",
+      excludeDock: true,
       rowMode: "compact",
       archived: "all",
       includeGlobal: true,

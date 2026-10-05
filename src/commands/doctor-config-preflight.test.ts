@@ -161,6 +161,24 @@ describe("runDoctorConfigPreflight", () => {
         const backupPath = `${configPath}.bak`;
         const backupBytes = "{}\n";
         await fs.writeFile(backupPath, backupBytes);
+        const authStorePath = path.join(home, ".openclaw/agents/main/agent/auth-profiles.json");
+        await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+        await fs.writeFile(
+          authStorePath,
+          JSON.stringify({
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "a".repeat(32),
+                },
+              },
+            },
+          }),
+        );
         const stateFiles = (await fs.readdir(path.dirname(configPath))).toSorted();
         const legacyDir = path.join(home, ".clawdbot");
         await fs.mkdir(legacyDir);

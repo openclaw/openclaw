@@ -59,8 +59,6 @@ type LogsTailPayload = {
   localFallback?: boolean;
 };
 
-type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
-
 type GatewayRecoveryResult =
   | { ok: true; payload: LogsTailPayload; startedAt: string }
   | { ok: false; error: unknown };
@@ -221,7 +219,12 @@ async function readSystemdJournalFallback(params: {
   }
   const limit = resolveIntegerOption(params.limit, 1, { min: 1, max: JOURNAL_MAX_LIMIT });
   const maxBytes = resolveIntegerOption(params.maxBytes, 1, { min: 1, max: JOURNAL_MAX_BYTES });
-  const unitName = resolveLogsSystemdUnitName(runtime, process.env);
+  const unitOverride = process.env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  const unitName = unitOverride
+    ? unitOverride.endsWith(".service")
+      ? unitOverride
+      : `${unitOverride}.service`
+    : `${runtime.resolveGatewaySystemdServiceName(process.env.OPENCLAW_PROFILE)}.service`;
   const source = `journalctl --user --boot --user-unit=${unitName} _PID=${service.pid}`;
   const args = [
     "--user",
@@ -247,8 +250,13 @@ async function readSystemdJournalFallback(params: {
   if (result.code !== 0) {
     return null;
   }
-  const boundedOutput = normalizeTailText(result.stdout, result.truncated);
-  const parsed = parseJournalctlOutput(boundedOutput.text);
+  const firstNewline = result.truncated ? result.stdout.indexOf("\n") : -1;
+  const output = result.truncated
+    ? firstNewline < 0
+      ? ""
+      : result.stdout.slice(firstNewline + 1)
+    : result.stdout;
+  const parsed = parseJournalctlOutput(output);
   const lines = parsed.lines.length > limit ? parsed.lines.slice(-limit) : parsed.lines;
   const redaction = resolveRedactOptions();
   return {
@@ -260,20 +268,9 @@ async function readSystemdJournalFallback(params: {
     },
     cursor: parsed.cursor ?? params.cursor,
     lines: redactSensitiveLines(lines, redaction),
-    truncated: boundedOutput.truncated || parsed.lines.length > limit,
+    truncated: result.truncated || parsed.lines.length > limit,
     localFallback: true,
   };
-}
-
-function normalizeTailText(text: string, truncated: boolean): { text: string; truncated: boolean } {
-  if (!truncated) {
-    return { text, truncated };
-  }
-  const firstNewline = text.indexOf("\n");
-  if (firstNewline < 0) {
-    return { text: "", truncated };
-  }
-  return { text: text.slice(firstNewline + 1), truncated };
 }
 
 function formatLogResetNotice(skippedBytes: number | undefined): string {
@@ -296,14 +293,6 @@ function parseJournalctlOutput(output: string): { lines: string[]; cursor?: stri
     lines.push(rawLine);
   }
   return { lines, cursor };
-}
-
-function resolveLogsSystemdUnitName(runtime: LogsCliRuntimeModule, env: NodeJS.ProcessEnv): string {
-  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
-  if (override) {
-    return override.endsWith(".service") ? override : `${override}.service`;
-  }
-  return `${runtime.resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
 }
 
 const MAX_FOLLOW_RETRIES = 8;
@@ -349,43 +338,6 @@ function createLogWriters(onOutputClosed?: () => void) {
     emitJsonLine: (payload: Record<string, unknown>, toStdErr = false) =>
       writer.write(toStdErr ? process.stderr : process.stdout, `${JSON.stringify(payload)}\n`),
   };
-}
-
-async function emitGatewayError(
-  err: unknown,
-  opts: LogsRequestOptions,
-  mode: "json" | "text",
-  rich: boolean,
-  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
-  errorLine: (text: string) => boolean,
-) {
-  const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
-  const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
-
-  const details = projectGatewayConnectionDetailsForDiagnostics(
-    isGatewayTransportError(err) ? err.connectionDetails : opts.connection,
-  );
-  if (mode === "json") {
-    emitJsonLine(
-      {
-        type: "error",
-        message: errorText,
-        error: errorText,
-        details,
-        hint,
-      },
-      true,
-    );
-    return;
-  }
-
-  if (!errorLine(colorize(rich, theme.error, errorText))) {
-    return;
-  }
-  if (!errorLine(details.message)) {
-    return;
-  }
-  errorLine(colorize(rich, theme.muted, hint));
 }
 
 export function registerLogsCli(program: Command) {
@@ -597,14 +549,22 @@ export function registerLogsCli(program: Command) {
           await delay(backoffMs);
           continue;
         }
-        await emitGatewayError(
-          err,
-          opts,
-          jsonMode ? "json" : "text",
-          rich,
-          emitJsonLine,
-          errorLine,
+        const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
+        const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
+        const details = projectGatewayConnectionDetailsForDiagnostics(
+          isGatewayTransportError(err) ? err.connectionDetails : opts.connection,
         );
+        if (jsonMode) {
+          emitJsonLine(
+            { type: "error", message: errorText, error: errorText, details, hint },
+            true,
+          );
+        } else if (
+          errorLine(colorize(rich, theme.error, errorText)) &&
+          errorLine(details.message)
+        ) {
+          errorLine(colorize(rich, theme.muted, hint));
+        }
         // Route terminal reset to stderr in JSON mode so structured
         // stdout stays parseable. Text mode resets to stdout by default.
         defaultRuntime.exit(1, {

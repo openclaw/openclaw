@@ -105,7 +105,7 @@ export function assertOpenClawAgentSchemaContains(
   schemaSql: string,
   participantSchema: "current" | "legacy" = "current",
   allowStartupIndexRepair = false,
-): void {
+): boolean {
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
     allowedMissingTables: [
@@ -120,7 +120,7 @@ export function assertOpenClawAgentSchemaContains(
   };
   if (!allowStartupIndexRepair) {
     assertSqliteSchemaContains(database, pathname, schemaSql, compatibility);
-    return;
+    return false;
   }
   // Admission is read-only; the writable schema owner rebuilds these projections
   // before session startup completes. Constraints and canonical data stay strict.
@@ -136,6 +136,7 @@ export function assertOpenClawAgentSchemaContains(
   ) {
     throwSqliteSchemaMismatches(pathname, legacySqliteSchemaIssueMessages(issues));
   }
+  return issues.length > 0;
 }
 
 export function assertOpenClawAgentCurrentRuntimeSchema(

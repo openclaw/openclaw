@@ -24,7 +24,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createGatewayMethodRegistry } from "../../methods/registry.js";
-import { agentWaitHandler } from "../../server-methods/agent-wait.js";
+import { agentHandlers } from "../../server-methods/agent.js";
 import { createLazyCoreHandlers } from "../../server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler, RespondFn } from "../../server-methods/types.js";
 import {
@@ -706,7 +706,7 @@ describe("Gateway observation response ordering", () => {
   afterEach(() => resetGatewayWorkAdmission());
   it("does not send a second response when shutdown follows a completed observation", async () => {
     const fixture = createDispatchTestHarness({
-      extraHandlers: { "agent.wait": agentWaitHandler },
+      extraHandlers: { "agent.wait": agentHandlers["agent.wait"]! },
       buildRequestContext: () => ({
         dedupe: new Map(),
         chatAbortControllers: new Map(),

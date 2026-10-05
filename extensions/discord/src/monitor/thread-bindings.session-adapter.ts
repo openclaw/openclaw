@@ -1,7 +1,6 @@
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
-  resolveThreadBindingConversationIdFromBindingId,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -11,6 +10,10 @@ import {
   asOptionalObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createAccountScopedBindingAdapter,
+  projectThreadBindingRecord,
+} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
   normalizeDiscordBindingChannelId,
   resolveChannelIdForBinding,
@@ -42,31 +45,22 @@ function toSessionBindingRecord(
       threadId: record.threadId,
     }) ?? `${record.accountId}:${record.threadId}`;
   const lifecycle = resolvePreparedThreadBindingLifecycle({ record, ...defaults });
-  return {
-    bindingId,
-    targetSessionKey: record.targetSessionKey,
-    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+  return projectThreadBindingRecord(record, {
     conversation: {
       channel: "discord",
-      accountId: record.accountId,
       conversationId: record.threadId,
       parentConversationId: record.channelId,
     },
-    status: "active",
-    boundAt: record.boundAt,
-    expiresAt: lifecycle.expiresAt,
-    metadata: {
-      agentId: record.agentId,
-      label: record.label,
+    bindingId,
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+    lifecycle,
+    metadata: (lifecycleMetadata) => ({
+      ...lifecycleMetadata,
       webhookId: record.webhookId,
       webhookToken: record.webhookToken,
-      boundBy: record.boundBy,
-      lastActivityAt: record.lastActivityAt,
-      idleTimeoutMs: lifecycle.idleTimeoutMs,
-      maxAgeMs: lifecycle.maxAgeMs,
       ...record.metadata,
-    },
-  };
+    }),
+  });
 }
 
 export function createThreadBindingSessionAdapter(params: {
@@ -79,7 +73,7 @@ export function createThreadBindingSessionAdapter(params: {
   const serializeBinding = (entry: ThreadBindingRecord) =>
     toSessionBindingRecord(entry, params.defaults);
 
-  return {
+  return createAccountScopedBindingAdapter({
     channel: "discord",
     accountId: params.accountId,
     capabilities: {
@@ -143,56 +137,17 @@ export function createThreadBindingSessionAdapter(params: {
       });
       return bound ? serializeBinding(bound) : null;
     },
-    listBySession: (targetSessionKey) =>
-      params.manager.listBySessionKey(targetSessionKey).map(serializeBinding),
-    resolveByConversation: (ref) => {
-      if (ref.channel !== "discord") {
-        return null;
-      }
-      const binding = params.manager.getByThreadId(ref.conversationId);
-      return binding ? serializeBinding(binding) : null;
-    },
-    touch: (bindingId, at) => {
-      const threadId = resolveThreadBindingConversationIdFromBindingId({
-        accountId: params.accountId,
-        bindingId,
-      });
-      if (threadId) {
-        params.manager.touchThreadSync({ threadId, at, persist: true });
-      }
-    },
-    touchAsync: async (bindingId, at) => {
-      const threadId = resolveThreadBindingConversationIdFromBindingId({
-        accountId: params.accountId,
-        bindingId,
-      });
-      if (!threadId) {
-        return;
-      }
-      await params.manager.touchThread({ threadId, at, persist: true });
-    },
-    unbind: async (input) => {
-      if (input.targetSessionKey?.trim()) {
-        const removed = await params.manager.unbindBySessionKey({
-          targetSessionKey: input.targetSessionKey,
-          reason: input.reason,
-        });
-        return removed.map(serializeBinding);
-      }
-      const threadId = resolveThreadBindingConversationIdFromBindingId({
-        accountId: params.accountId,
-        bindingId: input.bindingId,
-      });
-      if (!threadId) {
-        return [];
-      }
-      const removed = await params.manager.unbindThread({
-        threadId,
-        reason: input.reason,
-      });
-      return removed ? [serializeBinding(removed)] : [];
-    },
-  };
+    project: serializeBinding,
+    listBySessionKey: params.manager.listBySessionKey,
+    getByConversation: (ref) => params.manager.getByThreadId(ref.conversationId),
+    touchConversation: (threadId, at) =>
+      params.manager.touchThreadSync({ threadId, at, persist: true }),
+    touchConversationAsync: (threadId, at) =>
+      params.manager.touchThread({ threadId, at, persist: true }),
+    unbindConversation: (threadId, reason) => params.manager.unbindThread({ threadId, reason }),
+    unbindBySessionKey: (targetSessionKey, reason) =>
+      params.manager.unbindBySessionKey({ targetSessionKey, reason }),
+  });
 }
 
 /** Disabled bindings have a live empty owner; retirement still makes that owner unavailable. */

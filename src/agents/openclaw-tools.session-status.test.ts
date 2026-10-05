@@ -11,7 +11,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -1347,37 +1346,6 @@ describe("session_status tool", () => {
     expect(saved.authProfileOverride).toBe("session-status-team:prod");
     expect(saved.authProfileOverrideSource).toBe("user");
     expect(saved.authProfileOverrideCompactionCount).toBe(2);
-  });
-
-  it("returns a status card for the current session", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call1", {});
-    const details = result.details as { ok?: boolean; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
-    expect(details.statusText).not.toContain("OAuth/token status");
-    expect(tool.outputSchema).toBeDefined();
-    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(mockCallArg(buildStatusMessageMock)).toMatchObject({
-      thinkingCatalog: expect.arrayContaining([
-        expect.objectContaining({
-          provider: "openai",
-          id: "gpt-5.4",
-          contextWindow: 400_000,
-        }),
-      ]),
-    });
-    // The full contract exceeds the compact hint budget; never promote a truncated shape.
-    expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

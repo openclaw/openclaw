@@ -182,7 +182,7 @@ export function reconcileSessionActivity(
       !canApplySessionListSnapshot(
         nextResult,
         change.snapshot,
-        { archivedFilter: "all", limit: 100, excludeSubagents: true },
+        { archivedFilter: "all", limit: 100, excludeSubagents: true, excludeDock: true },
         "activity",
       )
     ) {

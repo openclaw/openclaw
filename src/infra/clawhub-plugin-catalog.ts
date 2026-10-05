@@ -230,7 +230,7 @@ function parseCatalogPackage(
     packageName: readRequiredClawHubStringField(value, "name", context),
     displayName: readRequiredClawHubStringField(value, "displayName", context),
     family,
-    isOfficial: readRequiredBoolean(value, "isOfficial", context),
+    isOfficial: readOptionalBoolean(value, "isOfficial", context) === true,
     categories: readClawHubStringArrayField(value, "categories", context) ?? [],
     ...display,
     ...(iconUrl ? { iconUrl } : {}),
@@ -371,15 +371,14 @@ function parseManifest(
         "description",
         `plugin config field ${index}`,
       );
-      const field: ClawHubPluginConfigField = {
-        name: readRequiredClawHubStringField(entry, "name", `plugin config field ${index}`),
-        required: readRequiredBoolean(entry, "required", `plugin config field ${index}`),
-        sensitive: readRequiredBoolean(entry, "sensitive", `plugin config field ${index}`),
-      };
-      if (description) {
-        field.description = description;
-      }
-      return field;
+      return Object.assign(
+        {
+          name: readRequiredClawHubStringField(entry, "name", `plugin config field ${index}`),
+          required: readRequiredBoolean(entry, "required", `plugin config field ${index}`),
+          sensitive: readRequiredBoolean(entry, "sensitive", `plugin config field ${index}`),
+        },
+        description ? { description } : {},
+      );
     }),
     mcpServers: mcpServerDetails.map(({ name }) => name),
     ...(mcpServerDetails.length ? { mcpServerDetails } : {}),
@@ -388,13 +387,10 @@ function parseManifest(
         throw new Error(`Malformed ClawHub bundled skill ${index}: expected an object.`);
       }
       const description = readClawHubStringField(entry, "description", `bundled skill ${index}`);
-      const skill: { name: string; description?: string } = {
-        name: readRequiredClawHubStringField(entry, "name", `bundled skill ${index}`),
-      };
-      if (description) {
-        skill.description = description;
-      }
-      return skill;
+      return Object.assign(
+        { name: readRequiredClawHubStringField(entry, "name", `bundled skill ${index}`) },
+        description ? { description } : {},
+      );
     }),
   };
 }
@@ -439,6 +435,7 @@ export async function fetchClawHubPluginCatalog(
     query?: string;
     searchSource?: "openclaw-control-ui";
     intent?: "all" | "trending" | "official" | "featured";
+    officialOnly?: boolean;
     category?: string;
     cursor?: string;
     limit?: number;
@@ -466,7 +463,7 @@ export async function fetchClawHubPluginCatalog(
         q: query,
         searchSource,
         category: params.category,
-        isOfficial: params.intent === "official" ? "true" : undefined,
+        isOfficial: params.officialOnly || params.intent === "official" ? "true" : undefined,
         limit: params.limit ? String(params.limit) : undefined,
       },
     });
@@ -479,7 +476,7 @@ export async function fetchClawHubPluginCatalog(
       category: params.category,
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
-      isOfficial: params.intent === "official" ? "true" : undefined,
+      isOfficial: params.officialOnly || params.intent === "official" ? "true" : undefined,
       curated: (params.intent ?? "all") === "all" && params.category ? "true" : undefined,
       sort:
         params.intent === "featured"

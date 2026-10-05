@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import type { AcpSessionReadInput, AcpSessionRow } from "../acp/runtime/session-meta-read.types.js";
+import type {
+  AcpSessionReadCommand,
+  AcpSessionReadResult,
+} from "../acp/runtime/session-meta-read.types.js";
 import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type {
   SandboxBrowserRegistryEntry,
@@ -106,7 +109,7 @@ import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
-  AgentDatabaseDeletionSnapshot,
+  AgentDatabaseDeletionWorkerSnapshot,
   AgentDeletionJournalAuthority,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
@@ -175,8 +178,7 @@ export type OpenClawStateReadCommand =
   | { type: "config.snapshot.read" }
   | { type: "claws.packageOwnership"; agentId?: string; includeInstalls: boolean }
   | { type: "doctor.gatewayOwnerLease.read" }
-  | { type: "acpSessions.list" }
-  | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
+  | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
   | { type: "conversationBindings.inspect"; conversation: ConversationRef }
   | DevicePairingReadCommand
@@ -321,14 +323,7 @@ export type OpenClawStateReadResult =
       type: "config.snapshot.read";
       snapshot: ConfigSnapshotAuditRecord | null;
     }
-  | {
-      type: "acpSessions.list";
-      rows: AcpSessionRow[];
-    }
-  | {
-      type: "acpSessions.metadata";
-      rows: Array<AcpSessionRow | null>;
-    }
+  | AcpSessionReadResult
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
         type: Kind;
@@ -437,7 +432,7 @@ export type OpenClawStateReadResult =
     }
   | {
       type: "agentDatabaseDeletion.snapshot";
-      snapshot: AgentDatabaseDeletionSnapshot;
+      snapshot: AgentDatabaseDeletionWorkerSnapshot;
     }
   | {
       type: "workerEnvironments.pruneCandidates";

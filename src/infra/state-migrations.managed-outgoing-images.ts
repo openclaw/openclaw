@@ -303,13 +303,9 @@ function removeClaimedSources(params: {
   }
 }
 
-function isExpiredTransient(record: ManagedImageRecord, nowMs: number, transientTtlMs: number) {
+function isExpiredTransient(record: ManagedImageRecord, nowMs: number) {
   const createdAtMs = Date.parse(record.createdAt);
-  return (
-    record.messageId === null &&
-    Number.isFinite(createdAtMs) &&
-    nowMs - createdAtMs >= transientTtlMs
-  );
+  return record.messageId === null && nowMs - createdAtMs >= DEFAULT_TRANSIENT_TTL_MS;
 }
 
 function rollbackImportedRecords(params: {
@@ -356,7 +352,6 @@ export function migrateLegacyManagedOutgoingImages(params: {
   detected: LegacyStateDetection["managedOutgoingImages"];
   stateDir: string;
   nowMs?: number;
-  transientTtlMs?: number;
   beforeClaim?: () => void;
   beforeVerify?: () => void;
   removeSource?: (sourcePath: string) => void;
@@ -390,7 +385,6 @@ export function migrateLegacyManagedOutgoingImages(params: {
   }
 
   const nowMs = params.nowMs ?? Date.now();
-  const transientTtlMs = params.transientTtlMs ?? DEFAULT_TRANSIENT_TTL_MS;
   const discardedIds = new Set<string>();
   const insertedRecords: ParsedLegacyRecord[] = [];
   let claimed: ClaimedLegacySource[];
@@ -421,7 +415,7 @@ export function migrateLegacyManagedOutgoingImages(params: {
             }
             continue;
           }
-          if (isExpiredTransient(parsed.record, nowMs, transientTtlMs)) {
+          if (isExpiredTransient(parsed.record, nowMs)) {
             discardedIds.add(parsed.record.attachmentId);
             continue;
           }

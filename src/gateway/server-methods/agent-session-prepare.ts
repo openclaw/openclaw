@@ -26,7 +26,7 @@ import type { AgentRunRequest } from "./agent-request-types.js";
 import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export function prepareAgentSession(params: {
+export async function prepareAgentSession(params: {
   cfg: OpenClawConfig;
   requestedSessionKey: string;
   requestedSessionId?: string;
@@ -194,7 +194,7 @@ export function prepareAgentSession(params: {
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
   const isSystemGatewayRun =
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
-  const reuse = evaluateAgentSessionReuse({
+  const reuse = await evaluateAgentSessionReuse({
     freshEntry: entry,
     cfg,
     sessionAgentId: canonicalSessionAgentId,

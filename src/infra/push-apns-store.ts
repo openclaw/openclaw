@@ -164,6 +164,7 @@ const apnsUpdatedAtSchema = z
   .number()
   .refine(Number.isSafeInteger)
   .refine((value) => value >= 0);
+const trimmedRelayIdentifierSchema = z.string().transform((value) => value.trim());
 const directApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("direct")),
@@ -175,18 +176,11 @@ const directApnsRegistrationSchema = z.object({
 const relayApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("relay")),
-  relayHandle: z
-    .string()
-    .transform((value) => value.trim())
-    .refine(isValidRelayIdentifier),
-  sendGrant: z
-    .string()
-    .transform((value) => value.trim())
-    .refine((value) => isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH)),
-  installationId: z
-    .string()
-    .transform((value) => value.trim())
-    .refine(isValidRelayIdentifier),
+  relayHandle: trimmedRelayIdentifierSchema.refine(isValidRelayIdentifier),
+  sendGrant: trimmedRelayIdentifierSchema.refine((value) =>
+    isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH),
+  ),
+  installationId: trimmedRelayIdentifierSchema.refine(isValidRelayIdentifier),
   topic: apnsTopicSchema,
   environment: apnsEnvironmentSchema,
   distribution: z.unknown().transform(normalizeDistribution).pipe(z.literal("official")),

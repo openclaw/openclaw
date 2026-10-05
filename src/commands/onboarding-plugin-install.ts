@@ -293,24 +293,6 @@ function resolveBundledLocalPath(params: {
   );
 }
 
-function resolveNpmSpecForOnboarding(install: PluginPackageInstall): string | null {
-  const npmSpec = install.npmSpec?.trim();
-  if (!npmSpec) {
-    return null;
-  }
-  const parsed = parseRegistryNpmSpec(npmSpec);
-  return parsed ? npmSpec : null;
-}
-
-function resolveClawHubSpecForOnboarding(install: PluginPackageInstall): string | null {
-  const clawhubSpec = install.clawhubSpec?.trim();
-  if (!clawhubSpec) {
-    return null;
-  }
-  const parsed = parseClawHubPluginSpec(clawhubSpec);
-  return parsed ? clawhubSpec : null;
-}
-
 function resolveInstallDefaultChoice(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
@@ -874,8 +856,11 @@ export async function ensureOnboardingPluginInstalled(params: {
   const allowLocal = hasGitWorkspace(workspaceDir);
   const bundledLocalPath = resolveBundledLocalPath({ entry, workspaceDir });
   const localPath = bundledLocalPath ?? resolveLocalPath({ entry, workspaceDir, allowLocal });
-  const clawhubSpec = resolveClawHubSpecForOnboarding(entry.install);
-  const npmSpec = resolveNpmSpecForOnboarding(entry.install);
+  const rawClawHubSpec = entry.install.clawhubSpec?.trim();
+  const clawhubSpec =
+    rawClawHubSpec && parseClawHubPluginSpec(rawClawHubSpec) ? rawClawHubSpec : null;
+  const rawNpmSpec = entry.install.npmSpec?.trim();
+  const npmSpec = rawNpmSpec && parseRegistryNpmSpec(rawNpmSpec) ? rawNpmSpec : null;
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(next.update?.channel),
     currentVersion: VERSION,

@@ -87,10 +87,7 @@ actor PushRegistrationManager {
         else {
             throw PushRelayError.relayMisconfigured("Missing bundle identifier for relay registration")
         }
-        guard let installationId = GatewaySettingsStore.loadStableInstanceID()?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !installationId.isEmpty
-        else {
+        guard let installationId = GatewaySettingsStore.loadStableInstanceID() else {
             throw PushRelayError.relayMisconfigured("Missing stable installation ID for relay registration")
         }
 

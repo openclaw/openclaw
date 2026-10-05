@@ -1,8 +1,16 @@
-import { renameSync } from "node:fs";
+import { renameSync, symlinkSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { AgentDatabaseRegistryChangedError } from "../../state/openclaw-agent-db-registry-listing.js";
+import { registerOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -13,6 +21,8 @@ import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlit
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import * as transcriptTargets from "./session-accessor.transcript-target.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
@@ -88,6 +98,105 @@ describe("transcript turn physical identity", () => {
         transcriptTargets.resolveSessionTranscriptRuntimeTarget(scope(), undefined, { keyFormat }),
       ).rejects.toThrow(/identity/i);
       expect(replaced).toBe(true);
+    },
+  );
+
+  it.each(["same owner", "different owner", "state retirement"] as const)(
+    "keeps post-selection first registration bound to its %s",
+    async (change) => {
+      const target = { ...scope(), storePath: `${fixture.storePath()}.custom.json` };
+      const databaseOptions = toDatabaseOptions(resolveSqliteScope(target));
+      const shared = openOpenClawStateDatabase();
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      let reads = 0;
+      vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (
+          reply.ok &&
+          typeof reply.value !== "boolean" &&
+          !Array.isArray(reply.value) &&
+          reply.value.kind === "session-runtime-target"
+        ) {
+          reads++;
+          openOpenClawAgentDatabase({
+            ...databaseOptions,
+            agentId: change === "different owner" ? "other" : "main",
+          });
+          if (change === "state retirement") {
+            await closeOpenClawStateDatabaseByPathAsync(shared.path);
+            openOpenClawStateDatabase();
+          }
+        }
+        return reply;
+      });
+      const pending = transcriptTargets.resolveSessionTranscriptRuntimeTarget(target);
+      if (change === "same owner") {
+        await expect(pending).resolves.toMatchObject(target);
+      } else if (change === "different owner") {
+        await expect(pending).rejects.toThrow("registry changed");
+      } else {
+        await expect(pending).rejects.toMatchObject({
+          code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+        });
+      }
+      expect(reads).toBe(1);
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["pending", "committed"] as const)(
+    "rejects aliased replacement after accepting the first %s registration",
+    async (phase) => {
+      const storePath = `${fixture.storePath()}.custom.json`;
+      const aliasDirectory = `${fixture.sessionsDir()}-alias`;
+      symlinkSync(fixture.sessionsDir(), aliasDirectory, "dir");
+      const aliasStorePath = path.join(aliasDirectory, path.basename(storePath));
+      const staging = ["first", "replacement"].map((name) =>
+        openOpenClawAgentDatabase({
+          agentId: "main",
+          path: `${fixture.storePath()}.${name}.sqlite`,
+        }),
+      );
+      for (const source of staging) {
+        await closeOpenClawAgentDatabaseByPathAsync(source.path, source.agentId);
+      }
+      let acceptedFirst = false;
+      await expect(
+        withSessionStoreTarget(
+          {
+            agentId: "main",
+            storePath,
+            env: process.env,
+            candidates: [
+              ...captureSessionStoreReadCandidates(storePath),
+              ...captureSessionStoreReadCandidates(aliasStorePath),
+            ],
+          },
+          async (target, owner) => {
+            const registerFirst = () => {
+              renameSync(staging[0]!.path, target.database.path);
+              registerOpenClawAgentDatabase(target.database);
+              owner.assertCurrent();
+              acceptedFirst = true;
+            };
+            const replace = () => {
+              renameSync(target.database.path, `${target.database.path}.retired`);
+              renameSync(staging[1]!.path, target.database.path);
+              registerOpenClawAgentDatabase(target.database);
+              owner.assertCurrent();
+            };
+            if (phase === "pending") {
+              runOpenClawStateWriteTransaction(() => {
+                registerFirst();
+                replace();
+              });
+            } else {
+              registerFirst();
+              replace();
+            }
+          },
+        ),
+      ).rejects.toThrow(AgentDatabaseRegistryChangedError);
+      expect(acceptedFirst).toBe(true);
     },
   );
 

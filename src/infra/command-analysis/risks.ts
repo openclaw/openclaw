@@ -159,19 +159,6 @@ function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarr
   return { kind: "indexes", indexes };
 }
 
-function resolveShellPositionalCarrierArgv(params: {
-  executableArgv: string[];
-  valueTokenIndex: number;
-  plan: ShellPositionalCarrierPlan;
-}): string[] {
-  const positionalArgv = params.executableArgv.slice(params.valueTokenIndex + 1);
-  const carriedArgv =
-    params.plan.kind === "all"
-      ? positionalArgv
-      : params.plan.indexes.map((index) => positionalArgv[index] ?? "");
-  return carriedArgv.map((token) => token.trim()).filter((token) => token.length > 0);
-}
-
 function detectShellPositionalCarrierInlineEvalArgvInternal(
   argv: string[],
   seenArgv: Set<string>,
@@ -201,11 +188,14 @@ function detectShellPositionalCarrierInlineEvalArgvInternal(
     return null;
   }
 
-  const carriedArgv = resolveShellPositionalCarrierArgv({
-    executableArgv,
-    valueTokenIndex: inlineMatch.valueTokenIndex,
-    plan: carrierPlan,
-  });
+  const positionalArgv = executableArgv.slice(inlineMatch.valueTokenIndex + 1);
+  const carriedArgv = (
+    carrierPlan.kind === "all"
+      ? positionalArgv
+      : carrierPlan.indexes.map((index) => positionalArgv[index] ?? "")
+  )
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
   if (carriedArgv.length === 0) {
     return null;
   }

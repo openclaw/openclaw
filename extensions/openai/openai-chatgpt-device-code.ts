@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
+import {
+  classifyTransientNetworkErrorCode,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/retry-runtime";
 import {
   asNullableObjectRecord,
   normalizeOptionalString,
@@ -436,21 +439,8 @@ export async function loginOpenAICodexDeviceCode(params: {
 }
 
 function waitForDeviceCodePoll(ms: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    return new Promise((resolve) => {
-      setTimeout(resolve, ms);
-    });
-  }
-  signal.throwIfAborted();
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("Device login cancelled"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
+  signal?.throwIfAborted();
+  return sleepWithAbort(Math.max(1, ms), signal).catch(() => {
+    throw signal?.reason instanceof Error ? signal.reason : new Error("Device login cancelled");
   });
 }

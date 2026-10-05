@@ -17,6 +17,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -434,6 +435,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     setTty(false);
     setStdoutTty(false);
     initializeExistingUpdateProfile();
+    // Keep guard reads on the fixture connection instead of booting snapshots per read.
+    openOpenClawStateDatabase();
   });
 
   afterAll(async () => {

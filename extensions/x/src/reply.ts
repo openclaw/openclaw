@@ -1,14 +1,12 @@
-import { LinkifyIt } from "linkify-it";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import tlds from "tlds" with { type: "json" };
 import type { XApiClient, XAssertActive } from "./api.js";
 import { normalizeXReplyTarget } from "./target.js";
+import { findXUrls } from "./urls.js";
 
 const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
 export type XVisibleWorkSession = { sessionKey: string; url: string; label?: string };
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
-const links = new LinkifyIt({ fuzzyLink: true, tlds });
 
 function characterWeight(value: string): number {
   // Arbitrary ZWJ runs are graphemes too, but only standardized emoji collapse to weight two.
@@ -40,10 +38,7 @@ function weightedTokens(text: string): { text: string; weight: number }[] {
       })),
     );
   };
-  for (const match of links.match(text) ?? []) {
-    if (match.schema && !["http:", "https:", "//"].includes(match.schema)) {
-      continue;
-    }
+  for (const match of findXUrls(text)) {
     appendText(text.slice(offset, match.index));
     tokens.push({ text: match.raw, weight: 23 });
     offset = match.lastIndex;

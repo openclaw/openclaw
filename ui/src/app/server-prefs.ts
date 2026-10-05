@@ -275,18 +275,14 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
     ? (profileId ?? resolveProfileAppearanceProfileId(scope))
     : null;
   const effectiveScope = resolveProfilePreferenceScope(scope, activeProfile);
-  const reset = specification.reset;
-  if (!reset) {
-    throw new Error(`Server UI preference is not resettable: ${key}`);
-  }
   // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
   const write = specification.write as
     | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
     | undefined;
+  if (!write) {
+    throw new Error(`Server UI preference is not resettable: ${key}`);
+  }
   if (state?.provenance === "device-local") {
-    if (!write) {
-      throw new Error(`Server UI preference cannot restore a retained local value: ${key}`);
-    }
     const patch = write(state.resetValue);
     const keys: SyncedPrefKey[] =
       key === "theme" && patch.theme !== loadSettings().theme
@@ -306,10 +302,7 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   requestServerUiPrefReset(key, "server");
   // The resolved state owns the reset target, including the Gateway fallback
   // while the profile is still loading. Config preferences use product defaults.
-  if (state && write) {
-    return applyReset(write(state.resetValue));
-  }
-  return applyReset(reset(loadSettings()));
+  return applyReset(write(state?.resetValue));
 }
 export function applyServerUiPrefs(
   configObject: unknown,

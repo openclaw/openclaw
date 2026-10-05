@@ -16,9 +16,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { projectDefaultInferenceRoute } from "./inference-route.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 
@@ -720,6 +722,28 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { platform: "linux", action: "installed" },
+    { platform: "win32", action: "installed" },
+    { platform: "linux", action: "restarted" },
+  ] as const)(
+    "uses the $platform readiness budget after service $action",
+    async ({ platform, action }) => {
+      await withMockedPlatform(platform, async () => {
+        const gateway = { status: "ready", action } as const;
+        mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+
+        const result = await applySystemAgentSetup(baseParams({ surface: "cli" }));
+
+        expect(result.gateway).toEqual(gateway);
+        expect(mocks.waitForGatewayReachable).toHaveBeenCalledOnce();
+        expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+          expect.objectContaining(resolveGatewayStartupTiming(platform)),
+        );
+      });
+    },
+  );
 
   it("keeps setup incomplete when the installed gateway never becomes reachable", async () => {
     mocks.ensureGatewayService.mockResolvedValueOnce({
