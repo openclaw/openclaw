@@ -288,9 +288,52 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(result?.message.chat_type).toBe("p2p");
   });
 
-  it("drops reactions without chat context when lookup does not provide chat_type", async () => {
+  it.each([
+    { chatMode: "p2p", expected: "p2p" },
+    { chatMode: "group", expected: "group" },
+  ] as const)(
+    "resolves $chatMode reactions from reacted-message chat metadata when payloads omit chat_type",
+    async ({ chatMode, expected }) => {
+      const fetchChatInfo = vi.fn(async () => ({ chat_mode: chatMode }));
+      const result = await resolveReaction({
+        event: makeReactionEvent({ chat_id: undefined, chat_type: undefined }),
+        fetchMessage: async () =>
+          fetchedMessage({ chatId: "oc_chat_from_reacted_message", chatType: undefined }),
+        fetchChatInfo,
+      });
+      expect(fetchChatInfo).toHaveBeenCalledWith({
+        cfg: {},
+        accountId: "default",
+        chatId: "oc_chat_from_reacted_message",
+      });
+      expect(result?.message).toMatchObject({
+        chat_id: "oc_chat_from_reacted_message",
+        chat_type: expected,
+      });
+    },
+  );
+
+  it("drops reactions when chat metadata remains ambiguous", async () => {
+    const fetchChatInfo = vi.fn(async () => ({ chat_type: "private" }));
     expect(
-      await resolveReaction({ fetchMessage: async () => fetchedMessage({ chatType: undefined }) }),
+      await resolveReaction({
+        event: makeReactionEvent({ chat_type: undefined }),
+        fetchMessage: async () => fetchedMessage({ chatType: undefined }),
+        fetchChatInfo,
+      }),
+    ).toBeNull();
+    expect(fetchChatInfo).toHaveBeenCalledOnce();
+  });
+
+  it("drops reactions when chat metadata lookup fails", async () => {
+    expect(
+      await resolveReaction({
+        event: makeReactionEvent({ chat_type: undefined }),
+        fetchMessage: async () => fetchedMessage({ chatType: undefined }),
+        fetchChatInfo: async () => {
+          throw new Error("chat lookup failed");
+        },
+      }),
     ).toBeNull();
   });
 
