@@ -39,6 +39,11 @@ import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.j
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import {
+  assertCodexSteeringAdmission,
+  isCodexMessageInjectionAvailable,
+  queueCodexTerminalReleaseInput,
+} from "./run-attempt-server-request-admission.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
@@ -84,10 +89,12 @@ export function activateCodexAttemptTurn(
     completion,
     userInputBridgeRef,
     steeringQueueRef,
+    serverRequestAdmission,
     deadlines,
     noteProgress,
     completeTurn,
     interruptTurn,
+    clearTerminalReleaseDeadline,
   } = turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
@@ -316,14 +323,9 @@ export function activateCodexAttemptTurn(
     }
   };
   const isSteeringAvailable = () =>
-    !state.completed && !state.terminalTurnNotificationQueued && !runAbortController.signal.aborted;
-  const assertSteeringActive = () => {
-    connection.assertCurrent();
-    runAbortController.signal.throwIfAborted();
-    if (!isSteeringAvailable()) {
-      throw new Error("codex app-server turn is no longer accepting steering");
-    }
-  };
+    isCodexMessageInjectionAvailable(state, runAbortController.signal);
+  const assertSteeringActive = () =>
+    assertCodexSteeringAdmission(connection, runAbortController.signal, state);
   const workspaceOnly = resolveAttemptFsWorkspaceOnly({ config: params.config, sessionAgentId });
   const imageContext = {
     workspaceDir: connection.effectiveWorkspace,
@@ -465,6 +467,17 @@ export function activateCodexAttemptTurn(
     preparation?: CodexSteeringPreparation,
   ) => {
     const canClaim = injectionGuard(assertCurrent);
+    if (state.finalSourceReplyCommit) {
+      return await queueCodexTerminalReleaseInput(
+        optionsLocal?.isInboundUserMessage === true,
+        assertCurrent,
+        () => connection.assertCurrent(),
+        runAbortController.signal,
+        state,
+        () => lifecycle.interruptTurnForTerminalRelease("new_inbound_message"),
+        () => activeSteeringQueue.queue(text, optionsLocal, canClaim, preparation),
+      );
+    }
     if (
       await claimPendingUserInputAnswer(
         text,
@@ -600,7 +613,7 @@ export function activateCodexAttemptTurn(
         onOrdinaryResponse: (response) => activeProjector.recordUserInputResponse(response),
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,
-        signal: runAbortController.signal,
+        signal: AbortSignal.any([runAbortController.signal, serverRequestAdmission.signal]),
       });
       trajectoryRecorder?.recordEvent("prompt.submitted", {
         threadId: resourceState.thread.threadId,
@@ -611,6 +624,7 @@ export function activateCodexAttemptTurn(
       if (isTerminalTurnStatus(turn.turn.status)) {
         activeProjector.settlement.terminalReceipt = turn.turn;
         state.terminalTurnNotificationQueued = true;
+        clearTerminalReleaseDeadline();
         deadlines.beginSettlement(Date.now());
       }
       emitLifecycleStart({ provider: projectionParams.provider, model: projectionParams.modelId });

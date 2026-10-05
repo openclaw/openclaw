@@ -239,6 +239,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.continuity-media.test.ts",
   "extensions/codex/src/app-server/run-attempt.durable-context.test.ts",
   "extensions/codex/src/app-server/run-attempt.dynamic-tools.test.ts",
+  "extensions/codex/src/app-server/run-attempt-final-source-steering.test.ts",
+  "extensions/codex/src/app-server/run-attempt-final-source-watches.test.ts",
   "extensions/codex/src/app-server/run-attempt.final-media.test.ts",
   "extensions/codex/src/app-server/run-attempt.generation-finalization.test.ts",
   "extensions/codex/src/app-server/run-attempt.hooks.test.ts",

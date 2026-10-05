@@ -10,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
-import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolCallParams,
+} from "./protocol.js";
 
 type ToolAuthoredSourceReplyPayload = NonNullable<
   ReturnType<typeof captureToolAuthoredSourceReply>
@@ -56,40 +59,75 @@ export function resolveCodexToolResultSourceReply(params: {
     (params.rawResult.terminate === true || params.result.terminate === true);
   const confirmed = messageToolOnly && (toolConfirmed || params.deliveredSourceReply);
   const final = confirmed ? params.executedArgs.final !== false : undefined;
-  // Middleware and extensions may withdraw or rewrite the reply, so read the
-  // effective result, never the raw tool output.
-  const payload =
-    params.canDeliverSourceReply === true &&
-    !params.resultIsError &&
-    params.call.namespace === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE
-      ? captureToolAuthoredSourceReply({
-          result: params.result,
-          toolCallId: params.call.callId,
-          idempotencyScope: params.runId ?? params.call.turnId,
-        })
-      : undefined;
-  if (payload) {
-    params.payloads.push(payload);
-  }
-  const toolAuthoredFinal = Boolean(payload);
+  const toolAuthoredFinal = captureCodexToolAuthoredSourceReply(params);
   const continuesSourceReplyProgress = confirmed && final === false;
   const terminate =
-    toolAuthoredFinal ||
+    toolAuthoredFinal === true ||
     ((params.rawResult.terminate === true || params.result.terminate === true) &&
       !continuesSourceReplyProgress) ||
     // Yield is an explicit owner-level turn handoff, not termination
     // inferred from source-reply delivery, so finality does not mask it.
-    [params.rawResult, params.result].some(
-      ({ details }) =>
-        isRecord(details) &&
-        typeof details.status === "string" &&
-        details.status.trim().toLowerCase() === "yielded",
-    ) ||
+    isToolResultYield(params.rawResult) ||
+    isToolResultYield(params.result) ||
     (confirmed && final === true) ||
     undefined;
   params.response.terminate = terminate;
-  if (toolAuthoredFinal) {
+  if (toolAuthoredFinal === true) {
     params.response.toolAuthoredFinalReply = true;
   }
   return { toolConfirmed, final, terminate };
+}
+
+function captureCodexToolAuthoredSourceReply(
+  params: Parameters<typeof resolveCodexToolResultSourceReply>[0],
+): boolean | undefined {
+  if (
+    params.canDeliverSourceReply !== true ||
+    params.resultIsError ||
+    params.call.namespace !== CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE
+  ) {
+    return undefined;
+  }
+  // Middleware and extensions may withdraw or rewrite the reply, so read the
+  // effective result, never the raw tool output.
+  const payload = captureToolAuthoredSourceReply({
+    result: params.result,
+    toolCallId: params.call.callId,
+    idempotencyScope: params.runId ?? params.call.turnId,
+  });
+  if (!payload) {
+    return undefined;
+  }
+  params.payloads.push(payload);
+  return true;
+}
+
+function isToolResultYield(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  if (!isRecord(details) || typeof details.status !== "string") {
+    return false;
+  }
+  return details.status.trim().toLowerCase() === "yielded";
+}
+
+export function canProduceFinalSourceReplyDelivery(call: CodexDynamicToolCallParams): boolean {
+  // before_tool_call may rewrite finality, so the original arguments cannot
+  // safely narrow which message calls can produce an authoritative receipt.
+  return call.tool === "message";
+}
+
+export function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  const hasProvider =
+    typeof args.provider === "string" && args.provider.trim().length > 0
+      ? true
+      : typeof args.channel === "string" && args.channel.trim().length > 0;
+  const provider = currentProvider?.trim();
+  if (toolName !== "message" || hasProvider || !provider) {
+    return args;
+  }
+  return { ...args, provider };
 }

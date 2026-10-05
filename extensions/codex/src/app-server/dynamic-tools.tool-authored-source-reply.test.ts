@@ -86,6 +86,7 @@ describe("Codex tool-authored source replies", () => {
     expect(result.success).toBe(true);
     expect(result.terminate).toBe(true);
     expect(result.toolAuthoredFinalReply).toBe(true);
+    expect(result.finalCurrentSourceReply).toBeUndefined();
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",

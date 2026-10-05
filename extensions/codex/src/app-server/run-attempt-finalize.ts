@@ -20,6 +20,7 @@ import { buildCodexContinuityCalibration } from "./context-engine-projection.js"
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
+import { recordCommittedFinalSourceReplyResult } from "./run-attempt-final-source-result.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import {
   emitCodexAppServerEvent,
@@ -129,6 +130,7 @@ export async function finalizeCodexAttempt(
         await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
       }
     }
+    recordCommittedFinalSourceReplyResult(activeProjector, state.finalSourceReplyCommit?.call);
     const result = activeProjector.buildResult(toolBridge.telemetry, {
       yieldDetected: toolState.yieldDetected,
       readRetainedNativeCommands,
