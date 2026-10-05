@@ -261,6 +261,7 @@ suite.define(() => {
                 agentRowLeft: element
                   .querySelector(".sidebar-agent-roster__row")!
                   .getBoundingClientRect().left,
+                avatarLeft: avatar.left,
                 avatarWidth: avatar.width,
                 headerHeight: header.height,
                 rows,
