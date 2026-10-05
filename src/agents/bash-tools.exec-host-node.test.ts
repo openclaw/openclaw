@@ -369,6 +369,10 @@ vi.mock("../infra/command-analysis/inline-eval.js", () => ({
 
 vi.mock("../infra/node-shell.js", () => ({
   buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
+  buildNodeCommandInvocation: vi.fn((command: string) => ({
+    argv: ["/bin/sh", "-lc", "bun ./script.ts"],
+    rawCommand: command,
+  })),
 }));
 
 vi.mock("../infra/system-run-approval-context.js", () => ({

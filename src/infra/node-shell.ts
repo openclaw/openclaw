@@ -1,5 +1,7 @@
 // Builds platform shell argv for Node-driven command execution.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { formatExecCommand } from "./system-run-command.js";
+import { resolveWindowsDirectCommandArgv } from "./windows-direct-command.js";
 
 // Node shell command construction keeps platform shell flags centralized for
 // system.run and related command execution paths.
@@ -15,4 +17,15 @@ export function buildNodeShellCommand(command: string, platform?: string | null)
     return ["/bin/sh", "-c", command];
   }
   return ["/bin/sh", "-lc", command];
+}
+
+export function buildNodeCommandInvocation(
+  command: string,
+  platform?: string | null,
+): { argv: string[]; rawCommand: string } {
+  const isWindows = normalizeLowercaseStringOrEmpty((platform ?? "").trim()).startsWith("win");
+  const directArgv = isWindows ? resolveWindowsDirectCommandArgv(command) : null;
+  return directArgv
+    ? { argv: directArgv, rawCommand: formatExecCommand(directArgv) }
+    : { argv: buildNodeShellCommand(command, platform), rawCommand: command };
 }

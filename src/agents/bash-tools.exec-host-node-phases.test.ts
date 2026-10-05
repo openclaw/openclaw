@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invokeNodeSystemRun } from "./bash-tools.exec-host-node-failure.js";
 import {
   dispatchNodeSystemRun,
+  prepareNodeSystemRun,
   resolveNodeExecutionTarget,
 } from "./bash-tools.exec-host-node-phases.js";
 
@@ -266,6 +267,7 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
     target: {
       nodeId: "node-1",
       argv: ["tool", "--version"],
+      rawCommand: "tool --version",
       env: undefined,
       invokeDeadlineMs: 30_000,
       invokeWaitMs: 35_000,
@@ -377,5 +379,65 @@ describe("direct node run", () => {
       reason,
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("Windows node command transport", () => {
+  beforeEach(() => {
+    callGatewayToolMock.mockReset();
+  });
+
+  async function prepareForWindowsNode(command: string) {
+    callGatewayToolMock.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "win-node",
+          platform: "win32",
+          commands: ["system.run", "system.run.prepare"],
+          connected: true,
+        },
+      ],
+    });
+    callGatewayToolMock.mockImplementationOnce(async (_method, _options, invoke) => ({
+      payload: {
+        plan: {
+          argv: invoke.params.command,
+          cwd: null,
+          commandText: invoke.params.rawCommand,
+          commandPreview: null,
+          agentId: null,
+          sessionKey: null,
+        },
+      },
+    }));
+    const request = { ...createDirectNodeRun().request, command };
+    const target = await resolveNodeExecutionTarget(request);
+    await prepareNodeSystemRun({ request, target });
+    const prepareCall = callGatewayToolMock.mock.calls.find(
+      ([method, , invoke]) => method === "node.invoke" && invoke.command === "system.run.prepare",
+    );
+    return { target, sent: prepareCall?.[2].params };
+  }
+
+  it("sends a command that needs no cmd.exe as its argv with matching display text", async () => {
+    const { target, sent } = await prepareForWindowsNode(
+      '"C:\\Program Files\\Tool\\tool.exe"   "deux mots é" --flag',
+    );
+
+    expect(target.argv).toEqual(["C:\\Program Files\\Tool\\tool.exe", "deux mots é", "--flag"]);
+    expect(sent).toMatchObject({
+      command: ["C:\\Program Files\\Tool\\tool.exe", "deux mots é", "--flag"],
+      rawCommand: '"C:\\Program Files\\Tool\\tool.exe" "deux mots é" --flag',
+    });
+  });
+
+  it("keeps the cmd.exe envelope and the original text for a command that needs cmd.exe", async () => {
+    const { target, sent } = await prepareForWindowsNode("tool.exe a > out.txt");
+
+    expect(target.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "tool.exe a > out.txt"]);
+    expect(sent).toMatchObject({
+      command: ["cmd.exe", "/d", "/s", "/c", "tool.exe a > out.txt"],
+      rawCommand: "tool.exe a > out.txt",
+    });
   });
 });

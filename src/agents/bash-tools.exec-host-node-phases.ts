@@ -31,7 +31,7 @@ import {
   hasPosixShellStartupBeforeInlineCommand,
   isBlockedShellWrapperCommand,
 } from "../infra/exec-wrapper-resolution.js";
-import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { buildNodeCommandInvocation } from "../infra/node-shell.js";
 import { buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
 import {
   parsePreparedSystemRunPayload,
@@ -59,6 +59,7 @@ type NodeExecutionTarget = {
   nodeId: string;
   platform?: string | null;
   argv: string[];
+  rawCommand: string;
   env: Record<string, string> | undefined;
   executionContext?: SystemRunExecutionContext;
   invokeDeadlineMs: number;
@@ -270,7 +271,7 @@ export async function resolveNodeExecutionTarget(
   return {
     nodeId: nodeInfo.nodeId,
     platform: nodeInfo.platform,
-    argv: buildNodeShellCommand(params.command, nodeInfo.platform),
+    ...buildNodeCommandInvocation(params.command, nodeInfo.platform),
     // Peers without the capability retain the shipped env transport, including rejections.
     env:
       !executionContext && params.executionContext
@@ -391,7 +392,7 @@ export async function prepareNodeSystemRun(params: {
         command: params.target.argv,
         security: params.request.security,
         ask: params.request.ask,
-        rawCommand: params.request.command,
+        rawCommand: params.target.rawCommand,
         ...(params.request.workdir != null ? { cwd: params.request.workdir } : {}),
         ...(params.target.env !== undefined ? { env: params.target.env } : {}),
         executionContext: params.target.executionContext,
