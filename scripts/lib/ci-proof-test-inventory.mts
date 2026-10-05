@@ -1305,7 +1305,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/sandbox/fs-bridge-mutation-helper.test.ts",
   "src/agents/sandbox/fs-bridge.anchored-ops.test.ts",
   "src/agents/sandbox/fs-bridge.mounts.test.ts",
-  "src/agents/sandbox/fs-bridge.shell.test.ts",
   "src/agents/sandbox/fs-paths.test.ts",
   "src/agents/sandbox/local-workspace-retirement.test.ts",
   "src/agents/sandbox/mount-plan.test.ts",
