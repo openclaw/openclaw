@@ -3,19 +3,43 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { groupToolCalls, type ToolCallIdentity } from "../chat/tool-call-grouping.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 
-/** Only recorded, unambiguous children replace a successfully completed wrapper. */
+/** Only recorded, countable descendants replace a successfully completed wrapper. */
 export function resolveCompletedActivityWrappers<
-  Call extends ToolCallIdentity & { activity?: { status?: string } },
+  Call extends ToolCallIdentity & {
+    activity?: {
+      status?: string;
+      hideFromChannelProgress?: boolean;
+      suppressChannelProgress?: boolean;
+    };
+  },
 >(calls: readonly Call[]): Set<Call> {
   const wrappers = new Set<Call>();
   const pending = groupToolCalls(calls);
+  const ordered: typeof pending = [];
   while (pending.length > 0) {
     const group = pending.pop()!;
-    if (group.children.length > 0 && group.card.activity?.status === "completed") {
-      wrappers.add(group.card);
-    }
+    ordered.push(group);
     for (const child of group.children) {
       pending.push(child);
+    }
+  }
+  // Resolve children first without recursion: a hidden routine child can still
+  // contain visible work, and an inner wrapper may be the only countable work.
+  const countable = new Set<Call>();
+  for (const group of ordered.toReversed()) {
+    const childCounts = group.children.some((child) => countable.has(child.card));
+    const activity = group.card.activity;
+    if (childCounts && activity?.status === "completed") {
+      wrappers.add(group.card);
+    }
+    if (
+      childCounts ||
+      (activity &&
+        !activity.hideFromChannelProgress &&
+        !activity.suppressChannelProgress &&
+        !wrappers.has(group.card))
+    ) {
+      countable.add(group.card);
     }
   }
   return wrappers;

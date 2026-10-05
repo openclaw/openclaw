@@ -158,6 +158,48 @@ describe("tool result ordering", () => {
     }
   });
 
+  it.each(["routine-only", "nested-routine", "visible-grandchild"])(
+    "settles the %s activity graph without losing or double-counting its work",
+    async (graph) => {
+      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+      const h = harness({ onAgentEvent });
+      h.start("exec", "outer");
+      if (graph !== "routine-only") {
+        h.start("exec", "inner", {}, "outer");
+      }
+      h.start("progress_card", "routine", {}, graph === "routine-only" ? "outer" : "inner");
+      if (graph === "visible-grandchild") {
+        h.start("read", "read", { path: "release.md" }, "routine");
+        h.end("read", "read", { content: [{ type: "text", text: "Release notes" }] });
+      }
+      h.end("progress_card", "routine", { content: [{ type: "text", text: "Updated" }] });
+      if (graph !== "routine-only") {
+        h.end("exec", "inner", { content: [] });
+      }
+      h.end("exec", "outer", { content: [] });
+      await h.finish("Finished.");
+      const items = onAgentEvent.mock.calls.flatMap(([event]) =>
+        event.stream === "item" && Value.Check(AgentActivityItemSchema, event.data)
+          ? [event.data]
+          : [],
+      );
+      const visibleId =
+        graph === "routine-only" ? "outer" : graph === "nested-routine" ? "inner" : "read";
+      expect(summarizeAgentActivity(items).total).toBe(1);
+      expect(
+        items.findLast((item) => item.toolCallId === visibleId)?.hideFromChannelProgress,
+      ).not.toBe(true);
+      expect(items.findLast((item) => item.toolCallId === "routine")?.hideFromChannelProgress).toBe(
+        true,
+      );
+      if (graph !== "routine-only") {
+        expect(items.findLast((item) => item.toolCallId === "outer")?.hideFromChannelProgress).toBe(
+          true,
+        );
+      }
+    },
+  );
+
   it.each(["execution-failed", "incomplete", "overlapping", "reused-active"])(
     "preserves the %s wrapper outcome",
     async (outcome) => {

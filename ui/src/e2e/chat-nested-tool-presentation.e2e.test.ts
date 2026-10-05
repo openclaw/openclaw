@@ -41,6 +41,96 @@ function nestedHistoryMessage(
 }
 
 suite.define(() => {
+  it("keeps completed code-mode work countable when every child is routine", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("chat-routine-wrapper");
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.history": prepareChatHistoryFixture([
+              { role: "user", content: "Check the release checklist.", timestamp },
+              {
+                role: "assistant",
+                runId,
+                messageId: "github-wrapper-call",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "github-wrapper",
+                    name: "exec",
+                    runId,
+                    arguments: {
+                      title: "Check the release checklist",
+                      code: "await tools.progress_card({ markdown: 'Checklist checked' });",
+                    },
+                  },
+                ],
+                timestamp: timestamp + 100,
+              },
+              nestedHistoryMessage(
+                "checklist-progress",
+                "progress_card",
+                { markdown: "Checklist checked" },
+                "Updated",
+                1,
+              ),
+              {
+                role: "toolResult",
+                runId,
+                toolCallId: "github-wrapper",
+                toolName: "exec",
+                isError: false,
+                content: [{ type: "text", text: "Checklist checked" }],
+                timestamp: timestamp + 2_000,
+              },
+              {
+                role: "assistant",
+                runId,
+                content: [
+                  { type: "toolCall", id: "handoff", name: "sessions_yield", arguments: {} },
+                ],
+                timestamp: timestamp + 3_000,
+              },
+              {
+                role: "toolResult",
+                runId,
+                toolCallId: "handoff",
+                toolName: "sessions_yield",
+                isError: false,
+                content: [],
+                timestamp: timestamp + 4_000,
+              },
+            ]),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const work = page.locator(".chat-activity-group").first();
+        const summary = work.locator(":scope > .chat-activity-group__summary");
+        const label = summary.locator(".chat-activity-group__label");
+        await summary.waitFor();
+        await page.screenshot({ path: path.join(artifactDir, "01-collapsed.png") });
+        expect(await label.textContent()).toBe("1 command");
+        await summary.click();
+        await work.getByText("Check the release checklist", { exact: true }).waitFor();
+        await page.screenshot({ path: path.join(artifactDir, "02-expanded.png") });
+        await page.reload();
+        await gateway.waitForRequest("chat.startup");
+        await summary.waitFor();
+        expect(await label.textContent()).toBe("1 command");
+        await page.screenshot({ path: path.join(artifactDir, "03-reloaded.png") });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.locator('.shell-nav[aria-hidden="true"]').waitFor({ state: "attached" });
+        expect(await label.textContent()).toBe("1 command");
+        await page.screenshot({
+          path: path.join(artifactDir, "04-mobile.png"),
+          animations: "disabled",
+        });
+      },
+    );
+  });
+
   it("keeps failed child diagnostics behind disclosure, including after reload", async () => {
     const artifactDir = createControlUiE2eArtifactDir("chat-nested-tool-presentation");
     await suite.withPage(

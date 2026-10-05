@@ -268,6 +268,61 @@ describe("agent activity events", () => {
     }
   });
 
+  test.each([
+    { toolName: "progress_card", input: {}, isError: false, hidden: false },
+    { toolName: "sessions_yield", input: {}, isError: false, hidden: false },
+    { toolName: "process", input: { action: "poll" }, isError: false, hidden: false },
+    { toolName: "progress_card", input: {}, isError: true, hidden: true },
+  ])(
+    "counts a completed wrapper with a $toolName child (error: $isError)",
+    ({ toolName, input, isError, hidden }) => {
+      const projected = projectAgentHistoryActivity([
+        {
+          messageId: "wrapper",
+          message: {
+            role: "assistant",
+            __openclaw: { runId: "run" },
+            content: [{ type: "toolCall", id: "outer", name: "exec", arguments: {} }],
+          },
+        },
+        {
+          messageId: "child",
+          message: createNestedToolActivity({
+            runId: "run",
+            scopeId: "scope",
+            afterEntryId: "wrapper",
+            startOrder: 1,
+            parentToolCallId: "outer",
+            toolCallId: "child",
+            toolName,
+            input,
+            result: { content: [{ type: "text", text: "Finished" }] },
+            isError,
+            startedAt: 1,
+            timestamp: 2,
+          }),
+        },
+        {
+          messageId: "result",
+          message: {
+            role: "toolResult",
+            __openclaw: { runId: "run" },
+            toolCallId: "outer",
+            toolName: "exec",
+            isError: false,
+            content: [{ type: "text", text: "Finished" }],
+          },
+        },
+      ]);
+      expect(projected.find((entry) => entry.messageId === "wrapper")?.items).toEqual(
+        hidden ? [] : [expect.objectContaining({ toolCallId: "outer", status: "completed" })],
+      );
+      expect(projected.find((entry) => entry.messageId === "child")?.items).toEqual(
+        hidden ? [expect.objectContaining({ toolCallId: "child", status: "failed" })] : [],
+      );
+    },
+  );
+
   test.each([true, false])(
     "does not expose a child assignment in progress (named: %s)",
     (named) => {
