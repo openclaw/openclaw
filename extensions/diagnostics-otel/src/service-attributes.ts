@@ -28,16 +28,13 @@ export function redactOtelAttributes(attributes: Record<string, string | number 
   return redactedAttributes;
 }
 
-function securityTargetNameAttr(value: string | undefined, fallback = "unknown"): string {
-  if (!value) {
-    return fallback;
-  }
+function securityTargetNameAttr(value: string): string {
   const redacted = redactSensitiveText(value.trim());
   const redactedLower = redacted.toLowerCase();
   if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
-    return fallback;
+    return "unknown";
   }
-  return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : fallback;
+  return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : "unknown";
 }
 
 function otelLogTimestampIso(timestamp: LogRecord["timestamp"]): string {

@@ -1,16 +1,40 @@
 // Openrouter OAuth tests cover PKCE exchange and auth profile output.
 import { createHash } from "node:crypto";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 
 const OPENROUTER_OAUTH_REDIRECT_URI = "http://localhost:3000/openrouter-oauth/callback";
-type OpenRouterOAuthLoginOptions = NonNullable<
-  Parameters<typeof createOpenRouterOAuthAuthMethod>[0]
->;
+type OpenRouterOAuthLoginOptions = {
+  createPkce?: typeof providerAuth.generatePkceVerifierChallenge;
+  createState?: typeof providerAuthRuntime.generateOAuthState;
+  fetchImpl?: typeof fetch;
+  startCallback?: typeof providerAuthRuntime.startProviderOAuthLoopbackCallbackServer;
+};
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function loginOpenRouterOAuth(ctx: ProviderAuthContext, options: OpenRouterOAuthLoginOptions = {}) {
-  return createOpenRouterOAuthAuthMethod(options).run(ctx);
+  if (options.createPkce) {
+    vi.spyOn(providerAuth, "generatePkceVerifierChallenge").mockImplementation(options.createPkce);
+  }
+  if (options.createState) {
+    vi.spyOn(providerAuthRuntime, "generateOAuthState").mockImplementation(options.createState);
+  }
+  if (options.startCallback) {
+    vi.spyOn(providerAuthRuntime, "startProviderOAuthLoopbackCallbackServer").mockImplementation(
+      options.startCallback,
+    );
+  }
+  if (options.fetchImpl) {
+    vi.stubGlobal("fetch", options.fetchImpl);
+  }
+  return createOpenRouterOAuthAuthMethod().run(ctx);
 }
 
 function jsonResponse(value: unknown, init?: ResponseInit): Response {

@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => {
   return {
     httpHandler,
     loadRenderer: vi.fn(),
-    createDefaultCanvasCliDependencies: vi.fn(() => ({ deps: true })),
     registerNodesCanvasCommands: vi.fn(),
     toolExecute,
     createCanvasTool: vi.fn(() => ({
@@ -33,7 +32,6 @@ vi.mock("./src/host/a2ui.js", () => {
 });
 
 vi.mock("./src/cli.js", () => ({
-  createDefaultCanvasCliDependencies: mocks.createDefaultCanvasCliDependencies,
   registerNodesCanvasCommands: mocks.registerNodesCanvasCommands,
 }));
 
@@ -134,7 +132,7 @@ describe("Canvas plugin entry", () => {
     expect(tools).toHaveLength(1);
     expect(tools.map(({ opts }) => opts?.name)).toEqual([undefined]);
     expect(cliFeatures).toHaveLength(1);
-    expect(mocks.createDefaultCanvasCliDependencies).not.toHaveBeenCalled();
+    expect(mocks.registerNodesCanvasCommands).not.toHaveBeenCalled();
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
 
     await cliFeatures[0]?.registrar({
@@ -144,7 +142,6 @@ describe("Canvas plugin entry", () => {
       workspaceDir: undefined,
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
-    expect(mocks.createDefaultCanvasCliDependencies).toHaveBeenCalledTimes(1);
     expect(mocks.registerNodesCanvasCommands).toHaveBeenCalledTimes(1);
 
     const registeredTools = tools.map(({ tool: toolFactory }) => {

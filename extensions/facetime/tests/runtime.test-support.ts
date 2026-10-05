@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
     cancelOutgoingCall: vi.fn(),
   },
   startTalk: vi.fn(),
+  installDriver: vi.fn(async () => ({ changed: false })),
   systemRun: vi.fn(),
   carrierProcessAlive: false,
   warn: vi.fn(),
@@ -79,7 +80,7 @@ vi.mock("../src/plugin-paths.js", () => ({
 }));
 
 vi.mock("../src/driver-setup.js", () => ({
-  installFaceTimeDriver: vi.fn(async () => ({ changed: false })),
+  installFaceTimeDriver: mocks.installDriver,
 }));
 
 vi.mock("../src/preflight.js", () => ({

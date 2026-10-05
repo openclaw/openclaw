@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnePasswordError } from "./errors.js";
 import { OpClient } from "./op-client.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
-type OpProcessRunner = NonNullable<ConstructorParameters<typeof OpClient>[0]["runner"]>;
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runExec: vi.fn() }));
+const runner = vi.mocked(runExec);
 
 const tempDirs: string[] = [];
 
@@ -36,6 +38,8 @@ describe("OpClient", () => {
     // openclaw-temp-dir: allow plugin tests cannot import the core-only tracker.
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-"));
     tempDirs.push(root);
+    runner.mockReset();
+    vi.spyOn(os, "homedir").mockReturnValue(root);
     opBin = path.join(root, process.platform === "win32" ? "op.exe" : "op");
     tokenFile = path.join(root, "service-account-token");
     await fs.writeFile(opBin, `#!${interpreter}\nprocess.exit(0);\n`, { mode: 0o700 });
@@ -50,7 +54,7 @@ describe("OpClient", () => {
   });
 
   it("constructs one cache-disabled request with minimal environment and trims the token", async () => {
-    const runner = vi.fn<OpProcessRunner>(async () => ({
+    runner.mockImplementation(async () => ({
       stdout: JSON.stringify({
         id: "new",
         label: "credential",
@@ -58,7 +62,7 @@ describe("OpClient", () => {
       }),
       stderr: "",
     }));
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1234, runner, home: root });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1234 });
 
     await expect(
       client.getItem({ item: "Repository token", vault: "Automation", field: "credential" }),
@@ -83,6 +87,7 @@ describe("OpClient", () => {
         "--cache=false",
       ],
       {
+        baseEnv: {},
         env: {
           OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth,
           HOME: root,
@@ -90,32 +95,33 @@ describe("OpClient", () => {
           OP_BIOMETRIC_UNLOCK_ENABLED: "false",
         },
         timeoutMs: 1234,
-        maxBufferBytes: 1024 * 1024,
+        maxBuffer: 1024 * 1024,
+        logOutput: false,
       },
     );
   });
 
   it("accepts a response selected by field id", async () => {
-    const runner: OpProcessRunner = async () => ({
+    runner.mockImplementation(async () => ({
       stdout: JSON.stringify({ id: "credential", label: "password", value: "by-id" }),
       stderr: "",
-    });
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    }));
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
     await expect(
       client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
     ).resolves.toMatchObject({ value: "by-id", fieldLabel: "password" });
   });
 
   it("rejects a mismatched field response without exposing its value", async () => {
-    const runner: OpProcessRunner = async () => ({
+    runner.mockImplementation(async () => ({
       stdout: JSON.stringify({
         id: "one",
         label: "username",
         value: ["private", "user"].join("-"),
       }),
       stderr: "",
-    });
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    }));
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
     const error = await client
       .getItem({ item: "Token", vault: "Automation", field: "credential" })
       .catch((caught: unknown) => caught);
@@ -126,8 +132,7 @@ describe("OpClient", () => {
 
   it("surfaces missing and empty token files as TOKEN_MISSING", async () => {
     await fs.rm(tokenFile);
-    const runner = vi.fn<OpProcessRunner>();
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
     await expect(
       client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
     ).rejects.toMatchObject({ code: "TOKEN_MISSING" });
@@ -141,8 +146,7 @@ describe("OpClient", () => {
 
   it("rejects oversized token files before invoking the 1Password CLI", async () => {
     await fs.writeFile(tokenFile, "x".repeat(16 * 1024 + 1), { mode: 0o600 });
-    const runner = vi.fn<OpProcessRunner>();
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
 
     await expect(
       client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
@@ -163,11 +167,11 @@ describe("OpClient", () => {
       } else {
         await fs.link(targetFile, tokenFile);
       }
-      const runner = vi.fn<OpProcessRunner>(async () => ({
+      runner.mockImplementation(async () => ({
         stdout: JSON.stringify({ label: "credential", value: "value" }),
         stderr: "",
       }));
-      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
 
       await expect(
         client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
@@ -185,11 +189,11 @@ describe("OpClient", () => {
   it("warns once for token file permissions broader than 0600", async () => {
     await fs.chmod(tokenFile, 0o644);
     const warn = vi.fn();
-    const runner: OpProcessRunner = async () => ({
+    runner.mockImplementation(async () => ({
       stdout: JSON.stringify({ label: "credential", value: "value" }),
       stderr: "",
-    });
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner, warn });
+    }));
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, warn });
     await client.getItem({ item: "Token", vault: "Automation", field: "credential" });
     await client.getItem({ item: "Token", vault: "Automation", field: "credential" });
     expect(warn).toHaveBeenCalledTimes(1);
@@ -208,10 +212,10 @@ describe("OpClient", () => {
     ["TIMEOUT", { stderr: "", timedOut: true }],
     ["OP_ERROR", { stderr: "unexpected failure", code: 1 }],
   ] as const)("maps process failure to %s without retry", async (expectedCode, failure) => {
-    const runner = vi.fn<OpProcessRunner>(async () => {
+    runner.mockImplementation(async () => {
       throw Object.assign(new Error("op failed"), failure);
     });
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
     await expect(
       client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
     ).rejects.toMatchObject({ code: expectedCode });
@@ -219,12 +223,10 @@ describe("OpClient", () => {
   });
 
   it("reports an unresolved binary without invoking a runner", async () => {
-    const runner = vi.fn<OpProcessRunner>();
     const client = new OpClient({
       opBin: path.join(root, "missing-op"),
       tokenFile,
       timeoutMs: 1000,
-      runner,
     });
     await expect(
       client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
@@ -233,8 +235,7 @@ describe("OpClient", () => {
   });
 
   it("fails closed if the resolved binary disappears before a request", async () => {
-    const runner = vi.fn<OpProcessRunner>();
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
     await fs.rm(opBin);
 
     await expect(
@@ -247,8 +248,7 @@ describe("OpClient", () => {
     "does not read or pass the token to an executable in an unsafe directory",
     async () => {
       await fs.chmod(root, 0o777);
-      const runner = vi.fn<OpProcessRunner>();
-      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
 
       await expect(
         client.getItem({ item: "Token", vault: "Automation", field: "credential" }),

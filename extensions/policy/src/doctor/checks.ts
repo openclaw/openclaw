@@ -5,7 +5,6 @@ import { evaluatePolicy } from "./evaluation.js";
 import {
   channelIdsFromFindings,
   disableChannels,
-  workspaceRepairsDisabledResult,
   workspaceRepairsEnabled,
 } from "./policy-runtime.js";
 import { previewPolicyReviewRequiredRepair } from "./review-required-repairs.js";
@@ -34,7 +33,14 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
       "Configured channels satisfy policy deny rules.",
       async (ctx, findings) => {
         if (!workspaceRepairsEnabled(ctx)) {
-          return workspaceRepairsDisabledResult("channel config");
+          return {
+            status: "skipped",
+            reason: "workspace repairs are disabled",
+            changes: [],
+            warnings: [
+              "Skipped channel config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.",
+            ],
+          };
         }
         const channelIds = channelIdsFromFindings(findings);
         if (channelIds.length === 0) {

@@ -50,13 +50,6 @@ type OpenRouterOAuthKeyResult = {
   userId?: string;
 };
 
-type OpenRouterOAuthLoginOptions = {
-  createPkce?: () => { verifier: string; challenge: string };
-  createState?: () => string;
-  fetchImpl?: typeof fetch;
-  startCallback?: typeof startProviderOAuthLoopbackCallbackServer;
-};
-
 function extractOpenRouterError(value: unknown): string | undefined {
   if (typeof value === "string") {
     return value.trim() || undefined;
@@ -183,11 +176,9 @@ function parseOpenRouterOAuthCallbackInput(
 async function exchangeOpenRouterOAuthCode(params: {
   code: string;
   codeVerifier: string;
-  fetchImpl?: typeof fetch;
   signal?: AbortSignal;
 }): Promise<OpenRouterOAuthKeyResult> {
-  const fetchImpl = params.fetchImpl ?? fetch;
-  const response = await fetchImpl(OPENROUTER_OAUTH_TOKEN_URL, {
+  const response = await fetch(OPENROUTER_OAUTH_TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -236,7 +227,6 @@ async function resolveOpenRouterOAuthCode(
   params: {
     buildAuthorizationUrl: (redirectUrl: string) => string;
     state: string;
-    startCallback: typeof startProviderOAuthLoopbackCallbackServer;
     onProgress: (message: string) => void;
   },
 ): Promise<string> {
@@ -279,7 +269,7 @@ async function resolveOpenRouterOAuthCode(
 
   let callback: OpenRouterOAuthCallbackServer | undefined;
   try {
-    callback = await params.startCallback({
+    callback = await startProviderOAuthLoopbackCallbackServer({
       redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
       expectedState: params.state,
       timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
@@ -330,19 +320,15 @@ async function resolveOpenRouterOAuthCode(
   return result.code;
 }
 
-async function loginOpenRouterOAuth(
-  ctx: ProviderAuthContext,
-  options: OpenRouterOAuthLoginOptions = {},
-): Promise<ProviderAuthResult> {
+async function loginOpenRouterOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const progress = ctx.prompter.progress("Starting OpenRouter OAuth...");
   try {
-    const pkce = options.createPkce?.() ?? generatePkceVerifierChallenge();
-    const state = options.createState?.() ?? generateOAuthState();
+    const pkce = generatePkceVerifierChallenge();
+    const state = generateOAuthState();
     const code = await resolveOpenRouterOAuthCode(ctx, {
       buildAuthorizationUrl: (redirectUrl) =>
         buildOpenRouterOAuthAuthorizeUrl({ codeChallenge: pkce.challenge, redirectUrl, state }),
       state,
-      startCallback: options.startCallback ?? startProviderOAuthLoopbackCallbackServer,
       onProgress: (message) => progress.update(message),
     });
     progress.update("Exchanging OpenRouter OAuth code...");
@@ -351,7 +337,6 @@ async function loginOpenRouterOAuth(
     const token = await exchangeOpenRouterOAuthCode({
       code,
       codeVerifier: pkce.verifier,
-      fetchImpl: options.fetchImpl,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     progress.stop("OpenRouter credential received");
@@ -380,9 +365,7 @@ async function loginOpenRouterOAuth(
   }
 }
 
-export function createOpenRouterOAuthAuthMethod(
-  options: OpenRouterOAuthLoginOptions = {},
-): ProviderAuthMethod {
+export function createOpenRouterOAuthAuthMethod(): ProviderAuthMethod {
   return {
     id: OPENROUTER_OAUTH_METHOD_ID,
     label: "OpenRouter OAuth",
@@ -399,6 +382,6 @@ export function createOpenRouterOAuthAuthMethod(
       onboardingScopes: ["text-inference", "music-generation"],
       onboardingFeatured: true,
     },
-    run: async (ctx) => await loginOpenRouterOAuth(ctx, options),
+    run: loginOpenRouterOAuth,
   };
 }

@@ -9,7 +9,15 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
+import { createEmbeddedLobsterRunner } from "./lobster-runner.js";
 import { createLobsterTool } from "./lobster-tool.js";
+
+vi.mock("./lobster-runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lobster-runner.js")>();
+  return { ...actual, createEmbeddedLobsterRunner: vi.fn(actual.createEmbeddedLobsterRunner) };
+});
+
+afterEach(() => vi.mocked(createEmbeddedLobsterRunner).mockReset());
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -195,7 +203,8 @@ describe("lobster plugin tool", () => {
       }),
     };
 
-    const tool = createLobsterTool(fakeApi(), { runner });
+    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
+    const tool = createLobsterTool(fakeApi());
     const res = await tool.execute("call-ordinary-run", {
       action: "run",
       pipeline: "noop",
@@ -232,7 +241,8 @@ describe("lobster plugin tool", () => {
       }),
     };
 
-    const tool = createLobsterTool(fakeApi(), { runner });
+    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
+    const tool = createLobsterTool(fakeApi());
     const res = await tool.execute("call-ordinary-resume", {
       action: "resume",
       token: "resume-token-1",
@@ -267,7 +277,8 @@ describe("lobster plugin tool", () => {
       }),
     };
 
-    const tool = createLobsterTool(fakeApi(), { runner });
+    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
+    const tool = createLobsterTool(fakeApi());
     await tool.execute("call-string-limits", {
       action: "run",
       pipeline: "noop",
@@ -288,7 +299,8 @@ describe("lobster plugin tool", () => {
 
   it("rejects malformed numeric run limits before invoking the runner", async () => {
     const runner = { run: vi.fn() };
-    const tool = createLobsterTool(fakeApi(), { runner });
+    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
+    const tool = createLobsterTool(fakeApi());
 
     await expect(
       tool.execute("call-bad-timeout", {
@@ -307,18 +319,11 @@ describe("lobster plugin tool", () => {
     expect(runner.run).not.toHaveBeenCalled();
   });
 
-  it("throws when the runner returns an error envelope", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: {
-        run: vi.fn().mockResolvedValue({
-          ok: false,
-          error: {
-            type: "runtime_error",
-            message: "boom",
-          },
-        }),
-      },
+  it("propagates runtime errors", async () => {
+    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce({
+      run: vi.fn().mockRejectedValue(new Error("boom")),
     });
+    const tool = createLobsterTool(fakeApi());
 
     await expect(
       tool.execute("call-runner-error", {
@@ -329,16 +334,12 @@ describe("lobster plugin tool", () => {
   });
 
   it("requires action", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(tool.execute("call-action-missing", {})).rejects.toThrow(/action required/);
   });
 
   it("rejects unknown action", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(
       tool.execute("call-action-unknown", {
         action: "explode",
@@ -347,9 +348,7 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects absolute cwd", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(
       tool.execute("call-absolute-cwd", {
         action: "run",
@@ -360,9 +359,7 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects cwd that escapes the gateway working directory", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(
       tool.execute("call-escape-cwd", {
         action: "run",

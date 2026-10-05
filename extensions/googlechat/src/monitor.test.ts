@@ -30,6 +30,12 @@ const accessMocks = vi.hoisted(() => ({
   applyGoogleChatInboundAccessPolicy: vi.fn(),
 }));
 
+const runtimeMocks = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
+
+vi.mock("./runtime.js", () => ({
+  getGoogleChatRuntime: () => ({ state: runtimeMocks }),
+}));
+
 const routingMocks = vi.hoisted(() => ({
   processEvent: undefined as
     | ((
@@ -561,11 +567,10 @@ describe("googlechat monitor inbound space classification", () => {
         await params.turnAdoptionLifecycle?.onAdopted();
       },
     );
+    runtimeMocks.openChannelIngressQueue.mockReturnValue(queue);
     const ingress = createGoogleChatIngressMonitor({
       accountId: account.accountId,
-      queue,
       runtime,
-      pollIntervalMs: 10,
       dispatch: async (event, turnAdoptionLifecycle) => {
         await processGoogleChatTestEvent({
           event,
