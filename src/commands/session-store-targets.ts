@@ -37,10 +37,12 @@ export function resolveExplicitSessionStorePath(params: {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(
         `Session store target does not exist: ${displayTarget}. Pass a selector whose resolved SQLite target exists.`,
+        { cause: error },
       );
     }
     throw new Error(
       `Could not inspect session store target ${displayTarget}: ${formatErrorMessage(error)}`,
+      { cause: error },
     );
   }
   if (!stat.isFile()) {
@@ -66,6 +68,7 @@ export function resolveExplicitSessionStorePath(params: {
   } catch (error) {
     throw new Error(
       `Session store target is not a session store: ${displayTarget}. ${formatErrorMessage(error)}. Pass a legacy store selector or SQLite target reported by openclaw sessions or openclaw status.`,
+      { cause: error },
     );
   } finally {
     database?.close();

@@ -41,6 +41,20 @@ type DoctorPairingSnapshot = {
   paired: DoctorPairedDevice[];
 };
 
+function normalizeGatewayPairedDevice(device: GatewayListedPairedDevice): DoctorPairedDevice {
+  return {
+    ...device,
+    tokenSummaries: device.tokens ?? [],
+  };
+}
+
+function normalizeLocalPairedDevice(device: PairedDevice): DoctorPairedDevice {
+  return {
+    ...device,
+    tokenSummaries: summarizeDeviceTokens(device.tokens) ?? [],
+  };
+}
+
 async function loadDoctorPairingSnapshot(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;
@@ -56,10 +70,7 @@ async function loadDoctorPairingSnapshot(params: {
       });
       return {
         pending: payload.pending,
-        paired: payload.paired.map((device) => ({
-          ...device,
-          tokenSummaries: device.tokens ?? [],
-        })),
+        paired: payload.paired.map((device) => normalizeGatewayPairedDevice(device)),
       };
     } catch {
       // Gateway health already reported separately. Fall back to local pairing
@@ -72,10 +83,7 @@ async function loadDoctorPairingSnapshot(params: {
   const local = await listDevicePairingReadOnly();
   return {
     pending: local.pending,
-    paired: local.paired.map((device) => ({
-      ...device,
-      tokenSummaries: summarizeDeviceTokens(device.tokens) ?? [],
-    })),
+    paired: local.paired.map((device) => normalizeLocalPairedDevice(device)),
   };
 }
 

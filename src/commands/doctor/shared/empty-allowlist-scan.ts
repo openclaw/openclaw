@@ -56,9 +56,9 @@ export async function scanEmptyAllowlistPolicyWarnings(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
         ...context,
         doctorFixCommand: params.doctorFixCommand,
-        shouldSkipDefaultEmptyGroupAllowlistWarning: (context) =>
+        shouldSkipDefaultEmptyGroupAllowlistWarning: (accountContext) =>
           options.suppressGroupAllowlistWarning ||
-          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(context)),
+          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(accountContext)),
       }),
     );
     warnings.push(...(params.extraWarningsForAccount?.(context) ?? []));
