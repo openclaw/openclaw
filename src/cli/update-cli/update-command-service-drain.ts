@@ -124,6 +124,15 @@ export async function withGatewayMaintenanceDrain<T>(
     return lastObservation;
   };
   const remaining = () => Math.max(1, deadline - performance.now());
+  if (!explicitDrain) {
+    const { isManagedGatewayServiceOffline } =
+      await import("./update-command-service-publication.js");
+    if (await isManagedGatewayServiceOffline(params.state)) {
+      // No resident can drain a stopped unit; the native stop still rechecks live authority.
+      assertResidentCurrent();
+      return await finish();
+    }
+  }
   const connection = await (async () => {
     const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
     const port = await resolveUpdatedGatewayRestartPort({

@@ -10,6 +10,8 @@ import { ServiceInspectionError } from "../../daemon/service-inspection-error.js
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import * as systemdMaintenance from "../../daemon/systemd-maintenance.js";
+import * as gatewayCalls from "../../gateway/call.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
@@ -59,6 +61,64 @@ function handoffService(home: string, overrides: Partial<GatewayService> = {}, p
     ...overrides,
   });
 }
+
+it("stops an offline Linux handoff without resident drain RPC", () =>
+  withServiceHome(async (home) => {
+    const root = await fs.realpath(process.cwd());
+    const runId = randomUUID();
+    createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
+    const store = createManagedHandoffLeaseStore();
+    const claim = store.acquire(root, "offline-handoff", { kind: "update" });
+    expect(claim.kind).toBe("acquired");
+    mockHandoffServicePlatform("linux");
+    const realDrain = await vi.importActual<typeof import("./update-command-service-drain.js")>(
+      "./update-command-service-drain.js",
+    );
+    mocks.drain.mockImplementation(realDrain.withGatewayMaintenanceDrain);
+    vi.spyOn(systemdMaintenance, "readSystemdGatewayStopTimeout").mockResolvedValue(330_000);
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Offline service unexpectedly required a resident RPC");
+      }
+    };
+    const rpc = vi.spyOn(gatewayCalls, "callGatewayCli").mockImplementation(async () => {
+      // Settle the pre-fix path through its existing authority fence, not a 30-minute wait.
+      current = false;
+      throw Object.assign(new Error("No resident listener"), { code: "ECONNREFUSED" });
+    });
+    const stop = vi.fn<GatewayService["stop"]>(async (args) => {
+      args.assertCurrent?.();
+      args.onMutation?.({ mode: "systemctl-stop" });
+    });
+    const service = handoffService(home, {
+      readRuntime: async () => ({
+        status: "stopped",
+        systemd: { managerUid: 2001, controlGroup: "/system.slice/openclaw-gateway.service" },
+      }),
+      stop,
+    });
+    mocks.service.mockReturnValue(service);
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_RUN_HANDOFF: "1", OPENCLAW_UPDATE_IN_PROGRESS: undefined },
+      async () => {
+        const updateRun = { runId, env: process.env };
+        const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
+        const result = await maybeStopManagedServiceBeforeMutableUpdate({
+          root,
+          updateInstallKind: "package",
+          shouldRestart: true,
+          jsonMode: true,
+          updateRun,
+          recordPhase,
+          assertCurrent,
+        });
+        expect(result).toMatchObject({ stopped: true, inspected: true, offline: true });
+        expect(stop).toHaveBeenCalledOnce();
+        expect(rpc).not.toHaveBeenCalled();
+      },
+    );
+  }));
 
 const servingAncestorMaintenanceCases = [
   ...(["linux", "darwin", "win32"] as const).flatMap(

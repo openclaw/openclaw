@@ -114,7 +114,8 @@ vi.mock("./update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: mocks.drain,
 }));
 
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
+vi.mock("../../daemon/systemd-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-maintenance.js")>()),
   prepareSystemdGatewayMaintenance: mocks.prepareStop,
 }));
 
