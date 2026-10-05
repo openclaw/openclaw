@@ -17,7 +17,8 @@ vi.mock("./browser/client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/client.js")>()),
   ...browserClientMocks,
 }));
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   getRuntimeConfig: () => ({ browser: {}, gateway: { nodes: { browser: { mode: "off" } } } }),
 }));
 vi.mock("./browser/config.js", async (importOriginal) => ({
@@ -31,7 +32,8 @@ vi.mock("./browser/config.js", async (importOriginal) => ({
   }),
   resolveProfile: () => null,
 }));
-vi.mock("./browser/session-tab-registry.js", () => ({
+vi.mock("./browser/session-tab-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/session-tab-registry.js")>()),
   touchSessionBrowserTab: vi.fn(),
   trackSessionBrowserTab: vi.fn(),
   untrackSessionBrowserTab: vi.fn(),

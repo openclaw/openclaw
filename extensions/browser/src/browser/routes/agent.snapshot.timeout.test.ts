@@ -75,7 +75,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
-vi.mock("./agent.shared.js", () => ({
+vi.mock("./agent.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent.shared.js")>()),
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
   handleRouteError: vi.fn((_res, err) => {
     throw err;

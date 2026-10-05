@@ -7,16 +7,13 @@ function routeBrowserClientMocks(
   mocks: Record<string, (...args: never[]) => unknown>,
 ) {
   // Delegated requests retain the production client projection before the mocked Gateway.
-  return {
-    ...actual,
-    ...Object.fromEntries(
-      Object.entries(mocks).map(([name, local]) => [
-        name,
-        (...args: unknown[]) =>
-          Reflect.apply(typeof args[0] === "function" ? actual[name]! : local, undefined, args),
-      ]),
-    ),
-  };
+  return Object.fromEntries(
+    Object.entries(mocks).map(([name, local]) => [
+      name,
+      (...args: unknown[]) =>
+        Reflect.apply(typeof args[0] === "function" ? actual[name]! : local, undefined, args),
+    ]),
+  );
 }
 
 const browserClientMocks = vi.hoisted(() => ({
@@ -75,12 +72,10 @@ const browserClientMocks = vi.hoisted(() => ({
     }),
   ),
 }));
-vi.mock("./browser/client.js", async (importOriginal) =>
-  routeBrowserClientMocks(
-    await importOriginal<typeof import("./browser/client.js")>(),
-    browserClientMocks,
-  ),
-);
+vi.mock("./browser/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./browser/client.js")>();
+  return { ...actual, ...routeBrowserClientMocks(actual, browserClientMocks) };
+});
 
 const browserActionsMocks = vi.hoisted(() => ({
   browserAct: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
@@ -140,12 +135,10 @@ const browserActionsMocks = vi.hoisted(() => ({
     },
   })),
 }));
-vi.mock("./browser/client-actions.js", async (importOriginal) =>
-  routeBrowserClientMocks(
-    await importOriginal<typeof import("./browser/client-actions.js")>(),
-    browserActionsMocks,
-  ),
-);
+vi.mock("./browser/client-actions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./browser/client-actions.js")>();
+  return { ...actual, ...routeBrowserClientMocks(actual, browserActionsMocks) };
+});
 
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
@@ -283,14 +276,16 @@ vi.mock("./browser/client-fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/client-fetch.js")>()),
   fetchBrowserJson: toolCommonMocks.fetchBrowserJson,
 }));
-vi.mock("./browser/proxy-files.js", () => ({
+vi.mock("./browser/proxy-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/proxy-files.js")>()),
   persistBrowserProxyResultFiles: vi.fn(async (result: unknown) => result),
 }));
 vi.mock("./browser/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/paths.js")>()),
   resolveExistingUploadPaths: pathValidationMocks.resolveExistingUploadPaths,
 }));
-vi.mock("./browser/screenshot-sharing.js", () => ({
+vi.mock("./browser/screenshot-sharing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/screenshot-sharing.js")>()),
   stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
 }));
 

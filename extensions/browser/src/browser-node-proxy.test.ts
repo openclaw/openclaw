@@ -54,7 +54,8 @@ vi.mock("./browser/client-fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/client-fetch.js")>()),
   fetchBrowserJson: runtimeMocks.fetchBrowserJson,
 }));
-vi.mock("./browser/proxy-files.js", () => ({
+vi.mock("./browser/proxy-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/proxy-files.js")>()),
   persistBrowserProxyResultFiles: runtimeMocks.persistBrowserProxyResultFiles,
 }));
 vi.mock("./browser-proxy-upload.js", () => uploadMocks);
