@@ -19,7 +19,8 @@ export type SubagentExecutionObservation = {
   };
 };
 
-function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
+/** A yielded row is paused for a continuation unless a kill owns it. */
+export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   return (
     entry.pauseReason === "sessions_yield" &&
     !entry.killIntent &&

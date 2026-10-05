@@ -22,6 +22,7 @@ import {
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import { isYieldedSubagentRun } from "./subagent-execution-observation.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -377,9 +378,13 @@ function planTerminalCompletion(
   },
 ) {
   const params = context.options;
+  // A settle request outlives the sweep that issued it; it must not rewrite a run that has
+  // since resumed, finished, or been claimed by a kill. A kill claim keeps its pause reason.
   if (
-    currentEntry.pauseReason === "sessions_yield" &&
-    completeParams.reason !== SUBAGENT_ENDED_REASON_KILLED
+    completeParams.settleYielded === true
+      ? !isYieldedSubagentRun(currentEntry)
+      : currentEntry.pauseReason === "sessions_yield" &&
+        completeParams.reason !== SUBAGENT_ENDED_REASON_KILLED
   ) {
     return undefined;
   }
