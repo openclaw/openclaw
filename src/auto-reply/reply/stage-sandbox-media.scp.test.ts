@@ -28,12 +28,17 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { killPidIfAlive, readPidFile } from "../../test-utils/process-tree.js";
+import { killPidIfAlive, readPidFile, waitForPidToExit } from "../../test-utils/process-tree.js";
 import { pinConfigDir } from "../../utils.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
 const SCP_STDERR_TAIL_CHARS = 16_384;
+// Default staging deadline: 50 MiB at the 256 KiB/s supported floor (~200s),
+// passed to the shared runner for the default size cap (asserted below).
+const SCP_TRANSFER_TIMEOUT_MS = 200_000;
+/** Small budget so the real hang and slow-transfer cases reach their deadline/margin in seconds. */
+const TEST_TRANSFER_BUDGET_MS = 5_000;
 const REMOTE_PATH = "/synthetic/attachments/report with spaces.txt";
 const SUCCESS = {
   code: 0,
@@ -318,6 +323,7 @@ describe("stageSandboxMedia SCP", () => {
           download,
         ],
         expect.objectContaining({
+          timeoutMs: SCP_TRANSFER_TIMEOUT_MS,
           maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
         }),
       );
@@ -802,5 +808,172 @@ describe("stageSandboxMedia SCP", () => {
         );
       });
     },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "publishes a slow transfer that stays inside the budget",
+    async () => {
+      await withOpenClawTestState({ label: "scp-slow-success" }, async (state) => {
+        const params = remoteStageParams(state);
+        const binDir = state.path("bin");
+        await fs.mkdir(binDir);
+        // A real process that needs seconds to finish: the old fixed cutoff killed
+        // transfers like this mid-flight and skipped the attachment.
+        await fs.writeFile(
+          path.join(binDir, "scp"),
+          [
+            `#!${process.execPath}`,
+            "const fs = require('node:fs');",
+            "const target = process.argv.at(-1);",
+            "setTimeout(() => {",
+            "  fs.writeFileSync(target, 'slow but healthy bytes');",
+            "  process.exit(0);",
+            "}, 2_000);",
+          ].join("\n"),
+          { mode: 0o700 },
+        );
+
+        await withEnvAsync(
+          {
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            OPENCLAW_SANDBOX_SCP_TIMEOUT_MS: String(TEST_TRANSFER_BUDGET_MS),
+          },
+          async () => {
+            const started = Date.now();
+            const result = await stageSandboxMedia(params);
+            expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
+            const fact = params.ctx.media?.[0];
+            expect(result.staged.size).toBe(1);
+            expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
+              "slow but healthy bytes",
+            );
+          },
+        );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "bounds an unattended SCP hang with the shared runner deadline",
+    async () => {
+      await withOpenClawTestState({ label: "scp-hung-timeout" }, async (state) => {
+        const params = remoteStageParams(state);
+        const before = structuredClone([params.ctx, params.sessionCtx]);
+        const binDir = state.path("bin");
+        const attemptsPath = state.path("attempts");
+        const parentPidPath = state.path("parent.pid");
+        const descendantPidPath = state.path("descendant.pid");
+        const readyPath = state.path("ready.pid");
+        const cleanupPath = state.path("cleanup");
+        const downloadPath = state.path("download-path");
+        await fs.mkdir(binDir);
+        const descendantSource = [
+          "const fs = require('node:fs')",
+          `const cleanup = () => { if (fs.existsSync(${JSON.stringify(cleanupPath)})) process.exit(0) }`,
+          "process.on('disconnect', cleanup); cleanup()",
+          "process.on('SIGTERM', () => {})",
+          "setInterval(() => {}, 1000)",
+          "process.send('ready')",
+        ].join(";");
+        await fs.writeFile(
+          path.join(binDir, "scp"),
+          [
+            `#!${process.execPath}`,
+            "const fs = require('node:fs'); const { spawn } = require('node:child_process');",
+            `const retried = fs.existsSync(${JSON.stringify(attemptsPath)});`,
+            `fs.appendFileSync(${JSON.stringify(attemptsPath)}, 'attempt\\n');`,
+            `if (retried || fs.existsSync(${JSON.stringify(cleanupPath)})) process.exit(1);`,
+            `fs.writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));`,
+            `fs.writeFileSync(${JSON.stringify(downloadPath)}, process.argv.at(-1));`,
+            "process.on('SIGTERM', () => {});",
+            `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
+            `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));`,
+            `child.once('message', () => fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)));`,
+            "setInterval(() => {}, 1000);",
+          ].join("\n"),
+          { mode: 0o700 },
+        );
+
+        await withEnvAsync(
+          {
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            OPENCLAW_SANDBOX_SCP_TIMEOUT_MS: String(TEST_TRANSFER_BUDGET_MS),
+          },
+          async () => {
+            const spawn = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+            let parentPid: number | undefined;
+            let descendantPid: number | undefined;
+            // No cancellation: only the shared runner deadline can settle this transfer.
+            const settled = stageSandboxMedia(params).then(
+              (value) => ({ value }),
+              (error: unknown) => ({ error }),
+            );
+            let reapedByDeadline: boolean[] = [];
+            let temporaryDirectoryRemoved = false;
+            // Sandbox setup can be slow under load; the transfer deadline is the behavior under test.
+            const spawnReadyTimeoutMs = 60_000;
+            const awaitPidFile = async (pidPath: string, timeoutMs: number): Promise<number> => {
+              const deadline = Date.now() + timeoutMs;
+              for (;;) {
+                try {
+                  const pid = await readPidFile(pidPath);
+                  if (Number.isInteger(pid) && pid > 0) {
+                    return pid;
+                  }
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+                    throw error;
+                  }
+                }
+                if (Date.now() >= deadline) {
+                  throw new Error(`Timed out waiting for pid file: ${pidPath}`);
+                }
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, 25);
+                });
+              }
+            };
+            try {
+              parentPid = await awaitPidFile(parentPidPath, spawnReadyTimeoutMs);
+              descendantPid = await awaitPidFile(descendantPidPath, spawnReadyTimeoutMs);
+              expect(await awaitPidFile(readyPath, spawnReadyTimeoutMs)).toBe(parentPid);
+              expect(isPidAlive(parentPid)).toBe(true);
+              expect(isPidAlive(descendantPid)).toBe(true);
+              reapedByDeadline = await Promise.all([
+                waitForPidToExit(parentPid, TEST_TRANSFER_BUDGET_MS + 5_000),
+                waitForPidToExit(descendantPid, TEST_TRANSFER_BUDGET_MS + 5_000),
+              ]);
+            } finally {
+              // Stop any late attempt, then drain the owner before removing its fixture.
+              await fs.writeFile(cleanupPath, "cleanup");
+              for (const [index, result] of spawn.mock.results.entries()) {
+                if (spawn.mock.calls[index]?.[0][0] === "scp" && result.type === "return") {
+                  killPidIfAlive(result.value.child.nodeChildProcess.pid);
+                }
+              }
+              descendantPid ??= await readPidFile(descendantPidPath).catch(() => undefined);
+              killPidIfAlive(descendantPid);
+              await settled;
+              if (existsSync(downloadPath)) {
+                const download = await fs.readFile(downloadPath, "utf8");
+                const temporaryDirectory = path.dirname(download);
+                temporaryDirectoryRemoved = !existsSync(temporaryDirectory);
+                await fs.rm(temporaryDirectory, { recursive: true, force: true });
+              }
+            }
+
+            expect(reapedByDeadline).toEqual([true, true]);
+            // The bounded retry loop exhausts instead of publishing failed media.
+            expect(await settled).toEqual({ value: { staged: new Map() } });
+            // A deadline kill means the copy stopped progressing, so it is not retried:
+            // one bounded wait, then the attachment is skipped.
+            expect(await fs.readFile(attemptsPath, "utf8")).toBe("attempt\n");
+            expect([params.ctx, params.sessionCtx]).toEqual(before);
+            expect(temporaryDirectoryRemoved).toBe(true);
+          },
+        );
+      });
+    },
+    180_000,
   );
 });
