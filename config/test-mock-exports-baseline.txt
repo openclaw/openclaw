@@ -4460,8 +4460,6 @@
 ["src/cli/command-secret-targets.agent-runtime.test.ts","../secrets/target-registry.js","087e966bdedcfab36859369a0aedefd3d720d42fbf991ddecfbd19edcd01919e",1]
 ["src/cli/command-secret-targets.import.test.ts","../channels/plugins/read-only.js","9c25189a5931b672343ae0336e0a23d7a754c0bd9edd4d88b8c6bb5d56c3de08",1]
 ["src/cli/command-secret-targets.import.test.ts","../secrets/target-registry.js","b842e091a53cfcb324df1582c8fdbb64064d879eeee48c4af4f31f64862e8faf",1]
-["src/cli/command-secret-targets.import.test.ts","../secrets/target-registry.js","b842e091a53cfcb324df1582c8fdbb64064d879eeee48c4af4f31f64862e8faf",2]
-["src/cli/command-secret-targets.import.test.ts","../secrets/target-registry.js","b842e091a53cfcb324df1582c8fdbb64064d879eeee48c4af4f31f64862e8faf",3]
 ["src/cli/command-secret-targets.test.ts","../plugins/web-fetch-providers.runtime.js","2103f94fa89a02df5ee13eb97b2a34c12fdb19748f3ccc1bbd10713773d9084d",1]
 ["src/cli/command-secret-targets.test.ts","../plugins/web-search-providers.runtime.js","c6adb8ae8f37088175863067a63ef6beafe3d19e26ed499819b864bc9731e667",1]
 ["src/cli/command-secret-targets.test.ts","../secrets/target-registry.js","ca0e1718140bdd54df634d01c7ea70930b176115c3e62edae6cee42ec80cf062",1]
