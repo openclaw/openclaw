@@ -122,7 +122,11 @@ export function sameSqliteFileGeneration(
   return (
     sameFileFingerprint(left.database, right.database) &&
     sameOptionalFileFingerprint(left.journal, right.journal) &&
-    sameOptionalFileFingerprint(left.wal, right.wal)
+    // SQLite can create/delete an empty WAL while opening a closed reader; it contains no frames.
+    sameOptionalFileFingerprint(
+      left.wal?.size === 0n ? undefined : left.wal,
+      right.wal?.size === 0n ? undefined : right.wal,
+    )
   );
 }
 

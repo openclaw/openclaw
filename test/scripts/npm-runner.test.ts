@@ -1,9 +1,39 @@
+import { createRequire } from "node:module";
 // Npm Runner tests cover npm runner script behavior.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 
+const originalVersions = process.versions;
+afterEach(() => {
+  Object.defineProperty(process, "versions", { value: originalVersions });
+});
+
 describe("resolveNpmRunner", () => {
+  it.each(["default", "explicit"])(
+    "runs bundled npm under the %s Bun runtime without PATH Node",
+    (selection) => {
+      Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
+      const packageJsonPath = createRequire(import.meta.url).resolve("npm/package.json");
+      expect(
+        resolveNpmRunner({
+          execPath: selection === "explicit" ? process.execPath : undefined,
+          env: { PATH: "" },
+          npmArgs: ["pack", "space & literal"],
+        }),
+      ).toEqual({
+        command: process.execPath,
+        args: [
+          path.join(path.dirname(packageJsonPath), "bin", "npm-cli.js"),
+          "pack",
+          "space & literal",
+        ],
+        packageJsonPath,
+        shell: false,
+      });
+    },
+  );
+
   it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {
     const execPath = "/Users/test/.nodenv/versions/24.13.0/bin/node";
     const expectedNpmCliPath = path.posix.resolve(

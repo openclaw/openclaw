@@ -13,12 +13,9 @@ export function formatLine(label: string, value: string): string {
 export function writeFormattedLines(
   stdout: NodeJS.WritableStream,
   lines: Array<{ label: string; value: string }>,
-  opts?: { leadingBlankLine?: boolean },
 ): void {
   // Keep daemon command output line-oriented so shell callers can parse labels.
-  if (opts?.leadingBlankLine) {
-    stdout.write("\n");
-  }
+  stdout.write("\n");
   for (const line of lines) {
     stdout.write(`${formatLine(line.label, line.value)}\n`);
   }

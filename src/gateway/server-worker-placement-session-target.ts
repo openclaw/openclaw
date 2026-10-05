@@ -40,6 +40,21 @@ export type WorkerPlacementSessionRuntime = {
   resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
 };
 
+export function resolveWorkerPlacementSessionStoreTarget(
+  runtime: WorkerPlacementSessionRuntime,
+  cfg: OpenClawConfig,
+  identity: Pick<WorkerSessionPlacementIdentity, "sessionKey" | "agentId">,
+) {
+  return runtime.resolveGatewaySessionStoreTargetWithStore({
+    cfg,
+    key: identity.sessionKey,
+    agentId: identity.agentId,
+    preserveQualifiedAddress: true,
+    clone: false,
+    exactRead: true,
+  });
+}
+
 export function createWorkerWorkspaceRecoveryPreparer(options: {
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
   getConfig: () => OpenClawConfig;
@@ -102,6 +117,7 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         storePath: target.readSource.path,
         env: binding.env,
         sessionKeys: [identity.sessionKey],
+        snapshotFields: [],
       });
       assertSourceCurrent();
       const preparedEntry = prepared.entries.find(
@@ -162,14 +178,11 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   signal?: AbortSignal;
   run: (workspace: WorkerSessionWorkspace, assertCurrent: () => void) => T | Promise<T>;
 }): Promise<T> {
-  const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.getConfig(),
-    key: params.sessionKey,
-    agentId: params.agentId,
-    preserveQualifiedAddress: true,
-    clone: false,
-    exactRead: true,
-  });
+  const target = resolveWorkerPlacementSessionStoreTarget(
+    params.sessionRuntime,
+    params.getConfig(),
+    params,
+  );
   const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
   return await runExclusiveSessionLifecycleMutation(operation, {
     scope: target.storePath,
@@ -233,14 +246,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   errorMessage: string;
 }) {
   const resolveTarget = (cfg: OpenClawConfig) =>
-    params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key: params.sessionKey,
-      agentId: params.agentId,
-      preserveQualifiedAddress: true,
-      clone: false,
-      exactRead: true,
-    });
+    resolveWorkerPlacementSessionStoreTarget(params.sessionRuntime, cfg, params);
   const initialTarget = resolveTarget(params.config);
   const initialEntry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
     initialTarget.store,

@@ -6,7 +6,7 @@ import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { ChatReplyTarget } from "../../../lib/chat/chat-types.ts";
+import type { ChatReplyTarget, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
@@ -75,8 +75,8 @@ export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageR
 // An explicit Markdown value is the displayed expansion, even when it is empty.
 export function resolveMessageReplyText(
   message: unknown,
-  normalizedMessage = normalizeMessage(message),
-  markdown = resolveMessageDisplayMarkdown(message, normalizedMessage),
+  normalizedMessage: NormalizedMessage,
+  markdown: string,
 ): string {
   return markdown || extractMessageMediaText(message, normalizedMessage.content);
 }

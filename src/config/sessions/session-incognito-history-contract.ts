@@ -6,7 +6,11 @@ import type {
 } from "../../gateway/session-transcript-read.types.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
+import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEvent,
+} from "./session-accessor.sqlite-projection-read.js";
 import type { SessionTranscriptStats, TranscriptEvent } from "./session-accessor.types.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -24,6 +28,14 @@ import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
+import type {
+  SessionTranscriptAccountingOptions,
+  SessionTranscriptAccountingSnapshot,
+} from "./session-transcript-accounting.types.js";
+import type {
+  SessionTranscriptAnchorFacts,
+  SessionTranscriptAnchorSelection,
+} from "./session-transcript-anchor-read.kernel.js";
 import type {
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
@@ -54,6 +66,15 @@ type Reads = {
     output: SessionTranscriptProjectionSelectionResults[Key];
   };
 } & {
+  anchors: { input: SessionTranscriptAnchorSelection; output: SessionTranscriptAnchorFacts };
+  accounting: {
+    input: { options: SessionTranscriptAccountingOptions };
+    output: SessionTranscriptAccountingSnapshot;
+  };
+  "bounded-tail": {
+    input: { options: SessionTranscriptBoundedMessageTailOptions };
+    output: SessionTranscriptBoundedMessageTailPage;
+  };
   title: {
     input: { includeInterSession?: boolean };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -115,7 +136,7 @@ type Reads = {
     output: IncognitoContextReadResult<SessionTranscriptContextSnapshot>;
   };
   "native-context-current": {
-    input: Pick<SessionTranscriptContextSnapshot, "version">;
+    input: Pick<SessionTranscriptContextSnapshot, "version"> & { through?: TranscriptEntryAnchor };
     output: IncognitoContextReadResult<void>;
   };
 };

@@ -125,6 +125,9 @@ During `openclaw update`, a locally linked plugin with an explicit load path kee
   </Accordion>
   <Accordion title="Existing plugin source choices">
     Updates retain the recorded npm or ClawHub source. Older install records do not distinguish automatic ClawHub selection from an explicit `clawhub:` request, so OpenClaw does not silently switch those records to npm. To change an existing plugin deliberately, review and run `openclaw plugins install npm:<package> --force`. Automatic externalization of an image-owned bundled plugin uses npm first and its declared ClawHub source second.
+
+    Version checks report the compatible update available from that recorded source. ClawHub and npm can publish at different times, so the reported target can be older than core or the latest npm package. Updating core does not require switching registries.
+
   </Accordion>
   <Accordion title="Version checks and integrity drift">
     Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, it avoids downloading or reinstalling. A requested selector change or managed release-pin recovery can still update the plugin index without rewriting `openclaw.json`.

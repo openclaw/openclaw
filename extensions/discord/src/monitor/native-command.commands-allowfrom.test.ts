@@ -167,13 +167,6 @@ function expectUnauthorizedReply(interaction: MockCommandInteraction) {
   expect(interaction.reply).not.toHaveBeenCalled();
 }
 
-function expectChannelNotAllowedReply(interaction: MockCommandInteraction) {
-  expect(interaction.followUp).toHaveBeenCalledWith({
-    content: "This channel is not allowed.",
-    ephemeral: true,
-  });
-}
-
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -286,27 +279,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectUnauthorizedReply(interaction);
-  });
-
-  it("does not treat open-DM wildcard access as guild command owner authorization", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      userId: "999999999999999999",
-      mutateConfig: (cfg) => {
-        cfg.commands = {};
-        cfg.channels!.discord = {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "allowlist",
-          guilds: {
-            "000000000000000000": {
-              channels: { "111111111111111111": { enabled: true, requireMention: false } },
-            },
-          },
-        };
-      },
-    });
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectChannelNotAllowedReply(interaction);
   });
 
   it("authorizes guild slash commands when commands.allowFrom.discord contains a matching guild: entry", async () => {

@@ -1,10 +1,12 @@
 // Managed-service handoff command tests cover immutable update target serialization.
 import { EventEmitter } from "node:events";
+import { symlinkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
@@ -104,6 +106,7 @@ afterEach(async () => {
 });
 
 async function startHandoffAndReadCommand(params: {
+  argv1?: string;
   runtime?: "node" | "bun";
   runId?: string;
   channel: "beta" | "extended-stable";
@@ -118,6 +121,8 @@ async function startHandoffAndReadCommand(params: {
 }): Promise<{
   command: string;
   commandArgv: string[] | undefined;
+  recoveryCommandArgv: string[];
+  triageCommandArgv: string[];
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
@@ -135,7 +140,7 @@ async function startHandoffAndReadCommand(params: {
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
     execPath: `/usr/local/bin/${params.runtime ?? "node"}`,
-    argv1: "/opt/openclaw/openclaw.mjs",
+    argv1: params.argv1 ?? "/opt/openclaw/openclaw.mjs",
     meta: {},
     ...(params.devTarget ? { devTarget: params.devTarget } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -151,6 +156,8 @@ async function startHandoffAndReadCommand(params: {
   tempDirs.add(path.dirname(paramsPath));
   const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
     commandArgv?: string[];
+    recoveryCommandArgv: string[];
+    triageCommandArgv: string[];
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
   };
@@ -165,6 +172,8 @@ async function startHandoffAndReadCommand(params: {
   return {
     command: result.command,
     commandArgv: helperParams.commandArgv,
+    recoveryCommandArgv: helperParams.recoveryCommandArgv,
+    triageCommandArgv: helperParams.triageCommandArgv,
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
@@ -172,6 +181,37 @@ async function startHandoffAndReadCommand(params: {
 }
 
 describe("managed service update handoff command", () => {
+  it("pins update, recovery, and triage before the detached helper starts", async () => {
+    const root = await fs.realpath(systemRoots.make("openclaw-handoff-launcher-"));
+    const releaseA = path.join(root, "release-a");
+    const releaseB = path.join(root, "release-b");
+    for (const release of [releaseA, releaseB]) {
+      await fs.mkdir(release);
+      await fs.writeFile(path.join(release, "openclaw.mjs"), "export {};\n");
+    }
+    const current = path.join(root, "current");
+    await fs.symlink(releaseA, current, "junction");
+    spawnMock.mockImplementationOnce((command: string, args: string[]) => {
+      unlinkSync(current);
+      symlinkSync(releaseB, current, "junction");
+      return createReadyChild(command, args);
+    });
+
+    const prepared = await startHandoffAndReadCommand({
+      argv1: path.join(current, "openclaw.mjs"),
+      channel: "beta",
+    });
+    for (const argv of [
+      prepared.commandArgv,
+      prepared.recoveryCommandArgv,
+      prepared.triageCommandArgv,
+    ]) {
+      expect(await fs.realpath(expectDefined(argv?.[1], "prepared handoff entry"))).toBe(
+        path.join(releaseA, "openclaw.mjs"),
+      );
+    }
+  });
+
   it.each([
     { writable: false, signal: null, code: 0, receipt: false },
     { writable: true, signal: null, code: 0, receipt: true },

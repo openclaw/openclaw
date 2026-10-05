@@ -10,11 +10,7 @@ import {
   isOpencodeGoKimiNoReasoningModelId,
 } from "./provider-policy-api.js";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
-import {
-  createOpencodeGoStalledStreamWrapper,
-  OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
-  OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
-} from "./stream-termination.js";
+import { createOpencodeGoStalledStreamWrapper } from "./stream-termination.js";
 
 function createOpencodeGoAttributionWrapper(
   baseStreamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]>,
@@ -107,9 +103,5 @@ export function createOpencodeGoWrapper(
   // Outermost layer: provider-owned stalled SSE termination so the underlying
   // OpenAI SDK request is aborted at the raw opencode-go boundary instead of
   // waiting for the shared runtime stuck-session recovery.
-  return createOpencodeGoStalledStreamWrapper(wrapped, {
-    provider: "opencode-go",
-    idleTimeoutMs: OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
-    firstEventTimeoutMs: OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
-  });
+  return createOpencodeGoStalledStreamWrapper(wrapped);
 }

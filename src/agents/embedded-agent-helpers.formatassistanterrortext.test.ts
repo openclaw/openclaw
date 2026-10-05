@@ -304,16 +304,13 @@ describe("formatAssistantErrorText", () => {
       "⚠️ The AI service is having trouble. Please try again in a moment.",
     );
   });
-  it("uses generic user-facing copy for escaped structured provider messages", () => {
-    // The internal formatter keeps detail for logs, while user-facing text must
-    // not expose arbitrary provider-controlled structured payload content.
+  it("preserves structured rejection messages as bounded single-line text", () => {
+    // Decode the message, not the surrounding provider response envelope.
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
-    expect(formatUserFacingAssistantErrorText(msg)).toBe(
-      "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
-    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe("LLM request rejected: SECRET CANARY");
   });
   it("surfaces allowlisted token limits from structured provider messages", () => {
     const msg = makeAssistantError(

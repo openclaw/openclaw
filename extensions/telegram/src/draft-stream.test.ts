@@ -834,7 +834,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
+      text: "<b>Shelling &lt;&amp;&gt;</b>\n<b>Exec</b>",
       parseMode: "HTML",
     });
     await stream.flush();
@@ -842,13 +842,13 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenNthCalledWith(
       1,
       123,
-      "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
+      "<b>Shelling &lt;&amp;&gt;</b>\n<b>Exec</b>",
       { parse_mode: "HTML" },
     );
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\n🛠️ Exec", {});
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\nExec", {});
     expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Shelling <&>\n🛠️ Exec",
-      sourceText: "Shelling &lt;&amp;&gt;\n🛠️ Exec",
+      text: "Shelling <&>\nExec",
+      sourceText: "Shelling &lt;&amp;&gt;\nExec",
       sourceTextMode: "html",
     });
 

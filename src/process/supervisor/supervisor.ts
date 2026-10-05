@@ -381,6 +381,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const construction = {
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
+        initiateSpawn: input.initiateSpawn,
         cwd: input.cwd,
         env: input.env,
         abortSignal: constructionAbort.signal,

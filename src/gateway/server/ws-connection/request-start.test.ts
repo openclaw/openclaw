@@ -109,6 +109,51 @@ describe("Gateway request start fairness", () => {
     await expect(requestStart()).resolves.toBeUndefined();
   });
 
+  it.each(["settled", "cancelled"] as const)(
+    "bounds settlement listeners while sibling requests are %s",
+    async (outcome) => {
+      const held = createDeferredCore();
+      const observeSettlement = vi.spyOn(held.promise, "then");
+      const siblings = Array.from({ length: 3 }, () => createDeferredCore());
+      const request = { method: "sessions.list" };
+      const start = (settled: Promise<void>, signal?: AbortSignal) => {
+        const permission = scheduleGatewayRequestStart(100, request, "client", settled, signal);
+        if (!permission) {
+          throw new Error("expected preparation capacity");
+        }
+        permissions.push(permission);
+        return permission;
+      };
+      try {
+        await Promise.all([
+          start(held.promise),
+          ...siblings.map((sibling) => start(sibling.promise)),
+        ]);
+        for (let index = 0; index < 32; index++) {
+          const completion = createDeferredCore();
+          const controller = new AbortController();
+          const permission = start(completion.promise, controller.signal);
+          await nextTurn();
+          if (outcome === "cancelled") {
+            controller.abort();
+            completion.resolve();
+          } else {
+            const slot = index % siblings.length;
+            siblings[slot]!.resolve();
+            siblings[slot] = completion;
+          }
+          await permission;
+        }
+        expect(observeSettlement.mock.calls.length).toBeLessThanOrEqual(4);
+      } finally {
+        held.resolve();
+        for (const sibling of siblings) {
+          sibling.resolve();
+        }
+      }
+    },
+  );
+
   it.each([false, true])(
     "yields after actual caller work (ready continuation: %s)",
     async (continuation) => {

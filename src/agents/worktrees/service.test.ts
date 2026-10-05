@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
@@ -1006,6 +1007,7 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "config", "--bool", "submodule.module.active")).toBe("true");
       expect(await git(path.join(repo, "module"), "rev-parse", "HEAD")).toBe(moduleHead);
 
+      useInProcessWorktreeCapacityTransport();
       const disk = fsSync.statfsSync(root);
       vi.spyOn(fsSync, "statfsSync").mockReturnValue({
         type: disk.type,

@@ -611,7 +611,6 @@ export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
-  ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
   agentId?: string;

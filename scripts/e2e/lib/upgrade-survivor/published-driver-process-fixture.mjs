@@ -79,6 +79,29 @@ if (role === "npm") {
   trace("cli", { args });
   if (args[0] === "doctor") {
     trace("doctor");
+  } else if (args[0] === "gateway" && args[1] === "call") {
+    // Lifecycle tests model RPC replies only; the update cell uses real packages.
+    const file = "/fixture/sessions.json";
+    const sessions = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+    const params = JSON.parse(args[args.indexOf("--params") + 1]);
+    const key = params.key ?? params.sessionKey ?? "agent:main:dashboard:incognito-fixture";
+    if (args[2] === "sessions.create") {
+      sessions[key] = { sessionId: key, incognito: Boolean(params.incognito), messages: [] };
+      output({ ok: true, key, sessionId: key, runStarted: false, entry: sessions[key] });
+    } else if (args[2] === "chat.inject") {
+      sessions[key].messages.push({ content: params.message });
+      output({ ok: true, messageId: "fixture-message" });
+    } else {
+      assert.equal(args[2], "chat.history");
+      const updated = fs.existsSync(
+        path.join(process.env.npm_config_prefix, "lib/node_modules/openclaw/dist/build-info.json"),
+      );
+      output({
+        ...sessions[key],
+        messages: updated && sessions[key].incognito ? [] : sessions[key].messages,
+      });
+    }
+    fs.writeFileSync(file, JSON.stringify(sessions));
   } else if (args[0] === "gateway" && args[1] === "install") {
     const unit = path.join(process.env.HOME, ".config/systemd/user/openclaw-gateway.service");
     fs.mkdirSync(path.dirname(unit), { recursive: true });

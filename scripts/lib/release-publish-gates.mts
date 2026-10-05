@@ -234,7 +234,10 @@ export function evaluateStableRollbackDrill(input: {
 
 function main() {
   const { values } = parseArgs({
-    options: { consumer: { type: "string" }, manifest: { type: "string" } },
+    options: {
+      consumer: { type: "string" },
+      manifest: { type: "string" },
+    },
   });
   const consumer = values.consumer;
   if (consumer !== "publisher" && consumer !== "core-npm" && consumer !== "stable-closeout") {

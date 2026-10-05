@@ -30,7 +30,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-function source(holdAgent = false) {
+function source(holdAgent = false, provenance = true) {
   const root = dirs.make("state-lease-before-migration-");
   const env = { HOME: root, OPENCLAW_STATE_DIR: root };
   const pathname = openOpenClawStateDatabase({ env }).path;
@@ -45,6 +45,9 @@ function source(holdAgent = false) {
       DROP TABLE IF EXISTS skill_workshop_proposals;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
+    if (!provenance) {
+      db.exec("ALTER TABLE agent_database_leases DROP COLUMN provenance");
+    }
   } finally {
     db.close();
   }
@@ -92,19 +95,23 @@ it.each(["timer", "worker"] as const)(
     expect(inspect(f.pathname)).toEqual(before);
   },
 );
-it("takes plugin and agent writer ownership before allowing the candidate migration", async () => {
-  const f = source();
-  const atEntry = await withPluginLifecycleLease(f.options, () =>
-    withAgentDatabaseMaintenanceLease(f.options, async (maintenance) => {
-      maintenance.assertOwned();
-      return inspect(f.pathname);
-    }),
-  );
-  expect(atEntry.version).toEqual({ user_version: 15 });
-  expect(atEntry.leases).toHaveLength(2);
-  expect(inspect(f.pathname).version).toEqual({ user_version: 15 });
-  expect(inspect(f.pathname).leases).toEqual([]);
-});
+it.each([true, false])(
+  "takes plugin and agent writer ownership before candidate migration (provenance=%s)",
+  async (provenance) => {
+    const f = source(false, provenance);
+    const before = inspect(f.pathname);
+    const atEntry = await withPluginLifecycleLease(f.options, () =>
+      withAgentDatabaseMaintenanceLease(f.options, async (maintenance) => {
+        maintenance.assertOwned();
+        return inspect(f.pathname);
+      }),
+    );
+    expect(atEntry.version).toEqual({ user_version: 15 });
+    expect(atEntry.schema).toEqual(before.schema);
+    expect(atEntry.leases).toHaveLength(2);
+    expect(inspect(f.pathname)).toEqual(before);
+  },
+);
 it("refuses a competing owner and preserves a replacement lease on cleanup", async () => {
   const f = source();
   const outside = new AsyncResource("premigration-competing-owner");

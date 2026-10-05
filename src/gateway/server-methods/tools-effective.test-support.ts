@@ -8,7 +8,7 @@ type RuntimeModelContext = Parameters<Parameters<AcquiredRuntimeModelContext["ru
 
 const toolsEffectiveInventoryMocks = vi.hoisted(() => {
   const resolveEffectiveToolInventory = vi.fn<InventoryModule["resolveEffectiveToolInventory"]>(
-    (params) => ({
+    async (params) => ({
       agentId: params.agentId ?? "main",
       profile: "coding",
       groups: [

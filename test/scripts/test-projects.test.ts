@@ -15,7 +15,6 @@ import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runt
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
-  applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
   applyFullExtensionsHeapBudget,
   buildFullSuiteVitestRunPlans,
@@ -119,34 +118,47 @@ describe("test runtime prerequisites", () => {
     ).toBe(expected);
   });
 
-  it("prepares direct lifecycle selection under test/vitest/vitest.full-agentic.config.ts", () => {
-    const config = "test/vitest/vitest.full-agentic.config.ts";
-    for (const [file, expected] of [
-      ["src/gateway/server-sidecar-retention.test.ts", "runtime"],
-      ["src/gateway/server-request-context.test.ts", undefined],
-    ] as const) {
-      const selections = resolveVitestRuntimeCliSelections(config, ["run", file], {});
-      expect(resolveVitestPretestBuildMode(selections), file).toBe(expected);
-    }
-  });
-
   const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
   const freshnessFile = "src/gateway/server-methods/models-list.freshness.integration.test.ts";
   const scopedFreshnessFile = "**/models-list.freshness.integration.test.ts";
   it.each([
+    ["full-agentic", ["src/gateway/server-sidecar-retention.test.ts"], "runtime"],
+    ["full-agentic", ["src/gateway/server-request-context.test.ts"], undefined],
     ["gateway-database-workers", [], "runtime"],
     ["gateway-database-workers", [freshnessFile], "runtime"],
     ["gateway-database-workers", ["models-list.freshness.integration"], "runtime"],
     ["gateway-database-workers", [freshnessFile, "--exclude", scopedFreshnessFile], undefined],
     ["gateway-methods", [catalogFile], undefined],
     ["gateway", [catalogFile, "--exclude", catalogFile], undefined],
-  ] as const)("binds %s runtime prerequisites to their owner for %s", (project, args, expected) => {
-    const selections = resolveVitestRuntimeCliSelections(
-      `test/vitest/vitest.${project}.config.ts`,
-      ["run", ...args],
-      {},
-    );
-    expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
+    ["bundled", ["--exclude", "src/plugins/loader.test.ts"], undefined],
+    ["extensions", ["--exclude", "deepinfra/**"], "runtime"],
+    [
+      "extensions",
+      ["--exclude", "deepinfra/**", "--exclude", "google-meet/**", "--exclude", "file-transfer/**"],
+      undefined,
+    ],
+    ["tui-pty", ["--exclude", "tui/tui-session-identity-pty.e2e.test.ts"], undefined],
+    ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
+    ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["tooling", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    [
+      "agents-core",
+      resolveVitestRuntimeConfigScopes("test/vitest/vitest.agents-core.config.ts").flatMap(
+        ({ file, dir }) => ["--exclude", path.posix.relative(dir, file)],
+      ),
+      undefined,
+    ],
+  ] as const)("binds %s prerequisites to CLI selection %j", (project, args, expected) => {
+    expect(
+      resolveVitestPretestBuildMode(
+        resolveVitestRuntimeCliSelections(
+          `test/vitest/vitest.${project}.config.ts`,
+          ["run", ...args],
+          {},
+        ),
+      ),
+    ).toBe(expected);
   });
 
   it("keeps Gateway worker runtime selection rooted at the repository for src/gateway/setup-inference.first-signin.integration.test.ts", () => {
@@ -164,31 +176,6 @@ describe("test runtime prerequisites", () => {
         resolveVitestRuntimeCliSelections(config, ["run", file, "--exclude", file], {}),
       ),
     ).toBeUndefined();
-  });
-
-  it.each([
-    ["bundled", ["src/plugins/loader.test.ts"], undefined],
-    ["extensions", ["deepinfra/**"], "runtime"],
-    ["extensions", ["deepinfra/**", "google-meet/**", "file-transfer/**"], undefined],
-    ["tui-pty", ["tui/tui-session-identity-pty.e2e.test.ts"], undefined],
-    ["tui-pty", ["tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
-    ["gateway-core", ["gateway-*.test.ts"], undefined],
-    ["gateway", ["gateway-*.test.ts"], "runtime"],
-    ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
-    [
-      "agents-core",
-      resolveVitestRuntimeConfigScopes("test/vitest/vitest.agents-core.config.ts").map(
-        ({ file, dir }) => path.posix.relative(dir, file),
-      ),
-      undefined,
-    ],
-  ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
-    const selections = resolveVitestRuntimeCliSelections(
-      `test/vitest/vitest.${project}.config.ts`,
-      ["run", ...exclude.flatMap((pattern) => ["--exclude", pattern])],
-      {},
-    );
-    expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
   });
 
   it.each([
@@ -383,36 +370,41 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toStrictEqual([]);
   });
 
-  it("records broad fallback paths skipped by focused changed mode", () => {
-    expect(
-      resolveChangedTestTargetPlan([
-        "test/vitest/vitest.shared.config.ts",
-        "src/utils/provider-utils.ts",
-      ]),
-    ).toEqual({
-      mode: "targets",
-      skippedBroadFallbackPaths: ["test/vitest/vitest.shared.config.ts"],
-      targets: ["src/utils/provider-utils.test.ts"],
-    });
-  });
-
-  it("keeps changed mode precise for global config and source edits", () => {
-    expect(resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"])).toEqual({
-      mode: "targets",
-      skippedBroadFallbackPaths: ["package.json"],
-      targets: ["src/commands/channels.add.test.ts"],
-    });
-  });
-
   it.each([
-    ["src/plugin-sdk/provider-entry.ts", "src/plugin-sdk/provider-entry.test.ts"],
     [
-      "extensions/qa-lab/src/scenario-catalog.test.ts",
-      "extensions/qa-lab/src/scenario-catalog.test.ts",
+      "test/vitest/vitest.shared.config.ts",
+      "src/utils/provider-utils.ts",
+      "src/utils/provider-utils.test.ts",
     ],
-    ["ui/src/components/markdown.test.ts", "ui/src/components/markdown.test.ts"],
-  ])("retains the precise owner for changed %s", (changedPath, target) => {
-    expectChangedTargets([changedPath], [target]);
+    ["package.json", "src/commands/channels.add.ts", "src/commands/channels.add.test.ts"],
+  ])("records skipped broad fallback %s beside precise source %s", (fallback, source, target) => {
+    expect(resolveChangedTestTargetPlan([fallback, source])).toEqual({
+      mode: "targets",
+      skippedBroadFallbackPaths: [fallback],
+      targets: [target],
+    });
+  });
+
+  it.each<[string[], string[]]>([
+    [["src/plugin-sdk/provider-entry.ts"], ["src/plugin-sdk/provider-entry.test.ts"]],
+    [
+      ["extensions/qa-lab/src/scenario-catalog.test.ts"],
+      ["extensions/qa-lab/src/scenario-catalog.test.ts"],
+    ],
+    [["ui/src/components/markdown.test.ts"], ["ui/src/components/markdown.test.ts"]],
+    [["scripts/crabbox-wrapper.mts"], ["test/scripts/crabbox-wrapper.test.ts"]],
+    [
+      ["scripts/check-composite-action-input-interpolation.py"],
+      ["test/scripts/check-composite-action-input-interpolation.test.ts"],
+    ],
+    [["scripts/check-no-conflict-markers.mjs"], ["test/scripts/check-no-conflict-markers.test.ts"]],
+    [
+      ["scripts/lib/restart-mac-gateway.sh"],
+      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
+    ],
+    [["src/gateway/gateway-codex-harness.live.test.ts"], []],
+  ])("retains precise changed owners for %j", (paths, targets) => {
+    expectChangedTargets(paths, targets);
   });
 
   it("discovers conventional nested, dashed and basename script owners for .mts", () => {
@@ -460,10 +452,6 @@ describe("scripts/test-projects changed-target routing", () => {
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => targets),
       { config: "test/vitest/vitest.tooling.config.ts" },
     );
-  });
-
-  it("keeps Crabbox runner script edits on their regression tests", () => {
-    expectChangedTargets(["scripts/crabbox-wrapper.mts"], ["test/scripts/crabbox-wrapper.test.ts"]);
   });
 
   it("unions semantic workflow owners with bounded direct references", () => {
@@ -547,18 +535,6 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("keeps workflow helper guard edits on their regression tests", () => {
-    expectChangedTargets(
-      ["scripts/check-composite-action-input-interpolation.py"],
-      ["test/scripts/check-composite-action-input-interpolation.test.ts"],
-    );
-
-    expectChangedTargets(
-      ["scripts/check-no-conflict-markers.mjs"],
-      ["test/scripts/check-no-conflict-markers.test.ts"],
-    );
-  });
-
   it("leaves actionlint validation external while retaining config consumers", () => {
     for (const withConsumers of [false, true]) {
       withTinyGitRepo(
@@ -608,15 +584,61 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes explicit source files through precise owner tests before broad globs", () => {
-    expectSingleVitestRunPlan(buildVitestRunPlans(["src/gateway/server-startup-early.ts"]), {
-      config: "test/vitest/vitest.gateway-server.config.ts",
-      includePatterns: ["src/gateway/server-startup-early.test.ts"],
+  it.each<{
+    file: string;
+    owner: string;
+    source?: string;
+    inventory?: readonly string[];
+  }>([
+    {
+      file: "src/gateway/server-startup-early.test.ts",
+      owner: "gateway-server",
+      source: "src/gateway/server-startup-early.ts",
+    },
+    {
+      file: "src/commands/onboarding-plugin-install.test.ts",
+      owner: "commands",
+      source: "src/commands/onboarding-plugin-install.ts",
+    },
+    { file: "src/agents/cli-runner/bundle-mcp.user-config.test.ts", owner: "agents-core-isolated" },
+    {
+      file: "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
+      owner: "agents-spawn-production-boundary",
+    },
+    { file: "src/agents/agent-command-local.test.ts", owner: "cli-process" },
+    ...[
+      "src/gateway/health/collector.queue-health.test.ts",
+      "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
+      "src/gateway/server-methods/server-methods.test.ts",
+    ].map((file) => ({
+      file,
+      owner: "gateway-database-workers",
+      inventory: gatewayDatabaseWorkerTestFiles,
+    })),
+    ...[
+      "src/agents/command/session-store.test.ts",
+      "src/agents/embedded-agent-runner/run-entry.cyber-failover.runner.test.ts",
+      "src/agents/models-config.providers.endpoint.test.ts",
+      "src/agents/models-config.root-authorship.test.ts",
+      "src/agents/models-config.runtime-source-snapshot.test.ts",
+      "src/agents/models-config.write-serialization.test.ts",
+      "src/agents/plugin-model-catalog-auth.test.ts",
+      "src/agents/plugin-model-catalog.test.ts",
+      "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
+      "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
+      "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
+      "src/state/openclaw-state-db.test.ts",
+      "src/worker/worker.runtime.test.ts",
+      "test/cron-conversation-delivery.codex.integration.test.ts",
+    ].map((file) => ({ file, owner: "infra", inventory: databaseWorkerCoreTestFiles })),
+  ])("routes $file to $owner", ({ file, owner, source, inventory }) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([source ?? file]), {
+      config: `test/vitest/vitest.${owner}.config.ts`,
+      includePatterns: [file],
     });
-    expectSingleVitestRunPlan(buildVitestRunPlans(["src/commands/onboarding-plugin-install.ts"]), {
-      config: "test/vitest/vitest.commands.config.ts",
-      includePatterns: ["src/commands/onboarding-plugin-install.test.ts"],
-    });
+    if (inventory) {
+      expect(inventory.filter((entry) => entry === file)).toEqual([file]);
+    }
   });
 
   it.each(["src/selector/one.test.ts", "./src/selector/one.test.ts"])(
@@ -1450,10 +1472,6 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("does not route live tests through the normal changed-test lane", () => {
-    expectChangedTargets(["src/gateway/gateway-codex-harness.live.test.ts"], []);
-  });
-
   it.each<{
     args: string[];
     owner: string;
@@ -1520,18 +1538,6 @@ describe("scripts/test-projects changed-target routing", () => {
     },
   );
 
-  it.each([
-    "src/gateway/health/collector.queue-health.test.ts",
-    "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
-    "src/gateway/server-methods/server-methods.test.ts",
-  ])("routes Gateway SQLite consumer %s exactly once to its broker owner", (testFile) => {
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.gateway-database-workers.config.ts",
-      includePatterns: [testFile],
-    });
-    expect(gatewayDatabaseWorkerTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
-  });
-
   it.each(
     ["src/gateway", "src/gateway/**/*.test.ts"].flatMap((target) =>
       ["alone", "worker-first", "aggregate-first"].map((order) => ({ target, order })),
@@ -1589,27 +1595,6 @@ describe("scripts/test-projects changed-target routing", () => {
       });
     },
   );
-
-  it.each([
-    "src/agents/command/session-store.test.ts",
-    "src/agents/models-config.providers.endpoint.test.ts",
-    "src/agents/models-config.root-authorship.test.ts",
-    "src/agents/models-config.runtime-source-snapshot.test.ts",
-    "src/agents/models-config.write-serialization.test.ts",
-    "src/agents/plugin-model-catalog-auth.test.ts",
-    "src/agents/plugin-model-catalog.test.ts",
-    "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
-    "src/state/openclaw-state-db.test.ts",
-    "src/worker/worker.runtime.test.ts",
-  ])("routes native shared-state consumer %s exactly once to its broker owner", (testFile) => {
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.infra.config.ts",
-      includePatterns: [testFile],
-    });
-    expect(databaseWorkerCoreTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
-  });
 
   it.each([
     ["src/agents/**/*.test.ts", "test/vitest/vitest.agents.config.ts"],
@@ -1736,22 +1721,6 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("routes isolated agent test src/agents/cli-runner/bundle-mcp.user-config.test.ts to the isolated agents-core shard", () => {
-    const testFile = "src/agents/cli-runner/bundle-mcp.user-config.test.ts";
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.agents-core-isolated.config.ts",
-      includePatterns: [testFile],
-    });
-  });
-
-  it("routes production-boundary agent test src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts to its dedicated shard", () => {
-    const testFile = "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts";
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.agents-spawn-production-boundary.config.ts",
-      includePatterns: [testFile],
-    });
-  });
-
   describe("agent directory and glob inventory", () => {
     const inventories = new Map<string, string[]>();
     const toolRoot = "src/agents/tools";
@@ -1767,7 +1736,7 @@ describe("scripts/test-projects changed-target routing", () => {
       [`${failoverRoot}/failover-classification.corpus.test.ts`, "agents-core-isolated"],
       [`${failoverRoot}/provider-structured-signals.test.ts`, "agents-core-isolated"],
       [`${runtimeRoot}/materialize-model.test.ts`, "agents-support"],
-      [`${embeddedRoot}/run.inherited-auth-owner.test.ts`, "agents-embedded-agent"],
+      [`${embeddedRoot}/run.inherited-auth-owner.test.ts`, "infra"],
       [
         `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
         "agents-embedded-agent-incomplete-turn",
@@ -1965,83 +1934,73 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes mac restart helpers through restart-mac owner tests", () => {
-    expectChangedTargets(
-      ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
-    );
-  });
-
-  it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
-    const targets = [
-      "scripts/e2e/mcp-channels-docker.sh",
-      "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
-      "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
-      "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
-      "scripts/e2e/mcp-code-mode-gateway-docker.sh",
-      "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
-      "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
-      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
-      "scripts/mcp-code-mode-gateway-e2e.ts",
-      "scripts/e2e/cron-cli-docker.sh",
-      "scripts/e2e/cron-mcp-cleanup-docker.sh",
-      "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
-    ];
-
+  it.each<[string[], string[]]>([
+    [
+      [
+        "scripts/e2e/mcp-channels-docker.sh",
+        "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
+        "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+        "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
+        "scripts/e2e/mcp-code-mode-gateway-docker.sh",
+        "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+        "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+        "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+        "scripts/mcp-code-mode-gateway-e2e.ts",
+        "scripts/e2e/cron-cli-docker.sh",
+        "scripts/e2e/cron-mcp-cleanup-docker.sh",
+        "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-observability.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "test/scripts/session-log-mentions.test.ts",
+        "src/agents/agent-bundle-mcp-runtime.test.ts",
+        "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+        "src/gateway/server.cron.test.ts",
+        "src/gateway/server-methods/agent.test.ts",
+        "src/cron/isolated-agent/run.fast-mode.test.ts",
+        "src/cron/active-jobs-manual-run.test.ts",
+      ],
+    ],
+    [
+      [
+        "scripts/e2e/openai-image-auth-docker.sh",
+        "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/openai-image-auth-docker-client.test.ts",
+        "extensions/openai/image-generation-provider.test.ts",
+        "src/image-generation/openai-compatible-image-provider.test.ts",
+      ],
+    ],
+    [
+      [
+        "scripts/e2e/codex-media-path-docker.sh",
+        "scripts/e2e/codex-npm-plugin-live-docker.sh",
+        "scripts/e2e/codex-on-demand-docker.sh",
+        "scripts/e2e/live-plugin-tool-docker.sh",
+        "scripts/e2e/plugin-binding-command-escape-docker.sh",
+        "scripts/e2e/qr-import-docker.sh",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/codex-media-path-client.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/live-plugin-tool-assertions.test.ts",
+        "test/scripts/plugin-binding-command-escape-docker.test.ts",
+      ],
+    ],
+  ])("routes Docker E2E targets %j to their semantic owners", (targets, owners) => {
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
-    expectChangedTargets(targets, [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-observability.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/plugin-prerelease-test-plan.test.ts",
-      "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
-      "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
-      "test/scripts/mcp-code-mode-gateway-client.test.ts",
-      "test/scripts/session-log-mentions.test.ts",
-      "src/agents/agent-bundle-mcp-runtime.test.ts",
-      "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
-      "src/gateway/server.cron.test.ts",
-      "src/gateway/server-methods/agent.test.ts",
-      "src/cron/isolated-agent/run.fast-mode.test.ts",
-      "src/cron/active-jobs-manual-run.test.ts",
-    ]);
-  });
-
-  it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
-    const targets = [
-      "scripts/e2e/openai-image-auth-docker.sh",
-      "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
-    ];
-
-    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
-    expectChangedTargets(targets, [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/openai-image-auth-docker-client.test.ts",
-      "extensions/openai/image-generation-provider.test.ts",
-      "src/image-generation/openai-compatible-image-provider.test.ts",
-    ]);
-  });
-
-  it("routes package-backed Docker shell targets instead of skipping changed tests", () => {
-    const targets = [
-      "scripts/e2e/codex-media-path-docker.sh",
-      "scripts/e2e/codex-npm-plugin-live-docker.sh",
-      "scripts/e2e/codex-on-demand-docker.sh",
-      "scripts/e2e/live-plugin-tool-docker.sh",
-      "scripts/e2e/plugin-binding-command-escape-docker.sh",
-      "scripts/e2e/qr-import-docker.sh",
-    ];
-
-    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
-    expectChangedTargets(targets, [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/codex-media-path-client.test.ts",
-      "test/scripts/package-acceptance-workflow.test.ts",
-      "test/scripts/live-plugin-tool-assertions.test.ts",
-      "test/scripts/plugin-binding-command-escape-docker.test.ts",
-    ]);
+    expectChangedTargets(targets, owners);
   });
 
   it.each([
@@ -2083,11 +2042,6 @@ describe("scripts/test-projects changed-target routing", () => {
         }
       }
     }
-  });
-
-  it("routes the agent command child through its isolated CLI project", () => {
-    const file = "src/agents/agent-command-local.test.ts";
-    expect(buildVitestRunPlans([file])).toEqual([runPlan("cli-process", [file])]);
   });
 
   it("adds the CLI process project for broad CLI targets", () => {
@@ -3675,63 +3629,46 @@ describe("test selector native source facts", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  const fastTooling = {
+    config: "test/vitest/vitest.tooling.config.ts",
+    includePatterns: ["test/scripts/run-with-env.test.ts"],
+  };
+  const slowTooling = {
+    ...fastTooling,
+    includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
+  };
+  const runtime = {
+    config: "test/vitest/vitest.runtime-config.config.ts",
+    includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
+  };
   it.each([
-    { label: "null", includePatterns: null },
-    { label: "empty", includePatterns: [] },
-  ])("retains whole-config costs for $label selection", ({ includePatterns }) => {
-    const whole = { config: "test/vitest/vitest.gateway.config.ts", includePatterns };
-    const selected = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/run-with-env.test.ts"],
-    };
-
-    expect(orderFullSuiteSpecsForParallelRun([selected, whole])).toEqual([whole, selected]);
-  });
-
-  it("prioritizes expensive selected files over whole-config defaults", () => {
-    const tooling = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
-    };
-    const runtime = {
-      config: "test/vitest/vitest.runtime-config.config.ts",
-      includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
-    };
-
-    expect(orderFullSuiteSpecsForParallelRun([runtime, tooling])).toEqual([tooling, runtime]);
-  });
-
-  it("prices expanded chunk files without enabling include-file filtering", () => {
-    const chunk = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: null,
-      timingTargets: ["test/scripts/vitest-worker-artifacts.test.ts"],
-    };
-    const whole = { config: "test/vitest/vitest.runtime-config.config.ts", includePatterns: null };
-
-    expect(orderFullSuiteSpecsForParallelRun([whole, chunk])).toEqual([chunk, whole]);
+    [
+      "null whole-config selection",
+      fastTooling,
+      { config: "test/vitest/vitest.gateway.config.ts", includePatterns: null },
+    ],
+    [
+      "empty whole-config selection",
+      fastTooling,
+      { config: "test/vitest/vitest.gateway.config.ts", includePatterns: [] },
+    ],
+    ["expensive selected files", runtime, slowTooling],
+    [
+      "expanded chunks",
+      { ...runtime, includePatterns: null },
+      { ...slowTooling, includePatterns: null, timingTargets: slowTooling.includePatterns },
+    ],
+  ] as const)("prioritizes %s", (_name, cheaper, expensive) => {
+    expect(orderFullSuiteSpecsForParallelRun([cheaper, expensive])).toEqual([expensive, cheaper]);
   });
 
   it("uses observed selection timings without substituting a whole-config sample", () => {
-    const fastTooling = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/run-with-env.test.ts"],
-    };
-    const slowTooling = {
-      config: fastTooling.config,
-      includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
-    };
-    const runtime = {
-      config: "test/vitest/vitest.runtime-config.config.ts",
-      includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
-    };
     const timings = new Map([
       [fastTooling.config, 1_000_000],
       [resolveShardTimingKey(fastTooling), 500],
       [resolveShardTimingKey(slowTooling), 153_000],
       [resolveShardTimingKey(runtime), 35_000],
     ]);
-
     expect(orderFullSuiteSpecsForParallelRun([fastTooling, slowTooling, runtime], timings)).toEqual(
       [slowTooling, fastTooling, runtime],
     );
@@ -3915,39 +3852,5 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(Number(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS)).toBeGreaterThan(
       Number(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS),
     );
-  });
-});
-
-describe("scripts/test-projects Vitest cache isolation", () => {
-  it("assigns isolated fs-module caches to multi-spec non-watch runs", () => {
-    const specs = applyDefaultVitestCachePaths(
-      [
-        {
-          config: "test/vitest/vitest.unit-fast.config.ts",
-          env: {},
-          includeFilePath: null,
-          includePatterns: null,
-          pnpmArgs: [],
-          watchMode: false,
-        },
-        {
-          config: "test/vitest/vitest.extension-memory.config.ts",
-          env: {},
-          includeFilePath: null,
-          includePatterns: null,
-          pnpmArgs: [],
-          watchMode: false,
-        },
-      ],
-      { cwd: "/repo", env: {} },
-    );
-
-    const paths = specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH);
-    expect(new Set(paths).size).toBe(2);
-    for (const cachePath of paths) {
-      expect(path.relative(path.join("/repo", ".cache", "vitest"), cachePath!)).toMatch(
-        /^slots[/\\][a-f\d]+[/\\]0$/u,
-      );
-    }
   });
 });

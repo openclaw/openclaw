@@ -12,7 +12,6 @@ import type {
   MessagePresentationButton,
 } from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
-// Builds reply payloads for exec approval prompts and outcomes.
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
@@ -111,13 +110,6 @@ function resolveAllowedDecisions(params: {
   return params.allowedDecisions ?? resolveExecApprovalAllowedDecisions({ ask: params.ask });
 }
 
-export function buildExecApprovalCommandText(params: {
-  approvalCommandId: string;
-  decision: ExecApprovalReplyDecision;
-}): string {
-  return `/approve ${params.approvalCommandId} ${params.decision}`;
-}
-
 type BuildExecApprovalActionDescriptorsParams = {
   approvalCommandId: string;
   ask?: string | null;
@@ -135,15 +127,11 @@ function buildApprovalActionDescriptors(
   ];
   return decisions
     .filter((descriptor) => allowedDecisions.includes(descriptor.decision))
-    .map((descriptor) => ({
-      decision: descriptor.decision,
-      label: descriptor.label,
-      style: descriptor.style,
-      command: buildExecApprovalCommandText({
-        approvalCommandId,
-        decision: descriptor.decision,
+    .map((descriptor) =>
+      Object.assign(descriptor, {
+        command: `/approve ${approvalCommandId} ${descriptor.decision}`,
       }),
-    }));
+    );
 }
 
 export function buildExecApprovalActionDescriptors(
@@ -166,18 +154,15 @@ export function buildTypedApprovalActionDescriptors(
     return [];
   }
   return buildApprovalActionDescriptors(approvalId, resolveAllowedDecisions(params)).map(
-    (descriptor) => ({
-      decision: descriptor.decision,
-      label: descriptor.label,
-      style: descriptor.style,
-      command: descriptor.command,
-      action: {
-        type: "approval",
-        approvalId,
-        approvalKind: params.approvalKind,
-        decision: descriptor.decision,
-      },
-    }),
+    (descriptor) =>
+      Object.assign(descriptor, {
+        action: {
+          type: "approval",
+          approvalId,
+          approvalKind: params.approvalKind,
+          decision: descriptor.decision,
+        } satisfies TypedApprovalActionDescriptor["action"],
+      }),
   );
 }
 
@@ -240,20 +225,6 @@ export function buildExecApprovalPresentation(params: {
 }): MessagePresentation | undefined {
   return buildApprovalButtonPresentation({
     approvalId: params.approvalCommandId,
-    ask: params.ask,
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
-/** Build an exec-approval presentation with canonical typed decision actions. */
-export function buildTypedExecApprovalPresentation(params: {
-  approvalCommandId: string;
-  ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalReplyDecision[];
-}): MessagePresentation | undefined {
-  return buildTypedApprovalPresentation({
-    approvalId: params.approvalCommandId,
-    approvalKind: "exec",
     ask: params.ask,
     allowedDecisions: params.allowedDecisions,
   });
@@ -417,8 +388,9 @@ export function buildTypedExecApprovalPendingReplyPayload(
   const payload = buildExecApprovalPendingReplyPayload(params);
   return {
     ...payload,
-    presentation: buildTypedExecApprovalPresentation({
-      approvalCommandId: params.approvalId,
+    presentation: buildTypedApprovalPresentation({
+      approvalId: params.approvalId,
+      approvalKind: "exec",
       allowedDecisions: resolveAllowedDecisions(params),
     }),
   };

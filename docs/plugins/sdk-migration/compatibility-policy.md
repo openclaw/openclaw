@@ -66,6 +66,25 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### Harness tool construction
+
+Harnesses should await `params.hostCapabilities.createToolSurfaceAsync(options,
+bindingOptions?)`. Each construction reads fresh exec policy through the existing
+worker, then binds tools to the exact admitted host. Ordinary exec-approval read
+errors use conservative deny defaults. Migration errors and authority loss reject
+construction; callers must not retry through the synchronous factory.
+The public `createOpenClawCodingToolsAsync(options?)` factory from
+`openclaw/plugin-sdk/agent-harness` provides the same awaited preparation for
+non-harness callers. Harnesses use the host capability to retain its source
+authority and private bindings.
+
+The synchronous `createToolSurface` and `createOpenClawCodingTools` contracts
+shipped in OpenClaw 2026.9.8 remain available with their existing arguments,
+array results, and completion timing. TypeScript marks them deprecated for
+removal at the next Plugin SDK major, subject to explicit breaking-release
+approval. Bundled callers use the awaited factories. This migration changes no
+stored data, schema, retention, or update behavior.
+
 ### WebSocket options and constructors
 
 `websocket-runtime` retains the `ws.ClientOptions` alias and `WebSocket`
@@ -208,6 +227,39 @@ types. Bundled code uses the awaited contracts. File-backed writes reuse the
 canonical worker writer; incognito retains its process-local owner until its
 separate cutover. Schemas, persisted bytes, and supported update paths are
 unchanged. Removal still requires explicit breaking-release approval.
+
+### Reply run-start transcript facts
+
+`GetReplyOptions.onAgentRunStart` from `openclaw/plugin-sdk/reply-runtime`, also
+provided to `reply_dispatch` hooks, retains the callback shipped in OpenClaw
+2026.9.8: `(runId, executionIdentityToken?, options?) => unknown`. Existing
+callbacks and producers that omit later arguments remain supported. Completion
+ownership still requires returning `"reply-dispatch"` synchronously.
+
+Current runtime helpers supply prepared transcript facts in an optional fourth
+argument. Wrappers should forward every argument and the callback's return value;
+see [message hooks](/plugins/hooks/messages). The facts describe the transcript
+boundary and do not grant session or write authority. When a released producer
+omits them, the Gateway retains its synchronous transcript-read fallback.
+
+Only that omitted-facts fallback is deprecated as of October 4, 2026; the callback
+itself remains supported. The fallback stays until the next Plugin SDK major and
+explicit breaking-release approval. The compatibility registry records the
+migration without runtime warnings. Schemas, retained data, and update behavior
+are unchanged.
+
+### ACP metadata binding compatibility
+
+`openclaw/plugin-sdk/acp-runtime` retains the one-argument
+`readAcpSessionEntryAsync` callable published in `v2026.9.8`. The returned ACP
+manager's `loadSessionEntryAsync` and `upsertSessionMeta` injection callbacks also
+keep their released one-argument signatures and Promise results. Plugins do not
+supply internal incognito actor bindings.
+
+The `acp-session-metadata-released-signatures` compatibility record is active:
+these APIs remain supported, with no deprecation warning or required migration.
+Worker activation must preserve them; changing these released contracts requires
+an explicitly approved Plugin SDK major release.
 
 ### Native session generation authority
 

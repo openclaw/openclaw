@@ -9,6 +9,7 @@ import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-ope
 import { createDeferredCore } from "../shared/deferred.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import type { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
+import type { createOpenClawStateLeaseWorkerStorage } from "../state/openclaw-state-lease-worker-storage.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
@@ -68,20 +69,52 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 vi.mock("../state/openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: fixture.forbiddenNative,
 }));
-vi.mock("../state/openclaw-state-db-cache.js", () => ({
+vi.mock("../state/openclaw-state-db-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-cache.js")>()),
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
+    coordinationKey: databasePath,
+    identity: { key: `file:${databasePath}`, canonicalPath: databasePath },
     assertCurrent: fixture.assertDatabaseCurrent,
   }),
+  registerOpenClawStateDatabaseAsyncResource: () => () => {},
 }));
-vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
+vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-lease-worker-storage.js")>()),
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
-  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenNative,
+  createOpenClawStateLeaseWorkerStorage: (
+    context: OpenClawStateWorkerContext,
+  ): ReturnType<typeof createOpenClawStateLeaseWorkerStorage> => ({
+    path: context.admission.databasePath,
+    assertCurrent: () => context.admission.assertCurrent(),
+    async withRetainedStartup(run, assertCurrent) {
+      context.admission.assertCurrent();
+      assertCurrent();
+      return await run(context);
+    },
+    async acquire(owner) {
+      return await owner.runLifecycle("acquire", async (admission) => {
+        admission.assertCurrent();
+        return { kind: "acquired" as const, expiresAt: fixture.expiresAt };
+      });
+    },
+    verify: fixture.forbiddenNative,
+    renew: fixture.forbiddenNative,
+    startTimer: fixture.forbiddenNative,
+    async release(owner) {
+      await owner.runLifecycle("release", async (admission) => {
+        admission.assertCurrent();
+        fixture.release();
+      });
+    },
+  }),
 }));
-vi.mock("../state/openclaw-state-lease-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-lease-storage.js")>()),
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => path.resolve("/synthetic-state/lease.sqlite"),
   verifyOpenClawStateLeaseOwnership: () => {
@@ -96,8 +129,12 @@ vi.mock("../state/openclaw-state-lease-storage.js", () => ({
     fixture.expiresAt = Date.now() + 30_000;
     return fixture.expiresAt;
   },
-  releaseOpenClawStateLeaseBestEffort: async () => {
-    fixture.release();
+  releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) => {
+    if (execute) {
+      await execute();
+    } else {
+      fixture.release();
+    }
   },
   releaseOpenClawStateLease: fixture.release,
 }));
@@ -360,7 +397,7 @@ it.each(["known", "unknown", "wrapped-unknown"] as const)(
       ready: Promise.resolve(),
       assertRunning: vi.fn(),
       assertResponsive: vi.fn(),
-      verify: fixture.forbiddenNative,
+      verify: async () => fixture.expiresAt,
       renew: fixture.forbiddenNative,
       close: fixture.forbiddenNative,
       stop: async () => 0,

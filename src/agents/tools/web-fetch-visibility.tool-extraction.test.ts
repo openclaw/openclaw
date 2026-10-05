@@ -4,7 +4,11 @@ import { createServer } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWebFetchTool } from "./web-fetch.js";
 
+const MARKDOWN_CODE =
+  "# Example\n\n- Read [the guide](https://example.com).\n\n```text\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n```";
+
 const PAGES: Record<string, string> = {
+  "/markdown-code": MARKDOWN_CODE,
   "/implicit-nested-siblings":
     "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
   "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
@@ -26,7 +30,9 @@ async function startPageServer(): Promise<{ server: Server; baseUrl: string }> {
       res.end("not found");
       return;
     }
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "content-type": `${req.url === "/markdown-code" ? "text/markdown" : "text/html"}; charset=utf-8`,
+    });
     res.end(page);
   });
   await new Promise<void>((resolve) => {
@@ -53,7 +59,10 @@ describe("web_fetch visibility through the real tool execute path", () => {
     });
   });
 
-  async function extract(path: string): Promise<string> {
+  async function extract(
+    path: string,
+    extractMode: "markdown" | "text" = "markdown",
+  ): Promise<string> {
     const tool = createWebFetchTool({
       config: {
         // The visibility sanitizer runs on the basic-extraction fallback path
@@ -72,7 +81,7 @@ describe("web_fetch visibility through the real tool execute path", () => {
     if (!tool) {
       throw new Error("expected enabled web_fetch tool");
     }
-    const result = await tool.execute("call", { url: `${baseUrl}${path}` });
+    const result = await tool.execute("call", { url: `${baseUrl}${path}`, extractMode });
     return result.content
       .filter((block) => block.type === "text")
       .map((block) => block.text)
@@ -95,4 +104,20 @@ describe("web_fetch visibility through the real tool execute path", () => {
     expect(text).not.toContain("Secret framework note");
     expect(text).not.toContain("Secret class note");
   });
+
+  it.each(["text", "markdown"] as const)(
+    "preserves code examples through HTTP Markdown extraction in %s mode",
+    async (mode) => {
+      const result = JSON.parse(await extract("/markdown-code", mode)) as {
+        extractor: string;
+        text: string;
+      };
+      expect(result.extractor).toBe("cf-markdown");
+      expect(result.text).toContain(
+        mode === "markdown"
+          ? MARKDOWN_CODE
+          : "Example\n\nRead the guide.\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`",
+      );
+    },
+  );
 });

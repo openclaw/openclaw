@@ -333,7 +333,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
     const scopedStream = recordServiceTierObservation
       ? createOpenAIServiceTierObservationWrapper(
           streamAgent.streamFn,
-          (model) =>
+          (model, serviceTiers) =>
             !signal.aborted &&
             params.isCurrent() &&
             recordServiceTierObservation({
@@ -341,8 +341,9 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
               runtimeId: "openclaw",
               api: model.api,
               baseUrl: model.baseUrl,
-              serviceTiers: ["priority"],
+              serviceTiers,
             }),
+          prepared.readServiceTiers,
         )
       : streamAgent.streamFn;
     const model = providerModel;

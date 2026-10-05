@@ -1,5 +1,7 @@
 {
   "id": "xai",
+  "name": "xAI (Grok)",
+  "description": "xAI provider for Grok models, Grok web and X search, code execution, speech, and media generation.",
   "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {

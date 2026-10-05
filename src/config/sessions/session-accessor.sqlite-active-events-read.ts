@@ -1,12 +1,11 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
   parseActiveTranscriptMessageRow,
-  selectMessagePayload,
-  selectMessageRows,
+  readSnapshotEventRows,
   type CurrentTranscriptProjection,
   type SessionTranscriptBoundedMessageTailOptions,
   type SessionTranscriptBoundedMessageTailPage,
@@ -120,35 +119,39 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
   if (metadata.length !== scannedMessages) {
     throw new Error("Active transcript bounded message page is incomplete");
   }
-  const selectedPositions: number[] = [];
+  const selected: typeof metadata = [];
   let newestContiguousEventCount: number | undefined;
   let serializedBytes = 0;
   for (let index = metadata.length - 1; index >= 0; index -= 1) {
     const row = metadata[index]!;
     if (serializedBytes + row.serialized_bytes > maxBytes) {
-      newestContiguousEventCount ??= selectedPositions.length;
+      newestContiguousEventCount ??= selected.length;
       continue;
     }
-    selectedPositions.push(row.message_position);
+    selected.push(row);
     serializedBytes += row.serialized_bytes;
   }
-  const events =
-    selectedPositions.length === 0
+  const payloads = new Map(
+    selected.length === 0
       ? []
-      : executeSqliteQuerySync(
-          projection.database.db,
-          selectMessagePayload(
-            projection.database,
-            selectMessageRows(projection.database, projection.resolved.sessionId, {
-              positions: selectedPositions,
-            }),
-          ),
-        ).rows.map(parseActiveTranscriptMessageRow);
+      : readSnapshotEventRows(
+          projection,
+          selected.map((row) => row.event_seq),
+        ).map((row) => [row.seq, row.event_json]),
+  );
+  const events = selected
+    .toSorted((left, right) => left.message_position - right.message_position)
+    .flatMap((row) => {
+      const eventJson = payloads.get(row.event_seq);
+      return eventJson === undefined
+        ? []
+        : [parseActiveTranscriptMessageRow({ ...row, event_json: eventJson })];
+    });
   return {
     ...checked,
     activeLeafEntryId: projection.state.leafEventId,
     events,
-    newestContiguousEventCount: newestContiguousEventCount ?? selectedPositions.length,
+    newestContiguousEventCount: newestContiguousEventCount ?? selected.length,
     scannedMessages,
     serializedBytes,
     snapshot,

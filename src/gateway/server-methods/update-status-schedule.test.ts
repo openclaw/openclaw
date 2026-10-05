@@ -31,9 +31,10 @@ vi.mock("../../infra/update-install-status.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: install,
 }));
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: () => null,
-  refreshLatestUpdateRestartSentinel: async () => null,
+  prepareLatestUpdateRestartSentinel: async () => null,
 }));
 
 let lifecycle: UpdateCheckLifecycle;

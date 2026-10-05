@@ -81,6 +81,13 @@ const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-ha
 // Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
 const bunCompatibleScopedOwners = new Map([
   [
+    "test/vitest/vitest.extension-whatsapp.config.ts",
+    {
+      dir: "extensions",
+      files: ["extensions/whatsapp/src/session.media-upload.test.ts"],
+    },
+  ],
+  [
     "test/vitest/vitest.extension-slack.config.ts",
     {
       dir: "extensions",
@@ -111,7 +118,10 @@ const bunCompatibleScopedOwners = new Map([
     "test/vitest/vitest.plugins.config.ts",
     {
       dir: "src/plugins",
-      files: ["src/plugins/plugin-module-generation.interop.test.ts"],
+      files: [
+        "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/sdk-alias.test.ts",
+      ],
     },
   ],
   [

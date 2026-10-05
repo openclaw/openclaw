@@ -141,7 +141,8 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
 });
 
 test("failed worker cleanup keeps worktree reconstruction blocked until the worker is gone", async () => {
-  const { key, sessionId, storePath, worktree } = await createArchiveWorktreeFixture();
+  const { key, sessionId, storePath, worktree, cleanupWorktrees } =
+    await createArchiveWorktreeFixture();
   await fs.writeFile(path.join(worktree.path, "draft.txt"), "restore this work\n");
   expect(
     await directSessionReq("sessions.patch", {
@@ -150,6 +151,7 @@ test("failed worker cleanup keeps worktree reconstruction blocked until the work
       archived: true,
     }),
   ).toMatchObject({ ok: true });
+  await cleanupWorktrees();
   const { environment, reclaim, context } = await pendingWorkerCleanup(sessionId, key);
   const restore = vi.spyOn(managedWorktrees, "restore");
   const unarchive = () =>

@@ -435,8 +435,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         baseUrl,
         abortSignal: daemonLifecycle.abortSignal,
         startupDeadlineMs: startupDeadline,
-        logAfterMs: 10_000,
-        logIntervalMs: 10_000,
         runtime,
         waitForTransportReadyFn,
       });

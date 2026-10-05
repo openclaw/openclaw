@@ -961,7 +961,7 @@ describe("FeishuStreamingSession", () => {
     const session = createActiveSession(deps, {
       cardId: "card_4",
       messageId: "om_4",
-      text: "🔎 Web Search\n\nfinal answer",
+      text: "Web Search\n\nfinal answer",
       lastUpdateTime: 3_000,
     });
 

@@ -10,6 +10,7 @@ import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-s
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { acquireSqliteStagingToken } from "../infra/sqlite-staging-token.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -536,6 +537,7 @@ it("joins hourly reclamation during metadata retirement without stopping sibling
   const orphan = path.join(root, "abandoned");
   fs.mkdirSync(orphan, { recursive: true });
   fs.writeFileSync(path.join(orphan, "payload"), "reconstructible capture");
+  acquireSqliteStagingToken(orphan, "create")();
   age(orphan);
   const entered = createDeferred();
   const release = createDeferred();

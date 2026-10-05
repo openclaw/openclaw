@@ -276,7 +276,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       setPendingScrollFrame: (frame) => {
         this.pendingScrollFrame = frame;
       },
-      requestUpdate: this.requestUpdate,
       onReaderScroll: () => this.callbacks.onReaderScroll?.(),
     };
     if (initialOffset !== null) {

@@ -909,7 +909,7 @@ describe("ollama setup", () => {
     },
   );
 
-  it("exits when Ollama is unreachable", async () => {
+  it("propagates unreachable guidance to the caller without exiting", async () => {
     const fetchMock = createOllamaFetchMock({
       tagsError: new Error("connect ECONNREFUSED"),
     });
@@ -918,24 +918,25 @@ describe("ollama setup", () => {
     const runtime: RuntimeEnv = createRuntimeSpies();
     const nextConfig = {};
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig,
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11435",
-        customModelId: "llama3.2:latest",
-      },
-      runtime,
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expect(
+      configureOllamaNonInteractive({
+        nextConfig,
+        opts: {
+          customBaseUrl: "http://127.0.0.1:11435",
+          customModelId: "llama3.2:latest",
+        },
+        runtime,
+      }),
+    ).rejects.toThrow(
       [
         "Ollama could not be reached at http://127.0.0.1:11435.",
         "Start or restart the Ollama server for this address.",
         "If Ollama is not installed on that machine, download it at https://ollama.com/download",
       ].join("\n"),
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(result).toBe(nextConfig);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(nextConfig).toEqual({});
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 });

@@ -445,13 +445,8 @@ export async function validateOllamaNonInteractive(
     typeof ctx.opts.customBaseUrl === "string" ? ctx.opts.customBaseUrl.trim() : undefined;
   const baseUrl = resolveOllamaApiBase(configuredBaseUrl || resolveOllamaSetupDefaultBaseUrl());
   const discovery = await fetchOllamaModels(baseUrl);
-  const fail = (message: string) => {
-    ctx.runtime.error(message);
-    ctx.runtime.exit(1);
-    return false;
-  };
   if (!discovery.reachable) {
-    return fail(
+    throw new Error(
       `Ollama could not be reached at ${baseUrl}.\nDownload it at https://ollama.com/download`,
     );
   }
@@ -463,7 +458,7 @@ export async function validateOllamaNonInteractive(
   if (requestedModel && isOllamaCloudModel(requestedModel)) {
     const cloudAuth = await checkOllamaCloudAuth(baseUrl);
     if (!cloudAuth.signedIn) {
-      return fail(
+      throw new Error(
         `Cloud models on this Ollama host need \`ollama signin\`.\n${
           cloudAuth.signinUrl ?? "Run `ollama signin` on the configured Ollama host."
         }`,
@@ -472,7 +467,7 @@ export async function validateOllamaNonInteractive(
     // A catalog row alone does not prove a cloud model still exists.
     const showInfo = await queryOllamaModelShowInfo(baseUrl, requestedModel);
     if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
-      return fail(
+      throw new Error(
         `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${
           availableModelNames.join(", ") || "(none)"
         }`,
@@ -481,14 +476,14 @@ export async function validateOllamaNonInteractive(
     return true;
   }
   if (availableModelNames.length === 0) {
-    return fail(
+    throw new Error(
       `No Ollama models are available at ${baseUrl}.\nPull a model first, then re-run setup.`,
     );
   }
   if (requestedModel) {
     const availableName = findAvailableOllamaModelName(requestedModel, availableModelNames);
     if (!availableName) {
-      return fail(
+      throw new Error(
         `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModelNames.join(", ")}`,
       );
     }
@@ -500,12 +495,12 @@ export async function validateOllamaNonInteractive(
         capabilities: inspectedModel.capabilities ?? listedModel?.capabilities,
       })
     ) {
-      return fail(
+      throw new Error(
         `Ollama model ${availableName} only supports embeddings. Choose a chat model instead.`,
       );
     }
   } else if (discovery.models.every(isOllamaEmbeddingOnlyModel)) {
-    return fail(
+    throw new Error(
       `No Ollama chat models are available at ${baseUrl}.\nPull a chat model first, then re-run setup.`,
     );
   }
@@ -527,9 +522,7 @@ export async function configureOllamaNonInteractive(params: {
   const explicitModel = normalizeOllamaModelName(params.opts.customModelId);
 
   if (!reachable) {
-    params.runtime.error(buildOllamaUnreachableLines(baseUrl, false).join("\n"));
-    params.runtime.exit(1);
-    return params.nextConfig;
+    throw new Error(buildOllamaUnreachableLines(baseUrl, false).join("\n"));
   }
 
   const modelNames = models.map((model) => model.name);
@@ -605,14 +598,12 @@ export async function configureOllamaNonInteractive(params: {
       }
     }
     if (!fallbackModelId) {
-      params.runtime.error(
+      throw new Error(
         [
           `No Ollama chat models are available at ${baseUrl}.`,
           "Pull a chat model first, then re-run setup.",
         ].join("\n"),
       );
-      params.runtime.exit(1);
-      return params.nextConfig;
     }
 
     defaultModelId = fallbackModelId;
@@ -624,11 +615,9 @@ export async function configureOllamaNonInteractive(params: {
   if (!requestedCloudModel) {
     const selectedModel = await inspectAvailableModel(defaultModelId);
     if (isOllamaEmbeddingOnlyModel(selectedModel)) {
-      params.runtime.error(
+      throw new Error(
         `Ollama model ${defaultModelId} only supports embeddings. Choose a chat model instead.`,
       );
-      params.runtime.exit(1);
-      return params.nextConfig;
     }
   }
 

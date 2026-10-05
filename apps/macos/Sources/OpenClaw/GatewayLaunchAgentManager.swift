@@ -649,6 +649,7 @@ extension GatewayLaunchAgentManager {
         quiet: Bool = false,
         runtime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
+        restoring: InstalledServiceCLI? = nil,
         legacyAuthority: InstalledServiceCLI? = nil,
         expectedServiceAuthority: ServiceAuthority? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil) async -> String?
@@ -659,6 +660,7 @@ extension GatewayLaunchAgentManager {
             quiet: quiet,
             runtime: runtime,
             installedCLI: installedCLI,
+            restoring: restoring,
             legacyAuthority: legacyAuthority,
             expectedServiceAuthority: expectedServiceAuthority,
             checkCurrent: checkCurrent)
@@ -672,29 +674,54 @@ extension GatewayLaunchAgentManager {
         quiet: Bool,
         runtime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
+        restoring: InstalledServiceCLI? = nil,
         legacyAuthority: InstalledServiceCLI? = nil,
         expectedServiceAuthority: ServiceAuthority? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil) async -> CommandResult
     {
+        var arguments = args
+        let selectedCLI: InstalledServiceCLI?
+        if let restoring {
+            guard let runtime, installedCLI == nil,
+                  let executable = restoring.prefix.first, let entrypoint = restoring.prefix.last,
+                  let data = try? JSONSerialization.data(withJSONObject: [
+                      "entrypoint": entrypoint,
+                      "executable": executable,
+                      "sqliteLibrary": restoring.sqliteLibrary as Any? ?? NSNull(),
+                  ], options: [.sortedKeys, .withoutEscapingSlashes]),
+                  let restoration = String(bytes: data, encoding: .utf8)
+            else {
+                return CommandResult(
+                    success: false,
+                    payload: nil,
+                    message: "Gateway recovery requires this app's bundled installer. Reinstall OpenClaw.app.")
+            }
+            selectedCLI = InstalledServiceCLI(
+                prefix: runtime.cliCommand,
+                sqliteLibrary: runtime.sqliteLibrary.path,
+                environment: restoring.environment)
+            if args.first == "install" { arguments += ["--restore-service-cli", restoration] }
+        } else {
+            selectedCLI = installedCLI
+        }
         let beforeSpawn: (@Sendable () -> String?)?
         if args.first.map(["install", "uninstall", "restart"].contains) == true {
             let custody: ServiceAuthority
             do { custody = try expectedServiceAuthority ?? self.gatewayServiceAuthority() } catch {
                 return CommandResult(success: false, payload: nil, message: error.localizedDescription)
             }
-            let authority = legacyAuthority ?? installedCLI
+            let authority = legacyAuthority ?? restoring ?? selectedCLI
             beforeSpawn = {
                 guard !self.isLaunchAgentWriteDisabled() else { return "Gateway service changes are disabled" }
                 if let error = custody.currentError() { return error }
-                if let installedCLI, let error = self.serviceCommandPathError(for: installedCLI) { return error }
+                if let selectedCLI, let error = self.serviceCommandPathError(for: selectedCLI) { return error }
                 guard let authority else { return nil }
                 return self.serviceCommandPathError(for: authority) ?? self.legacyServiceAuthorityError(for: authority)
             }
         } else {
             beforeSpawn = nil
         }
-        let invocation = await self.daemonInvocation(runtime: runtime, installedCLI: installedCLI)
-        var arguments = args
+        let invocation = await self.daemonInvocation(runtime: runtime, installedCLI: selectedCLI)
         if args.first == "install", invocation.supportsExpectedRuntimePin {
             let observation = await self.executeDaemonCommand(
                 ["status", "--deep", "--json", "--no-probe"],

@@ -619,7 +619,7 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     [
       "subagent-announce-delivery",
       importsAnnounceDelivery || isAnnounceDispatchPath,
-      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
+      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bresolveBoundDeliveryDestination\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
     ],
     [
       "subagent-session-cleanup",

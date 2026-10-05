@@ -51,7 +51,7 @@ describe("registered Codex harness model attribution", () => {
     // Supervision replaces the helper model; this fixture supplies no host tools.
     params.hostCapabilities = Object.freeze({
       ...params.hostCapabilities,
-      createToolSurface: () => [],
+      createToolSurfaceAsync: async () => [],
     });
     params.agentDir = path.join(tempDir, "agent");
     params.provider = "anthropic";

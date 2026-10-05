@@ -653,7 +653,11 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(result).toMatchObject({
         kind: "maintenance-plan",
-        value: { archived: 1, archivedSessionKeys: [stale.sessionKey], entryRemovals: [] },
+        value: {
+          archived: 1,
+          archivedEntries: [{ sessionKey: stale.sessionKey, sessionId: "stale" }],
+          entryRemovals: [],
+        },
       });
       expect(published).toEqual([
         {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
@@ -10,6 +11,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import {
+  notifyGatewayWorktreeArchive,
   requestGatewayWorktreeMaintenance,
   startWorktreeMaintenance,
 } from "./worktree-maintenance.js";
@@ -24,6 +26,83 @@ afterEach(() => {
 });
 
 describe("worktree maintenance owner", () => {
+  it("coalesces archive notifications into cleanup under the maintenance context", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const context = new AsyncLocalStorage<string>();
+    const observed: Array<string | undefined> = [];
+    const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async () => {
+      observed.push(context.getStore());
+      return completedResult();
+    });
+    const config: OpenClawConfig = {};
+    const getRuntimeConfig = () => config;
+    const owner = context.run("maintenance", () =>
+      startWorktreeMaintenance({
+        scheduler,
+        getRuntimeConfig,
+        onComplete: vi.fn(),
+        onError: vi.fn(),
+      }),
+    );
+    try {
+      context.run("archive-request", () => {
+        notifyGatewayWorktreeArchive(getRuntimeConfig);
+        notifyGatewayWorktreeArchive(getRuntimeConfig);
+      });
+      expect(gc).not.toHaveBeenCalled();
+      await context.run("host-wake", () => clock.advanceBy(0));
+      expect(observed).toEqual(["maintenance"]);
+    } finally {
+      await owner.stop();
+      await scheduler.stop();
+    }
+  });
+
+  it("sweeps again after archive commits during cleanup without overlapping passes", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const entered = createDeferred();
+    const release = createDeferred<ManagedWorktreeGcResult>();
+    const gc = vi
+      .spyOn(managedWorktrees, "gc")
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return release.promise;
+      })
+      .mockResolvedValue(completedResult());
+    const config: OpenClawConfig = {};
+    const getRuntimeConfig = () => config;
+    const owner = startWorktreeMaintenance({
+      scheduler,
+      getRuntimeConfig,
+      onComplete: vi.fn(),
+      onError: vi.fn(),
+    });
+    notifyGatewayWorktreeArchive(getRuntimeConfig);
+    const running = clock.advanceBy(0);
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        Promise.resolve(running),
+        "cleanup never started",
+      );
+      notifyGatewayWorktreeArchive(getRuntimeConfig);
+      notifyGatewayWorktreeArchive(getRuntimeConfig);
+      await clock.advanceBy(0);
+      expect(gc).toHaveBeenCalledOnce();
+      release.resolve(completedResult());
+      await running;
+      await clock.advanceBy(0);
+      expect(gc).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve(completedResult());
+      await owner.stop();
+      await running;
+      await scheduler.stop();
+    }
+  });
+
   it.each([
     { budget: "eight checkouts", batchSize: 8, elapsedMs: 0 },
     { budget: "five seconds", batchSize: 1, elapsedMs: 5_000 },
@@ -118,6 +197,7 @@ describe("worktree maintenance owner", () => {
       expect(guard.signal?.aborted).toBe(true);
       expect(() => guard.commitGuard!()).toThrow(/stopping/);
       expect(() => owner.request()).toThrow(/stopping/);
+      notifyGatewayWorktreeArchive(getRuntimeConfig);
       await Promise.resolve();
       expect(stopped).toBe(false);
       release.resolve(completedResult());
@@ -125,6 +205,7 @@ describe("worktree maintenance owner", () => {
       expect(onComplete).not.toHaveBeenCalled();
       expect(onError).toHaveBeenCalledWith(expect.stringContaining("stopping"));
       expect(() => requestGatewayWorktreeMaintenance(getRuntimeConfig)).toThrow(/not running/);
+      notifyGatewayWorktreeArchive(getRuntimeConfig);
     } finally {
       release.resolve(completedResult());
       await owner.stop();

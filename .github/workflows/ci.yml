@@ -54,6 +54,11 @@ on:
         required: false
         default: ""
         type: string
+      qualification_baselines_json:
+        description: Captured exact upgrade and survivor baselines from the qualification request
+        required: false
+        default: ""
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -113,7 +118,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     outputs:
-      checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
+      checkout_revision: &target_sha ${{ steps.checkout_ref.outputs.sha }}
       pr_job_count: ${{ steps.manifest.outputs.pr_job_count }}
       pr_check_job_count: ${{ steps.manifest.outputs.pr_check_job_count }}
       candidate_trust: ${{ steps.candidate_trust.outputs.trust }}
@@ -130,7 +135,7 @@ jobs:
       hybrid_hosted_main_checks: ${{ steps.manifest.outputs.hybrid_hosted_main_checks }}
       hybrid_hosted_base_rows: ${{ steps.manifest.outputs.hybrid_hosted_base_rows }}
       hybrid_hosted_total_rows: ${{ steps.manifest.outputs.hybrid_hosted_total_rows }}
-      diff_base_revision: ${{ steps.diff_base.outputs.sha }}
+      diff_base_revision: &diff_base ${{ steps.diff_base.outputs.sha }}
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
@@ -224,7 +229,7 @@ jobs:
       run_ios_lifecycle_tests: ${{ steps.manifest.outputs.run_ios_lifecycle_tests }}
       ios_simulator_selection: ${{ steps.manifest.outputs.ios_simulator_selection }}
       run_ios_screenshots: ${{ steps.changed_scope.outputs.run_ios_screenshots }}
-      run_android_screenshots: ${{ steps.changed_scope.outputs.run_android_screenshots }}
+      run_android_screenshots: ${{ steps.manifest.outputs.run_android_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       run_android_access_native: ${{ steps.manifest.outputs.run_android_access_native }}
       use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
@@ -235,8 +240,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
-          TARGET_REF: ${{ inputs.target_ref }}
+          PULL_REQUEST_NUMBER: &pr_number ${{ inputs.pull_request_number }}
+          TARGET_REF: &target_ref ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
 
@@ -264,7 +269,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_KIND: preflight
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: &workflow_sha ${{ github.workflow_sha }}
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
@@ -751,7 +756,7 @@ jobs:
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
               platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py")
-              upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+              upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
               # Preflight imports these siblings by file-relative paths.
               preflight_scripts = (
                   "scripts/ci-build-manifest.mjs",
@@ -1007,7 +1012,7 @@ jobs:
         if: ${{ steps.checkout_ref.outputs.sha != github.workflow_sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: *workflow_sha
           path: .ci-harness
           sparse-checkout: |
             /.github/actions/
@@ -1025,9 +1030,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_GATE: ${{ inputs.release_gate }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
-          TARGET_REF: ${{ inputs.target_ref }}
-          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+          PULL_REQUEST_NUMBER: *pr_number
+          TARGET_REF: *target_ref
+          WORKFLOW_REVISION: *workflow_sha
           RELEASE_SCOPE: ${{ inputs.release_scope }}
           CI_SHAPE: ${{ inputs.ci_shape }}
           REQUESTED_RUNNER_PROFILE: ${{ inputs.runner_backend }}
@@ -1138,9 +1143,12 @@ jobs:
         id: diff_base
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          WORKFLOW_REVISION: *workflow_sha
           EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
           GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          PULL_REQUEST_NUMBER: *pr_number
           RELEASE_GATE: ${{ inputs.release_gate }}
         run: |
           set -euo pipefail
@@ -1162,18 +1170,28 @@ jobs:
               --base "$base_sha" --head HEAD --prefer-first-parent)"
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" != "true" ]; then
-            encoded_ref="$(jq -rn --arg value "refs/heads/${DEFAULT_BRANCH}" '$value | @uri')"
-            default_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
+            # Qualification compares frozen inputs, not main after it advances.
+            # Cross-revision diagnostics retain the immutable workflow/target merge base.
+            if [[ "${DISPATCH_ID:-}" == full-release-validation-* && -n "${TARGET_CONTEXT_REF:-}" ]]; then
+              default_sha="$WORKFLOW_REVISION"
+            else
+              encoded_ref="$(jq -rn --arg value "refs/heads/${DEFAULT_BRANCH}" '$value | @uri')"
+              default_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
+            fi
             if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
               echo "Could not resolve the default branch head for the manual target." >&2
               exit 1
             fi
             echo "default_sha=$default_sha" >> "$GITHUB_OUTPUT"
-            base_sha="$(
-              gh api --method GET \
-                "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}" \
-                --jq '.merge_base_commit.sha'
-            )"
+            if [[ "$default_sha" == "$head_sha" ]]; then
+              base_sha="$head_sha"
+            else
+              base_sha="$(
+                gh api --method GET \
+                  "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}" \
+                  --jq '.merge_base_commit.sha'
+              )"
+            fi
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" = "true" ]; then
             merge_ref="refs/remotes/origin/release-gate-merge"
@@ -1200,7 +1218,7 @@ jobs:
         id: historical_target
         if: inputs.historical_target_tag != ''
         env:
-          EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          EXPECTED_SHA: *target_sha
           GH_TOKEN: ${{ github.token }}
           HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
         run: |
@@ -1221,7 +1239,7 @@ jobs:
         id: release_candidate_target
         if: inputs.release_candidate_ref != ''
         env:
-          EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          EXPECTED_SHA: *target_sha
           GH_TOKEN: ${{ github.token }}
           RELEASE_CANDIDATE_REF: ${{ inputs.release_candidate_ref }}
         run: |
@@ -1244,7 +1262,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          TARGET_REF: ${{ inputs.target_ref }}
+          TARGET_REF: *target_ref
         run: |
           set -euo pipefail
           if [[ ! "$TARGET_CONTEXT_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+(-[1-9][0-9]*)?|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
@@ -1300,14 +1318,14 @@ jobs:
       - name: Classify candidate cache trust
         id: candidate_trust
         env:
-          CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          CHECKOUT_REVISION: *target_sha
           DEFAULT_SHA: ${{ steps.diff_base.outputs.default_sha }}
           HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
-          TARGET_REF: ${{ inputs.target_ref }}
-          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+          TARGET_REF: *target_ref
+          WORKFLOW_REVISION: *workflow_sha
         run: |
           set -euo pipefail
 
@@ -1354,7 +1372,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ steps.diff_base.outputs.sha }}
+          base-sha: *diff_base
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
@@ -1362,7 +1380,7 @@ jobs:
         if: (github.event_name != 'workflow_dispatch' && github.event_name != 'schedule') || steps.runner_profile.outputs.ci_qualification == 'true'
         uses: ./.ci-harness/.github/actions/detect-docs-changes
         with:
-          base-sha: ${{ steps.diff_base.outputs.sha }}
+          base-sha: *diff_base
 
       - name: Detect changed scopes
         id: changed_scope
@@ -1448,21 +1466,21 @@ jobs:
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_FILE: ${{ steps.changed_scope.outputs.changed_paths_file }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
-          OPENCLAW_CI_CHANGED_BASE: ${{ steps.diff_base.outputs.sha }}
-          OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          OPENCLAW_CI_CHANGED_BASE: *diff_base
+          OPENCLAW_CI_CHECKOUT_REVISION: *target_sha
           OPENCLAW_CI_CORRECTION_BASE_SHA: ${{ steps.release_correction_base.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           OPENCLAW_CI_RELEASE_FAST_LANE_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release-fast-lane') && 'true' || 'false' }}
           OPENCLAW_CI_RELEASE_SCOPE: ${{ inputs.release_scope || 'full' }}
           OPENCLAW_CI_VALIDATION_TIER: ${{ github.event_name == 'schedule' && 'main' || inputs.validation_tier || 'full' }}
-          OPENCLAW_CI_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
-          OPENCLAW_CI_TARGET_REF: ${{ inputs.target_ref }}
+          OPENCLAW_CI_PULL_REQUEST_NUMBER: *pr_number
+          OPENCLAW_CI_TARGET_REF: *target_ref
           OPENCLAW_CI_TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           OPENCLAW_CI_HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
-          OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.workflow_sha }}
+          OPENCLAW_CI_WORKFLOW_REVISION: *workflow_sha
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
           OPENCLAW_CI_RUNNER_PROFILE: ${{ steps.runner_profile.outputs.runner_profile }}
@@ -1485,8 +1503,8 @@ jobs:
       - name: Check mobile protocol event coverage
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         env:
-          OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
-          OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.workflow_sha }}
+          OPENCLAW_CI_CHECKOUT_REVISION: *target_sha
+          OPENCLAW_CI_WORKFLOW_REVISION: *workflow_sha
         run: |
           # Different-revision dispatches may need their candidate-owned tsx
           # shim; current workflow source runs the dependency-free .mts owner.
@@ -1535,14 +1553,14 @@ jobs:
           CHECKOUT_KIND: manual
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_REF: ${{ inputs.target_ref }}
+          CHECKOUT_REF: *target_ref
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
         run: *owned_checkout_run
 
       - name: Checkout trusted CI harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: *workflow_sha
           path: .ci-harness
           sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts\nscripts/ci-production-audit.mjs"
           persist-credentials: false
@@ -1578,12 +1596,12 @@ jobs:
         if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ steps.diff_base.outputs.sha }}
+          base-sha: *diff_base
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Prepare trusted scanner config
         env:
-          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
+          BASE_SHA: *diff_base
         run: |
           set -euo pipefail
           trusted_policy="$RUNNER_TEMP/zizmor.yml"
@@ -1638,7 +1656,7 @@ jobs:
       - name: Detect changed GitHub workflows
         id: workflow_scope
         env:
-          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
+          BASE_SHA: *diff_base
         run: |
           set -euo pipefail
 
@@ -1687,8 +1705,8 @@ jobs:
       - name: Check main push ratchets and protocol additions
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true'
         env:
-          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
-          PROTOCOL_SINCE_BASE_SHA: ${{ steps.diff_base.outputs.sha }}
+          BASE_SHA: *diff_base
+          PROTOCOL_SINCE_BASE_SHA: *diff_base
         run: |
           set -euo pipefail
           pnpm check:max-lines-ratchet --base "$BASE_SHA"
@@ -2134,7 +2152,7 @@ jobs:
     runs-on: &shared_small_linux_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 15
     env:
-      CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
+      CHECKOUT_BASE_SHA: &ci_diff_base ${{ needs.preflight.outputs.diff_base_revision }}
       COMPATIBILITY_TARGET: &historical_target ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *linux_node_checkout_step
@@ -2419,7 +2437,7 @@ jobs:
           DESKTOP_PROOF_CHECKOUT_SHA: *checkout_sha
           DESKTOP_PROOF_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           DESKTOP_PROOF_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          DESKTOP_PROOF_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          DESKTOP_PROOF_WORKFLOW_SHA: *workflow_sha
         run: |
           bootstrap=scripts/test-desktop-resize-real.mts
           if [[ ! -f "$bootstrap" ]]; then
@@ -2612,15 +2630,15 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'runson' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'hybrid' && (github.run_attempt != 1 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || needs.preflight.outputs.node_runner_backend == 'runson' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_qualification != 'true') || needs.preflight.outputs.frozen_target == 'true')))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'runson' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'hybrid' && (github.run_attempt != 1 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || needs.preflight.outputs.node_runner_backend == 'runson' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_qualification != 'true') || needs.preflight.outputs.frozen_target == 'true')))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 60
     env:
-      CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
+      CHECKOUT_BASE_SHA: *ci_diff_base
     steps:
       - *linux_node_checkout_step
       - name: Prepare release-gate ratchet merge tree
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           GH_TOKEN: ${{ github.token }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
-          TARGET_SHA: ${{ inputs.target_ref }}
+          PULL_REQUEST_NUMBER: *pr_number
+          TARGET_SHA: *target_ref
         shell: bash
         run: &prepare_ratchet_merge |
           set -euo pipefail
@@ -2757,8 +2775,8 @@ jobs:
         if: (matrix.task == 'startup-corpus' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           GH_TOKEN: ${{ github.token }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
-          TARGET_SHA: ${{ inputs.target_ref }}
+          PULL_REQUEST_NUMBER: *pr_number
+          TARGET_SHA: *target_ref
         shell: bash
         run: *prepare_ratchet_merge
 
@@ -2774,7 +2792,7 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
-          PROTOCOL_SINCE_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
+          PROTOCOL_SINCE_BASE_SHA: *ci_diff_base
           TASK: ${{ matrix.task }}
           RUN_BUNDLED_TESTS: ${{ needs.preflight.outputs.run_proof_tier }}
         shell: bash
@@ -3300,7 +3318,7 @@ jobs:
         if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: *workflow_sha
           path: .ci-workflow
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
@@ -4185,7 +4203,7 @@ jobs:
         if: (matrix.group == 'extension-package-boundary' && github.event_name == 'pull_request') || (matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch')
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          base-sha: *ci_diff_base
           fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Ensure Plugin SDK API diff head commit
         if: matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch'
@@ -4238,7 +4256,7 @@ jobs:
         if: needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
+          path: &boundary_paths |
             packages/plugin-sdk/dist
             .artifacts/extension-package-boundary/plugins
             .artifacts/extension-package-boundary/*.json
@@ -4288,11 +4306,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            packages/plugin-sdk/dist
-            .artifacts/extension-package-boundary/plugins
-            .artifacts/extension-package-boundary/*.json
-            .artifacts/extension-package-boundary/compile
+          path: *boundary_paths
           key: ${{ steps.extension-package-boundary-cache.outputs.cache-primary-key }}
 
       - name: Save shared SDK declarations
@@ -4389,6 +4403,11 @@ jobs:
           CHECKOUT_KIND: clawhub
           CHECKOUT_REPO: openclaw/clawhub
         run: *owned_checkout_run
+
+      - name: Record external documentation dependency
+        run: |
+          printf 'ClawHub documentation dependency: openclaw/clawhub@%s (external data, not qualification harness).\n' \
+            "$(git -C clawhub-source rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check docs
         env:
@@ -5600,7 +5619,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_ID: ${{ github.run_id }}
           TARGET_SHA: *checkout_sha
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: *workflow_sha
         run: |
           set -euo pipefail
           fastlane_version="$(
@@ -5683,7 +5702,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_ID: ${{ github.run_id }}
           TARGET_SHA: *checkout_sha
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: *workflow_sha
         run: |
           node .ci-harness/scripts/ios-screenshot-evidence.mjs reduce \
             --input apps/ios/build/ScreenshotEvidenceInputs \
@@ -6163,34 +6182,36 @@ jobs:
         if: contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
         env:
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || github.base_ref || github.ref_name }}
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
           FROZEN_TARGET: *frozen_target
         run: |
           set -euo pipefail
           candidate_version="$(node -p "require('./package.json').version")"
-          baseline="$(node .ci-harness/scripts/lib/release-upgrade-baseline.mjs \
-            --candidate-version "$candidate_version" \
-            --target-context-ref "$TARGET_CONTEXT_REF")"
+          if [[ -n "$QUALIFICATION_BASELINES_JSON" ]]; then
+            captured="$(node .ci-harness/scripts/lib/release-upgrade-baseline.mjs \
+              --candidate-version "$candidate_version" --target-context-ref "$TARGET_CONTEXT_REF" \
+              --qualification-baselines-json "$QUALIFICATION_BASELINES_JSON")"
+            baseline="$(jq -er .upgradeBaseline <<< "$captured")"
+          else
+            baseline="$(node .ci-harness/scripts/lib/release-upgrade-baseline.mjs \
+              --candidate-version "$candidate_version" \
+              --target-context-ref "$TARGET_CONTEXT_REF")"
+          fi
           printf 'OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=%s\n' "$baseline" >> "$GITHUB_ENV"
           node --input-type=module >> "$GITHUB_ENV" <<'NODE'
           import { existsSync, readFileSync } from "node:fs";
+          import { readUpgradeSurvivorScenarioCatalog } from "./.ci-harness/scripts/lib/upgrade-survivor-policy.mjs";
           const file = "scripts/lib/upgrade-survivor-scenarios.json";
           let scenario = "legacy-operator-state";
           if (process.env.FROZEN_TARGET === "true") {
             scenario = "base";
             if (existsSync(file)) {
-              const catalog = JSON.parse(readFileSync(file, "utf8"));
-              if (!catalog || typeof catalog !== "object" || Array.isArray(catalog) ||
-                  Object.keys(catalog).length !== 2 || !Array.isArray(catalog.scenarios) ||
-                  catalog.scenarios.length === 0 || !Array.isArray(catalog.assertionOnlyScenarios)) {
-                throw new Error("Invalid upgrade-survivor scenario catalog");
-              }
-              const names = [...catalog.scenarios, ...catalog.assertionOnlyScenarios];
-              if (!names.every(name => typeof name === "string" && /^[a-z0-9][a-z0-9-]*$/.test(name)) ||
-                  new Set(names).size !== names.length) {
-                throw new Error("Invalid upgrade-survivor scenario catalog");
-              }
-              if (catalog.scenarios.includes("legacy-operator-state")) scenario = "legacy-operator-state";
-              else if (!catalog.scenarios.includes("base")) throw new Error("No supported Docker seed upgrade scenario");
+              const scenarios = readUpgradeSurvivorScenarioCatalog(readFileSync(file, "utf8"), {
+                includeAssertionOnly: false,
+              });
+              if (!scenarios) throw new Error("Invalid upgrade-survivor scenario catalog");
+              if (scenarios.includes("legacy-operator-state")) scenario = "legacy-operator-state";
+              else if (!scenarios.includes("base")) throw new Error("No supported Docker seed upgrade scenario");
             }
           }
           console.log(`OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=${scenario}`);

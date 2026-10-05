@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { UpdateCampaignController } from "../infra/update-campaign.js";
 import {
   createGatewayUpdateLifecycle,
@@ -23,6 +24,7 @@ const ledger = vi.hoisted(() => ({
       ) => Promise<UpdateRunRecord[]>
     >(),
   notice: vi.fn(async (_run: UpdateRunRecord) => {}),
+  sentinel: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
 }));
 vi.mock("../state/openclaw-state-db.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-db.js")>()),
@@ -32,6 +34,11 @@ vi.mock("../infra/update-run-interruption.js", () => ({
   reconcileInterruptedUpdateRuns: ledger.reconcile,
 }));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: ledger.notice }));
+vi.mock("./server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-update-sentinel.js")>()),
+  refreshLatestUpdateRestartSentinel: ledger.sentinel,
+  getLatestUpdateRestartSentinel: () => null,
+}));
 vi.mock("../infra/update-run-ledger.js", () => ({
   reconcileAbandonedUpdateRunsAsync: async () => [],
   listUpdateRunsAsync: async () => {
@@ -56,6 +63,7 @@ beforeEach(() => {
   ledger.reads.mockReset();
   ledger.reconcile.mockReset().mockResolvedValue([]);
   ledger.notice.mockReset().mockResolvedValue(undefined);
+  ledger.sentinel.mockReset().mockResolvedValue(null);
 });
 afterEach(async () => {
   await watcher?.stop();
@@ -209,7 +217,9 @@ describe("Gateway update run watcher", () => {
       await activatingNotice.promise;
       expect(ledger.notice).toHaveBeenCalledOnce();
       ledger.run = { ...ledger.run!, updatedAtMs: 3 };
+      const unchangedPhase = nextPollSchedule();
       await clock.advanceBy(4_000);
+      await unchangedPhase;
       expect(ledger.notice).toHaveBeenCalledOnce();
       ledger.run = { ...ledger.run!, phase: "finished", status: "succeeded", updatedAtMs: 4 };
       await clock.advanceBy(2_000);
@@ -405,6 +415,72 @@ describe("Gateway update run watcher", () => {
     expect(ledger.reads).toHaveBeenCalledTimes(reads);
     expect(broadcast).toHaveBeenCalledTimes(3);
   });
+
+  it.each(["published", "unavailable", "timed-out", "superseded"] as const)(
+    "owns late terminal sentinel observation until %s",
+    async (outcome) => {
+      const run = beginRun();
+      const pending: RestartSentinelPayload = {
+        kind: "update",
+        status: "skipped",
+        ts: 1,
+        stats: { runId: run.runId, reason: "managed-service-handoff-started" },
+      };
+      ledger.sentinel.mockResolvedValue(pending);
+      const initial = createDeferredCore();
+      const terminal = createDeferredCore();
+      const settled = createDeferredCore();
+      const idle = createDeferredCore();
+      const broadcast = vi
+        .fn()
+        .mockImplementationOnce(() => initial.resolve())
+        .mockImplementationOnce(() => terminal.resolve())
+        .mockImplementationOnce(() => {
+          if (outcome !== "superseded") {
+            void nextLedgerRead("status").then(() => idle.resolve());
+          }
+          settled.resolve();
+        });
+      const warn = vi.fn();
+      watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn } });
+      await initial.promise;
+      ledger.run = { ...run, status: "failed", phase: "finished", updatedAtMs: 2 };
+      if (outcome === "unavailable") {
+        ledger.sentinel.mockRejectedValueOnce(new Error("state unavailable"));
+      }
+      await clock.advanceBy(2_000);
+      await terminal.promise;
+      expect(scheduler.nextWakeAtMs).not.toBeNull();
+      if (outcome === "superseded") {
+        beginRun("aa688074-cb7a-4fb8-ae6a-e099e37e1d20");
+        ledger.sentinel.mockResolvedValue(null);
+        await clock.advanceBy(2_000);
+        await settled.promise;
+        expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+        return;
+      }
+      if (outcome !== "timed-out") {
+        ledger.sentinel.mockResolvedValue({
+          ...pending,
+          status: "error",
+          stats: { runId: run.runId },
+        });
+      }
+      await clock.advanceBy(outcome === "timed-out" ? 30 * 60_000 : 2_000);
+      await settled.promise;
+      await idle.promise;
+      expect(ledger.sentinel).toHaveBeenCalled();
+      expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+      const reads = ledger.reads.mock.calls.length;
+      await clock.advanceBy(60_000);
+      expect(ledger.reads).toHaveBeenCalledTimes(reads);
+      if (outcome === "timed-out") {
+        expect(warn).toHaveBeenCalledWith(
+          `update run ${run.runId} terminal notification remained pending`,
+        );
+      }
+    },
+  );
 
   it("broadcasts a terminal repair after an update has remained running for over 45 minutes", async () => {
     beginRun();

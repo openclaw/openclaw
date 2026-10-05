@@ -438,6 +438,8 @@ describe("model resolution auth row snapshots", () => {
               throw new Error("Model resolution completed before the publication barrier");
             }),
           ]);
+          // Only the captured model read waits; usage bookkeeping reads independently.
+          read.mockRestore();
           await markAuthProfileSuccess({
             store: before,
             provider: PROVIDER,

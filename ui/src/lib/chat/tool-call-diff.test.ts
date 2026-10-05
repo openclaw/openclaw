@@ -191,12 +191,13 @@ describe("computeLineDiff", () => {
 });
 
 describe("buildWriteDiffLines", () => {
-  it("truncates past maxLines with a skip marker", () => {
-    expect(buildWriteDiffLines("a\nb\nc\nd", 2)).toEqual([
-      { kind: "add", lineNo: 1, text: "a" },
-      { kind: "add", lineNo: 2, text: "b" },
-      { kind: "skip", text: "" },
-    ]);
+  it("truncates past 80 lines with a skip marker", () => {
+    const content = Array.from({ length: 81 }, (_, index) => `line ${index + 1}`).join("\n");
+    const lines = buildWriteDiffLines(content);
+    expect(lines).toHaveLength(81);
+    expect(lines[0]).toEqual({ kind: "add", lineNo: 1, text: "line 1" });
+    expect(lines[79]).toEqual({ kind: "add", lineNo: 80, text: "line 80" });
+    expect(lines[80]).toEqual({ kind: "skip", text: "" });
   });
 });
 

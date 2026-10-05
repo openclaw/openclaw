@@ -134,6 +134,13 @@ keeps the retained runtime for later cleanup, and preserves the command's exit
 status. This protection belongs to the installed updater: installing a release
 with the fix enables it for the next update that release performs.
 
+The executable CLI retains its shared-state and worker cleanup code before an
+update can replace those files. Older installed development builds can finish an
+update successfully and then exit with `ERR_MODULE_NOT_FOUND` during CLI cleanup.
+Check `openclaw update status` with the newly installed CLI to distinguish that
+exit failure from the recorded update outcome; the installed driver needs the fix
+before it performs its next update.
+
 Updating from inside the installation keeps captured paths anchored to the
 invoking directory while the package is replaced. The updater keeps a valid
 working directory for background workers and restores the original directory

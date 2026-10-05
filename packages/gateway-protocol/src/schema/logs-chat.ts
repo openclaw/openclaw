@@ -182,6 +182,12 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 export const ChatMetadataParamsSchema = Object.assign(
   closedObject({
     agentId: Type.Optional(NonEmptyString),
+    includeModels: Type.Optional(
+      Type.Boolean({
+        description:
+          "Include model and account selection metadata (default true). Set false when reading models.list separately.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,

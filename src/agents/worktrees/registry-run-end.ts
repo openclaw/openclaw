@@ -5,10 +5,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
-import {
-  withOpenClawStateLeaseWorkerAdmission,
-  type WorkerLeaseScope,
-} from "../../state/openclaw-state-lease-worker-owner.js";
+import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
 import type {
@@ -29,6 +26,9 @@ type RunEndCommands = Pick<
   | "worktrees.finalizeRemoval"
   | "worktrees.abortRemoval"
 >;
+type LeaseSetAdmission = Parameters<
+  Parameters<typeof withOpenClawStateLeasesWorkerAdmission>[2]
+>[0];
 
 export function runWorktreeRunEndCommand(
   context: OpenClawStateWorkerContext,
@@ -38,10 +38,16 @@ export function runWorktreeRunEndCommand(
   const captured = structuredClone(command);
   const predicates = structuredClone(authority.predicates);
   const assertCurrent = authority.assertCurrent;
-  const heldLease = authority.lease;
+  const leaseSet = authority.leaseSet;
   return withWorktreeRunEnd(context.environment, async () => {
     context.admission.assertCurrent();
-    const execute = async (lease?: WorkerLeaseScope) => {
+    if (
+      leaseSet &&
+      leaseSet.context.admission.coordinationKey !== context.admission.coordinationKey
+    ) {
+      throw new Error("Worktree settlement lease set belongs to another database");
+    }
+    const execute = async (leases?: LeaseSetAdmission) => {
       let admission: SqliteWorkerOperationAdmission | undefined;
       let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
       let failure: { error: unknown } | undefined;
@@ -49,18 +55,18 @@ export function runWorktreeRunEndCommand(
         const { runOpenClawStateWorkerOperation } =
           await import("../../state/openclaw-state-worker-store.js");
         await runOpenClawStateWorkerOperation(
-          context,
+          leaseSet?.context ?? context,
           (scope) =>
             scope.execute({
               type: captured.type,
-              input: { ...captured.input, predicates, lease: lease?.identity },
+              input: { ...captured.input, predicates, leases: leases?.identities },
             }),
           {
-            assertCurrent: lease?.assertCurrent ?? assertCurrent,
+            assertCurrent: leases?.assertCurrent ?? assertCurrent,
             createAdmission(operation) {
               settled = operation.settled;
-              const result = lease
-                ? lease.createAdmission(operation)
+              const result = leases
+                ? leases.createAdmission(operation)
                 : {
                     nativeLocations: [context.admission.databasePath],
                     admission: createSqliteWorkerOperationAdmission((_request, grant) => {
@@ -96,18 +102,13 @@ export function runWorktreeRunEndCommand(
       }
     };
     try {
-      await (heldLease
-        ? withOpenClawStateLeaseWorkerAdmission(
-            heldLease,
-            context.admission.databasePath,
-            execute,
-            {
-              assertCurrent: () => {
-                context.admission.assertCurrent();
-                assertCurrent?.();
-              },
+      await (leaseSet
+        ? withOpenClawStateLeasesWorkerAdmission(leaseSet.leases, leaseSet.context, execute, {
+            assertCurrent: () => {
+              context.admission.assertCurrent();
+              assertCurrent?.();
             },
-          )
+          })
         : execute());
     } catch (error) {
       retainWorktreeRunEndFailure(error);

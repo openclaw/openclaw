@@ -450,6 +450,11 @@ generation during preparation; a failed or superseded preparation leaves it in
 place. Admitted runs retain their captured generation, and each usage-estimation
 operation uses one pricing context.
 
+Catalog reads and refresh writes run through the shared-state worker. If a
+background refresh fails, the Gateway records the error and keeps serving its
+accepted catalog. The next scheduled check runs six hours later; run
+`openclaw models refresh` to retry the download immediately.
+
 Remote data can update or add models only for providers declared by installed
 plugin manifests. It cannot supply API base URLs or request headers, and a
 catalog older than the installed release's build stamp is ignored. Hosted

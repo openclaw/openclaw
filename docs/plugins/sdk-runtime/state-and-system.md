@@ -210,9 +210,9 @@ closing the connection.
     while the drain still owns the claim, shutdown reports the error and retains
     that ownership.
 
-    <Warning>
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
-    </Warning>
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available to every loaded plugin, including workspace plugins, `plugins.load.paths`, and linked installs. The runtime binds each handle to the calling plugin's namespace; existing quotas, retention and overflow policies, scope checks, and worker ownership still apply. This change requires no provenance repair or data migration.
+
+    `plugins inspect` and startup provenance warnings still report trust information. Trust remains required for hook agent turns and Gateway scope elevation; see [Plugin runtime trust refused](/tools/plugin#plugin-runtime-trust-refused) for those capabilities.
 
   </Accordion>
 </AccordionGroup>
@@ -360,9 +360,8 @@ never selects that compatibility path. The namespace, stored records, and
 retention remain unchanged, so this cutover requires no data migration.
 
 This deprecation adds editor annotations, documentation, and compatibility
-inventory metadata. It adds no runtime warning and changes no trust eligibility:
-the runtime openers remain limited to bundled plugins and trusted official
-installations. Runtime warnings should wait for an actionable supported upgrade.
+inventory metadata. It adds no runtime warning. Both runtime openers are available
+to every loaded plugin. Runtime deprecation warnings should wait for an actionable supported upgrade.
 Only the operations identified above execute on the worker. Callback execution
 is unchanged during this migration.
 

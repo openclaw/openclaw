@@ -241,6 +241,7 @@ export async function prepareGitHubPublicationWorkspaceOwner(params: Publication
       cfg: getRuntimeConfig(),
       key: params.sessionKey,
       agentId: params.agentId,
+      projection: [],
     }),
   );
   context.admission.assertCurrent();
@@ -398,6 +399,7 @@ export async function hasSupportedGitHubPublicationTarget(
       key: session.sessionKey,
       agentId: session.agentId,
       assertActive: assertCurrent,
+      projection: [],
     }),
     true,
   );

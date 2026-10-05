@@ -11,6 +11,7 @@ import {
   normalizeRunNodePath as normalizePath,
   runNodeWatchedPaths,
 } from "../run-node-watch-paths.mts";
+import { CLI_DIAGNOSTIC_COMPANIONS } from "../runtime-postbuild-shared.mjs";
 import {
   BUNDLED_PLUGIN_BUILD_ENV_NAMES,
   collectSourceCheckoutPluginBuildEntries,
@@ -40,6 +41,9 @@ export type BundledPluginBuildEntry = ReturnType<
 >[number] & {
   hasManifest: boolean;
 };
+const cliDiagnosticSources = new Set(
+  CLI_DIAGNOSTIC_COMPANIONS.map((fileName) => `src/cli/${fileName}`),
+);
 export const runtimePostBuildWatchedPaths = [
   "scripts/check-built-plugin-control-plane-modules.mts",
   "scripts/copy-bundled-plugin-metadata.mjs",
@@ -59,6 +63,7 @@ export const runtimePostBuildWatchedPaths = [
   "scripts/write-build-info.ts",
   "scripts/write-official-channel-catalog.mjs",
   "scripts/write-official-channel-catalog.mts",
+  ...cliDiagnosticSources,
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
 const runtimePostBuildScriptPaths = new Set(
@@ -120,7 +125,10 @@ export const hasDirtySourceTree = (deps: RunNodeInputDeps) => {
 
 export const isRuntimePostBuildRelevantPath = (repoPath: string) => {
   const normalizedPath = normalizePath(repoPath);
-  if (runtimePostBuildStaticAssetPaths.has(normalizedPath)) {
+  if (
+    runtimePostBuildStaticAssetPaths.has(normalizedPath) ||
+    cliDiagnosticSources.has(normalizedPath)
+  ) {
     return true;
   }
   if (

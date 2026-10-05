@@ -19,6 +19,7 @@ import type {
 } from "../providers/openai-reasoning-effort.js";
 import type { OpenAIRequestReasoningEffort } from "../providers/openai-request-reasoning.js";
 import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
+import { isResponsesServiceTierRejection } from "./openai-responses-service-tier.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -78,12 +79,18 @@ function readWebSocketServerError(value: unknown) {
     return undefined;
   }
   const details = isRecord(value.error) ? value.error : value;
-  if (typeof details.code !== "string" || typeof details.message !== "string") {
+  const code =
+    typeof details.code === "string"
+      ? details.code
+      : isResponsesServiceTierRejection(details)
+        ? "invalid_request_error"
+        : undefined;
+  if (!code || typeof details.message !== "string") {
     return undefined;
   }
   const rawStatus = value.status ?? value.status_code;
   return {
-    code: details.code,
+    code,
     message: details.message,
     param: typeof details.param === "string" ? details.param : null,
     status: typeof rawStatus === "number" ? rawStatus : undefined,
@@ -116,6 +123,7 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
   }
   const ErrorClass =
     isPreviousResponseRejection(details) ||
+    isResponsesServiceTierRejection(details) ||
     details.code === "websocket_connection_limit_reached" ||
     details.code === "invalid_encrypted_content" ||
     details.code === "thinking_signature_invalid"
@@ -191,10 +199,9 @@ export const responsesPromptObserver = {
 };
 
 const SERVICE_TIER_OBSERVER = Symbol("openaiResponsesServiceTierObserver");
-export type ResponsesServiceTierObservation = {
-  requestedTier: string;
-  responseTier: string;
-};
+export type ResponsesServiceTierObservation =
+  | { requestedTier: string; responseTier: string; rejected?: false }
+  | { requestedTier: string; rejected: true };
 type ResponsesServiceTierObserver = (observation: ResponsesServiceTierObservation) => void;
 
 export const responsesServiceTierObserver = {
@@ -210,6 +217,10 @@ export const responsesServiceTierObserver = {
     if (observer) {
       responsesServiceTierObserver.set(target, observer);
     }
+  },
+  reject(options: object | undefined, requestedTier: string): void {
+    const observer = options && responsesServiceTierObserver.get(options);
+    observer?.({ requestedTier, rejected: true });
   },
   observe(options: object | undefined, requestedTier: unknown, responseTier: unknown): void {
     const observer = options && responsesServiceTierObserver.get(options);

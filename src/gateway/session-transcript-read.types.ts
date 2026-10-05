@@ -55,6 +55,8 @@ export type ReadRecentSessionMessagesResult = {
 export type ReadSessionMessagesResult = {
   messages: unknown[];
   transcriptPath?: string;
+  nextCursor?: SessionTranscriptSourceCursor;
+  snapshot?: SessionTranscriptSourceSnapshot;
 };
 
 export type ReadSessionMessageByIdResult = {
@@ -71,6 +73,27 @@ export type ReadSessionMessageByIdResult = {
 export type SessionTranscriptReadOptions = {
   allowResetArchiveFallback?: boolean;
   readOnly?: boolean;
+};
+
+export type SessionTranscriptSourceSnapshot = {
+  indexedSeq: number;
+  activeEventCount: number;
+  totalMessages: number;
+  generation: string | undefined;
+  tailEventSeq: number | undefined;
+  resetSeq: number | null;
+};
+
+export type SessionTranscriptSourceCursor = {
+  snapshot: SessionTranscriptSourceSnapshot;
+  position: number;
+  messageSeq: number;
+} & ({ kind: "kept" | "active" | "off-path" } | { kind: "archive"; path: string; source: string });
+
+export type SessionTranscriptSourcePageOptions = SessionTranscriptReadOptions & {
+  mode: "page";
+  includeOffPathMessages?: boolean;
+  cursor?: SessionTranscriptSourceCursor;
 };
 
 export type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
@@ -92,13 +115,10 @@ export type SessionTranscriptPageOptions = TranscriptReadWindowOptions &
 export type SessionTranscriptReader = {
   subagentCoordination?: SubagentCoordinationDisplayResolver;
   readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number>;
-  readSessionMessagesAsync(
-    scope: SessionTranscriptReadScope,
-    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
-  ): Promise<unknown[]>;
   readSessionMessagesWithSourceAsync(
     scope: SessionTranscriptReadScope,
-    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
+    options: SessionTranscriptSourcePageOptions,
+    signal?: AbortSignal,
   ): Promise<ReadSessionMessagesResult>;
   readSessionMessageByIdAsync(
     scope: SessionTranscriptReadScope,
@@ -157,7 +177,10 @@ export type SessionTranscriptProjectionSelection =
       messageId: string;
       options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean };
     }
-  | { kind: "source"; options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions }
+  | {
+      kind: "source";
+      options: Parameters<SessionTranscriptReader["readSessionMessagesWithSourceAsync"]>[1];
+    }
   | { kind: "lookup"; messageId: string };
 
 export type SessionTranscriptProjectionSelectionResults = {
@@ -167,7 +190,7 @@ export type SessionTranscriptProjectionSelectionResults = {
   page: ReadRecentSessionMessagesResult;
   "around-id": ReadSessionMessagesAroundIdResult;
   "by-id": ReadSessionMessageByIdResult;
-  source: ReadSessionMessagesResult & { offPathMessages?: unknown[] };
+  source: ReadSessionMessagesResult;
   lookup: { hasDisplayMessages: boolean; messages: unknown[] };
 };
 

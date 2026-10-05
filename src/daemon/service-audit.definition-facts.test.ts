@@ -252,7 +252,7 @@ it.each(["missing", "custom", "stale", "legacy-1", "legacy-60"])(
         ...(kind !== "custom" ? staleServiceEnvironment : {}),
       },
     };
-    const { stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+    const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
     const legacyThrottle = kind.startsWith("legacy-") ? Number(kind.slice(7)) : undefined;
     const original = buildLaunchAgentPlist({
       ...command,
@@ -579,7 +579,7 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
       programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
       environment: { PATH: "/usr/bin:/bin", ...staleServiceEnvironment },
     };
-    const { stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+    const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
       sourcePath,

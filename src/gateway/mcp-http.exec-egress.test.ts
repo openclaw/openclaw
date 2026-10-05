@@ -1,10 +1,11 @@
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { peekSystemEventEntries } from "../infra/system-events.js";
 import {
   startSecretEgressProxyServer,
   type SecretEgressProxyHandle,
@@ -21,6 +22,7 @@ import {
   activateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  type McpLoopbackRequestContext,
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
@@ -43,7 +45,10 @@ beforeAll(async () => {
       entries: { probe: { workspace: state.workspaceDir } },
     },
     plugins: { enabled: false },
-    tools: { allow: ["exec"], exec: { host: "gateway", security: "full", ask: "off" } },
+    tools: {
+      allow: ["exec", "process"],
+      exec: { host: "gateway", security: "full", ask: "off" },
+    },
     secrets: { egressProxy: { enabled: true } },
   };
   await state.writeConfig(config);
@@ -71,7 +76,11 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
-async function mintExecGrant(runId: string) {
+async function mintExecGrant(
+  runId: string,
+  turn: Partial<McpLoopbackRequestContext> = { trigger: "cron" },
+  args: Record<string, unknown> = { command: "echo mcp-egress-ok", yieldMs: 10000 },
+) {
   const runtime = getActiveMcpLoopbackRuntime();
   if (!runtime) {
     throw new Error("Expected the isolated MCP runtime");
@@ -91,14 +100,14 @@ async function mintExecGrant(runId: string) {
     runtimeOwnerToken: runtime.ownerToken,
     admittedRunContext,
     context: {
-      sessionKey: "agent:probe:cron:mcp-egress",
+      sessionKey: turn.sessionKey ?? "agent:probe:cron:mcp-egress",
       agentId: "probe",
       runId,
       workspaceDir: state.workspaceDir,
       cwd: state.workspaceDir,
       senderIsOwner: true,
-      trigger: "cron",
-      toolsAllow: ["exec"],
+      ...turn,
+      toolsAllow: turn.toolsAllow ?? ["exec"],
     },
   });
   grants.push(grant.token);
@@ -126,7 +135,7 @@ async function mintExecGrant(runId: string) {
           ? {
               params: {
                 name: "exec",
-                arguments: { command: "echo mcp-egress-ok", yieldMs: 10000 },
+                arguments: args,
               },
             }
           : {}),
@@ -164,4 +173,35 @@ it("executes egress-enabled commands through cached CLI grants and rejects a ret
       content: [expect.objectContaining({ text: expect.stringContaining("mcp-egress-ok") })],
     },
   });
+});
+
+it("marks a command started by a conversation's completion turn as the conversation's own", async () => {
+  const sessionKey = "agent:probe:telegram:group:-100155462274:topic:42";
+  const { request } = await mintExecGrant(
+    "mcp-continuation",
+    {
+      sessionKey,
+      trigger: "heartbeat",
+      continuesConversation: true,
+      toolsAllow: ["exec", "process"],
+      messageProvider: "telegram",
+      currentChannelId: "telegram:-100155462274:topic:42",
+      currentThreadTs: "42",
+    },
+    { command: "echo mcp-chain-ok", background: true },
+  );
+  const started = await request("tools/call");
+  expect(started.status).toBe(200);
+  await started.body?.cancel();
+
+  await vi.waitFor(
+    () =>
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({
+          text: expect.stringContaining("mcp-chain-ok"),
+          fromConversationTurn: true,
+        }),
+      ]),
+    { timeout: 10_000 },
+  );
 });

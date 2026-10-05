@@ -1,8 +1,20 @@
 // Applies archive, pin, snooze, and unread facts to the projected session entry.
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
+
+/** Call only after archive drain or startup reconciliation has excluded live work. */
+export function settleArchivedSessionRun(entry: SessionEntry, now: number): void {
+  if (entry.archivedAt === undefined || entry.status !== "running") {
+    return;
+  }
+  // Keep recovery/delivery receipts and known run timing; archive cancels execution.
+  entry.status = "killed";
+  entry.abortedLastRun = true;
+  entry.endedAt ??= now;
+  delete entry.lifecycleRunId;
+}
 
 export function applySessionPatchLifecycleFlags(params: {
   patch: SessionsPatchParams;
@@ -28,6 +40,7 @@ export function applySessionPatchLifecycleFlags(params: {
       delete next.pinnedAt;
       delete next.snoozedUntil;
       delete next.snoozedAt;
+      settleArchivedSessionRun(next, now);
     } else {
       delete next.archivedAt;
       delete next.archivedBy;

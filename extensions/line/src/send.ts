@@ -661,9 +661,8 @@ function fetchLineMemberProfile(
 
 export async function getUserProfile(
   userId: string,
-  opts: LineClientOpts & { useCache?: boolean } & LineConversationScope,
+  opts: LineClientOpts & LineConversationScope,
 ): Promise<LineUserProfile | null> {
-  const useCache = opts.useCache ?? true;
   try {
     // Client construction resolves the canonical account for the cache key and
     // can throw; an unresolvable name must never cost the inbound turn.
@@ -679,11 +678,6 @@ export async function getUserProfile(
         return null;
       }
     };
-    if (!useCache) {
-      const profile = await load();
-      rememberLineIdentity(profileCache, cacheKey, profile);
-      return profile;
-    }
     return await loadLineIdentity(profileCache, cacheKey, load);
   } catch (err) {
     logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);

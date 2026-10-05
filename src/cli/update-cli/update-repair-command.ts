@@ -4,7 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { supersedeStalePackageActivation } from "../../infra/package-update-activation.js";
+import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -80,12 +80,14 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     throw new Error(admission.message);
   }
   if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
-    const superseded = await supersedeStalePackageActivation(
-      resolveUpdateInstallRoot(discoveredRoot),
-    );
-    if (superseded) {
+    const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
+    if (settled) {
       defaultRuntime.error(
-        `Warning: previous package update operation ${superseded.operationId} closed as ${superseded.reason}. Recovery evidence retained at ${superseded.retained}.`,
+        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+          settled.retained
+            ? `Recovery evidence retained at ${settled.retained}.`
+            : "The original package and launchers remain unchanged."
+        }`,
       );
     }
   }

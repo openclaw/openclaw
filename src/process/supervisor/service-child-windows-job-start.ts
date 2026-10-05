@@ -23,7 +23,7 @@ export function isWindowsJobServiceStart(value: unknown): value is ServiceChildS
   const message = asOptionalRecord(value);
   return Boolean(
     message &&
-    message.type === "start" &&
+    (message.type === "start" || message.type === "prepare") &&
     typeof message.generation === "string" &&
     typeof message.command === "string" &&
     Array.isArray(message.args) &&

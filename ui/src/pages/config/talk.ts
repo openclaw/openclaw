@@ -16,6 +16,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
   renderDeviceTalk,
@@ -23,6 +24,8 @@ import {
   type VoiceWakeEditorState,
 } from "./talk-device.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
+
+registerSettingsEnglish();
 
 export type TalkRealtimeProviderOption = TalkCatalogResult["realtime"]["providers"][number];
 
