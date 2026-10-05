@@ -451,6 +451,7 @@ export async function startFreshCodexThread(
     preserveExistingBinding,
     rotatedContextEngineBinding,
     replacementPredecessor,
+    replacementOperation,
   } = context;
   const pluginThreadConfig = params.pluginThreadConfig?.enabled
     ? (prebuiltPluginThreadConfig ??
@@ -624,7 +625,7 @@ export async function startFreshCodexThread(
       return await rejectUncommittedThread(
         new CodexThreadBindingConflictError(
           replacementPredecessor?.threadId ?? response.thread.id,
-          "committing a fresh thread",
+          replacementOperation ?? "committing a fresh thread",
         ),
       );
     }

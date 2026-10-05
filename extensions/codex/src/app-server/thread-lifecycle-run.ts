@@ -108,6 +108,7 @@ export async function startOrResumeThread(
       webSearchThreadConfigFingerprint,
     } = preflight;
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
+    let replacementOperation: string | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
@@ -248,18 +249,20 @@ export async function startOrResumeThread(
       assert();
       // Replacement CAS needs the predecessor row to preserve same-connection inventory.
       replacementPredecessor = current;
+      replacementOperation = operation;
       binding = undefined;
     };
     const rotateStaleBinding = (
       current: CodexAppServerThreadBinding,
       changed: string,
+      operation: string,
       details?: Record<string, unknown>,
     ) => {
       embeddedAgentLog.debug(`codex app-server ${changed} changed; starting a new thread`, {
         threadId: current.threadId,
         ...details,
       });
-      stageBindingReplacement("rotating a stale thread binding");
+      stageBindingReplacement(operation);
     };
     const transientDelegationRestriction = params.params.delegationCapability === "report_only";
     const persistentWebSearchRestriction =
@@ -323,7 +326,7 @@ export async function startOrResumeThread(
         binding: binding.appServerRuntimeFingerprint,
       })
     ) {
-      rotateStaleBinding(binding, "runtime identity", {
+      rotateStaleBinding(binding, "runtime identity", "changing its app-server runtime identity", {
         connectionClass: params.appServer.connectionClass,
       });
     }
@@ -437,7 +440,7 @@ export async function startOrResumeThread(
         );
         preserveExistingBinding = true;
       } else {
-        rotateStaleBinding(binding, "MCP config");
+        rotateStaleBinding(binding, "MCP config", "changing MCP configuration");
       }
       binding = undefined;
     }
@@ -469,7 +472,7 @@ export async function startOrResumeThread(
       } else {
         // Codex can ignore resume overrides for a loaded thread, so persistent
         // search-policy changes and legacy bindings without metadata rotate first.
-        rotateStaleBinding(binding, "web search config");
+        rotateStaleBinding(binding, "web search config", "changing web-search configuration");
       }
       binding = undefined;
     }
@@ -507,16 +510,21 @@ export async function startOrResumeThread(
         !contextEngineBinding ||
         !isContextEngineBindingCompatible(binding.contextEngine, contextEngineBinding)
       ) {
-        rotateStaleBinding(binding, "context-engine binding", {
-          engineId: contextEngineBinding?.engineId,
-          previousEngineId: binding.contextEngine?.engineId,
-          epoch: contextEngineBinding?.projection?.epoch,
-          previousEpoch: binding.contextEngine?.projection?.epoch,
-          fingerprint: contextEngineBinding?.projection?.fingerprint,
-          previousFingerprint: binding.contextEngine?.projection?.fingerprint,
-          policyFingerprint: contextEngineBinding?.policyFingerprint,
-          previousPolicyFingerprint: binding.contextEngine?.policyFingerprint,
-        });
+        rotateStaleBinding(
+          binding,
+          "context-engine binding",
+          "changing its context-engine binding",
+          {
+            engineId: contextEngineBinding?.engineId,
+            previousEngineId: binding.contextEngine?.engineId,
+            epoch: contextEngineBinding?.projection?.epoch,
+            previousEpoch: binding.contextEngine?.projection?.epoch,
+            fingerprint: contextEngineBinding?.projection?.fingerprint,
+            previousFingerprint: binding.contextEngine?.projection?.fingerprint,
+            policyFingerprint: contextEngineBinding?.policyFingerprint,
+            previousPolicyFingerprint: binding.contextEngine?.policyFingerprint,
+          },
+        );
         rotatedContextEngineBinding = true;
       }
     }
@@ -528,14 +536,18 @@ export async function startOrResumeThread(
         nextLegacy: legacyUserMcpServersFingerprint,
       })
     ) {
-      rotateStaleBinding(binding, "user MCP config");
+      rotateStaleBinding(binding, "user MCP config", "changing its user MCP configuration");
     }
     if (
       binding?.threadId &&
       (binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint ||
         binding.networkProxyProfileName !== params.appServer.networkProxy?.profileName)
     ) {
-      rotateStaleBinding(binding, "network proxy config");
+      rotateStaleBinding(
+        binding,
+        "network proxy config",
+        "changing its network proxy configuration",
+      );
     }
     if (binding?.threadId) {
       const pluginBindingStale = isCodexPluginThreadBindingStale({
@@ -546,7 +558,7 @@ export async function startOrResumeThread(
         hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
       });
       if (pluginBindingStale) {
-        rotateStaleBinding(binding, "plugin app config");
+        rotateStaleBinding(binding, "plugin app config", "changing its plugin app configuration");
       }
     }
     if (binding?.threadId) {
@@ -556,7 +568,11 @@ export async function startOrResumeThread(
         binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
         (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred)
       ) {
-        rotateStaleBinding(binding, "dynamic tool loading");
+        rotateStaleBinding(
+          binding,
+          "dynamic tool loading",
+          "changing its dynamic tool loading mode",
+        );
       }
     }
     if (binding?.threadId) {
@@ -587,7 +603,7 @@ export async function startOrResumeThread(
             },
           );
         } else {
-          rotateStaleBinding(binding, "dynamic tool catalog");
+          rotateStaleBinding(binding, "dynamic tool catalog", "changing the dynamic tool catalog");
         }
       } else {
         const requestContext = await prepareRequestContext();
@@ -644,6 +660,7 @@ export async function startOrResumeThread(
       preserveExistingBinding,
       rotatedContextEngineBinding,
       replacementPredecessor,
+      replacementOperation,
     });
     if (replacementPredecessor && !preserveExistingBinding && configuredMcpOwnershipChanged) {
       // Configured MCP migration retains the prior subscription until its replacement commits.
