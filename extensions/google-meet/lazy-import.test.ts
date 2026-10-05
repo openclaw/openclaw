@@ -65,12 +65,8 @@ describe("google-meet lazy imports", () => {
             return { ok: true };
           }
 
-          transcriptSourceRuntime() {
-            return {
-              startTranscriptSource: async () => ({ ok: true }),
-              stopTranscriptSource: async () => ({ ok: true }),
-            };
-          }
+          startTranscriptSource = async () => ({ ok: true });
+          stopTranscriptSource = async () => ({ ok: true });
         },
       };
     });

@@ -11,14 +11,9 @@ import {
   registerGoogleMeetSessionCommands,
 } from "./cli-runtime-commands.js";
 import {
-  parseOptionalNumber,
-  parsePositiveIntegerOption,
   promptInput,
   resolveGoogleMeetOAuthCallbackTimeoutMs,
-  type CreateOptions,
-  type MeetArtifactOptions,
   type OAuthLoginOptions,
-  type ResolveSpaceOptions,
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
@@ -33,63 +28,6 @@ import {
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
-
-function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
-  const meeting = value?.trim() || config.defaults.meeting;
-  if (!meeting) {
-    throw new Error(
-      "Meeting input is required. Pass a URL/meeting code or configure defaults.meeting.",
-    );
-  }
-  return meeting;
-}
-
-function hasCalendarLookupOptions(options: ResolveSpaceOptions): boolean {
-  return Boolean(options.today || options.event?.trim());
-}
-
-function resolveCliParams(options: ResolveSpaceOptions): Record<string, unknown> {
-  const { calendar, expiresAt, ...raw } = options;
-  return {
-    ...raw,
-    calendarId: calendar,
-    expiresAt: parseOptionalNumber(expiresAt),
-  };
-}
-
-function resolveCliArtifactParams(
-  config: GoogleMeetConfig,
-  options: MeetArtifactOptions,
-): Record<string, unknown> {
-  const meeting = options.meeting?.trim() || config.defaults.meeting;
-  const conferenceRecord = options.conferenceRecord?.trim();
-  if (!meeting && !conferenceRecord && !hasCalendarLookupOptions(options)) {
-    throw new Error(
-      "Meeting input or conference record is required. Pass --meeting, --today, --event, --conference-record, or configure defaults.meeting.",
-    );
-  }
-  return {
-    ...resolveCliParams(options),
-    meeting,
-    conferenceRecord,
-    pageSize: parsePositiveIntegerOption(options.pageSize, "page-size"),
-    includeTranscriptEntries: options.transcriptEntries,
-    includeAllConferenceRecords: options.allConferenceRecords,
-    includeDocumentBodies: options.includeDocBodies,
-    mergeDuplicateParticipants: options.mergeDuplicates,
-    lateAfterMinutes: parseOptionalNumber(options.lateAfterMinutes),
-    earlyBeforeMinutes: parseOptionalNumber(options.earlyBeforeMinutes),
-  };
-}
-
-function hasCreateOAuth(config: GoogleMeetConfig, options: CreateOptions): boolean {
-  return Boolean(
-    options.accessToken?.trim() ||
-    options.refreshToken?.trim() ||
-    config.oauth.accessToken ||
-    config.oauth.refreshToken,
-  );
-}
 
 export function registerGoogleMeetCli(params: {
   program: Command;
@@ -170,10 +108,6 @@ export function registerGoogleMeetCli(params: {
     ensureRuntime: params.ensureRuntime,
     callGateway,
     operationTimeoutMs,
-    resolveMeetingInput,
-    resolveCliParams,
-    resolveCliArtifactParams: (options) => resolveCliArtifactParams(params.config, options),
-    hasCreateOAuth,
   };
 
   registerGoogleMeetCreateCommands(context);
