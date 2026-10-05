@@ -237,6 +237,12 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   delayMs?: number;
   getConfig: () => OpenClawConfig;
   maxRetries?: number;
+  /**
+   * Set while the Gateway crash-loop breaker is tripped. Interrupted sessions are
+   * still marked, but not dispatched: a started turn refreshes its retry
+   * allowance, so replaying the turn that crashed the process would loop forever.
+   */
+  pauseAutomaticDispatch?: boolean;
   shouldContinue?: () => boolean;
   stateDir?: string;
   startupCheckedStorePaths?: Set<string>;
@@ -267,6 +273,14 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           startupCheckedStorePaths,
           updatedBeforeMs: startupRecoveryCutoffMs,
         });
+        if (params.pauseAutomaticDispatch) {
+          mainSessionRecoveryLog.warn(
+            "restart-loop breaker tripped; automatic main-session restart recovery paused. " +
+              "Interrupted sessions stay marked: a new message in a session resumes its interrupted turn, " +
+              "and the first Gateway start after the breaker recovers resumes the rest.",
+          );
+          return { started: 0, settled: 0, failed: marking.failedTargets?.length ?? 0, skipped: 0 };
+        }
         const result = await recoverRestartAbortedMainSessions({
           cfg,
           onExhaustedTarget: (target) => {

@@ -479,4 +479,51 @@ describe("startup recovery admission", () => {
       warn.mockRestore();
     }
   });
+
+  it("marks but does not replay interrupted sessions while the crash-loop breaker is tripped", async () => {
+    const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
+      abortedLastRun: undefined,
+    });
+    await writeCompletedToolTranscript(sessionsDir);
+    const paused = createDeferred();
+    const dispatched = createDeferred();
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation((message) => {
+      if (message.includes("automatic main-session restart recovery paused")) {
+        paused.resolve();
+      }
+    });
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      dispatched.resolve();
+      return { runId: "run-resumed" };
+    });
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      getConfig: () => ({}),
+      delayMs: 0,
+      pauseAutomaticDispatch: true,
+      stateDir: tmpDir,
+      gatewayRuntime,
+    });
+    try {
+      await Promise.race([paused.promise, dispatched.promise]);
+      await recovery.stop();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+      });
+      // A new message in the session still resumes the paused turn explicitly.
+      await expect(
+        retryRestartAbortedMainSessionRecovery({
+          expectedSessionId: "main-session",
+          storePath,
+          sessionKey,
+          gatewayRuntime,
+        }),
+      ).resolves.toMatchObject({ started: 1, failed: 0 });
+      expect(callGateway).toHaveBeenCalledOnce();
+    } finally {
+      await recovery.stop();
+      warn.mockRestore();
+    }
+  });
 });

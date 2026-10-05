@@ -284,6 +284,8 @@ export async function finishGatewayStartup(params: {
           deps,
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
+          crashLoopBreakerTripped:
+            opts.channelAutostartSuppression?.reason === "crash-loop-breaker",
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,
