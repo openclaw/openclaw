@@ -68,6 +68,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
         })
       ).buffer;
     } catch (err) {
+      if (isMissingPathError(err)) {
+        throw err;
+      }
       throw new Error(
         `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,
         { cause: err },
@@ -432,7 +435,7 @@ async function removeLocalRootPath(params: {
       });
     }
   } catch (err) {
-    if (params.force !== false && isNotFoundError(err)) {
+    if (params.force !== false && isMissingPathError(err)) {
       return;
     }
     throw err;
@@ -480,7 +483,7 @@ async function nearestExistingDirectoryStats(params: {
   let cursor = path.resolve(params.targetPath);
   while (isPathInside(rootPath, cursor)) {
     const stats = await fsPromises.lstat(cursor).catch((err: unknown) => {
-      if (isNotFoundError(err)) {
+      if (isMissingPathError(err)) {
         return null;
       }
       throw err;
@@ -500,10 +503,9 @@ async function nearestExistingDirectoryStats(params: {
   return await fsPromises.lstat(rootPath);
 }
 
-function isNotFoundError(err: unknown): boolean {
-  return (
-    (err instanceof FsSafeError && err.code === "not-found") || extractErrorCode(err) === "ENOENT"
-  );
+function isMissingPathError(err: unknown): boolean {
+  const code = err instanceof FsSafeError ? err.code : extractErrorCode(err);
+  return code === "not-found" || code === "ENOENT" || code === "ENOTDIR";
 }
 
 async function assertLocalPathSafety(params: {
@@ -516,7 +518,7 @@ async function assertLocalPathSafety(params: {
     hostPath !== mountHostRoot &&
     (
       await fsPromises.lstat(hostPath).catch((error: unknown) => {
-        if (isNotFoundError(error)) {
+        if (isMissingPathError(error)) {
           return null;
         }
         throw error;
