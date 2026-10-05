@@ -68,11 +68,10 @@ function createMockCtx(
 }
 
 function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
-  const result = resolveCopilotForwardCompatModel(ctx);
-  if (!result) {
-    throw new Error(`expected model ${ctx.modelId} to resolve`);
-  }
-  return result;
+  return expectDefined(
+    resolveCopilotForwardCompatModel(ctx),
+    `expected model ${ctx.modelId} to resolve`,
+  );
 }
 
 describe("resolveCopilotForwardCompatModel", () => {
@@ -1024,7 +1023,16 @@ describe("fetchCopilotModelCatalog", () => {
       const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
         const signal = expectDefined(init?.signal, "catalog request signal");
         return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("Expected catalog abort to carry an Error"),
+              ),
+            { once: true },
+          );
           started.resolve();
         });
       });
@@ -1085,25 +1093,16 @@ describe("fetchCopilotModelCatalog", () => {
     }
   });
 
-  it("rejects empty token / baseUrl synchronously before fetching", async () => {
-    const fetchImpl = vi.fn();
-
-    await expect(
-      fetchCatalogWithFetch({
-        copilotApiToken: "",
-        baseUrl: "https://api.githubcopilot.com",
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow(/copilotApiToken required/);
-
+  it.each(["copilotApiToken", "baseUrl"] as const)("rejects empty %s", async (field) => {
+    const fetchImpl = vi.fn<typeof fetch>();
     await expect(
       fetchCatalogWithFetch({
         copilotApiToken: "tid=test",
-        baseUrl: "",
-        fetchImpl: fetchImpl as unknown as typeof fetch,
+        baseUrl: "https://api.githubcopilot.com",
+        [field]: "",
+        fetchImpl,
       }),
-    ).rejects.toThrow(/baseUrl required/);
-
+    ).rejects.toThrow(`${field} required`);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

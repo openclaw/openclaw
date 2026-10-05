@@ -476,7 +476,16 @@ describe("bedrock mantle discovery", () => {
             return;
           }
           started.resolve(signal);
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("Expected discovery abort to carry an Error"),
+              ),
+            { once: true },
+          );
         }),
     );
     try {
