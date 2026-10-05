@@ -524,7 +524,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/session-manager-transaction-rollback.test.ts",
   "src/agents/sessions/session-manager-model-context-limits.test.ts",
   "src/agents/sessions/session-manager-model-context.test.ts",
-  "src/agents/sessions/session-manager.fork-rebase.test.ts",
   "src/agents/sessions/session-manager.persistence-compat.test.ts",
   "src/agents/sessions/session-manager-static-notes.test.ts",
   "src/agents/sessions/session-manager.test.ts",
