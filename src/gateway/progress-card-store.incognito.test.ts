@@ -185,9 +185,27 @@ it.each([
   "model-context",
   "native-context",
   "hydration",
+  "progress-write",
+  "reaction-write",
+  "board-write",
+  "acp-write",
 ] as const)("refuses %s disclosure to a retained parent after release", async (reader) => {
-  const { scope, heartbeat } = await fixture(`retained-${reader}`);
+  const { scope, heartbeat, reaction, store: initialStore } = await fixture(`retained-${reader}`);
   await persistHeartbeatOutcome(heartbeat);
+  if (reader === "progress-write") {
+    await initialStore.put(scope.sessionKey, { markdown: "Stored private progress" });
+  } else if (reader === "reaction-write") {
+    await setSessionReactionAsync(scope, reaction);
+  } else if (reader === "board-write") {
+    await new SqliteBoardStore({
+      env,
+      resolveSession: () => ({ ...scope, path: actor.path }),
+    }).putWidget({
+      sessionKey: scope.sessionKey,
+      name: "stored",
+      content: { kind: "html", html: "<p>Stored private Board</p>" },
+    });
+  }
   const borrowed = await captureOpenClawAgentDatabaseExecution({
     kind: "ephemeral",
     agentId: actor.agentId,
@@ -228,6 +246,33 @@ it.each([
         reading = true;
         if (reader === "heartbeat") {
           await claimHeartbeatOutcomeForRun({ ...bound, runId: "retained-read" });
+        } else if (reader === "progress-write") {
+          await createIncognitoProgressCardStore(() => bound).put(scope.sessionKey, {
+            expectedRevision: 999,
+          });
+        } else if (reader === "reaction-write") {
+          await setSessionReactionAsync(bound, { ...reaction, identityId: "writer" });
+        } else if (reader === "board-write") {
+          await new SqliteBoardStore({
+            env,
+            resolveSession: () => ({ ...bound, path: borrowed.path }),
+          }).applyOps({ sessionKey: scope.sessionKey }, [
+            { kind: "widget_resize", name: "stored", sizeW: 8, sizeH: 6 },
+          ]);
+        } else if (reader === "acp-write") {
+          await borrowed.acp.upsertMeta({
+            ...scope,
+            authority: source,
+            cfg: {},
+            mutate: () => ({
+              backend: "fixture",
+              agent: "fixture",
+              runtimeSessionName: "private-runtime",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 100,
+            }),
+          });
         } else if (reader === "acp") {
           await borrowed.acp.readEntry({ ...scope, authority: source, cfg: {} });
         } else if (reader === "pending") {
@@ -266,13 +311,37 @@ it.each([
       }),
     ).rejects.toThrow("reference is released");
     expect(disclosed).toBe(false);
+    if (reader === "reaction-write") {
+      expect(
+        await actor.sessions.sideData(authority, {
+          type: "session.reactions.read",
+          input: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
+        }),
+      ).toMatchObject({ [reaction.messageId]: [{ count: 2 }] });
+    } else if (reader === "progress-write") {
+      expect(await initialStore.get(scope.sessionKey)).toMatchObject({
+        markdown: "Stored private progress",
+        revision: 1,
+      });
+    } else if (reader === "board-write") {
+      expect(
+        await actor.sessions.sideData(authority, {
+          type: "session.boards.readSnapshot",
+          input: { sessionKey: scope.sessionKey },
+        }),
+      ).toMatchObject({ snapshot: { revision: 2, widgets: [{ name: "stored" }] } });
+    } else if (reader === "acp-write") {
+      expect(await actor.acp.readEntry({ ...scope, authority, cfg: {} })).toMatchObject({
+        acp: { runtimeSessionName: "private-runtime" },
+      });
+    }
   } finally {
     await retiring;
     await borrowed.release();
   }
 });
 
-it.each(["revocation", "release", "close"] as const)(
+it.each(["revocation", "release"] as const)(
   "refuses progress-card disclosure after %s during the worker read",
   async (ending) => {
     let allowed = true;
@@ -298,7 +367,7 @@ it.each(["revocation", "release", "close"] as const)(
           if (ending === "revocation") {
             allowed = false;
           } else {
-            retiring ??= ending === "release" ? borrowed.release() : borrowed.close();
+            retiring ??= borrowed.release();
           }
         }
       },
@@ -325,6 +394,79 @@ it.each(["revocation", "release", "close"] as const)(
     }
   },
 );
+
+it("refuses private read and mutation responses while accepted work settles during close", async () => {
+  const closingActor = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "response-close",
+    env,
+    authority,
+  });
+  assert(closingActor);
+  const target = {
+    agentId: closingActor.agentId,
+    sessionKey: "agent:response-close:dashboard:incognito-response",
+    sessionId: "response-close",
+    storePath: closingActor.path,
+    env,
+  };
+  let closing: Promise<void> | undefined;
+  try {
+    await closingActor.sessions.create(authority, {
+      sessionKey: target.sessionKey,
+      entry: {
+        sessionId: target.sessionId,
+        lifecycleRevision: "initial",
+        updatedAt: 1,
+        incognito: true,
+      },
+    });
+    const appended = await withIncognitoSessionActor(closingActor, () =>
+      appendSessionTranscriptNote(target, makeUserMessage("Private closing message", 1)),
+    );
+    assert(appended);
+    const initial = { ...target, incognito: { actor: closingActor, authority } };
+    await createIncognitoProgressCardStore(() => initial).put(target.sessionKey, {
+      markdown: "Private closing card",
+    });
+    const reaction = {
+      messageId: appended.messageId,
+      expectedSessionId: target.sessionId,
+      emoji: "👍",
+      identityId: "viewer",
+    };
+    await setSessionReactionAsync(initial, reaction);
+    const source: IncognitoSessionAuthority = {
+      assertCurrent() {},
+      authorize(stage) {
+        if (stage === "commit") {
+          closing ??= closingActor.close();
+        }
+      },
+    };
+    const bound = { ...target, incognito: { actor: closingActor, authority: source } };
+    const store = createIncognitoProgressCardStore(() => bound);
+    let results: PromiseSettledResult<unknown>[] = [];
+    await expect(
+      closingActor.sessions.withSharedState(async () => {
+        results = await Promise.allSettled([
+          store.get(target.sessionKey),
+          store.put(target.sessionKey, { expectedRevision: 999 }),
+          setSessionReactionAsync(bound, { ...reaction, identityId: "writer" }),
+        ]);
+      }),
+    ).rejects.toBeInstanceOf(IncognitoSessionEndedError);
+    expect(results).toEqual(
+      Array.from({ length: 3 }, () => ({
+        status: "rejected",
+        reason: expect.any(IncognitoSessionEndedError),
+      })),
+    );
+    await closing;
+  } finally {
+    await closingActor.close();
+  }
+});
 
 it("keeps the actor transport alive through admission policy cleanup after close revokes the claim", async ({
   onTestFinished,

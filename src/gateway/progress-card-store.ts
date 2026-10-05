@@ -108,6 +108,7 @@ export function createIncognitoProgressCardStore(
         });
         target.current.assertCurrent();
         target.claim.assertCurrent();
+        target.actor.assertReadable();
         return "card" in result ? result : { card: null };
       });
     },

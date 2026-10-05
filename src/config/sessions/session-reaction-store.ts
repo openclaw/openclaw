@@ -98,6 +98,7 @@ export async function setSessionReactionAsync(
         });
         current.assertCurrent();
         claim.assertCurrent();
+        actor.assertReadable();
         return result;
       })
       .catch(restoreReactionError);

@@ -593,7 +593,9 @@ Closing refuses new work and joins accepted compositions, dependent cleanup, and
 publication before stopping the actor transport. Accepted persistence does not
 inherit scheduler cancellation. Read consumers require a live borrow immediately
 before disclosure; retained settlement authority does not permit new callbacks
-after release or close. Admission claims retain their own policy and
+after release or close. Mutation responses containing stored private data use
+the same delivery fence after their writes and committed publications settle.
+Admission claims retain their own policy and
 cleanup lifetime until release, independently of the original borrow.
 Caller authority remains live at grants and
 disclosure; ended actors surface `INCOGNITO_SESSION_ENDED` to Gateway clients as a

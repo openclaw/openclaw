@@ -454,7 +454,10 @@ function createIncognitoAgentExecutionOwner(
             return execution.sessions.withSharedState(async () => {
               const { upsertIncognitoAcpSessionMeta } =
                 await import("../acp/runtime/session-meta-worker-mutation.js");
-              return upsertIncognitoAcpSessionMeta({ ...params, actor: execution });
+              const entry = await upsertIncognitoAcpSessionMeta({ ...params, actor: execution });
+              params.authority.assertCurrent();
+              execution.assertReadable();
+              return entry;
             });
           },
         },

@@ -200,6 +200,8 @@ export class SqliteBoardStore implements BoardStore {
         try {
           const committed = await actorWrite(actor, writeAuthority, resolved.sessionKey);
           sessionChanges.emitBatch(committed.changes);
+          writeAuthority.assertCurrent();
+          actor.assertReadable();
           return committed.value;
         } catch (error) {
           // Disclosure can fail after the actor acknowledges COMMIT; invalidate without replay.
