@@ -1,6 +1,6 @@
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import type { Dispatcher } from "undici";
+import { getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForControlUiDocument } from "../../commands/control-ui-handoff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -13,7 +13,7 @@ import {
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import type { DispatcherAwareRequestInit } from "./runtime-fetch.js";
 import {
-  ensureGlobalUndiciStreamTimeouts,
+  ensureGlobalUndiciDispatcherStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
 } from "./undici-global-dispatcher.js";
 
@@ -905,23 +905,32 @@ describe("request lifecycle", () => {
   });
 
   it("inherits the global stream timeout and checks authority after DNS", async () => {
-    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
-    installRuntime();
-    const fetchImpl = fetchStub();
-    const beforeRequest = vi.fn();
-    const lookupFn = createPublicLookup();
-    const result = await guardedRequest(fetchImpl, { lookupFn, beforeRequest });
-    expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
-    expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
-    expect(agentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowH2: false,
-        bodyTimeout: 1_900_000,
-        headersTimeout: 1_900_000,
-        connect: expect.objectContaining({ lookup: expect.any(Function) }),
-      }),
-    );
-    await result.release();
+    const previous = getGlobalDispatcher();
+    try {
+      ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
+      installRuntime();
+      const fetchImpl = fetchStub();
+      const beforeRequest = vi.fn();
+      const lookupFn = createPublicLookup();
+      const result = await guardedRequest(fetchImpl, { lookupFn, beforeRequest });
+      expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
+      expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
+      expect(agentCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowH2: false,
+          bodyTimeout: 1_900_000,
+          headersTimeout: 1_900_000,
+          connect: expect.objectContaining({ lookup: expect.any(Function) }),
+        }),
+      );
+      await result.release();
+    } finally {
+      const current = getGlobalDispatcher();
+      setGlobalDispatcher(previous);
+      if (current !== previous) {
+        await current.destroy();
+      }
+    }
   });
 
   it("propagates a final dispatch rejection without sending the request", async () => {

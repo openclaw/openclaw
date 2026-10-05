@@ -249,6 +249,7 @@ export type GatewayCloseParams = {
 };
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
+  preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
   getPendingReplyCount: () => number;
@@ -323,6 +324,20 @@ export async function prepareGatewayClose(
         warnings,
       }),
     );
+    // ACPX owns agent-process cleanup; memory retirement must not overtake its drain.
+    await measureCloseStep("acp-session-manager", () =>
+      shutdownStep(
+        "acp-session-manager",
+        () => disposeAcpSessionManager("gateway-shutdown"),
+        warnings,
+      ),
+    );
+    // Memory owns database borrows independent of stalled model/tool finalizers.
+    // The registry retains and later joins this same preparation before retirement.
+    void cleanupWork.track(params.preparePluginRegistryClose).catch((error: unknown) => {
+      shutdownLog.warn(`memory preparation failed during shutdown: ${formatErrorMessage(error)}`);
+      recordShutdownWarning(warnings, "memory-managers");
+    });
     return { start, notice, warnings, cleanupWork };
   } catch (error) {
     await cleanupWork.drain();
@@ -389,15 +404,6 @@ async function closeGatewayResources(
     if (params.bonjourStop) {
       await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
     }
-    // ACPX owns agent-process cleanup, so plugin teardown must not overtake
-    // the manager drain even when cancellation and handle close are slow.
-    await measureCloseStep("acp-session-manager", () =>
-      shutdownStep(
-        "acp-session-manager",
-        () => disposeAcpSessionManager("gateway-shutdown"),
-        warnings,
-      ),
-    );
     if (params.pluginServices) {
       const cleanup = cleanupWork.track(() =>
         Promise.resolve().then(async () => {
@@ -641,11 +647,12 @@ async function closeGatewayResources(
       }
       for (const { pluginId, hookId, error } of registryClose.pluginFailures) {
         recordShutdownWarning(warnings, `plugin/${pluginId}`);
-        resourceCleanupErrors.push(
-          new Error(`Plugin ${pluginId} cleanup failed (${hookId}): ${formatErrorMessage(error)}`, {
-            cause: error,
-          }),
-        );
+        const message = `Plugin ${pluginId} cleanup failed (${hookId}): ${formatErrorMessage(error)}`;
+        shutdownLog.warn(message);
+        // Retirement has joined admitted work; callback faults are diagnostic, unlike lost state.
+        if (hookId === "session-store") {
+          resourceCleanupErrors.push(new Error(message, { cause: error }));
+        }
       }
     } catch (error) {
       resourceCleanupErrors.push(error);

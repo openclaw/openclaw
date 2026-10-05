@@ -102,6 +102,7 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         storePath: target.readSource.path,
         env: binding.env,
         sessionKeys: [identity.sessionKey],
+        snapshotFields: [],
       });
       assertSourceCurrent();
       const preparedEntry = prepared.entries.find(

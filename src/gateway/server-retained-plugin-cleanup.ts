@@ -10,12 +10,12 @@ export async function cleanupRetainedPluginInstallGenerations(params: {
   try {
     const {
       clearLoadInstalledPluginIndexInstallRecordsCache,
-      loadInstalledPluginIndexInstallRecordsSync,
+      loadInstalledPluginIndexInstallRecords,
     } = await import("../plugins/installed-plugin-index-records.js");
     // An external install may have advanced the ledger during the idle delay.
     // Protect both the desired install and the code still owned by this Gateway.
     clearLoadInstalledPluginIndexInstallRecordsCache();
-    const records = loadInstalledPluginIndexInstallRecordsSync();
+    const records = await loadInstalledPluginIndexInstallRecords();
     const { cleanupRetainedManagedNpmInstallGenerations } =
       await import("../plugins/managed-npm-retention.js");
     const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({

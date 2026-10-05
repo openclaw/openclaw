@@ -14,7 +14,6 @@ type ModelStatusTestHarness = {
   createModelVisibilityPolicy: typeof CreateModelVisibilityPolicy;
   buildModelAliasIndex: typeof BuildModelAliasIndex;
   createSessionEntry: (overrides?: Partial<InternalSessionEntry>) => InternalSessionEntry;
-  modelDefinition: (id: string, name: string) => ModelDefinitionConfig;
   setAuthProfiles: (
     profiles: Record<
       string,
@@ -24,6 +23,18 @@ type ModelStatusTestHarness = {
   ) => void;
 };
 
+function modelDefinition(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
+}
+
 export function registerModelStatusDirectiveTests(harness: ModelStatusTestHarness): void {
   const {
     resolveModelInfoReply,
@@ -31,7 +42,6 @@ export function registerModelStatusDirectiveTests(harness: ModelStatusTestHarnes
     createModelVisibilityPolicy,
     buildModelAliasIndex,
     createSessionEntry,
-    modelDefinition,
     setAuthProfiles,
   } = harness;
 

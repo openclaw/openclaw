@@ -202,6 +202,7 @@ export const preservedModuleBuildSources = [
   "src/worker/inference-stream.runtime.ts",
   "src/cli/mcp-cli.ts",
   "src/cli/exec-approvals-local.ts",
+  "src/cli/exec-policy-cli.ts",
   "src/agents/agent-bundle-mcp-materialize.ts",
   "src/plugins/tool-metadata.ts",
   "src/plugins/tools.ts",

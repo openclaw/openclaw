@@ -165,15 +165,7 @@ func normalizeMaskedListMarkerSpacing(source, translated string, listPlaceholder
 }
 
 func markdownWhitespaceRunStart(text string, position int) int {
-	for position > 0 {
-		switch text[position-1] {
-		case ' ', '\t', '\r', '\n':
-			position--
-		default:
-			return position
-		}
-	}
-	return position
+	return len(strings.TrimRight(text[:position], " \t\r\n"))
 }
 
 func escapeUnexpectedListItemBodyMarkers(source, translated string, listPlaceholders map[string]string) string {

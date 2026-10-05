@@ -248,10 +248,16 @@ describe("Sessions board storage", () => {
     });
     const card = await store.create({ title: "Keep this card" });
     await store.writeSessionPlacement("sessions", placement(), { expectedSpec: board.sessions });
+    const sibling = await store.upsertBoard({ id: "sibling", kind: "sessions" });
+    await store.writeSessionPlacement("sibling", placement(), { expectedSpec: sibling.sessions! });
     expect(await store.deleteBoard("sessions")).toEqual({ deleted: true });
     expect(await stores.sessionsBoard.listPlacements("sessions")).toEqual([]);
     await expect(store.getSessionsBoard("sessions")).rejects.toThrow("board not found");
     expect(await store.list()).toEqual([card]);
+    expect(await store.listSessionPlacements("sibling")).toEqual([placement()]);
+    const recreated = await store.upsertBoard({ id: "sessions", kind: "sessions" });
+    expect(recreated.sessions?.agentSessionKey).toBeUndefined();
+    expect(await store.listSessionPlacements("sessions")).toEqual([]);
   });
 
   it.each(["update", "write"] as const)(

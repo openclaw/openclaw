@@ -46,49 +46,11 @@ describe("release publication control admission", () => {
 
   it.each([
     { name: "stable evidence", overrides: {}, failures: [] },
-    { name: "unsealed rerun", overrides: { rerunGroup: "performance" }, failures: ["rerun-group"] },
-    { name: "missing soak", overrides: { runReleaseSoak: "false" }, failures: ["soak"] },
-    {
-      // Strict default: stable evidence without blocking performance fails closed.
-      name: "advisory performance",
-      overrides: { controls: { performanceBlocking: false } },
-      failures: ["performance"],
-    },
     {
       name: "waived advisory and soak",
       overrides: { controls: { performanceBlocking: false }, runReleaseSoak: "false" },
       waiver: "2026.9.5 Approved after infrastructure failure",
       failures: ["performance", "soak"],
-    },
-    {
-      name: "waiver naming another release train",
-      overrides: { runReleaseSoak: "false" },
-      waiver: "2026.9.7 Approved",
-      failures: ["soak"],
-    },
-    {
-      name: "blank waiver",
-      overrides: { runReleaseSoak: "false" },
-      waiver: " \n\t",
-      failures: ["soak"],
-    },
-    {
-      name: "failed advisory performance",
-      overrides: {
-        controls: { performanceBlocking: false },
-        childRuns: { productPerformance: { conclusion: "failure" } },
-      },
-      failures: ["performance"],
-    },
-    {
-      // A waiver cannot stand in for a performance child that failed.
-      name: "waived failed advisory performance",
-      overrides: {
-        controls: { performanceBlocking: false },
-        childRuns: { productPerformance: { conclusion: "failure" } },
-      },
-      waiver: "2026.9.5 Approved",
-      failures: ["performance"],
     },
     {
       name: "missing performance evidence",

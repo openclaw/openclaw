@@ -17,7 +17,6 @@ type ModelPickerParams = {
   options: readonly ModelPickerOption[];
   disabled?: boolean;
   title?: string;
-  className?: string;
   placement?: "top" | "bottom";
   showSelectedDetail?: boolean;
   groupByProvider?: boolean;
@@ -75,7 +74,7 @@ export function renderModelPicker(params: ModelPickerParams) {
           : undefined,
         showOptionTooltips: false,
         showSelectedDescription: params.showSelectedDetail,
-        className: `model-picker__select ${params.className ?? ""}`,
+        className: "model-picker__select ",
         onOpen: params.onOpen,
         renderLeading: (option) =>
           option.provider

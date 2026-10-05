@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createProcessSupervisor } from "./supervisor.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,6 +31,8 @@ it.skipIf(process.platform === "win32").each(["consume", "cancel"] as const)(
     const scope = `relay-${path.basename(cwd)}`;
     const closeScope = supervisor.acquireScopeCleanup(scope, { processTree: "required-all" });
     const observed = { stdout: "", stderr: "" };
+    const nativeAdmission = createDeferredCore();
+    let launchGrants = 0;
     let ready = false;
     const starting = supervisor.spawn({
       mode: "child",
@@ -39,6 +42,14 @@ it.skipIf(process.platform === "win32").each(["consume", "cancel"] as const)(
       stdinMode: "pipe-closed",
       timeoutMs: 10_000,
       secretInput: { fd: 3, createData: () => secret },
+      initiateSpawn(launch, settlement) {
+        launchGrants++;
+        if (!settlement) {
+          throw new Error("Relay launch did not retain native admission");
+        }
+        void settlement.then(() => nativeAdmission.resolve(), nativeAdmission.reject);
+        return launch();
+      },
       onStdout: (chunk) => {
         observed.stdout += chunk;
       },
@@ -46,13 +57,12 @@ it.skipIf(process.platform === "win32").each(["consume", "cancel"] as const)(
         observed.stderr += chunk;
       },
     });
-    void starting.then(
-      () => {
-        ready = true;
-      },
-      () => {},
-    );
+    void starting.then(() => {
+      ready = true;
+    }, nativeAdmission.reject);
     try {
+      await nativeAdmission.promise;
+      expect(launchGrants).toBe(1);
       await expect
         .poll(() => observed, { timeout: 5_000 })
         .toEqual({

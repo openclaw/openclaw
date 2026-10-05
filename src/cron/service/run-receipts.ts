@@ -131,6 +131,27 @@ export function markServiceCronJobActive(
         deletionBlocked: false,
       },
     );
+    marker.standingGrantAuthority = {
+      context,
+      handle: { ...runReceipt },
+      assertCurrent() {
+        context.admission.assertCurrent();
+        if (
+          resolveCronRunReceiptAgentId(state, job) !== runReceipt.agentId ||
+          state.deps.isAgentAvailable?.(runReceipt.agentId, undefined, {
+            deletionBlocked: false,
+          }) === false
+        ) {
+          throw new CronRunReceiptRevisionError(runReceipt.receiptId, "cron owner changed");
+        }
+      },
+      acquireUse: (assertCurrent, signal) =>
+        observation.acquireUse({
+          permission: "execution",
+          assertCurrent,
+          signal,
+        }),
+    };
     marker.prepareMessageUse = (sourceSensitive, assertCurrent, signal) =>
       observation.acquireUse({
         permission: sourceSensitive ? "source" : "message",

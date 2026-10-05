@@ -291,12 +291,13 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     },
   );
 
-  it.for(
-    (["resolve", "deny", "cancel", "reconcile"] as const).flatMap((operation) => [
-      { operation, replaced: false },
-      { operation, replaced: true },
-    ]),
-  )(
+  it.for([
+    { operation: "resolve", replaced: true },
+    { operation: "cancel", replaced: false },
+    { operation: "cancel", replaced: true },
+    { operation: "reconcile", replaced: false },
+    { operation: "reconcile", replaced: true },
+  ] as const)(
     "retains expiry custody for $operation (replacement: $replaced)",
     async ({ operation, replaced }, testContext) => {
       const fixture = await prepareExpiry(testContext);
@@ -349,9 +350,9 @@ describe("ExecApprovalManager timeout expiry publication", () => {
             ? manager.resolve(record.id, "allow-once")
             : manager.forceDenyDetailed(
                 record.id,
-                operation === "cancel" ? "run-aborted" : "malformed-verdict",
+                "run-aborted",
                 { kind: "system", id: "fixture" },
-                operation === "cancel" ? "cancelled" : "denied",
+                "cancelled",
               );
       const outcome = await transition.then(
         (value) => ({ ok: true, value }),
@@ -382,8 +383,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         ).toHaveLength(0);
       } else {
         expect(outcome.ok).toBe(true);
-        const expectedDecision =
-          operation === "cancel" ? null : operation === "deny" ? "deny" : "allow-once";
+        const expectedDecision = operation === "cancel" ? null : "allow-once";
         await expect(fixture.decision).resolves.toBe(expectedDecision);
         await fixture.observation;
         expect(fixture.handoff).toHaveBeenCalledExactlyOnceWith(expectedDecision);

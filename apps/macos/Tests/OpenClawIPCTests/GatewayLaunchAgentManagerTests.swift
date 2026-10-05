@@ -4,7 +4,15 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
-    @Test(arguments: ["definition", "absent", "legacy", "retained-bun"])
+    @Test(arguments: [
+        "definition",
+        "absent",
+        "legacy",
+        "retained-bun",
+        "restore",
+        "restore-without-runtime",
+        "restore-with-conflicting-cli",
+    ])
     func `bundled installs carry the CLI observation across the final custody check`(_ mode: String) async throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -22,6 +30,9 @@ struct GatewayLaunchAgentManagerTests {
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
             }
             let retained = ["legacy", "retained-bun"].contains(mode)
+            let restoring = mode.hasPrefix("restore")
+                ? GatewayLaunchAgentManager.InstalledServiceCLI(
+                    prefix: ["/fixture/node", "/fixture/old package/openclaw.mjs"], sqliteLibrary: nil) : nil
             let legacy: GatewayLaunchAgentManager.InstalledServiceCLI? = retained
                 ? .init(
                     prefix: [
@@ -29,16 +40,24 @@ struct GatewayLaunchAgentManagerTests {
                         "/fixture/openclaw.mjs",
                     ],
                     sqliteLibrary: nil) : nil
+            let arguments = ["install", "--force"] + (restoring == nil ? [] : ["--runtime", "node"])
+            let rejected = ["restore-without-runtime", "restore-with-conflicting-cli"].contains(mode)
             let error = await GatewayLaunchAgentManager.runDaemonCommand(
-                ["install", "--force"],
-                runtime: mode == "retained-bun" ? nil : runtime,
-                installedCLI: legacy,
+                arguments,
+                runtime: ["retained-bun", "restore-without-runtime"].contains(mode) ? nil : runtime,
+                installedCLI: mode == "restore-with-conflicting-cli" ? restoring : legacy,
+                restoring: restoring,
                 checkCurrent: {
                     #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().count ==
                         (retained ? 0 : 1))
                 })
-            #expect(error == nil)
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            if rejected {
+                #expect(error?.contains("Reinstall OpenClaw.app") == true)
+                #expect(calls.isEmpty)
+                return
+            }
+            #expect(error == nil)
             if retained {
                 #expect(calls == [["install", "--force"]])
                 #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
@@ -47,9 +66,13 @@ struct GatewayLaunchAgentManagerTests {
                 let expected = mode == "definition"
                     ? #"{"definition":"service/\"one\"","revision":"observed-pin"}"#
                     : #"{"definition":null,"revision":"observed-pin"}"#
+                let restoration = restoring == nil ? [] : [
+                    "--restore-service-cli",
+                    #"{"entrypoint":"/fixture/old package/openclaw.mjs","executable":"/fixture/node","sqliteLibrary":null}"#,
+                ]
                 #expect(calls == [
                     ["status", "--deep", "--json", "--no-probe"],
-                    ["install", "--force", "--expected-runtime-pin", expected],
+                    arguments + restoration + ["--expected-runtime-pin", expected],
                 ])
                 let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 #expect(commands.allSatisfy { Array($0.prefix(2)) == runtime.cliCommand })

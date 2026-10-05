@@ -6,6 +6,7 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
 import { decodeTerminalPtyEvent, type TerminalPtyControl } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
@@ -16,6 +17,7 @@ const CLEANUP_TIMEOUT_MS = 2_000;
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
+  initiateSpawn?: SpawnInitiation,
 ): Promise<TerminalPtyHandle> {
   const node = resolveNodeRuntimeExecutable();
   if (!node) {
@@ -128,7 +130,24 @@ export async function spawnNodeTerminalPty(
     if (message.type === "boot") {
       try {
         beforeSpawn?.();
-        send({ type: "start", params });
+        send({ type: initiateSpawn ? "prepare" : "start", params });
+      } catch (error) {
+        fail(toErrorObject(error, "PTY launch denied"));
+      }
+    } else if (message.type === "prepared") {
+      try {
+        beforeSpawn?.();
+        if (!initiateSpawn) {
+          throw new Error("Terminal launch authority is unavailable");
+        }
+        // Rejection already joins helper exit, IPC close, and output EOF in finish().
+        initiateSpawn(
+          () => send({ type: "launch" }),
+          ready.promise.then(
+            () => {},
+            () => {},
+          ),
+        );
       } catch (error) {
         fail(toErrorObject(error, "PTY launch denied"));
       }

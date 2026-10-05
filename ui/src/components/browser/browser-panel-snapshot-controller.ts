@@ -15,8 +15,11 @@ import type {
   BrowserPanelOperationOwnership,
   BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+
+const ACTION_REFRESH_DELAY_MS = 350;
 
 type BrowserPanelSnapshotState = {
   running: boolean | null;
@@ -34,10 +37,12 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
     "ownsView" | "ensure" | "frameRevision" | "releaseReplacedView"
   >;
   readonly activeTargetId: string | null;
+  readonly pendingInput: Pick<BrowserPanelPendingInput, "scheduleRefresh">;
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
     | "epoch"
+    | "hasPendingCapture"
     | "captureClient"
     | "isLive"
     | "beginCapture"
@@ -60,6 +65,19 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
 export class BrowserPanelSnapshotController {
   constructor(private readonly controller: BrowserPanelSnapshotHost) {}
+
+  scheduleRefresh(epoch: number, current: () => boolean): void {
+    const controller = this.controller;
+    controller.pendingInput.scheduleRefresh(
+      ACTION_REFRESH_DELAY_MS,
+      () => {
+        if (current() && controller.activeTargetId) {
+          void this.capture(controller.activeTargetId, epoch);
+        }
+      },
+      () => !controller.operations.hasPendingCapture,
+    );
+  }
 
   async listTabs(client: BrowserRequestClient) {
     const snapshot = await listBrowserTabs(client);

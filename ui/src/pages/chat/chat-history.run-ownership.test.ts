@@ -14,6 +14,42 @@ import {
 
 describe("chat history run ownership recovery", () => {
   it.each(["page", "delta"] as const)(
+    "retires a stale run from a fresh idle %s after another run completed",
+    async (kind) => {
+      const initial = activeHistory("run-missed-terminal");
+      initial.sessionInfo!.sessionId = "same-session";
+      if (kind === "delta") {
+        initial.deltaCursor = "before-completion";
+      }
+      const sessionInfo = {
+        ...initial.sessionInfo!,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: "run-completed-later",
+        status: "done" as const,
+      };
+      const completed: ChatHistoryResponse =
+        kind === "delta"
+          ? { kind: "delta", messages: [], sessionInfo, deltaCursor: "after-completion" }
+          : { messages: [], sessionInfo };
+      const request = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(completed);
+      const state = createState(initial);
+      state.client = { request } as unknown as GatewayBrowserClient;
+      await loadChatHistory(state);
+      expect(state.chatRunId).toBe("run-missed-terminal");
+      state.chatMessage = "An unsent draft";
+
+      await loadChatHistory(state);
+
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatStreamStartedAt).toBeNull();
+      expect(state).toMatchObject({ chatRunStatus: null });
+      expect(state.chatMessage).toBe("An unsent draft");
+    },
+  );
+
+  it.each(["page", "delta"] as const)(
     "recovers stale Stop ownership from a fresh %s without aborting the replacement run",
     async (kind) => {
       const initial = activeHistory("run-missed-terminal");
@@ -86,17 +122,33 @@ describe("chat history run ownership recovery", () => {
     },
   );
 
-  it.each([
-    "active local run",
-    "unknown active identities",
-    "replacement session",
-    "live delta",
-    "lifecycle restart",
-    "pending send",
-    "late consumer",
-  ] as const)("retains local ownership across %s", async (change) => {
+  it.each(
+    [
+      "active local run",
+      "unknown active identities",
+      "replacement session",
+      "live delta",
+      "lifecycle restart",
+      "pending send",
+      "late consumer",
+    ].flatMap((change) =>
+      (change === "active local run" || change === "unknown active identities"
+        ? [false]
+        : [false, true]
+      ).map((idle) => ({ change, idle })),
+    ),
+  )("retains local ownership across $change (idle history: $idle)", async ({ change, idle }) => {
     const history = activeHistory("run-history");
     history.sessionInfo!.sessionId = "same-session";
+    if (idle) {
+      delete history.inFlightRun;
+      Object.assign(history.sessionInfo!, {
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: "run-history",
+        status: "done",
+      });
+    }
     if (change === "active local run") {
       history.sessionInfo!.activeRunIds = ["run-owned", "run-history"];
     } else if (change === "unknown active identities") {
@@ -154,7 +206,7 @@ describe("chat history run ownership recovery", () => {
     expect(state.chatRunId).toBe("run-owned");
     expect(state.chatStream).toBe(snapshotOnly ? "Still locally owned." : stream);
     if (first !== state) {
-      expect(first.chatRunId).toBe("run-history");
+      expect(first.chatRunId).toBe(idle ? null : "run-history");
     }
   });
 });

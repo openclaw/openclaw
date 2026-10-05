@@ -67,6 +67,7 @@ export function createImageGenerateListActionResult(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 }): MediaGenerateActionResult {
   return createMediaGenerateProviderListActionResult({
     kind: "image_generation",
@@ -76,6 +77,7 @@ export function createImageGenerateListActionResult(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
     listModes: listSupportedImageGenerationModes,
     summarizeCapabilities: summarizeImageGenerationCapabilities,
     formatAuthHint: formatImageGenerationAuthHint,

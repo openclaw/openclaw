@@ -58,6 +58,7 @@ describe("dead config keys", () => {
     "agents.defaults.videoGenerationModel",
     "agents.defaults.musicGenerationModel",
     "agents.defaults.promptOverlays",
+    "agents.defaults.agentRuntime",
     "agents.defaults.cliBackends",
     "agents.defaults.heartbeat.ackMaxChars",
     "agents.defaults.heartbeat.includeReasoning",

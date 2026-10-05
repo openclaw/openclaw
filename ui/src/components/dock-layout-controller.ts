@@ -16,7 +16,6 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
   maxWidth?: () => number;
-  reserveViewport?: boolean;
   onResize?: () => void;
 };
 
@@ -202,7 +201,6 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   // panel can be open at the same time, so they neither reserve nor clear its properties.
   private reservesViewport(): boolean {
     return (
-      this.options.reserveViewport !== false &&
       !this.isFullscreen() &&
       !(this.host instanceof HTMLElement && this.host.hasAttribute("embedded"))
     );

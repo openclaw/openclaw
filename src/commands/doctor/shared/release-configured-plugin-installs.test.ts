@@ -1,5 +1,6 @@
 // Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
 
@@ -597,15 +598,16 @@ describe("configured plugin install release step", () => {
       warnings: [],
       pluginInventoryChanged: true,
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {},
@@ -627,15 +629,16 @@ describe("configured plugin install release step", () => {
       warnings: [],
       notices: [reviewNotice],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {},
@@ -659,15 +662,16 @@ describe("configured plugin install release step", () => {
         'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {

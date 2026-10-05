@@ -434,6 +434,7 @@ ${runner.slice(boundary)}
     // The full runner exceeds Linux's per-argument limit when passed to bash -c.
     const automaticPhasesPath = path.join(root, "automatic-phases.sh");
     writeFileSync(automaticPhasesPath, automaticPhases);
+    const openclawArgvLog = path.join(root, "openclaw-argv.log");
     const runAutomaticChecks = (
       record: PluginInstallRecord | null = npmRecord,
       deniedPluginId?: string,
@@ -444,6 +445,7 @@ ${runner.slice(boundary)}
         JSON.stringify({ installRecords: record ? { whatsapp: record } : {} }),
       );
       const fixtureEnv = writePluginInspectFixture(bin, record ? { whatsapp: record } : {});
+      writeFileSync(openclawArgvLog, "");
       const artifacts = path.join(isolatedCwd, "artifacts");
       mkdirSync(artifacts, { recursive: true });
       writeFileSync(
@@ -495,6 +497,7 @@ ${runner.slice(boundary)}
               .update(registryManifest)
               .digest("hex"),
             OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
+            OPENCLAW_TEST_OPENCLAW_ARGV_LOG: openclawArgvLog,
             OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
             OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
             OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
@@ -511,6 +514,11 @@ ${runner.slice(boundary)}
     expect(automatic.status, automatic.stdout + automatic.stderr).toBe(0);
     expect(automatic.stdout).toContain("assert-prepublish-requests passed");
     expect(automatic.stdout).toContain("assert-prepublish-recovery-requests passed");
+    expect(
+      readFileSync(openclawArgvLog, "utf8")
+        .split("\n")
+        .filter((line) => line === "plugins install --help"),
+    ).toHaveLength(1);
     expect(automatic.stdout).toContain(
       'Plugin "whatsapp" has verified official capability-consent exemption.',
     );

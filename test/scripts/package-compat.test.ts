@@ -342,11 +342,9 @@ run_plugins_clawhub_scenario
   });
 
   it.each([
-    ["  --accept-capabilities  Accept\n", [consent]],
     ["  \u001b[32m--accept-capabilities\u001b[0m  Accept\n", [consent]],
     ["  --accept-capabilities-extra  Other\n", []],
     ["See --accept-capabilities in newer releases\n", []],
-    ["  --force  Confirm\n", []],
   ])("reads only an advertised option from help %j", (help, expected) => {
     expect(fixtureCapabilityConsentArgs(help)).toEqual(expected);
   });

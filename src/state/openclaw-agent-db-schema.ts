@@ -8,7 +8,6 @@ import {
 import { migrateSessionCostUsageRollupStorage } from "../infra/session-cost-usage-cache-migration.js";
 import {
   repairCanonicalSqliteIndexes,
-  verifyAndRepairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexSteps,
 } from "../infra/sqlite-index-schema.js";
 import {
@@ -52,6 +51,7 @@ import {
   getOpenClawAgentMigrationSchema,
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentCurrentRuntimeSchema,
+  assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   assertAgentSchemaVersion,
   hasPendingCurrentVersionAgentDatabaseMigration,
@@ -77,10 +77,7 @@ import {
   isPersistentOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import {
-  migrateSessionParticipantsSchema,
-  withLegacySessionParticipantsSchema,
-} from "./openclaw-agent-participants-migration.js";
+import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
 import {
@@ -389,19 +386,18 @@ function ensureAgentSchema(
         return;
       }
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
-        const legacySql = withLegacySessionParticipantsSchema(
-          withLegacyAgentStorageSchema(OPENCLAW_AGENT_SCHEMA_SQL),
-        );
         ensureSessionAdditiveColumns(db);
-        verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
-          validateAfterRepair: () => {
-            assertAgentSchemaVersion(
-              db,
-              { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
-              legacySql,
-            );
-          },
-        });
+        assertSqliteIntegrity(db, pathname);
+        migrateMemoryChunkMetadataSchema(db);
+        // Validate before CREATE IF NOT EXISTS can conceal missing required storage.
+        // The finalizer repairs canonical indexes after the remaining migrations.
+        assertOpenClawAgentSchemaContains(
+          db,
+          pathname,
+          getOpenClawAgentMigrationSchema(previousVersion),
+          "legacy",
+          true,
+        );
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
@@ -444,7 +440,9 @@ function ensureAgentSchema(
       }
       maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
       db.exec(migrationSchemaSql);
-      migrateMemoryChunkMetadataSchema(db);
+      if (previousVersion !== AGENT_MEDIA_SCHEMA_VERSION) {
+        migrateMemoryChunkMetadataSchema(db);
+      }
       if (previousVersion < targetVersion) {
         ensureOpenClawAgentBoardSchemaInTransaction(db);
       }

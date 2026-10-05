@@ -1,6 +1,8 @@
 /** A fresh conversation must not inherit the prior task's progress card. */
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import {
@@ -108,15 +110,28 @@ it.each(
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
         } else {
-          await reset();
+          const sql = writer === "batched" ? observeHostDataSql() : undefined;
+          try {
+            await reset();
+            if (sql) {
+              expect(sql.queries, "batched reset caller-thread SQL").toEqual([]);
+            }
+          } finally {
+            sql?.restore();
+          }
         }
       } finally {
         unsubscribe();
       }
       // A fresh read-only connection proves this is durable state, not client/cache invalidation.
-      expect(readSessionProgressCard(database.path, sessionKey)).toEqual(
-        context === "clear" && !rollback ? null : before,
-      );
+      const reader = new DatabaseSync(database.path, { readOnly: true });
+      try {
+        expect(readSessionProgressCard(reader, sessionKey)).toEqual(
+          context === "clear" && !rollback ? null : before,
+        );
+      } finally {
+        reader.close();
+      }
       expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
       expect((await readBoardHtml(boards, { sessionKey }, "retained-widget"))?.html).toBe(
         "<p>Keep this dashboard</p>",

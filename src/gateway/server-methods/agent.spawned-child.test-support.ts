@@ -4,12 +4,14 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentRunValuesInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -115,4 +117,63 @@ export async function withPluginSubagentTestState(
     await resetSubagentRegistryForTests({ persist: false });
     await state.cleanup();
   }
+}
+
+export function seedReleasedYieldedSubagentRun(params: {
+  previousRunId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  storePath: string;
+  budget: number;
+}): void {
+  const { previousRunId, childSessionKey, requesterSessionKey, storePath, budget } = params;
+  // Frozen v2026.9.6 (eb377ac59e6c) codec/normalizer output after sessions_yield.
+  // Seed the released bytes without passing through the candidate's serializer.
+  runOpenClawStateWriteTransaction((database) =>
+    writeSubagentRunValuesInDatabase(
+      database,
+      [
+        {
+          run_id: previousRunId,
+          child_session_key: childSessionKey,
+          controller_session_key: requesterSessionKey,
+          requester_session_key: requesterSessionKey,
+          requester_store_path: storePath,
+          controller_store_path: storePath,
+          created_at: 1,
+          payload_json: JSON.stringify({
+            runId: previousRunId,
+            taskRunId: previousRunId,
+            childSessionKey,
+            controllerSessionKey: requesterSessionKey,
+            requesterSessionKey,
+            requesterStorePath: storePath,
+            controllerStorePath: storePath,
+            requesterDisplayKey: requesterSessionKey,
+            requesterAgentId: "main",
+            task: "Review the candidate",
+            cleanup: "keep",
+            expectsCompletionMessage: true,
+            spawnMode: "run",
+            runTimeoutSeconds: budget,
+            generation: 1,
+            createdAt: 1,
+            execution: {
+              status: "terminal",
+              startedAt: 1,
+              endedAt: 2,
+              lifecycleGeneration: "released-generation",
+            },
+            completion: { required: true },
+            delivery: { status: "pending" },
+            sessionStartedAt: 1,
+            accumulatedRuntimeMs: 0,
+            cleanupHandled: false,
+            pauseReason: "sessions_yield",
+          }),
+        },
+      ],
+      [],
+    ),
+  );
 }

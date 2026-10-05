@@ -32,12 +32,11 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as videoGenerateBackground from "./media-generate-background.js";
-import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
 } from "./media-generation-lifecycle.test-support.js";
-import { createVideoGenerateTool as createVideoGenerateToolImpl } from "./video-generate-tool.js";
+import { createVideoGenerateTool } from "./video-generate-tool.js";
 import { createVideoProviderSnapshot } from "./video-generate-tool.test-support.js";
 
 function mockGeneratedVideo(
@@ -65,20 +64,6 @@ function configWithDefaults(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
 ): OpenClawConfig {
   return { agents: { defaults } };
-}
-
-function createVideoGenerateTool(
-  params: Parameters<typeof createVideoGenerateToolImpl>[0],
-): ReturnType<typeof createVideoGenerateToolImpl> {
-  const options = params ?? {};
-  return createVideoGenerateToolImpl({
-    ...options,
-    config: canonicalizeMediaGenerationTestConfig(
-      options.config ?? {},
-      "video",
-      "videoGenerationModel",
-    ),
-  });
 }
 
 const mediaActivityMocks = vi.hoisted(() => ({
@@ -146,7 +131,7 @@ function mockVideoPluginProvider(capabilities: Record<string, unknown> = {}) {
 function createConfiguredVideoTool(primary = "video-plugin/vid-v1") {
   return expectVideoGenerateTool(
     createVideoGenerateTool({
-      config: configWithDefaults({ videoGenerationModel: { primary } }),
+      config: configWithDefaults({ mediaModels: { video: { primary } } }),
     }),
   );
 }
@@ -233,7 +218,7 @@ describe("createVideoGenerateTool", () => {
       "OPENAI_API_KEYS",
     ];
     resetVideoGenerateMocks(providerEnvVars);
-    emptyConfigTool = createVideoGenerateTool({ config: asConfig({}) });
+    emptyConfigTool = createVideoGenerateTool({ config: {} });
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -258,7 +243,7 @@ describe("createVideoGenerateTool", () => {
 
     expectVideoGenerateTool(
       createVideoGenerateTool({
-        config: asConfig({}),
+        config: {},
         authProfileStore: createAuthStore(["runway"]),
       }),
     );
@@ -285,7 +270,7 @@ describe("createVideoGenerateTool", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: configWithDefaults({
-          videoGenerationModel: { primary: "runway/gen4.5" },
+          mediaModels: { video: { primary: "runway/gen4.5" } },
         }),
       }),
     );
@@ -299,8 +284,10 @@ describe("createVideoGenerateTool", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: configWithDefaults({
-          videoGenerationModel: {
-            primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+          mediaModels: {
+            video: {
+              primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+            },
           },
         }),
       }),
@@ -317,14 +304,14 @@ describe("createVideoGenerateTool", () => {
         index === 0 ? "external-video" : `external-video-${index}`,
       ),
     };
-    const config = asConfig({
+    const config: OpenClawConfig = {
       plugins,
       agents: {
         defaults: {
           mediaModels: { video: { primary: "external-video/vid-v1" } },
         },
       },
-    });
+    };
     const workspaceDir = "/workspace/external-video";
     const normalize = vi.spyOn(pluginConfig, "normalizePluginsConfig");
     const normalizationCounts: number[] = [];
@@ -372,7 +359,7 @@ describe("createVideoGenerateTool", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: configWithDefaults({
-          videoGenerationModel: { primary: "runway/gen4.5" },
+          mediaModels: { video: { primary: "runway/gen4.5" } },
         }),
       }),
     );
@@ -393,7 +380,7 @@ describe("createVideoGenerateTool", () => {
           },
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "runway/gen4.5" },
+              mediaModels: { video: { primary: "runway/gen4.5" } },
             },
           },
         }),
@@ -409,7 +396,7 @@ describe("createVideoGenerateTool", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: configWithDefaults({
-          videoGenerationModel: { primary: "custom-video/vid-v1" },
+          mediaModels: { video: { primary: "custom-video/vid-v1" } },
         }),
       }),
     );
@@ -457,7 +444,7 @@ describe("createVideoGenerateTool", () => {
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
         mediaMaxMb: 8,
-        videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+        mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
       }),
     });
     expect(typeof tool?.execute).toBe("function");
@@ -511,9 +498,11 @@ describe("createVideoGenerateTool", () => {
     const generateSpy = mockSavedVideoResult();
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: {
-          primary: "video-plugin/vid-v1",
-          timeoutMs: 180_000,
+        mediaModels: {
+          video: {
+            primary: "video-plugin/vid-v1",
+            timeoutMs: 180_000,
+          },
         },
       }),
     });
@@ -556,7 +545,7 @@ describe("createVideoGenerateTool", () => {
     const generateSpy = mockSavedVideoResult("deployment.mp4");
     const tool = expectVideoGenerateTool(
       createVideoGenerateTool({
-        config: configWithDefaults({ videoGenerationModel: { timeoutMs: 180_000 } }),
+        config: configWithDefaults({ mediaModels: { video: { timeoutMs: 180_000 } } }),
         preparedModelRuntime: {
           mediaCapabilityProviders: { videoGenerationProviders: [provider] },
         } as never,
@@ -582,7 +571,7 @@ describe("createVideoGenerateTool", () => {
       createVideoGenerateTool({
         config: configWithDefaults({
           mediaMaxMb: 8 / (1024 * 1024),
-          videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          mediaModels: { video: { primary: "video-plugin/vid-v1" } },
         }),
       }),
     );
@@ -643,7 +632,7 @@ describe("createVideoGenerateTool", () => {
     });
     const tool = expectVideoGenerateTool(
       createVideoGenerateTool({
-        config: configWithDefaults({ videoGenerationModel: { primary: "vydra/veo3" } }),
+        config: configWithDefaults({ mediaModels: { video: { primary: "vydra/veo3" } } }),
       }),
     );
 
@@ -684,7 +673,7 @@ describe("createVideoGenerateTool", () => {
       ],
     });
     const tool = createVideoGenerateTool({
-      config: configWithDefaults({ videoGenerationModel: { primary: "vydra/veo3" } }),
+      config: configWithDefaults({ mediaModels: { video: { primary: "vydra/veo3" } } }),
     });
     if (!tool) {
       throw new Error("expected video_generate tool");
@@ -863,7 +852,7 @@ describe("createVideoGenerateTool", () => {
     const onAsyncTaskStarted = vi.fn();
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "vydra/veo3" },
+        mediaModels: { video: { primary: "vydra/veo3" } },
       }),
       agentSessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
@@ -1010,7 +999,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+        mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
       }),
     });
     expect(typeof tool?.execute).toBe("function");
@@ -1047,7 +1036,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "google/veo-3.1-fast-generate-preview" },
+        mediaModels: { video: { primary: "google/veo-3.1-fast-generate-preview" } },
       }),
     });
     if (!tool) {
@@ -1086,7 +1075,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "google/veo-3.1-fast-generate-preview" },
+        mediaModels: { video: { primary: "google/veo-3.1-fast-generate-preview" } },
       }),
     });
     if (!tool) {
@@ -1123,7 +1112,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "runway/gen4.5" },
+        mediaModels: { video: { primary: "runway/gen4.5" } },
       }),
     });
     if (!tool) {
@@ -1177,7 +1166,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "google/veo-3.1-fast-generate-preview" },
+        mediaModels: { video: { primary: "google/veo-3.1-fast-generate-preview" } },
       }),
     });
     if (!tool) {
@@ -1233,7 +1222,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "video-plugin/text-video" },
+        mediaModels: { video: { primary: "video-plugin/text-video" } },
       }),
     });
     if (!tool) {
@@ -1280,7 +1269,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "video-plugin/vid-v1" },
+        mediaModels: { video: { primary: "video-plugin/vid-v1" } },
       }),
     });
     if (!tool) {
@@ -1327,7 +1316,7 @@ describe("createVideoGenerateTool", () => {
     const generateSpy = mockSavedVideoResult();
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "video-plugin/r2v" },
+        mediaModels: { video: { primary: "video-plugin/r2v" } },
       }),
     });
     if (!tool) {
@@ -1374,7 +1363,7 @@ describe("createVideoGenerateTool", () => {
 
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
-        videoGenerationModel: { primary: "openai/sora-2" },
+        mediaModels: { video: { primary: "openai/sora-2" } },
       }),
     });
     if (!tool) {
@@ -1585,14 +1574,14 @@ describe("createVideoGenerateTool", () => {
     });
     mockSavedVideoResult();
     const tool = createVideoGenerateTool({
-      config: asConfig({
+      config: {
         agents: {
           defaults: {
-            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+            mediaModels: { video: { primary: "video-plugin/vid-v1" } },
           },
         },
         tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
-      }),
+      },
     });
     if (!tool) {
       throw new Error("expected video_generate tool");

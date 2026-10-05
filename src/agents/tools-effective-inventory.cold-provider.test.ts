@@ -90,14 +90,13 @@ vi.mock("./agent-bundle-mcp-tools.js", async (importOriginal) => {
   };
 });
 
-// Shell, channel, media, and MCP factories are unrelated to model metadata. Keep
-// the real provider normalizer, schema quarantine, notices, and grouping below.
+// mock-isolation: Keep tool assembly inert while provider normalization and lifetime stay real.
 vi.mock("./agent-tools.js", () => {
   const execute = async () => {
     throw new Error("Inventory must not execute tools");
   };
   return {
-    createOpenClawCodingToolsInternal: () =>
+    createOpenClawCodingToolsInternalAsync: async () =>
       [
         {
           name: "healthy_tool",

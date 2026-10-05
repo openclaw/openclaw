@@ -106,12 +106,10 @@ export async function runCliFallbackCandidate(
   const cliReplyToMode = cliThreadRequired
     ? cliThreadingContext.replyToMode
     : (turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode);
-  const isRestartSentinelContinuation =
-    turn.sessionCtx.InputProvenance?.kind === "internal_system" &&
-    turn.sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
-  const cliCurrentMessageId = isRestartSentinelContinuation
-    ? turn.sessionCtx.ReplyToId
-    : (turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid);
+  const cliCurrentMessageId =
+    cliThreadingContext.currentMessageId != null
+      ? String(cliThreadingContext.currentMessageId)
+      : undefined;
   const commandDetailsVisible = turn.resolvedVerboseLevel === "full";
   const cliToolSummaryTracker = createCliToolSummaryTracker({
     detailMode: turn.toolProgressDetail,
@@ -218,6 +216,8 @@ export async function runCliFallbackCandidate(
           turn.followupRun.run.agentId,
         );
         let droppedCliSessionReplacement = false;
+        await params.prepareAgentRunStart();
+        assertSettlementCurrent();
         const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
@@ -370,6 +370,7 @@ export async function runCliFallbackCandidate(
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,
             trigger: turn.isHeartbeat ? "heartbeat" : "user",
+            continuesConversation: turn.opts?.continuesConversation,
             sessionFile: turn.followupRun.run.sessionFile,
             workspaceDir: turn.followupRun.run.workspaceDir,
             cwd: turn.followupRun.run.cwd,

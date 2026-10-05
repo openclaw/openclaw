@@ -1,0 +1,136 @@
+.x-replies {
+  width: min(100%, 960px);
+  margin: 0 auto;
+  padding: var(--space-5);
+  color: var(--text);
+}
+
+.x-replies__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.x-replies h1 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 24px;
+}
+
+.x-replies p {
+  line-height: 1.5;
+}
+
+.x-replies__controls,
+.x-replies__add {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.x-replies__controls {
+  justify-content: space-between;
+}
+
+.x-replies__field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.x-replies__field input,
+.x-replies__field select {
+  min-width: 180px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font: inherit;
+}
+
+.x-replies__hint,
+.x-replies small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.x-replies__error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+}
+
+.x-replies__list {
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+}
+
+.x-replies table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.x-replies th,
+.x-replies td {
+  padding: 14px 16px;
+  overflow-wrap: anywhere;
+}
+
+.x-replies th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.x-replies td {
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.x-replies td:first-child span,
+.x-replies td:first-child small {
+  display: block;
+  margin-top: 3px;
+}
+
+.x-replies td:last-child {
+  text-align: right;
+}
+
+.x-replies__empty {
+  padding: var(--space-5);
+}
+
+.x-replies__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .x-replies {
+    padding: var(--space-3);
+  }
+
+  .x-replies__controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .x-replies__add {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

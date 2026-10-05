@@ -1,3 +1,4 @@
+import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
@@ -24,6 +25,7 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  ...AGENT_HARNESS_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
@@ -619,19 +621,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     ...ACTIVATION_HINT_METADATA,
     replacement: "manifest contribution ownership",
     surfaces: ["activation.onCapabilities", "activation planner"],
-  },
-  {
-    code: "agent-harness-sdk-alias",
-    status: "deprecated",
-    owner: "agent-runtime",
-    introduced: "2026-04-24",
-    deprecated: "2026-04-25",
-    warningStarts: "2026-04-25",
-    replacement: "none yet; retain until a harness subpath ships and external migration is proven",
-    docsPath: "/plugins/sdk-agent-harness",
-    surfaces: ["openclaw/plugin-sdk/agent-harness", "openclaw/plugin-sdk/agent-harness-runtime"],
-    diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
   },
   {
     code: "embedded-pi-agent-sdk-aliases",

@@ -4,17 +4,30 @@ import { pathToFileURL } from "node:url";
 import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
 import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
+import {
+  dispatchEnvelopeFromInputs,
+  publicationInputRecord as object,
+  publicationInputText as text,
+  publicationPackageNamePattern as packageName,
+  publicationIntentInputs,
+  publicationSourceJson,
+} from "./lib/full-release-publication-inputs.mjs";
 import corePackages from "./lib/npm-core-release-packages.json" with { type: "json" };
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+export {
+  decodePublicationDispatchEnvelope,
+  normalizePublicationIntent,
+  normalizePublicationLaneInputs,
+  publicationDispatchEnvelope,
+  publicationIntentInputs,
+  publicationSourceJson,
+} from "./lib/full-release-publication-inputs.mjs";
 
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT = "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT = "1";
-const purposes = ["publish", "diagnostic", "main-qualification", "postpublish-confidence"];
-const maximumBytes = 128 * 1024;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
-const packageName = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const coverageInputs = {
   provider: "provider",
   mode: "mode",
@@ -28,6 +41,7 @@ const coverageInputs = {
   npm_telegram_scenario: "npmTelegramScenario",
   plugin_prerelease_node_exclude_patterns_json: "pluginPrereleaseNodeExcludePatternsJson",
   extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
+  qualification_baselines_json: "qualificationBaselinesJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
   telegram_waiver: "telegramWaiver",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
@@ -53,249 +67,14 @@ export function publicationSourceContract(workflowSource) {
   return FULL_RELEASE_SOURCE_ADMISSION_CONTRACT;
 }
 
-function object(value, keys, label) {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    Object.keys(value).some((key) => !keys.includes(key))
-  ) {
-    throw new Error(`invalid ${label}`);
-  }
-  return value;
-}
-
-function text(value, label, limit = 4096) {
-  if (typeof value !== "string" || value.length > limit) {
-    throw new Error(`invalid ${label}`);
-  }
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 32 || code === 127) {
-      throw new Error(`invalid ${label}`);
-    }
-  }
-  return value;
-}
-
-export function publicationSourceJson(value) {
-  const json = JSON.stringify(canonicalizeJsonValue(value));
-  if (Buffer.byteLength(json) > maximumBytes) {
-    throw new Error("source admission exceeds byte limit");
-  }
-  return json;
-}
-
 function publicationSourceDigest(value) {
   return createHash("sha256").update(publicationSourceJson(value)).digest("hex");
 }
 
-export function normalizePublicationIntent(purpose, selectionJson = "") {
-  if (!purposes.includes(purpose)) {
-    throw new Error(`validation_purpose must be explicit: ${purposes.join(", ")}`);
-  }
-  if (purpose !== "publish") {
-    if (selectionJson !== "") {
-      throw new Error("nonpublish purpose must omit publication selection");
-    }
-    return { validationPurpose: purpose, publicationSelection: null };
-  }
-  if (
-    typeof selectionJson !== "string" ||
-    !selectionJson ||
-    Buffer.byteLength(selectionJson) > 16 * 1024
-  ) {
-    throw new Error("publish purpose requires bounded publication_selection_json");
-  }
-  let selected;
-  try {
-    selected = JSON.parse(selectionJson);
-  } catch {
-    throw new Error("invalid publication selection JSON");
-  }
-  object(
-    selected,
-    [
-      "route",
-      "npmDistTag",
-      "publishOpenclawNpm",
-      "pluginPublishScope",
-      "plugins",
-      "windowsNodeTag",
-      "windowsNodeInstallerDigests",
-    ],
-    "publication selection",
-  );
-  if (selected.route === "alpha" || selected.npmDistTag === "alpha") {
-    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
-  }
-  if (
-    !["normal", "prepared", "extended-stable"].includes(selected.route) ||
-    !["beta", "latest", "extended-stable"].includes(selected.npmDistTag) ||
-    typeof selected.publishOpenclawNpm !== "boolean" ||
-    !["selected", "all-publishable"].includes(selected.pluginPublishScope) ||
-    !Array.isArray(selected.plugins) ||
-    selected.plugins.length > 256 ||
-    selected.plugins.some((name) => typeof name !== "string" || !packageName.test(name))
-  ) {
-    throw new Error("invalid publication selection operands");
-  }
-  const plugins = [...new Set(selected.plugins)].toSorted(compareAscii);
-  if ((selected.pluginPublishScope === "selected") !== plugins.length > 0) {
-    throw new Error("selected publication requires names; all-publishable must omit names");
-  }
-  if (selected.publishOpenclawNpm && selected.pluginPublishScope !== "all-publishable") {
-    throw new Error("core publication requires all-publishable plugins");
-  }
-  if ((selected.route === "extended-stable") !== (selected.npmDistTag === "extended-stable")) {
-    throw new Error("publication route and npm dist-tag disagree");
-  }
-  if (
-    ["prepared", "extended-stable"].includes(selected.route) &&
-    (selected.pluginPublishScope !== "all-publishable" || !selected.publishOpenclawNpm)
-  ) {
-    throw new Error("prepared and extended-stable require the complete core/plugin publication");
-  }
-  const windows = {};
-  if (selected.windowsNodeTag !== undefined || selected.windowsNodeInstallerDigests !== undefined) {
-    if (selected.route === "extended-stable") {
-      throw new Error("extended-stable does not select Windows assets");
-    }
-    windows.windowsNodeTag = text(selected.windowsNodeTag, "Windows source tag", 256);
-    if (
-      !/^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u.test(
-        windows.windowsNodeTag,
-      )
-    ) {
-      throw new Error("invalid Windows source tag");
-    }
-    const digests = selected.windowsNodeInstallerDigests;
-    if (
-      !digests ||
-      typeof digests !== "object" ||
-      Array.isArray(digests) ||
-      !Object.keys(digests).length ||
-      Object.keys(digests).length > 16 ||
-      Object.entries(digests).some(
-        ([name, value]) =>
-          !/^[A-Za-z0-9._-]+$/u.test(name) ||
-          typeof value !== "string" ||
-          !/^sha256:[a-f0-9]{64}$/u.test(value),
-      )
-    ) {
-      throw new Error("invalid Windows installer digest map");
-    }
-    windows.windowsNodeInstallerDigests = digests;
-  }
-  return {
-    validationPurpose: purpose,
-    publicationSelection: {
-      route: selected.route,
-      npmDistTag: selected.npmDistTag,
-      publishOpenclawNpm: selected.publishOpenclawNpm,
-      pluginPublishScope: selected.pluginPublishScope,
-      plugins,
-      ...windows,
-    },
-  };
-}
-
-export function publicationIntentInputs(intent) {
-  const normalized = normalizePublicationIntent(
-    intent.validationPurpose,
-    intent.publicationSelection === null ? "" : publicationSourceJson(intent.publicationSelection),
-  );
-  return {
-    validationPurpose: normalized.validationPurpose,
-    publicationSelectionJson:
-      normalized.publicationSelection === null
-        ? ""
-        : publicationSourceJson(normalized.publicationSelection),
-  };
-}
-
-export function normalizePublicationLaneInputs(value) {
-  object(value, ["extension_test_exclude_patterns_json"], "source-admission lane inputs");
-  return Object.fromEntries(
-    Object.entries(value).map(([key, raw]) => {
-      if (typeof raw !== "string" || raw.length > 4096) {
-        throw new Error(`invalid ${key}`);
-      }
-      const entries = JSON.parse(raw);
-      if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
-        throw new Error(`${key} must be a JSON array of strings`);
-      }
-      return [key, JSON.stringify(entries)];
-    }),
-  );
-}
-
-export function decodePublicationDispatchEnvelope(raw) {
-  if (typeof raw !== "string" || !raw || Buffer.byteLength(raw) > maximumBytes) {
-    throw new Error("trusted_workflow_json requires a bounded source-admission envelope");
-  }
-  const value = object(
-    JSON.parse(raw),
-    ["trustedWorkflow", "validationPurpose", "publicationSelection", "laneInputs"],
-    "source-admission envelope",
-  );
-  if (
-    ["trustedWorkflow", "validationPurpose", "publicationSelection"].some(
-      (key) => !Object.hasOwn(value, key),
-    )
-  ) {
-    throw new Error("source-admission envelope requires identity, purpose and selection");
-  }
-  const trustedWorkflow = value.trustedWorkflow;
-  if (trustedWorkflow !== null) {
-    object(trustedWorkflow, ["ref", "fullRef", "sha"], "source-admission tooling identity");
-    if (
-      Object.keys(trustedWorkflow).length !== 3 ||
-      typeof trustedWorkflow.ref !== "string" ||
-      !/^[A-Za-z0-9._/-]+$/u.test(trustedWorkflow.ref) ||
-      !["refs/heads/", "refs/tags/"].some(
-        (prefix) => trustedWorkflow.fullRef === prefix + trustedWorkflow.ref,
-      ) ||
-      typeof trustedWorkflow.sha !== "string" ||
-      !sha.test(trustedWorkflow.sha)
-    ) {
-      throw new Error("invalid source-admission tooling identity");
-    }
-  }
-  const laneInputs =
-    value.laneInputs === undefined ? undefined : normalizePublicationLaneInputs(value.laneInputs);
-  return {
-    trustedWorkflow,
-    ...(laneInputs === undefined ? {} : { laneInputs }),
-    ...normalizePublicationIntent(
-      value.validationPurpose,
-      value.publicationSelection === null ? "" : publicationSourceJson(value.publicationSelection),
-    ),
-  };
-}
-
-export function publicationDispatchEnvelope(trustedWorkflow, intent, laneInputs) {
-  return publicationSourceJson(
-    decodePublicationDispatchEnvelope(
-      publicationSourceJson({ trustedWorkflow, ...intent, ...(laneInputs ? { laneInputs } : {}) }),
-    ),
-  );
-}
-
-function dispatchEnvelopeFromInputs(inputs) {
-  if (
-    Object.hasOwn(inputs, "validation_purpose") ||
-    Object.hasOwn(inputs, "publication_selection_json") ||
-    Object.hasOwn(inputs, "extension_test_exclude_patterns_json")
-  ) {
-    throw new Error("source intent must use only the trusted_workflow_json envelope");
-  }
-  return decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
-}
-
 export function publicationSourceRequest(env) {
   const inputs = JSON.parse(env.PUBLICATION_INPUTS_JSON);
-  const { trustedWorkflow, laneInputs, ...intent } = dispatchEnvelopeFromInputs(inputs);
+  const { trustedWorkflow, laneInputs, qualificationAdmission, ...intent } =
+    dispatchEnvelopeFromInputs(inputs);
   const coverageSource = { ...inputs, extension_test_exclude_patterns_json: "[]", ...laneInputs };
   const tooling = JSON.parse(env.PUBLICATION_TOOLING_JSON);
   if (
@@ -332,6 +111,9 @@ export function publicationSourceRequest(env) {
   );
   coverage.coverage_policy = text(env.PUBLICATION_COVERAGE_POLICY ?? "", "coverage policy");
   return {
+    ...(qualificationAdmission === undefined
+      ? {}
+      : { qualificationAdmission, qualificationInputs: inputs }),
     repository: env.GITHUB_REPOSITORY,
     candidateSha: env.PUBLICATION_TARGET_SHA,
     targetContextRef: text(env.PUBLICATION_TARGET_CONTEXT || inputs.ref, "target context"),
@@ -377,6 +159,8 @@ function validatePublicationSourceFact(value, expected = {}) {
       "inventoryDigest",
       "projection",
       "digest",
+      "qualificationAdmission",
+      "qualificationInputs",
     ],
     "source admission fact",
   );
@@ -426,7 +210,8 @@ function validatePublicationSourceFact(value, expected = {}) {
   if (
     coverageKeys.some(
       (key) =>
-        key !== "extension_test_exclude_patterns_json" && !Object.hasOwn(value.coverage, key),
+        !["extension_test_exclude_patterns_json", "qualification_baselines_json"].includes(key) &&
+        !Object.hasOwn(value.coverage, key),
     )
   ) {
     throw new Error("source admission coverage is incomplete");
@@ -1185,12 +970,29 @@ if (invokedAsMain) {
   try {
     if (process.argv[2] === "--dispatch") {
       const envelope = dispatchEnvelopeFromInputs(JSON.parse(process.env.PUBLICATION_INPUTS_JSON));
+      if (
+        process.env.QUALIFICATION_ADMISSION_CONTRACT === "1" &&
+        envelope.validationPurpose === "publish" &&
+        envelope.qualificationAdmission === undefined
+      ) {
+        throw new Error(
+          "Fresh publication qualification requires an independently admitted candidate-owned request",
+        );
+      }
       const identity =
         envelope.trustedWorkflow === null ? "" : publicationSourceJson(envelope.trustedWorkflow);
       appendFileSync(process.env.GITHUB_OUTPUT, `trusted_workflow_json=${identity}\n`);
       appendFileSync(
         process.env.GITHUB_OUTPUT,
+        `qualification_admission_json=${envelope.qualificationAdmission === undefined ? "" : publicationSourceJson(envelope.qualificationAdmission)}\n`,
+      );
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
         `extension_test_exclude_patterns_json=${envelope.laneInputs?.extension_test_exclude_patterns_json ?? "[]"}\n`,
+      );
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n`,
       );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);

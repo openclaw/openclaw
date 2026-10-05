@@ -55,7 +55,6 @@ export type ComponentInteractionContext = {
   user: DiscordUser;
   username: string;
   userId: string;
-  replyOpts: { ephemeral?: boolean };
   rawGuildId: string | undefined;
   isDirectMessage: boolean;
   isGroupDm: boolean;

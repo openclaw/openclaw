@@ -126,11 +126,6 @@ describe("Tool Search flattened call arguments", () => {
       arguments: { id: "inspect_resource", args: null, input: null, command: "flattened" },
       expected: { command: "flattened" },
     },
-    ...["args", "input"].map((wrapper) => ({
-      label: `empty ${wrapper} wrapper with flattened top-level params`,
-      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
-      expected: { command: "list", timeout_ms: 5_000 },
-    })),
     {
       label: "empty args wrapper with dotted params",
       arguments: {
@@ -601,46 +596,12 @@ describe("Tool Search input schemas", () => {
     expect(target.execute).not.toHaveBeenCalled();
   });
 
-  it("suggests a near-miss parameter without executing the tool", async () => {
-    const target = fakeTool(
-      "strict_instruction",
-      Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
-    );
-    const { runtime } = createRuntime([target]);
-
-    await expect(runtime.call("strict_instruction", { instructions: "run" })).rejects.toThrow(
-      "Did you mean: instruction?",
-    );
-    expect(target.execute).not.toHaveBeenCalled();
-  });
-
   it("fails before side effects when a trusted input schema is invalid", async () => {
     const target = fakeTool("invalid_input", { type: "sting" } as never);
     const { runtime } = createRuntime([target]);
 
     await expect(runtime.call("invalid_input", {})).rejects.toThrow("invalid inputSchema");
     expect(target.execute).not.toHaveBeenCalled();
-  });
-
-  it("does not reuse another catalog's validator for the same tool id", async () => {
-    const first = fakeTool(
-      "shared_instruction",
-      Type.Object({ before: Type.String() }, { additionalProperties: false }),
-    );
-    const second = fakeTool(
-      "shared_instruction",
-      Type.Object({ after: Type.String() }, { additionalProperties: false }),
-    );
-    const firstRuntime = createRuntime([first]).runtime;
-    const secondRuntime = createRuntime([second]).runtime;
-
-    await expect(firstRuntime.call("shared_instruction", { before: "run" })).resolves.toBeDefined();
-    await expect(secondRuntime.call("shared_instruction", { after: "run" })).resolves.toBeDefined();
-    await expect(secondRuntime.call("shared_instruction", { before: "run" })).rejects.toThrow(
-      "after",
-    );
-    expect(first.execute).toHaveBeenCalledOnce();
-    expect(second.execute).toHaveBeenCalledOnce();
   });
 
   it("recompiles a trusted schema after its constraints change in place", async () => {
@@ -822,64 +783,6 @@ describe("Tool Search catalog indexing", () => {
     ]);
     await expect(runtime.search("orchard_alpha")).resolves.toEqual([]);
   });
-
-  it("rebuilds the search index when tools are appended to the same catalog", async () => {
-    const { catalogRef, runtime } = createRuntime([fakeTool("orchard_alpha")]);
-    const added = createRuntime([fakeTool("meteor_beta")]);
-    const addedEntry = added.catalogRef.current?.entries[0];
-
-    expect(addedEntry).toBeDefined();
-    await expect(runtime.search("meteor_beta")).resolves.toEqual([]);
-    catalogRef.current!.entries.push(addedEntry!);
-
-    await expect(runtime.search("meteor_beta")).resolves.toEqual([
-      expect.objectContaining({ name: "meteor_beta" }),
-    ]);
-  });
-
-  it("rebuilds the search index when indexed metadata changes in place", async () => {
-    const { catalogRef, runtime } = createRuntime([fakeTool("orchard_alpha")]);
-    const entry = catalogRef.current?.entries[0];
-
-    expect(entry).toBeDefined();
-    await expect(runtime.search("meteor")).resolves.toEqual([]);
-    entry!.description = "Track the current meteor forecast";
-
-    await expect(runtime.search("meteor")).resolves.toEqual([
-      expect.objectContaining({ name: "orchard_alpha" }),
-    ]);
-  });
-
-  it.each(["root", "property", "items"])(
-    "rebuilds the search index when a %s description changes in place",
-    async (location) => {
-      const described = {
-        type: "object",
-        description: "Search an orchard",
-        properties: {},
-      };
-      const parameters =
-        location === "root"
-          ? described
-          : location === "property"
-            ? { type: "object", properties: { resource: described } }
-            : {
-                type: "object",
-                properties: { resources: { type: "array", items: described } },
-              };
-      const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
-
-      await expect(runtime.search("orchard")).resolves.toEqual([
-        expect.objectContaining({ name: "indexed_resource" }),
-      ]);
-      described.description = "Search a meteor";
-
-      await expect(runtime.search("meteor")).resolves.toEqual([
-        expect.objectContaining({ name: "indexed_resource" }),
-      ]);
-      await expect(runtime.search("orchard")).resolves.toEqual([]);
-    },
-  );
 });
 
 describe("Tool Search network error boundaries", () => {

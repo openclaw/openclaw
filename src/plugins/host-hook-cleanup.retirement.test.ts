@@ -82,6 +82,7 @@ describe("plugin retirement session-store ownership", () => {
           release.resolve();
           await Promise.all([call, retirement]);
           expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({
+            ...(mode === "clear-command" ? { fixture: { value: "old" } } : {}),
             other: { value: "preserve" },
           });
           expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual({

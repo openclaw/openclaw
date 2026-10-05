@@ -25,9 +25,6 @@ export type SessionWorkspaceProps = {
   onSearch: (search: string) => void;
   onSetFilter: (filter: SessionWorkspaceFilter) => void;
   onOpenArtifact: (artifactId: string) => void;
-  onToggleTerminal?: () => void;
-  onToggleBrowser?: () => void;
-  onToggleDesktop?: () => void;
   /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };

@@ -179,7 +179,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 150,
           highWaterBytes: 100,
@@ -479,7 +478,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 1,
           highWaterBytes: 1,
@@ -514,7 +512,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: "agent:main:active",
         maintenance: {
           maxDiskBytes: 1,
           highWaterBytes: 1,
@@ -548,7 +545,6 @@ describe("enforceSessionDiskBudget", () => {
         const result = await enforceSessionDiskBudget({
           store,
           storePath,
-          activeSessionKey: "agent:main:active",
           maintenance: {
             maxDiskBytes: 1,
             highWaterBytes: 1,
@@ -753,7 +749,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 1000,
           highWaterBytes: 500,
@@ -796,7 +791,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
         warnOnly: false,
         commitEvictedIndex: async () => {
@@ -848,7 +842,6 @@ describe("enforceSessionDiskBudget", () => {
         enforceSessionDiskBudget({
           store,
           storePath,
-          activeSessionKey: activeKey,
           maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
           warnOnly: false,
           commitEvictedIndex: async () => {
@@ -882,7 +875,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
         warnOnly: false,
       });

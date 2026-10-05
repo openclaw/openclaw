@@ -73,7 +73,7 @@ export async function runCodeModeExec(params: {
   code: string;
   assistantTurnId?: string;
   restartSafe: boolean;
-  required?: boolean;
+  awaitResults?: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   onRuntime?: (runtime: ToolSearchRuntime) => void;
@@ -101,7 +101,12 @@ export async function runCodeModeExec(params: {
     mcpIds: namespaceRuntime.mcpBindings.keys(),
   });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
-  const owner = createCodeModeRunOwner(params.ctx, config, params.required, !params.restartSafe);
+  const owner = createCodeModeRunOwner(
+    params.ctx,
+    config,
+    params.awaitResults,
+    !params.restartSafe,
+  );
   const { approvalWait } = owner;
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);

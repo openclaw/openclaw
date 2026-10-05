@@ -56,6 +56,7 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Exercise the HTTP denylist with inert automation and Gateway tools.
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
     {
@@ -70,7 +71,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
     },
   ];
   return {
-    createOpenClawTools: () => tools,
+    createOpenClawToolsAsync: async () => tools,
   };
 });
 

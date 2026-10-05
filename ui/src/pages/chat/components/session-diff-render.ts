@@ -24,8 +24,8 @@ function renderSplitSide(
 
 export function renderSessionSplitDiff(
   lines: readonly DiffLine[],
-  renderSkip?: (line: DiffLine) => unknown,
-  file: DiffFilePaths = { path: "" },
+  renderSkip: (line: DiffLine) => unknown,
+  file: DiffFilePaths,
 ): ReturnType<typeof renderHighlightedDiff> {
   const rows = pairSessionDiffLines(lines);
   return renderHighlightedDiff(
@@ -45,7 +45,7 @@ export function renderSessionSplitDiff(
         }
         if (row.line.kind === "skip") {
           return html`<div class="session-diff-split__row session-diff-split__row--skip">
-            ${(renderSkip?.(row.line) ?? row.line.text) || "⋯"}
+            ${(renderSkip(row.line) ?? row.line.text) || "⋯"}
           </div>`;
         }
         return html`<div class="session-diff-split__row session-diff-split__row--context">

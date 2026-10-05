@@ -28,6 +28,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import * as agentTools from "../agent-tools.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -129,6 +130,31 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
+  it.each(["host close", "authority release"] as const)(
+    "rejects an awaited tool surface after %s during construction",
+    async (revocation) => {
+      const { attempt, admission } = await admittedAttempt("run-tool-construction-race");
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const result = createDeferred<AnyAgentTool[]>();
+      using construct = vi
+        .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+        .mockReturnValueOnce(result.promise);
+      const pending = host.capabilities.createToolSurfaceAsync!({});
+      expect(construct).toHaveBeenCalledOnce();
+      if (revocation === "host close") {
+        host.close();
+      } else {
+        admission.close();
+      }
+      const { tool } = testTool();
+      mockRewrap.mockClear();
+      result.resolve([tool]);
+      await expect(pending).rejects.toThrow("no longer active");
+      expect(mockRewrap).not.toHaveBeenCalled();
+      host.close();
+    },
+  );
+
   it("does not remove existing shell policy from a non-Codex required-root harness", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-other-"));
     const { attempt } = await admittedAttempt("required-other", {

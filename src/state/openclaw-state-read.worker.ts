@@ -1,7 +1,8 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
-  selectAcpSessionRowForRead,
+  acpSessionRowMatchesEntry,
   selectAcpSessionRows,
+  selectAcpSessionRowsByKeys,
 } from "../acp/runtime/session-meta-keys.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
@@ -36,7 +37,10 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
-import { listCronStandingGrantsInDatabase } from "../gateway/operator-approval-standing-grants.js";
+import {
+  listCronStandingGrantsInDatabase,
+  lookupCronStandingGrantInDatabase,
+} from "../gateway/operator-approval-standing-grants.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
@@ -264,9 +268,22 @@ serveOwnedWorkerTasks(
               };
             }
             if (command.type === "acpSessions.metadata") {
+              const cohortKeys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
+              const rows = new Map(
+                [...selectAcpSessionRowsByKeys(db, cohortKeys)].map((row) => [
+                  row.session_key,
+                  row,
+                ]),
+              );
               return {
                 type: command.type,
-                rows: command.entries.map((entry) => selectAcpSessionRowForRead(db, entry) ?? null),
+                rows: command.entries.map(
+                  ({ keys, entry }) =>
+                    keys
+                      .map((key) => rows.get(key))
+                      .find((row) => row && (!entry || acpSessionRowMatchesEntry(row, entry))) ??
+                    null,
+                ),
               };
             }
             if (isChannelIngressReadCommand(command)) {
@@ -465,6 +482,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 history: listTerminalOperatorApprovalsInDatabase(command.input, db),
+              };
+            }
+            if (command.type === "operatorApprovals.validateCronGrant") {
+              return {
+                type: command.type,
+                result: lookupCronStandingGrantInDatabase(db, command.input, false),
               };
             }
             if (command.type === "operatorApprovals.listCronGrants") {

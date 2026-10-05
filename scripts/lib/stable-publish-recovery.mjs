@@ -676,7 +676,11 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     runAttempt: prepared.preparedRunAttempt,
     artifactName: prepared.preparedArtifactName,
   });
-  verifyDockerReleaseProducer(dockerArtifact.value, { publisherSha: docker.head_sha });
+  await verifyDockerReleaseProducer(dockerArtifact.value, {
+    publisherSha: docker.head_sha,
+    publisherFullRef: dockerDispatch.value.toolingFullRef,
+    fullReleaseManifest: manifest,
+  });
   const directory = mkdtempSync(join(tmpdir(), "openclaw-stable-recovery-"));
   try {
     const npmPackages = await verifyNpm(

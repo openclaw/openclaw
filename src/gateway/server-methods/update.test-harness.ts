@@ -385,10 +385,11 @@ vi.mock("../../../packages/gateway-protocol/src/index.js", async () => {
   };
 });
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: getLatestUpdateRestartSentinelMock,
   recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
+  prepareLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
 }));
 
 vi.mock("./restart-request.js", () => ({

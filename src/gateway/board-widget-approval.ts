@@ -60,6 +60,7 @@ export function createBoardWidgetApprovalResolver() {
               agentId,
               storePath: resolveSessionStorePathForScope(scope, cfg),
               sessionKeys: [sessionKey],
+              snapshotFields: [],
             }).then(
               (sessions) =>
                 sessions.entries.find((entry) => entry.sessionKey === sessionKey)?.entry,

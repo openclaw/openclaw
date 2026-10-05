@@ -605,6 +605,7 @@ src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
+src/config/sessions/session-transcript-writer-claim-error.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
@@ -971,6 +972,7 @@ src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-pinned-read-snapshot.ts
+src/infra/sqlite-planner-statistics.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
@@ -1046,6 +1048,7 @@ src/infra/state-migrations.media-persistence-targets.ts
 src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
+src/infra/temp-directory-usage.ts
 src/infra/test-runtime-env.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
@@ -1181,6 +1184,7 @@ src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
+src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts
@@ -1212,7 +1216,6 @@ src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
-src/plugins/doctor-contract-registry-loader-state.ts
 src/plugins/doctor-contract-registry.ts
 src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
@@ -1313,6 +1316,7 @@ src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
+src/plugins/plugin-instance-runtime-scope.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -1360,6 +1364,7 @@ src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission.types.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
+src/plugins/plugin-source-capture-cleanup.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
@@ -1528,6 +1533,7 @@ src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
+src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-queue.ts

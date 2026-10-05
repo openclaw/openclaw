@@ -424,8 +424,8 @@ async function runEmbeddedAttemptOwned(
         state: executionState,
         lifecycle: {
           applyPermissionMode: (mode, revokeApprovals) =>
-            withRuntimeToolSchemaQuarantine((recordQuarantine) => {
-              preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
+            withRuntimeToolSchemaQuarantine(async (recordQuarantine) => {
+              await preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
               preparedBundleTools.refreshTools(recordQuarantine);
               preparedToolCatalog.refreshTools(recordQuarantine);
               preparedSessionRuntime.agentSession.refreshTools();
