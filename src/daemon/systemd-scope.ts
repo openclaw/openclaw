@@ -195,25 +195,6 @@ export function resolveSystemdTemplateInstanceName(
   return `${template}@${instance}.service`;
 }
 
-async function findSystemSystemdUnitPath(
-  env: GatewayServiceEnv,
-): Promise<{ unitName: string; unitPath: string } | null> {
-  const candidates = systemdInstalledNameProbes(resolveInstalledSystemdServiceNameCandidates(env));
-  for (const name of candidates) {
-    const serviceFile = `${name}.service`;
-    for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
-      const candidate = path.posix.join(dir, serviceFile);
-      try {
-        await fs.access(candidate);
-        return { unitName: serviceFile, unitPath: candidate };
-      } catch {
-        continue;
-      }
-    }
-  }
-  return null;
-}
-
 export async function assertNoSystemGatewayOwnership(
   env: GatewayServiceEnv,
   timeoutMs?: number,
@@ -525,13 +506,22 @@ async function findSystemSystemdGatewayScope(
   options: SystemdDiscoveryOptions | undefined,
   discoverCustom: boolean,
 ): Promise<SystemdServiceReadTarget | null> {
-  const systemUnit = await findSystemSystemdUnitPath(env);
-  if (systemUnit) {
-    return {
-      scope: "system",
-      unitName: resolveSystemdTemplateInstanceName(systemUnit.unitName, env),
-      unitPath: systemUnit.unitPath,
-    };
+  const candidates = systemdInstalledNameProbes(resolveInstalledSystemdServiceNameCandidates(env));
+  for (const name of candidates) {
+    const unitName = `${name}.service`;
+    for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
+      const unitPath = path.posix.join(dir, unitName);
+      try {
+        await fs.access(unitPath);
+      } catch {
+        continue;
+      }
+      return {
+        scope: "system",
+        unitName: resolveSystemdTemplateInstanceName(unitName, env),
+        unitPath,
+      };
+    }
   }
   if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
     return null;

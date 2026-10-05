@@ -9,7 +9,6 @@ import {
   assertSkillProposalSupportTargetUnchanged,
   markSkillProposalStale,
   withSkillProposalLifecycleDispatch,
-  type SkillProposalTransitionInput,
 } from "./apply-transition.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { resolveDraftedSkillDescription, resolveSkillProposalName } from "./frontmatter.js";
@@ -26,7 +25,6 @@ import {
 import { readRequiredProposal } from "./service-query.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
 import {
   hashSkillProposalContent,
   readSkillProposalRecord,
@@ -145,7 +143,22 @@ export async function reviseSkillProposal(
               input: lockedRequest,
             });
           }
-          await assertSupportTargetsUnchanged(record, lockedRequest, store);
+          for (const file of record.supportFiles ?? []) {
+            if (file.targetExisted === undefined) {
+              continue;
+            }
+            const currentContent = await readWorkspaceSupportFile({
+              skillDir: record.target.skillDir,
+              relativePath: file.path,
+            });
+            await assertSkillProposalSupportTargetUnchanged({
+              store,
+              record,
+              file,
+              currentContent,
+              input: lockedRequest,
+            });
+          }
         }
 
         const supportFiles =
@@ -344,30 +357,4 @@ async function markProposal(
     });
   }
   return result.record;
-}
-
-async function assertSupportTargetsUnchanged(
-  record: SkillProposalRecord,
-  input: SkillProposalTransitionInput,
-  store: SkillWorkshopStoreOptions,
-): Promise<void> {
-  if (record.kind !== "update" || !record.supportFiles) {
-    return;
-  }
-  for (const file of record.supportFiles) {
-    if (file.targetExisted === undefined) {
-      continue;
-    }
-    const currentContent = await readWorkspaceSupportFile({
-      skillDir: record.target.skillDir,
-      relativePath: file.path,
-    });
-    await assertSkillProposalSupportTargetUnchanged({
-      store,
-      record,
-      file,
-      currentContent,
-      input,
-    });
-  }
 }

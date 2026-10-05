@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -68,18 +68,6 @@ function rowToRecord(row: FleetCellRow): FleetCellRecord {
   };
 }
 
-function recordToRow(record: FleetCellRecord): Insertable<FleetCellsTable> {
-  return {
-    tenant_id: record.tenantId,
-    created_at_ms: record.createdAtMs,
-    image: record.image,
-    runtime: record.runtime,
-    host_port: record.hostPort,
-    container_name: record.containerName,
-    data_dir: record.dataDir,
-  };
-}
-
 export function listFleetCellsInDatabase(db: DatabaseSync): FleetCellRecord[] {
   if (!tableExists(db, "fleet_cells")) {
     return [];
@@ -134,7 +122,18 @@ export function reserveFleetCellInDatabase(
     containerName: params.containerName,
     dataDir: params.dataDir,
   };
-  executeSqliteQuerySync(db, kysely.insertInto("fleet_cells").values(recordToRow(record)));
+  executeSqliteQuerySync(
+    db,
+    kysely.insertInto("fleet_cells").values({
+      tenant_id: record.tenantId,
+      created_at_ms: record.createdAtMs,
+      image: record.image,
+      runtime: record.runtime,
+      host_port: record.hostPort,
+      container_name: record.containerName,
+      data_dir: record.dataDir,
+    }),
+  );
   return record;
 }
 

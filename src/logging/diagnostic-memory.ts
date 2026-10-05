@@ -30,7 +30,10 @@ type DiagnosticMemoryThresholds = {
   pressureRepeatMs?: number;
 };
 
-type MemoryPressure = Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
+type MemoryPressure = Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type"> & {
+  usedBytes: number;
+  thresholdBytes: number;
+};
 const lastPressureAtByKey = new Map<string, number>();
 
 function isPositiveMemoryLimit(value: number | undefined): value is number {
@@ -111,11 +114,7 @@ function pickPressure(
   return null;
 }
 
-function shouldEmitPressure(
-  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
-  now: number,
-  repeatMs: number,
-): boolean {
+function shouldEmitPressure(pressure: MemoryPressure, now: number, repeatMs: number): boolean {
   const key = `${pressure.level}:${pressure.reason}`;
   const lastAt = lastPressureAtByKey.get(key);
   // Pressure events can repeat during sustained memory spikes; throttle per level/reason pair.
@@ -150,46 +149,22 @@ function formatReadableBytes(value: number | undefined): string | undefined {
     : `${formatScaledNumber(scaled)} ${BYTE_UNITS[unitIndex]}`;
 }
 
-function formatPressureRatio(params: {
-  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
-  thresholdBytes: number;
-}): string | undefined {
-  const { pressure, thresholdBytes } = params;
-  if (!Number.isFinite(thresholdBytes) || thresholdBytes <= 0) {
-    return undefined;
-  }
-  const value = pressure.usedBytes;
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const ratio = (value / thresholdBytes) * 100;
-  return `${formatScaledNumber(ratio)}%`;
-}
-
-function formatPressureSummary(
-  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
-): string {
+function formatPressureSummary(pressure: MemoryPressure): string {
+  const ratio = Number.isFinite(pressure.usedBytes)
+    ? `${formatScaledNumber((pressure.usedBytes / pressure.thresholdBytes) * 100)}%`
+    : undefined;
   const parts = [
     `rss=${formatReadableBytes(pressure.memory.rssBytes)}`,
     `heap=${formatReadableBytes(pressure.memory.heapUsedBytes)}`,
-    pressure.thresholdBytes !== undefined
-      ? `threshold=${formatReadableBytes(pressure.thresholdBytes)}`
-      : "",
-    pressure.thresholdBytes !== undefined
-      ? `thresholdRatio=${formatPressureRatio({
-          pressure,
-          thresholdBytes: pressure.thresholdBytes,
-        })}`
-      : "",
+    `threshold=${formatReadableBytes(pressure.thresholdBytes)}`,
+    `thresholdRatio=${ratio}`,
     pressure.limitBytes !== undefined ? `limit=${formatReadableBytes(pressure.limitBytes)}` : "",
-    pressure.usedBytes !== undefined ? `used=${formatReadableBytes(pressure.usedBytes)}` : "",
+    `used=${formatReadableBytes(pressure.usedBytes)}`,
   ];
   return parts.filter((part): part is string => Boolean(part)).join(" ");
 }
 
-function logMemoryPressure(
-  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
-): void {
+function logMemoryPressure(pressure: MemoryPressure): void {
   const nextStep =
     pressure.level === "critical"
       ? "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000."

@@ -3,15 +3,11 @@ import type { SkillsCuratorLiveStatusResult } from "../../../packages/gateway-pr
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  onTrustedInternalDiagnosticEvent,
-  type DiagnosticSkillUsedEvent,
-} from "../../infra/diagnostic-events.js";
+import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import { parseSkillProposalRow } from "./store-sqlite-record.js";
 import {
@@ -23,14 +19,6 @@ const log = createSubsystemLogger("skills/curator");
 
 export const SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE =
   "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.";
-
-function canonicalSkillKey(name: string): string {
-  const key = normalizeSkillIndexName(name);
-  if (!key) {
-    throw new Error(`Invalid skill name: ${name}`);
-  }
-  return key;
-}
 
 export async function getSkillCuratorStatus(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & { config: OpenClawConfig },
@@ -102,27 +90,6 @@ export async function getSkillCuratorStatus(
   };
 }
 
-async function recordSkillUsage(
-  event: Pick<DiagnosticSkillUsedEvent, "agentId" | "skillName" | "skillSource" | "ts"> & {
-    skillFile?: string;
-  },
-  context: OpenClawStateWorkerContext,
-): Promise<void> {
-  const rawSkillFile = event.skillFile?.trim();
-  // File identity prevents a same-named skill in another workspace from inheriting usage.
-  if (!rawSkillFile || !path.isAbsolute(rawSkillFile)) {
-    log.debug(`skipping skill usage without file identity: ${event.skillName}`);
-    return;
-  }
-  const skillFile = canonicalizePath(path.resolve(rawSkillFile));
-  const skillKey = canonicalSkillKey(event.skillName);
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  await executeOpenClawStateWorker(context, {
-    type: "skills.usage.record",
-    input: { ...event, skillFile, skillKey },
-  });
-}
-
 /** Listener failures must never propagate into the tool execution that emitted usage. */
 export function registerSkillUsageTracking(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
@@ -137,10 +104,24 @@ export function registerSkillUsageTracking(
       }
       void work.track(async () => {
         try {
-          await recordSkillUsage(
-            { ...event, skillFile: privateData.skillUsage?.skillFile },
-            context,
-          );
+          const usage = { ...event, skillFile: privateData.skillUsage?.skillFile };
+          const rawSkillFile = usage.skillFile?.trim();
+          // File identity prevents a same-named skill in another workspace from inheriting usage.
+          if (!rawSkillFile || !path.isAbsolute(rawSkillFile)) {
+            log.debug(`skipping skill usage without file identity: ${usage.skillName}`);
+            return;
+          }
+          const skillFile = canonicalizePath(path.resolve(rawSkillFile));
+          const skillKey = normalizeSkillIndexName(usage.skillName);
+          if (!skillKey) {
+            throw new Error(`Invalid skill name: ${usage.skillName}`);
+          }
+          const { executeOpenClawStateWorker } =
+            await import("../../state/openclaw-state-worker-store.js");
+          await executeOpenClawStateWorker(context, {
+            type: "skills.usage.record",
+            input: { ...usage, skillFile, skillKey },
+          });
         } catch (error) {
           log.warn(`failed to record skill usage: ${String(error)}`);
         }
