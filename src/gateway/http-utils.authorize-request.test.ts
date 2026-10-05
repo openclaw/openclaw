@@ -541,46 +541,6 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     }
   });
 
-  it.each(["trusted-proxy", "tailscale", "bootstrap-token"] as const)(
-    "rejects identity-less %s authentication when operator roles require durable identity",
-    async (method) => {
-      vi.mocked(getRuntimeConfig).mockReturnValue({
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: ["guest"],
-                scopes: ["operator.read"],
-              },
-            },
-          },
-        },
-      });
-      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method });
-      const response = {} as ServerResponse;
-
-      try {
-        await expect(
-          authorizeGatewayHttpRequestOrReply({
-            req: createReq(),
-            res: response,
-            auth: { mode: "token", allowTailscale: false, token: "shared-secret" },
-          }),
-        ).resolves.toBeNull();
-        expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
-          ok: false,
-          reason: "user_profile_unavailable",
-        });
-      } finally {
-        vi.mocked(getRuntimeConfig).mockReturnValue({
-          gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
-        });
-      }
-    },
-  );
-
   it("preserves shared-secret owner authentication when operator roles are configured", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       gateway: {

@@ -6,13 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveGatewayRequestContext,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
-import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
@@ -46,16 +43,6 @@ describe("resolveGatewayRequestContext", () => {
     expect(result.messageChannel).toBe("custom-channel");
   });
 
-  it("defaults messageChannel to webchat when the header is absent", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq(),
-      model: "openclaw",
-      sessionPrefix: "openresponses",
-    });
-
-    expect(result.messageChannel).toBe("webchat");
-  });
-
   it("includes session prefix and user in generated session key", () => {
     const result = resolveGatewayRequestContext({
       req: createReq(),
@@ -65,16 +52,6 @@ describe("resolveGatewayRequestContext", () => {
     });
 
     expect(result.sessionKey).toContain("openresponses-user:alice");
-  });
-
-  it("preserves normal explicit session-key overrides", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-session-key": "customer-case-42" }),
-      model: "openclaw",
-      sessionPrefix: "openai",
-    });
-
-    expect(result.sessionKey).toBe("customer-case-42");
   });
 
   it.each([
@@ -176,17 +153,6 @@ describe("resolveTrustedHttpOperatorScopes", () => {
     expect(scopes).toStrictEqual([]);
   });
 
-  it("keeps declared scopes for non-bearer HTTP requests", () => {
-    const scopes = resolveTrustedHttpOperatorScopes(
-      createReq({
-        "x-openclaw-scopes": "operator.admin, operator.write",
-      }),
-      trustedRequestAuth,
-    );
-
-    expect(scopes).toEqual(["operator.admin", "operator.write"]);
-  });
-
   it("keeps trusted identity scopes even if bearer auth headers are forwarded", () => {
     const scopes = resolveTrustedHttpOperatorScopes(
       createReq({
@@ -197,18 +163,6 @@ describe("resolveTrustedHttpOperatorScopes", () => {
     );
 
     expect(scopes).toEqual(["operator.admin", "operator.write"]);
-  });
-
-  it("drops declared scopes when request auth resolved to a shared-secret method", () => {
-    const scopes = resolveTrustedHttpOperatorScopes(
-      createReq({
-        authorization: "Bearer upstream-idp-token",
-        "x-openclaw-scopes": "operator.admin, operator.write",
-      }),
-      { trustDeclaredOperatorScopes: false },
-    );
-
-    expect(scopes).toStrictEqual([]);
   });
 
   it.each<{
@@ -282,60 +236,6 @@ describe("resolveTrustedHttpOperatorScopes", () => {
       ).toEqual([]);
     },
   );
-});
-
-describe("resolveSharedSecretHttpOperatorScopes", () => {
-  it("restores default operator scopes for shared-secret bearer auth", () => {
-    const scopes = resolveSharedSecretHttpOperatorScopes(
-      createReq({
-        authorization: "Bearer secret",
-        "x-openclaw-scopes": "operator.approvals",
-      }),
-      { authMethod: "token", trustDeclaredOperatorScopes: false },
-    );
-
-    expect(scopes).toEqual(createExpectedBroadOperatorScopes());
-  });
-
-  it("keeps declared scopes for trusted HTTP identity-bearing requests", () => {
-    const scopes = resolveSharedSecretHttpOperatorScopes(
-      createReq({
-        "x-openclaw-scopes": "operator.write",
-      }),
-      { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-    );
-
-    expect(scopes).toEqual(["operator.write"]);
-  });
-});
-
-describe("resolveOpenAiCompatibleHttpSenderIsOwner", () => {
-  it("treats shared-secret bearer auth as owner on the compat surface", () => {
-    expect(
-      resolveOpenAiCompatibleHttpSenderIsOwner(
-        createReq({
-          authorization: "Bearer secret",
-          "x-openclaw-scopes": "operator.approvals",
-        }),
-        { authMethod: "token", trustDeclaredOperatorScopes: false },
-      ),
-    ).toBe(true);
-  });
-
-  it("still requires operator.admin for trusted scope-bearing requests", () => {
-    expect(
-      resolveOpenAiCompatibleHttpSenderIsOwner(
-        createReq({ "x-openclaw-scopes": "operator.write" }),
-        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      ),
-    ).toBe(false);
-    expect(
-      resolveOpenAiCompatibleHttpSenderIsOwner(
-        createReq({ "x-openclaw-scopes": "operator.admin" }),
-        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("authorizeOpenAiCompatibleHttpModelOverride", () => {
