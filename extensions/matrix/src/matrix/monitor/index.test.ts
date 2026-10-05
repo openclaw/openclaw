@@ -122,6 +122,7 @@ describe("monitorMatrixProvider", () => {
     });
     hoisted.getMemberDisplayName.mockReset().mockResolvedValue("Bot");
     hoisted.registeredOnRoomMessage = null;
+    hoisted.messagesConfig = undefined;
     hoisted.registeredHealthySyncGetter = undefined;
     hoisted.stopThreadBindingManager.mockReset().mockResolvedValue(undefined);
     hoisted.client.removeAllListeners();
@@ -292,13 +293,54 @@ describe("monitorMatrixProvider", () => {
       expect(unhandled).toHaveLength(0);
       expect(mockCallArg(hoisted.logger.warn, 0, 0)).toBe("matrix background task failed");
       const warningMetadata = mockCallArg(hoisted.logger.warn, 0, 1) as Record<string, unknown>;
-      expect(warningMetadata.task).toBe("test room message");
+      // The debounce flush owns the handler task, including timer-fired batches.
+      expect(warningMetadata.task).toBe(
+        "debounced room message handler room=!room:example.org id=$event",
+      );
       expect(warningMetadata.error).toBe("Error: room handler exploded");
 
       abortController.abort();
       await monitorPromise;
     } finally {
       process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("merges a Matrix text burst when messages.inbound.byChannel.matrix is set", async () => {
+    hoisted.messagesConfig = { inbound: { byChannel: { matrix: 1000 } } };
+    const handler = vi.fn(async () => {});
+    hoisted.createMatrixRoomMessageHandler.mockReturnValue(handler);
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await waitForCallOrderEntry("start-client");
+    const onRoomMessage = registeredRoomMessageHandler();
+    vi.useFakeTimers();
+    try {
+      for (const [eventId, body] of [
+        ["$1", "one"],
+        ["$2", "two"],
+      ]) {
+        await onRoomMessage("!room:example.org", {
+          type: "m.room.message",
+          event_id: eventId,
+          sender: "@alice:example.org",
+          content: { msgtype: "m.text", body },
+        });
+      }
+      expect(handler).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(mockCallArg(handler, 0, 0)).toBe("!room:example.org");
+      expect(mockCallArg(handler, 0, 1)).toMatchObject({
+        event_id: "$2",
+        content: { body: "one\ntwo" },
+      });
+    } finally {
+      vi.useRealTimers();
+      abortController.abort();
+      await monitorPromise;
     }
   });
 

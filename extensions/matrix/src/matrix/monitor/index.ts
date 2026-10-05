@@ -50,6 +50,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
+import { createMatrixInboundDebouncer } from "./inbound-debounce.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
@@ -468,7 +469,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logger,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
+      onRoomMessage: createMatrixInboundDebouncer({
+        cfg,
+        selfUserId: auth.userId,
+        handleRoomMessage,
+        inboundDeduper,
+        runDetachedTask: monitorTaskRunner.runDetachedTask,
+        logVerboseMessage,
+        onError: (err) => {
+          logger.warn("matrix inbound debounce flush failed", { error: String(err) });
+        },
+      }),
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
 
