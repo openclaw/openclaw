@@ -24,6 +24,11 @@ vi.mock("./gateway-service-probe-hosts.js", () => ({
   resolveGatewayServiceProbeHosts: async () => ["127.0.0.1"],
 }));
 
+vi.mock("./schtasks-process-snapshot.js", async (original) => ({
+  ...(await original<typeof import("./schtasks-process-snapshot.js")>()),
+  readWindowsProcessSnapshot: () => [{ ProcessId: 111, CommandLine: "powershell.exe" }],
+}));
+
 beforeEach(() => {
   spawnSync.mockReset();
 });
@@ -39,7 +44,7 @@ describe("scheduled task runtime derivation", () => {
   it.each([
     [1, 267009, "stopped", "Disabled"],
     [3, 267009, "stopped", "Ready"],
-    [4, -2147024891, "running", "Running"],
+    [4, -2147024891, "unknown", "Running"],
     [2, 0, "unknown", "Queued"],
     [0, 267009, "unknown", "Unknown"],
     [3, "unavailable", "stopped", "Ready"],
@@ -50,7 +55,20 @@ describe("scheduled task runtime derivation", () => {
     async (state, result, status, name) => {
       spawnSync.mockReturnValue({
         status: 0,
-        stdout: JSON.stringify({ state, lastRunResult: result, lastRunTime: false }),
+        stdout: JSON.stringify({
+          state,
+          lastRunResult: result,
+          lastRunTime: false,
+          taskPath: "OpenClaw Gateway",
+          actions: [
+            {
+              type: 0,
+              path: "C:\\node.exe",
+              arguments: "C:\\openclaw\\entry.js gateway --port 18789",
+              workingDirectory: "",
+            },
+          ],
+        }),
       });
       await expect(readRuntime()).resolves.toMatchObject({
         status,

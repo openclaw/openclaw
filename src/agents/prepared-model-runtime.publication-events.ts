@@ -16,6 +16,7 @@ type PreparedModelRuntimePublicationEvent =
   | { phase: "invalidated"; modelFactsChanged?: false; replacement?: Promise<void> }
   | { phase: "published"; modelFactsChanged?: false }
   | { phase: "failed"; error: Error }
+  | { phase: "catalog-status"; modelFactsChanged: false }
   // Publication owners alone can prove that model facts stayed unchanged.
   | {
       phase: "catalog-published";
@@ -72,6 +73,10 @@ export function createCatalogAttemptReporter(
   };
   const pendingCount = () =>
     (pendingProviders.provider?.length ?? 0) + (pendingProviders.native?.length ?? 0);
+  const readPendingProviders = () =>
+    pendingCount()
+      ? [...new Set([...(pendingProviders.provider ?? []), ...(pendingProviders.native ?? [])])]
+      : undefined;
   const failed = (
     error: unknown,
     providers?: readonly string[],
@@ -112,7 +117,18 @@ export function createCatalogAttemptReporter(
       providers: readonly string[] | undefined,
       kind: PreparedModelCatalogAcquisitionKind = "provider",
     ) => {
+      const previous = readPendingProviders();
       pendingProviders[kind] = providers;
+      if (
+        isCurrent() &&
+        isPublished?.() !== false &&
+        !isDeepStrictEqual(previous, readPendingProviders())
+      ) {
+        notifyPreparedModelRuntimePublication({
+          phase: "catalog-status",
+          modelFactsChanged: false,
+        });
+      }
     },
     withRefreshStatus: (catalog: ModelCatalogSnapshot) => {
       const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {}).flat();
@@ -127,15 +143,7 @@ export function createCatalogAttemptReporter(
       Object.defineProperty(catalog, "pendingProviders", {
         enumerable: true,
         configurable: true,
-        get: () =>
-          pendingCount()
-            ? [
-                ...new Set([
-                  ...(pendingProviders.provider ?? []),
-                  ...(pendingProviders.native ?? []),
-                ]),
-              ]
-            : undefined,
+        get: readPendingProviders,
       });
       // Keep the status live on retained inventory without copying an error into its successor.
       Object.defineProperty(catalog, "refreshFailed", {

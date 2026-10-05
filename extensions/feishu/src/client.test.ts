@@ -1,8 +1,31 @@
 // Feishu tests cover client plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { FeishuConfigSchema } from "./config-schema.js";
+import { withFeishuRequestContext } from "./send-context.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
@@ -47,6 +70,7 @@ const mockBaseHttpInstance = vi.hoisted(() => {
     },
   });
   return {
+    defaults: {},
     request: vi.fn().mockResolvedValue({}),
     get: vi.fn().mockResolvedValue({}),
     post: vi.fn().mockResolvedValue({}),
@@ -382,6 +406,68 @@ describe("createFeishuClient HTTP timeout", () => {
     await httpInstance.get("https://example.com/api");
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", { timeout });
   };
+
+  it.each([false, true])(
+    "rechecks the caller at the SDK handoff after effect preparation (retired=%s)",
+    async (retired) => {
+      const preparing = createDeferred();
+      const prepared = createDeferred();
+      const dispatched = createDeferred();
+      const response = createDeferred<{ code: number }>();
+      const caller = new AbortController();
+      const failure = new Error("Feishu caller retired");
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      mockBaseHttpInstance.request.mockImplementationOnce(() => {
+        dispatched.resolve();
+        return response.promise;
+      });
+      const httpInstance = createHttpInstance(`effect-handoff-${retired}`);
+      const sending = withFeishuRequestContext(
+        () => caller.signal.throwIfAborted(),
+        () =>
+          httpInstance.request({
+            url: "https://open.feishu.cn/open-apis/im/v1/messages",
+            method: "POST",
+            data: { content: "hello" },
+          }),
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          dispatched.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+          sending.then(() => {
+            throw new Error("settled before preparation");
+          }),
+        ]);
+        expect(mockBaseHttpInstance.request).not.toHaveBeenCalled();
+        if (retired) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!retired) {
+          await dispatched.promise;
+          caller.abort(failure);
+        }
+        response.resolve({ code: 0 });
+        expect(await sending).toEqual(retired ? { error: failure } : { value: { code: 0 } });
+        expect(mockBaseHttpInstance.request).toHaveBeenCalledTimes(retired ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve({ code: 0 });
+        await sending;
+        mockBaseHttpInstance.request.mockReset().mockResolvedValue({});
+        effectGate.prepare = undefined;
+      }
+    },
+  );
 
   it("allows explicit timeout override per-request", async () => {
     const httpInstance = createHttpInstance("timeout-override");

@@ -17,6 +17,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   options,
   runInContext,
   dispatch,
+  onRotationComplete,
   serviceDeadlines,
   markWorkerRetirement,
 }: {
@@ -24,6 +25,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   options: WorkerTaskPoolOptions<Output>;
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
+  onRotationComplete: () => void;
   serviceDeadlines: () => void;
   markWorkerRetirement: WorkerTaskHost["workerRetiring"];
 }) {
@@ -98,6 +100,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
             throw cleaned.error;
           }
           rotation = undefined;
+          onRotationComplete();
           completion.resolve();
           dispatch();
         } catch (error) {

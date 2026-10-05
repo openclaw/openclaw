@@ -120,8 +120,8 @@ const clearPendingLifecycleError = pendingLifecycle.clearError;
 const clearPendingLifecycleTimeout = pendingLifecycle.clearTimeout;
 
 const contextCleanup = createSubagentRegistryContextCleanup({
-  isEndedHookOwnerCurrent: (runId, entry): boolean =>
-    subagentLifecycleController.isEndedHookOwnerCurrent(runId, entry),
+  isEndedHookOwnerCurrent: (entry): boolean =>
+    subagentLifecycleController.isEndedHookOwnerCurrent(entry),
   warn,
 });
 
@@ -258,7 +258,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
     }
     const current = subagentRuns.get(runId);
     if (current) {
-      await finalizeResumedAnnounceGiveUp({ runId, entry: current, reason, stateContext });
+      await finalizeResumedAnnounceGiveUp({ entry: current, reason, stateContext });
     }
   }, "subagents:delivery-finalize").catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
@@ -412,7 +412,7 @@ function resumeFinalizedSubagentRun(
     if (
       entry.killReconciliation ||
       contextCleanup.suppressAnnounceForSteerRestart(entry) ||
-      startSubagentAnnounceCleanupFlow(runId, entry)
+      startSubagentAnnounceCleanupFlow(entry)
     ) {
       resumedRuns.add(getSubagentRunRuntimeKey(entry));
     }
@@ -507,7 +507,7 @@ function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord)
     !wake &&
     !entry.cleanupCompletedAt
   ) {
-    startSubagentAnnounceCleanupFlow(runId, entry);
+    startSubagentAnnounceCleanupFlow(entry);
     return Promise.resolve();
   }
   const isCurrent = () =>

@@ -359,7 +359,7 @@ async function testPreflightCandidate(
     }
   }
   const manager: Awaited<ReturnType<typeof resolveUpdateBuildManager>> = params.referenceSource
-    ? { kind: "resolved", manager: "pnpm", preferred: "pnpm", fallback: false }
+    ? { kind: "resolved", manager: "pnpm", fallback: false }
     : await resolveUpdateBuildManager(
         params.runCommand,
         params.worktreeDir,

@@ -846,10 +846,10 @@ export function createAuthProfileStoreRuntime(
     ) {
       return params.store;
     }
-    const synced = syncPersistedExternalCliAuthProfiles(params.store, {
-      agentDir: params.agentDir,
-      ...resolveExternalCliOverlayOptions(params.options),
-    });
+    const synced = syncPersistedExternalCliAuthProfiles(
+      params.store,
+      resolveExternalCliOverlayOptions(params.options),
+    );
     if (synced === params.store) {
       return params.store;
     }

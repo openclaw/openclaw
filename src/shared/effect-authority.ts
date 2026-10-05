@@ -88,3 +88,11 @@ export function captureEffectAuthority() {
     },
   };
 }
+
+/** Independent owners, such as transport crypto maintenance, restore their own scope explicitly. */
+export function withEffectAuthority<T>(
+  authority: ReturnType<typeof captureEffectAuthority> | undefined,
+  run: () => T,
+): T {
+  return authority ? authority.run(run) : effectScope.run(undefined, run);
+}

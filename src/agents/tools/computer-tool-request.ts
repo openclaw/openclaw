@@ -15,7 +15,7 @@ import {
 import { isStringOption } from "../../utils/string-readers.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import type { ComputerObservationState, ComputerToolAction } from "./computer-tool-shared.js";
-import { COMPUTER_REF_WIDTH, MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
+import { MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
 
 const LOCAL_ACTIONS = new Set<ComputerUseV2ActionName>(["screenshot", "wait"]);
 const INPUT_ACTIONS = new Set<ComputerUseV2ActionName>(
@@ -165,13 +165,13 @@ export function buildComputerActParams(params: {
   executionId: string;
   screenIndex: number;
   displayFrameId?: string;
-  refWidth?: number;
+  refWidth: number;
 }): ComputerActParams {
   const { action, input } = params;
   const wire: Record<string, unknown> = { action, executionId: params.executionId };
   if (POINTER_OR_KEYBOARD_ACTIONS.has(action)) {
     wire.screenIndex = params.screenIndex;
-    wire.refWidth = params.refWidth ?? COMPUTER_REF_WIDTH;
+    wire.refWidth = params.refWidth;
   }
   const elementRef = readToolStringParam(input, "elementRef");
   if (

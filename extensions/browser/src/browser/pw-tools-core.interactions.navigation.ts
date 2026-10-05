@@ -73,11 +73,7 @@ export function hasInteractionNavigationPolicy(policy: BrowserNavigationPolicyOp
   return Boolean(policy.ssrfPolicy || policy.browserProxyMode);
 }
 
-type NavigationObservablePage = Pick<Page, "url"> & {
-  mainFrame?: () => Frame;
-  on?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
-  off?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
-};
+type NavigationObservablePage = Pick<Page, "url" | "mainFrame" | "on" | "off">;
 
 const pendingInteractionNavigationGuardCleanup = new WeakMap<Page, () => void>();
 
@@ -196,13 +192,6 @@ function isHashOnlyNavigation(currentUrl: string, previousUrl: string): boolean 
   );
 }
 
-function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): boolean {
-  if (typeof page.mainFrame !== "function") {
-    return true;
-  }
-  return frame === page.mainFrame();
-}
-
 async function assertSubframeNavigationAllowed(
   frameUrl: string,
   navigationPolicy: BrowserNavigationPolicyOptions,
@@ -227,15 +216,6 @@ type ObservedDelayedNavigations = {
   subframes: string[];
 };
 
-function snapshotNetworkFrameUrl(frame: Frame): string | null {
-  try {
-    const frameUrl = frame.url();
-    return frameUrl.startsWith("http://") || frameUrl.startsWith("https://") ? frameUrl : null;
-  } catch {
-    return null;
-  }
-}
-
 function createInteractionFrameListener(
   page: NavigationObservablePage,
   previousUrl: string,
@@ -243,9 +223,9 @@ function createInteractionFrameListener(
   onMainFrameNavigation: () => void,
 ): (frame: Frame) => void {
   return (frame) => {
-    if (!isMainFrameNavigation(page, frame)) {
-      const frameUrl = snapshotNetworkFrameUrl(frame);
-      if (frameUrl) {
+    if (frame !== page.mainFrame()) {
+      const frameUrl = frame.url();
+      if (frameUrl.startsWith("http://") || frameUrl.startsWith("https://")) {
         subframes.push(frameUrl);
       }
     } else if (!isHashOnlyNavigation(page.url(), previousUrl)) {
@@ -293,9 +273,6 @@ function observeDelayedInteractionNavigation(
 ): Promise<ObservedDelayedNavigations | undefined> {
   if (didCrossDocumentUrlChange(page, previousUrl)) {
     return Promise.resolve({ mainFrameNavigated: true, subframes: [] });
-  }
-  if (typeof page.on !== "function" || typeof page.off !== "function") {
-    return Promise.resolve({ mainFrameNavigated: false, subframes: [] });
   }
   if (replacePending) {
     pendingInteractionNavigationGuardCleanup.get(page)?.();
@@ -349,20 +326,17 @@ async function assertInteractionNavigationCompletedSafely<T>(
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
-  const navPage: NavigationObservablePage = opts.page;
   let navigatedDuringAction = false;
   const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = createInteractionFrameListener(
-    navPage,
+    opts.page,
     opts.previousUrl,
     subframeNavigationsDuringAction,
     () => {
       navigatedDuringAction = true;
     },
   );
-  if (typeof navPage.on === "function") {
-    navPage.on("framenavigated", onFrameNavigated);
-  }
+  opts.page.on("framenavigated", onFrameNavigated);
 
   let result: T | undefined;
   let actionError: unknown = null;
@@ -371,9 +345,7 @@ async function assertInteractionNavigationCompletedSafely<T>(
   } catch (err) {
     actionError = err;
   } finally {
-    if (typeof navPage.off === "function") {
-      navPage.off("framenavigated", onFrameNavigated);
-    }
+    opts.page.off("framenavigated", onFrameNavigated);
   }
 
   const navigationObserved =

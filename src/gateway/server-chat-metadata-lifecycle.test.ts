@@ -18,8 +18,13 @@ import {
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createPreparedReadHandler } from "./server-methods/prepared-read.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { dispatchSharedRead, invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 const mocks = vi.hoisted(() => ({
   createRuntime: vi.fn(),
@@ -879,26 +884,68 @@ describe("gateway chat metadata lifecycle", () => {
     { modelFactsChanged: false, refreshStatusChanged: false, refreshes: false },
     { modelFactsChanged: undefined, refreshStatusChanged: false, refreshes: true },
     { modelFactsChanged: false, refreshStatusChanged: true, refreshes: true },
+    {
+      phase: "catalog-status",
+      modelFactsChanged: false,
+      refreshStatusChanged: false,
+      refreshes: false,
+    },
   ])(
     "refreshes catalog metadata only for a change (%j)",
-    async ({ modelFactsChanged, refreshStatusChanged, refreshes }) => {
+    async ({ phase = "catalog-published", modelFactsChanged, refreshStatusChanged, refreshes }) => {
       const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
       const lifecycle = await pendingLifecycle;
+      const requestContext = { ...context, broadcast: vi.fn(), getRuntimeConfig: () => config };
+      let pending = true;
+      let payloadJson: string | undefined;
+      const produce = vi.fn(() => ({ pendingProviders: pending ? ["synthetic"] : undefined }));
+      const handler = createPreparedReadHandler(() => ({
+        run: (respond) => respond(true, produce()),
+      }));
+      const options = {
+        req: { type: "req", id: "catalog", method: "models.list" },
+        params: {},
+        client: null,
+        context: requestContext,
+        isWebchatConnect: () => false,
+        respond: (_ok, payload) => {
+          payloadJson = JSON.stringify(payload);
+        },
+      } satisfies GatewayRequestHandlerOptions;
+      const sharing = {
+        shareKey: () => "catalog",
+        shareInvalidationEvents: ["chat.metadata.changed"],
+        shareMaxAgeMs: 1_000,
+      };
+      const read = () => dispatchSharedRead(handler, options, sharing, () => {});
+      vi.useFakeTimers();
+      try {
+        await lifecycle.attachContext(requestContext, sidecarOwner.publish);
+        const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+        modelListener({ phase: "published" });
+        expect(mocks.refresh).toHaveBeenCalledTimes(2);
+        mocks.invalidate.mockClear();
+        await read();
+        await read();
+        expect(produce).toHaveBeenCalledOnce();
+        expect(payloadJson).toBe('{"pendingProviders":["synthetic"]}');
 
-      await lifecycle.attachContext(context, sidecarOwner.publish);
-      const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-      modelListener({ phase: "published" });
-      await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-      mocks.invalidate.mockClear();
+        pending = false;
+        modelListener({ phase, modelFactsChanged, refreshStatusChanged });
+        await read();
 
-      modelListener({ phase: "catalog-published", modelFactsChanged, refreshStatusChanged });
-
-      expect(mocks.invalidate).not.toHaveBeenCalled();
-      expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
-      if (refreshes) {
-        expect(mocks.refresh).toHaveBeenLastCalledWith({
-          notifyIfUnchanged: refreshStatusChanged,
-        });
+        expect(payloadJson).toBe("{}");
+        expect(produce).toHaveBeenCalledTimes(2);
+        expect(mocks.invalidate).not.toHaveBeenCalled();
+        expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
+        if (refreshes) {
+          expect(mocks.refresh).toHaveBeenLastCalledWith({
+            notifyIfUnchanged: refreshStatusChanged,
+          });
+        }
+      } finally {
+        invalidateSharedReadResponses(requestContext.broadcast);
+        vi.useRealTimers();
       }
     },
   );

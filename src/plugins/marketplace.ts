@@ -101,10 +101,8 @@ type MarketplaceInstallResult =
   | ({
       ok: true;
       marketplaceName?: string;
-      marketplaceVersion?: string;
       marketplacePlugin: string;
       marketplaceSource: string;
-      marketplaceEntryVersion?: string;
     } & Extract<InstallPluginResult, { ok: true }>)
   | Extract<InstallPluginResult, { ok: false }>;
 
@@ -112,7 +110,6 @@ type MarketplaceShortcutResolution =
   | {
       ok: true;
       plugin: string;
-      marketplaceName: string;
       marketplaceSource: string;
     }
   | {
@@ -1083,7 +1080,6 @@ export async function resolveMarketplaceInstallShortcut(
   return {
     ok: true,
     plugin,
-    marketplaceName,
     marketplaceSource: marketplaceName,
   };
 }
@@ -1171,10 +1167,8 @@ export async function installPluginFromMarketplace(
     return {
       ...result,
       marketplaceName: loaded.marketplace.manifest.name,
-      marketplaceVersion: loaded.marketplace.manifest.version,
       marketplacePlugin: entry.name,
       marketplaceSource: params.marketplace,
-      marketplaceEntryVersion: entry.version,
     };
   } finally {
     await installCleanup?.();

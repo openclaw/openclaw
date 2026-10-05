@@ -52,10 +52,7 @@ export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPa
 export function normalizeTransformedPayloadForDelivery(
   payload: ReplyPayload,
   handler: ChannelHandler,
-  copyMetadata: (
-    source: ReplyPayload,
-    payload: ReplyPayload,
-  ) => ReplyPayload = copyReplyPayloadMetadata,
+  copyMetadata: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
 ): ReplyPayload | null {
   const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
   if (!normalizedPayload) {
@@ -169,7 +166,6 @@ export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): s
  */
 export function resolveOutboundMediaAccessForSend(
   params: DeliverOutboundPayloadsCoreParams,
-  channel: string,
   mediaSources: readonly string[],
 ): OutboundMediaAccess {
   if (mediaSources.length === 0) {
@@ -181,7 +177,7 @@ export function resolveOutboundMediaAccessForSend(
     mediaSources,
     mediaAccess: params.mediaAccess,
     sessionKey: params.session?.policyKey ?? params.session?.key,
-    messageProvider: params.session?.key ? undefined : channel,
+    messageProvider: params.session?.key ? undefined : params.channel,
     accountId: params.session?.requesterAccountId ?? params.accountId,
     requesterSenderId: params.session?.requesterSenderId,
     requesterSenderName: params.session?.requesterSenderName,

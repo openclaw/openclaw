@@ -111,7 +111,7 @@ async function runPdfPrompt(params: {
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
-  pdfBuffers: Array<{ buffer: Buffer; filename: string }>;
+  pdfBuffers: Array<{ buffer: Buffer }>;
   password?: string;
   pageNumbers?: number[];
   explicitSelectionLimit?: number;
@@ -181,7 +181,7 @@ async function runPdfPrompt(params: {
     "imageModel",
     committedPdfModelConfig,
   );
-  let nativePdfs: Array<{ base64: string; filename: string }> | undefined;
+  let nativePdfs: Array<{ base64: string }> | undefined;
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
@@ -272,9 +272,8 @@ async function runPdfPrompt(params: {
 
         // Encode only native requests, once across retries, after checking cancellation.
         assertModelCurrent();
-        const pdfs = (nativePdfs ??= params.pdfBuffers.map(({ buffer, filename }) => ({
+        const pdfs = (nativePdfs ??= params.pdfBuffers.map(({ buffer }) => ({
           base64: buffer.toString("base64"),
-          filename,
         })));
 
         const analyzePdf =
@@ -485,7 +484,6 @@ export function createPdfTool(options?: {
 
     const loadedPdfs: Array<{
       buffer: Buffer;
-      filename: string;
       resolvedInput: string;
       rewrittenFrom?: string;
     }> = [];
@@ -542,15 +540,8 @@ export function createPdfTool(options?: {
         throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
       }
 
-      const filename =
-        media.fileName ??
-        (isHttpUrl
-          ? (new URL(trimmed).pathname.split("/").pop() ?? "document.pdf")
-          : "document.pdf");
-
       loadedPdfs.push({
         buffer: media.buffer,
-        filename,
         resolvedInput: resolvedPath,
         ...(rewrittenFrom ? { rewrittenFrom } : {}),
       });

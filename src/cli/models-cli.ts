@@ -8,6 +8,14 @@ import { isModelsStatusJsonOutput } from "./models-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
+type ModelsAuthCommands = typeof import("../commands/models/auth.js");
+type ModelsStatusOptions = Parameters<
+  typeof import("../commands/models/list.status-command.js").modelsStatusCommand
+>[0];
+type ModelsAuthLoginOptions = Parameters<ModelsAuthCommands["modelsAuthLoginCommand"]>[0] & {
+  deviceCode?: boolean;
+};
+type ModelsAuthOrderOptions = { provider: string; agent?: string; json?: boolean };
 
 async function withModelsRuntime(
   action: (runtime: ModelsCliRuntime) => Promise<void>,
@@ -96,21 +104,14 @@ export function registerModelsCli(program: Command) {
     .option("--probe-concurrency <n>", "Concurrent probes")
     .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
-    .action(async (opts, command) => {
+    .action(async (opts: ModelsStatusOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
         const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
         await modelsStatusCommand(
           {
+            ...opts,
             json: hasJsonOutput(opts),
-            plain: Boolean(opts.plain),
-            check: Boolean(opts.check),
-            probe: Boolean(opts.probe),
-            probeProvider: opts.probeProvider as string | undefined,
-            probeProfile: opts.probeProfile as string | string[] | undefined,
-            probeTimeout: opts.probeTimeout as string | undefined,
-            probeConcurrency: opts.probeConcurrency as string | undefined,
-            probeMaxTokens: opts.probeMaxTokens as string | undefined,
             agent,
           },
           defaultRuntime,
@@ -314,18 +315,11 @@ export function registerModelsCli(program: Command) {
     .option("--provider <id>", "Filter by provider id")
     .option("--agent <id>", "Agent id (default: configured system agent)")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
+    .action(async (opts: { provider?: string; agent?: string; json?: boolean }, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
         const { modelsAuthListCommand } = await import("../commands/models/auth-list.js");
-        await modelsAuthListCommand(
-          {
-            provider: opts.provider as string | undefined,
-            agent,
-            json: hasJsonOutput(opts),
-          },
-          defaultRuntime,
-        );
+        await modelsAuthListCommand({ ...opts, agent, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -360,18 +354,11 @@ export function registerModelsCli(program: Command) {
     .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--yes", "Skip the confirmation prompt", false)
-    .action(async (profileId: string, opts, command) => {
+    .action(async (profileId: string, opts: { agent?: string; yes?: boolean }, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
         const { modelsAuthLogoutCommand } = await import("../commands/models/auth-logout.js");
-        await modelsAuthLogoutCommand(
-          {
-            profileId,
-            agent,
-            yes: Boolean(opts.yes),
-          },
-          defaultRuntime,
-        );
+        await modelsAuthLogoutCommand({ ...opts, profileId, agent }, defaultRuntime);
       });
     });
 
@@ -389,8 +376,8 @@ export function registerModelsCli(program: Command) {
       "Remove existing profiles for the provider before logging in (use when a cached OAuth profile is stuck or you want to switch accounts)",
       false,
     )
-    .action(async (opts, command) => {
-      if (opts.deviceCode && typeof opts.method === "string" && opts.method !== "device-code") {
+    .action(async ({ deviceCode, ...opts }: ModelsAuthLoginOptions, command) => {
+      if (deviceCode && typeof opts.method === "string" && opts.method !== "device-code") {
         throw new Error(
           "--device-code cannot be combined with --method unless method is device-code.",
         );
@@ -400,11 +387,8 @@ export function registerModelsCli(program: Command) {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
           {
-            provider: opts.provider as string | undefined,
-            method: opts.deviceCode ? "device-code" : (opts.method as string | undefined),
-            profileId: opts.profileId as string | undefined,
-            setDefault: Boolean(opts.setDefault),
-            force: Boolean(opts.force),
+            ...opts,
+            method: deviceCode ? "device-code" : opts.method,
             agent,
           },
           defaultRuntime,
@@ -418,18 +402,11 @@ export function registerModelsCli(program: Command) {
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--provider <name>", "Provider id")
     .option("--yes", "Skip confirmation", false)
-    .action(async (opts, command) => {
+    .action(async (opts: { provider?: string; agent?: string; yes?: boolean }, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command);
         const { modelsAuthSetupTokenCommand } = await import("../commands/models/auth.js");
-        await modelsAuthSetupTokenCommand(
-          {
-            provider: opts.provider as string | undefined,
-            yes: Boolean(opts.yes),
-            agent,
-          },
-          defaultRuntime,
-        );
+        await modelsAuthSetupTokenCommand({ ...opts, agent }, defaultRuntime);
       });
     });
 
@@ -451,19 +428,11 @@ export function registerModelsCli(program: Command) {
         "Optional expiry duration (e.g. 365d, 12h). Stored as absolute expiresAt.",
       );
     }
-    paste.action(async (opts, command) => {
+    paste.action(async (opts: Parameters<ModelsAuthCommands[typeof handler]>[0], command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command);
         const commands = await import("../commands/models/auth.js");
-        await commands[handler](
-          {
-            provider: opts.provider as string | undefined,
-            profileId: opts.profileId as string | undefined,
-            ...(name === "paste-token" ? { expiresIn: opts.expiresIn as string | undefined } : {}),
-            agent,
-          },
-          defaultRuntime,
-        );
+        await commands[handler]({ ...opts, agent }, defaultRuntime);
       });
     });
   }
@@ -473,15 +442,15 @@ export function registerModelsCli(program: Command) {
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--yes", "Overwrite existing profile without prompting", false)
-    .action(async (opts, command) => {
+    .action(async (opts: { agent?: string; yes?: boolean }, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command);
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
           {
+            ...opts,
             provider: "github-copilot",
             method: "device",
-            yes: Boolean(opts.yes),
             agent,
           },
           defaultRuntime,
@@ -497,16 +466,12 @@ export function registerModelsCli(program: Command) {
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured system agent)")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
+    .action(async (opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
         const { modelsAuthOrderGetCommand } = await import("../commands/models/auth-order.js");
         await modelsAuthOrderGetCommand(
-          {
-            provider: opts.provider as string,
-            agent,
-            json: hasJsonOutput(opts),
-          },
+          { ...opts, agent, json: hasJsonOutput(opts) },
           defaultRuntime,
         );
       });
@@ -518,18 +483,11 @@ export function registerModelsCli(program: Command) {
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:default)")
-    .action(async (profileIds: string[], opts, command) => {
+    .action(async (profileIds: string[], opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
         const { modelsAuthOrderSetCommand } = await import("../commands/models/auth-order.js");
-        await modelsAuthOrderSetCommand(
-          {
-            provider: opts.provider as string,
-            agent,
-            order: profileIds,
-          },
-          defaultRuntime,
-        );
+        await modelsAuthOrderSetCommand({ ...opts, agent, order: profileIds }, defaultRuntime);
       });
     });
 
@@ -538,17 +496,11 @@ export function registerModelsCli(program: Command) {
     .description("Clear per-agent auth profile order override")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
-    .action(async (opts, command) => {
+    .action(async (opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
         const { modelsAuthOrderClearCommand } = await import("../commands/models/auth-order.js");
-        await modelsAuthOrderClearCommand(
-          {
-            provider: opts.provider as string,
-            agent,
-          },
-          defaultRuntime,
-        );
+        await modelsAuthOrderClearCommand({ ...opts, agent }, defaultRuntime);
       });
     });
 }

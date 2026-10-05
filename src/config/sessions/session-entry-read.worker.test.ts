@@ -492,7 +492,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
   });
 });
 
-it.each(["worker", "row-facts"] as const)(
+it.each(["worker", "exact", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   async (reader) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -511,7 +511,7 @@ it.each(["worker", "row-facts"] as const)(
               database: { agentId: "main", path: storePath },
               env,
               sessionKeys,
-              projection: "list",
+              projection: reader === "exact" ? "exact" : "list",
             }).entries;
       expect(read()).toEqual([]);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });

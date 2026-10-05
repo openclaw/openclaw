@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
@@ -105,14 +104,6 @@ export function renderDailyChartCompact(
   const usesCompressedScale = spread > 50;
   const chartAreaPx = 200;
   const minBarPx = 6;
-  const barHeights = values.map((v): number => {
-    if (v <= 0) {
-      return 0;
-    }
-    const ratio = usesCompressedScale ? Math.sqrt(v / maxValue) : v / maxValue;
-    return Math.max(minBarPx, ratio * chartAreaPx);
-  });
-
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
   const showTotals = daily.length <= 14;
   const selectedDaySet = new Set(selectedDays);
@@ -170,7 +161,9 @@ export function renderDailyChartCompact(
           </div>
           <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
             ${daily.map((d, idx) => {
-              const heightPx = expectDefined(barHeights[idx], "daily usage bar height");
+              const total = isTokenMode ? d.totalTokens : d.totalCost;
+              const ratio = usesCompressedScale ? Math.sqrt(total / maxValue) : total / maxValue;
+              const heightPx = total <= 0 ? 0 : Math.max(minBarPx, ratio * chartAreaPx);
               const isSelected = selectedDaySet.has(d.date);
               const showDateLabel =
                 daily.length <= 14 ||

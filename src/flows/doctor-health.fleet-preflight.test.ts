@@ -163,7 +163,7 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
       }
       expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
       expect(fs.readFileSync(captured.payloadPath)).toEqual(original);
-      expect(await inspectUpdateRecoveryBackups({ installRoot: process.cwd() })).toEqual([
+      expect(await inspectUpdateRecoveryBackups()).toEqual([
         expect.objectContaining({
           ref: expect.objectContaining({ manifestPath: captured.manifestPath }),
           runId: captured.manifest.runId,

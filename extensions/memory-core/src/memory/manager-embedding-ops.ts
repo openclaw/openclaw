@@ -73,8 +73,8 @@ type PreparedMemoryIndexEntry = {
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so
 // they cannot override the counter or break accounting when they are immutable.
-type MemoryBatchRetryResult<T> =
-  | { kind: "success"; value: T }
+type MemoryBatchRetryResult =
+  | { kind: "success"; value: number[][] | null }
   | { kind: "failure"; error: unknown; attempts: 1 | 2 };
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
@@ -304,28 +304,56 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     }
 
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
-    const batchResult = await this.runBatchWithFallback({
-      provider: provider.id,
-      run: () =>
-        batchEmbed({
-          agentId: this.agentId,
-          chunks: missingChunks,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) =>
-            log.debug(message, { ...data, source, chunks: candidates.length, ...debugContext }),
-        }),
-      fallback: () =>
-        this.embedChunksInBatches(missingCandidates, generation, EMBEDDING_BATCH_MAX_TOKENS),
-    });
-    const batchEmbeddings = batchResult.value;
-    if (!batchEmbeddings) {
-      return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
-    }
-    if (batchResult.kind === "batch") {
+    const batchResult = this.batch.enabled
+      ? await this.runBatchWithTimeoutRetry({
+          provider: provider.id,
+          run: () =>
+            batchEmbed({
+              agentId: this.agentId,
+              chunks: missingChunks,
+              wait: this.batch.wait,
+              concurrency: this.batch.concurrency,
+              pollIntervalMs: this.batch.pollIntervalMs,
+              timeoutMs: this.batch.timeoutMs,
+              debug: (message, data) =>
+                log.debug(message, { ...data, source, chunks: candidates.length, ...debugContext }),
+            }),
+        })
+      : null;
+    let batchEmbeddings: number[][];
+    // Completion accounting is synchronous: concurrent batches cannot interleave updates.
+    if (batchResult?.kind === "success") {
+      if (this.batchFailure.count > 0) {
+        log.debug("memory embeddings: batch recovered; resetting failure count");
+      }
+      // An in-flight success clears failures without re-enabling disabled batching.
+      this.batchFailure = { count: 0 };
+      if (!batchResult.value) {
+        return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
+      }
+      batchEmbeddings = batchResult.value;
       await this.persistGeneratedEmbeddings(missingCandidates, batchEmbeddings, generation);
+    } else {
+      if (batchResult) {
+        const message = formatErrorMessage(batchResult.error);
+        const forceDisable = isEmbeddingBatchUnavailableError(batchResult.error);
+        if (this.batch.enabled) {
+          const count =
+            this.batchFailure.count +
+            (forceDisable ? this.batchFailureLimit : batchResult.attempts);
+          this.batchFailure = { count, lastError: message, lastProvider: provider.id };
+          this.batch.enabled = !(forceDisable || count >= this.batchFailureLimit);
+        }
+        const suffix = this.batch.enabled ? "keeping batch enabled" : "disabling batch";
+        log.warn(
+          `memory embeddings: ${provider.id} batch failed (${this.batchFailure.count}/${this.batchFailureLimit}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+        );
+      }
+      batchEmbeddings = await this.embedChunksInBatches(
+        missingCandidates,
+        generation,
+        EMBEDDING_BATCH_MAX_TOKENS,
+      );
     }
     for (const [index, item] of missing.entries()) {
       embeddings[item.index] = batchEmbeddings[index] ?? [];
@@ -518,10 +546,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
   }
 
-  private async runBatchWithTimeoutRetry<T>(params: {
+  private async runBatchWithTimeoutRetry(params: {
     provider: string;
-    run: () => Promise<T>;
-  }): Promise<MemoryBatchRetryResult<T>> {
+    run: () => Promise<number[][] | null>;
+  }): Promise<MemoryBatchRetryResult> {
     try {
       return { kind: "success", value: await params.run() };
     } catch (error) {
@@ -536,43 +564,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     } catch (error) {
       return { kind: "failure", error, attempts: 2 };
     }
-  }
-
-  private async runBatchWithFallback<T>(params: {
-    provider: string;
-    run: () => Promise<T>;
-    fallback: () => Promise<number[][]>;
-  }): Promise<{ kind: "batch"; value: T } | { kind: "fallback"; value: number[][] }> {
-    if (!this.batch.enabled) {
-      return { kind: "fallback", value: await params.fallback() };
-    }
-    const result = await this.runBatchWithTimeoutRetry({
-      provider: params.provider,
-      run: params.run,
-    });
-    // Completion accounting is synchronous: concurrent batches cannot interleave updates.
-    if (result.kind === "success") {
-      if (this.batchFailure.count > 0) {
-        log.debug("memory embeddings: batch recovered; resetting failure count");
-      }
-      // An in-flight success clears failures without re-enabling disabled batching.
-      this.batchFailure = { count: 0 };
-      return { kind: "batch", value: result.value };
-    }
-
-    const message = formatErrorMessage(result.error);
-    const forceDisable = isEmbeddingBatchUnavailableError(result.error);
-    if (this.batch.enabled) {
-      const count =
-        this.batchFailure.count + (forceDisable ? this.batchFailureLimit : result.attempts);
-      this.batchFailure = { count, lastError: message, lastProvider: params.provider };
-      this.batch.enabled = !(forceDisable || count >= this.batchFailureLimit);
-    }
-    const suffix = this.batch.enabled ? "keeping batch enabled" : "disabling batch";
-    log.warn(
-      `memory embeddings: ${params.provider} batch failed (${this.batchFailure.count}/${this.batchFailureLimit}); ${suffix}; falling back to non-batch embeddings: ${message}`,
-    );
-    return { kind: "fallback", value: await params.fallback() };
   }
 
   protected getIndexConcurrency(): number {

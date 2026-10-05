@@ -5,6 +5,7 @@ import {
   formatErrorMessage,
   PlatformMessageNotDispatchedError,
 } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
@@ -383,9 +384,12 @@ async function requestTwilioApi(params: {
       authorization: basicAuthHeader(params.account),
     },
   } satisfies RequestInit;
-  if (params.fetchImpl) {
-    assertTwilioRequestCredentialsAvailable(params.account);
-    const response = await params.fetchImpl(params.url, init);
+  const fetchImpl = params.fetchImpl;
+  if (fetchImpl) {
+    const response = await captureEffectAuthority().initiate(() => {
+      assertTwilioRequestCredentialsAvailable(params.account);
+      return fetchImpl(params.url, init);
+    });
     return {
       ok: response.ok,
       status: response.status,

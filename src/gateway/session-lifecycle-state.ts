@@ -11,6 +11,7 @@ import { projectMainSessionRecoveryLifecycle } from "../agents/main-session-reco
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -511,6 +512,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      workerGuard: {
+        source: composeSessionSourceAssertion([
+          params.assertCommitAllowed,
+          providerReview?.assertCurrent,
+        ]),
+      },
       ...(providerReview ? { providerReviewMutation: true } : {}),
       onCommitted: () =>
         sessionChanges.emit({
@@ -520,14 +527,6 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           // The SQLite writer already published sharing facts; this adapter only projects run state.
           facts: { kind: "unchanged" },
         }),
-      ...(params.assertCommitAllowed || providerReview
-        ? {
-            assertCommitAllowed: () => {
-              params.assertCommitAllowed?.();
-              providerReview?.assertCurrent();
-            },
-          }
-        : {}),
     },
   );
   if (persisted && terminalRecovery) {

@@ -119,8 +119,8 @@ export function createSubagentSweeperHarness(
     resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
-    isCleanupOwnerCurrent: (runId, selected) =>
-      isSameSubagentRunOwner(runs.get(runId), selected) || !runs.has(runId),
+    isCleanupOwnerCurrent: (selected) =>
+      isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
     sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,
     shouldSuppressSessionEffects: async (selected) =>
       selected.execution.suppressSessionEffects === true,

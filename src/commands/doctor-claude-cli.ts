@@ -18,11 +18,19 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "../plugins/public-surface-loader.js";
 import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
 
 type ClaudeCliDirHealth = "present" | "missing" | "not_directory" | "unreadable" | "readonly";
+
+type ClaudeCliDiscoveryApi = {
+  resolveClaudeTerminalExecutable: (
+    env: NodeJS.ProcessEnv,
+    options: { pathStrategy: "direct" },
+  ) => { executable: string } | undefined;
+};
 
 function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): boolean {
   const result = spawnSync(commandPath, ["auth", "status", "--json"], {
@@ -150,7 +158,6 @@ export function noteClaudeCliHealth(
     env?: NodeJS.ProcessEnv;
     homeDir?: string;
     isAuthenticated?: (commandPath: string, env: NodeJS.ProcessEnv) => boolean;
-    resolveCommandPath?: (command: string, env?: NodeJS.ProcessEnv) => string | undefined;
     workspaceDir?: string;
   },
 ) {
@@ -167,11 +174,18 @@ export function noteClaudeCliHealth(
 
   const backend = resolveCliBackendConfig(CLAUDE_CLI_PROVIDER, cfg);
   const command = backend?.config.command ?? "claude";
-  const resolveCommandPath =
-    deps?.resolveCommandPath ??
-    ((rawCommand: string, nextEnv?: NodeJS.ProcessEnv) =>
-      resolveExecutablePath(rawCommand, { env: nextEnv }));
-  const commandPath = resolveCommandPath(command, env);
+  const commandOnPath = resolveExecutablePath(command, { env });
+  // Update workers can skip PATH bootstrap; native-install discovery stays with the plugin.
+  const claudeApi =
+    command === "claude"
+      ? loadBundledPluginPublicArtifactModuleFromCandidatesSync<ClaudeCliDiscoveryApi>({
+          dirName: "anthropic",
+          artifactCandidates: ["cli-auth-api.js"],
+        })
+      : null;
+  const commandPath = claudeApi
+    ? claudeApi.resolveClaudeTerminalExecutable(env, { pathStrategy: "direct" })?.executable
+    : commandOnPath;
   const authEnv = { ...env };
   for (const envName of backend?.config.clearEnv ?? []) {
     delete authEnv[envName];
@@ -192,6 +206,8 @@ export function noteClaudeCliHealth(
     fixHints.push(
       "- Fix: install Claude CLI on PATH for the gateway user; custom executable paths belong in a CLI backend plugin registration.",
     );
+  } else if (!commandOnPath) {
+    lines.push(`- Binary: found at ${shortenHomePath(commandPath)} (not on service PATH).`);
   }
 
   if (commandPath && !authenticated) {

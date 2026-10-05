@@ -22,9 +22,6 @@ import {
   listRuntimeVisibleChannelPlugins,
 } from "./runtime-visible-channels.js";
 
-/** Source that explains how message channel selection chose its result. */
-type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
-
 function resolveAvailableChannel(params: {
   cfg: OpenClawConfig;
   value?: string | null;
@@ -189,8 +186,6 @@ export async function resolveMessageChannelSelection(params: {
 }): Promise<{
   channel: string;
   plugin: ChannelPlugin;
-  configured: string[];
-  source: MessageChannelSelectionSource;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   const explicit = normalized
@@ -201,7 +196,7 @@ export async function resolveMessageChannelSelection(params: {
       })
     : undefined;
   if (explicit) {
-    return { ...explicit, configured: [], source: "explicit" };
+    return explicit;
   }
 
   const fallback = resolveAvailableChannel({
@@ -210,11 +205,7 @@ export async function resolveMessageChannelSelection(params: {
     agentId: params.agentId,
   });
   if (fallback) {
-    return {
-      ...fallback,
-      configured: [],
-      source: "tool-context-fallback",
-    };
+    return fallback;
   }
 
   if (normalized) {
@@ -243,8 +234,6 @@ export async function resolveMessageChannelSelection(params: {
     return {
       channel: plugin.id,
       plugin,
-      configured,
-      source: "single-configured",
     };
   }
   if (configured.length === 0) {

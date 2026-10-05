@@ -140,6 +140,8 @@ export type Slot<Input, Output> = {
   nativeSections: WorkerNativeSectionState;
   worker?: WorkerLifecycle;
   native?: RetainedNativeWorker;
+  /** Undefined until a host-declared task-protocol Worker begins construction. */
+  ready?: boolean;
   creating?: boolean;
   releaseResources?: () => Promise<void>;
   task?: Task<Input, Output>;
