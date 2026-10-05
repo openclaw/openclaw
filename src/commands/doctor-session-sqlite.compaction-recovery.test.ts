@@ -131,7 +131,6 @@ describe("runDoctorSessionSqlite", () => {
       await expect(
         recoverDoctorSessionSqliteTargets({
           env: store.env,
-          options: { mode: "recover" },
           targets: [
             { agentId: "main", storePath: sqlitePath },
             { agentId: "later", storePath: laterPath },
@@ -229,7 +228,6 @@ describe("runDoctorSessionSqlite", () => {
     const run = createSessionSqliteMigrationRun(store.env, [target]);
     const report = await recoverDoctorSessionSqliteTargets({
       env: store.env,
-      options: { mode: "recover" },
       targets: [target],
       validateTarget: async (selected) => {
         const validation = readOnlySqliteValidationSnapshot(selected);

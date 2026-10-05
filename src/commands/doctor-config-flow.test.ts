@@ -141,9 +141,9 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./doctor/shared/channel-doctor.js", () => ({
+vi.mock("./doctor/shared/channel-doctor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor/shared/channel-doctor.js")>()),
   collectChannelDoctorCompatibilityMutations: vi.fn(() => []),
-  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
   collectChannelDoctorMutableAllowlistWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(async () => []),
   collectChannelDoctorRepairMutations: vi.fn(async () => []),
@@ -154,10 +154,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => ({
       channelName === "googlechat" || channelName === "telegram",
   })),
   runChannelDoctorConfigSequences: vi.fn(async () => ({ changeNotes: [], warningNotes: [] })),
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(
-    ({ channelName }: { channelName: string }) =>
-      channelName === "googlechat" || channelName === "telegram",
-  ),
 }));
 
 vi.mock("./doctor/shared/preview-warnings.js", () => ({

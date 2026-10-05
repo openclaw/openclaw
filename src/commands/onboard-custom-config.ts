@@ -8,7 +8,6 @@ import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.j
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { buildModelAliasIndex, modelKey, type ModelRef } from "../agents/model-selection.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -176,23 +175,10 @@ export class CustomApiError extends Error {
   }
 }
 
-type ResolveCustomProviderIdParams = {
-  config: OpenClawConfig;
-  baseUrl: string;
-  providerId?: string;
-};
-
-type ResolvedCustomProviderId = {
-  providerId: string;
-  providerIdRenamedFrom?: string;
-};
-
 export function normalizeEndpointId(raw: string): string {
-  const trimmed = normalizeOptionalLowercaseString(raw);
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return normalizeLowercaseStringOrEmpty(raw)
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 /** Builds a stable custom provider id from an endpoint URL host and port. */
@@ -206,31 +192,6 @@ export function buildEndpointIdFromUrl(baseUrl: string): string {
   } catch {
     return "custom";
   }
-}
-
-function resolveUniqueEndpointId(params: {
-  requestedId: string;
-  baseUrl: string;
-  providers: Record<string, ModelProviderConfig | undefined>;
-}) {
-  const normalized = normalizeEndpointId(params.requestedId) || "custom";
-  const existing = params.providers[normalized];
-  // Azure config URLs are normalized before storage, so host equality preserves
-  // the existing provider id across deployment-path and /openai/v1 variants.
-  if (
-    !existing?.baseUrl ||
-    existing.baseUrl === params.baseUrl ||
-    (isAzureUrl(params.baseUrl) && hasSameHost(existing.baseUrl, params.baseUrl))
-  ) {
-    return { providerId: normalized, renamed: false };
-  }
-  let suffix = 2;
-  let candidate = `${normalized}-${suffix}`;
-  while (params.providers[candidate]) {
-    suffix += 1;
-    candidate = `${normalized}-${suffix}`;
-  }
-  return { providerId: candidate, renamed: true };
 }
 
 function configuredAliasModelKey(
@@ -299,7 +260,7 @@ export function normalizeOptionalProviderApiKey(value: unknown): SecretInput | u
 function resolveVerificationEndpoint(params: {
   baseUrl: string;
   modelId: string;
-  endpointPath: "chat/completions" | "responses" | "messages";
+  endpointPath: "chat/completions" | "messages";
 }) {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
@@ -398,15 +359,6 @@ export function buildAnthropicVerificationProbeRequest(params: {
   };
 }
 
-function resolveProviderApi(
-  compatibility: CustomApiCompatibility,
-): "openai-completions" | "openai-responses" | "anthropic-messages" {
-  if (compatibility === "anthropic") {
-    return "anthropic-messages";
-  }
-  return compatibility === "openai-responses" ? "openai-responses" : "openai-completions";
-}
-
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   const compatibilityRaw = normalizeOptionalLowercaseString(raw);
   if (!compatibilityRaw) {
@@ -425,9 +377,11 @@ function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   return compatibilityRaw;
 }
 
-export function resolveCustomProviderId(
-  params: ResolveCustomProviderIdParams,
-): ResolvedCustomProviderId {
+export function resolveCustomProviderId(params: {
+  config: OpenClawConfig;
+  baseUrl: string;
+  providerId?: string;
+}): { providerId: string; providerIdRenamedFrom?: string } {
   const providers = params.config.models?.providers ?? {};
   const baseUrl = params.baseUrl.trim();
   const explicitProviderId = params.providerId?.trim();
@@ -437,21 +391,23 @@ export function resolveCustomProviderId(
       "Custom provider ID must include letters, numbers, or hyphens.",
     );
   }
-  const requestedProviderId = explicitProviderId || buildEndpointIdFromUrl(baseUrl);
-  const providerIdResult = resolveUniqueEndpointId({
-    requestedId: requestedProviderId,
-    baseUrl,
-    providers,
-  });
-
-  return {
-    providerId: providerIdResult.providerId,
-    ...(providerIdResult.renamed
-      ? {
-          providerIdRenamedFrom: normalizeEndpointId(requestedProviderId) || "custom",
-        }
-      : {}),
-  };
+  const requestedId =
+    normalizeEndpointId(explicitProviderId || buildEndpointIdFromUrl(baseUrl)) || "custom";
+  const existing = providers[requestedId];
+  // Azure config URLs are normalized before storage, so host equality preserves
+  // the existing provider id across deployment-path and /openai/v1 variants.
+  if (
+    !existing?.baseUrl ||
+    existing.baseUrl === baseUrl ||
+    (isAzureUrl(baseUrl) && hasSameHost(existing.baseUrl, baseUrl))
+  ) {
+    return { providerId: requestedId };
+  }
+  let suffix = 2;
+  while (providers[`${requestedId}-${suffix}`]) {
+    suffix += 1;
+  }
+  return { providerId: `${requestedId}-${suffix}`, providerIdRenamedFrom: requestedId };
 }
 
 export function parseNonInteractiveCustomApiFlags(
@@ -591,9 +547,6 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     normalizeOptionalProviderApiKey(params.apiKey) ??
     normalizeOptionalProviderApiKey(existingApiKey);
 
-  const providerApi = isAzureOpenAi
-    ? ("azure-openai-responses" as const)
-    : resolveProviderApi(params.compatibility);
   // Azure clients use api-key headers and no bearer Authorization header.
   const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
 
@@ -607,7 +560,13 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         [providerId]: {
           ...existingProviderRest,
           baseUrl: resolvedBaseUrl,
-          api: providerApi,
+          api: isAzureOpenAi
+            ? "azure-openai-responses"
+            : params.compatibility === "anthropic"
+              ? "anthropic-messages"
+              : params.compatibility === "openai-responses"
+                ? "openai-responses"
+                : "openai-completions",
           ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
           ...(isAzure ? { authHeader: false } : {}),
           ...(azureHeaders ? { headers: azureHeaders } : {}),

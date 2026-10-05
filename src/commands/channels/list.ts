@@ -1,6 +1,5 @@
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
@@ -11,6 +10,8 @@ import {
   resolveChannelAccountStatusRows,
   type RuntimeChannelStatusPayload,
 } from "../../channels/status/read-model.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
@@ -18,11 +19,8 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
-import {
-  formatChannelAccountLabel,
-  NO_CONFIGURED_CHAT_CHANNELS_LINE,
-  requireValidChannelConfig,
-} from "./shared.js";
+import { requireValidConfig } from "../config-validation.js";
+import { formatChannelAccountLabel, NO_CONFIGURED_CHAT_CHANNELS_LINE } from "./shared.js";
 
 type ChannelsListOptions = {
   json?: boolean;
@@ -41,16 +39,6 @@ async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload |
   }
 }
 
-const colorValue = (value: string) => {
-  if (value === "none") {
-    return theme.error(value);
-  }
-  if (value === "env") {
-    return theme.accent(value);
-  }
-  return theme.success(value);
-};
-
 function formatEnabled(value: boolean | undefined): string {
   return value === false ? theme.error("disabled") : theme.success("enabled");
 }
@@ -59,16 +47,17 @@ function formatPresence(label: string, value: boolean): string {
   return value ? theme.success(label) : theme.warn(`not ${label}`);
 }
 
-function formatCredentialSource(source?: string, status?: string): string {
-  const value = source || "none";
-  if (status === "configured_unavailable" && value !== "none") {
-    return theme.warn(`${value}-unavailable`);
-  }
-  return colorValue(value);
-}
-
 function formatSource(label: string, source?: string, status?: string): string {
-  return `${label}=${formatCredentialSource(source, status)}`;
+  const value = source || "none";
+  const formatted =
+    value === "none"
+      ? theme.error(value)
+      : status === "configured_unavailable"
+        ? theme.warn(`${value}-unavailable`)
+        : value === "env"
+          ? theme.accent(value)
+          : theme.success(value);
+  return `${label}=${formatted}`;
 }
 
 function formatAccountLine(params: {
@@ -110,33 +99,20 @@ function formatAccountLine(params: {
   return `- ${label}: ${bits.join(", ")}`;
 }
 
-function formatCatalogOnlyLine(params: {
-  entry: ChannelPluginCatalogEntry;
-  installed: boolean;
-  configured: boolean;
-  repairHint?: string;
-}): string {
-  const { entry, installed, configured, repairHint } = params;
-  const channelText = theme.accent(entry.meta.label ?? entry.id);
-  const bits: string[] = [
-    formatPresence("installed", installed),
-    formatPresence("configured", configured),
-    formatEnabled(false),
-  ];
-  if (repairHint) {
-    bits.push(repairHint);
-  }
-  return `- ${channelText}: ${bits.join(", ")}`;
-}
-
 export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidChannelConfig(runtime, { skipPluginValidation: true });
-  if (!cfg) {
+  const sourceConfig = await requireValidConfig(runtime, { skipPluginValidation: true });
+  if (!sourceConfig) {
     return;
   }
+  const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
+    config: sourceConfig,
+    commandName: "channels",
+    targetIds: getChannelsCommandSecretTargetIds(),
+    runtime,
+  });
   const showAll = opts.all === true;
   const workspace = resolvePluginControlPlaneWorkspace({
     config: cfg,
@@ -326,8 +302,16 @@ export async function channelsListCommand(
     for (const line of accountLines) {
       lines.push(formatAccountLine(line));
     }
-    for (const line of catalogOnlyLines) {
-      lines.push(formatCatalogOnlyLine(line));
+    for (const { entry, installed, configured, repairHint } of catalogOnlyLines) {
+      const bits = [
+        formatPresence("installed", installed),
+        formatPresence("configured", configured),
+        formatEnabled(false),
+      ];
+      if (repairHint) {
+        bits.push(repairHint);
+      }
+      lines.push(`- ${theme.accent(entry.meta.label ?? entry.id)}: ${bits.join(", ")}`);
     }
   }
 
