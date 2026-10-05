@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { FailoverError } from "../agents/failover/error.js";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -661,6 +662,49 @@ describe("realtime voice agent consult runtime", () => {
       provider: "openai",
       model: "gpt-5.6-sol",
     });
+  });
+
+  it("records one terminal lifecycle event when a fallback model answers", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockImplementationOnce(async () => {
+      throw new FailoverError('No API key found for provider "anthropic".', {
+        reason: "auth",
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+      });
+    });
+    const lifecycle: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycle.push(evt);
+      }
+    });
+
+    try {
+      await runConsult({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-5-5",
+                fallbacks: ["openai/gpt-5.6-sol"],
+              },
+            },
+          },
+        } as never,
+        agentRuntime: runtime as never,
+        sessionKey: "voice:single-terminal",
+        runIdPrefix: "voice-realtime-consult:single-terminal",
+        args: { question: "What is on today?" },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    for (const call of runEmbeddedAgent.mock.calls) {
+      expect(call[0]?.deferTerminalLifecycle).toBe(true);
+    }
+    expect(lifecycle.map((evt) => evt.data.phase)).toEqual(["end"]);
   });
 
   it("does not replay a consult on a fallback model after a tool ran", async () => {

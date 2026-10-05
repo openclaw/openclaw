@@ -6,10 +6,15 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
 import { resolveInitialEmbeddedRunModel } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { runWithModelFallback } from "../agents/model-fallback-runner.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+} from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
 import { buildSpawnAuthorityReceipt } from "../config/sessions/session-entry-lineage.js";
@@ -19,6 +24,7 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
@@ -515,6 +521,17 @@ export async function consultRealtimeVoiceAgent(params: {
       });
       // A consult that already ran a tool may have acted; never replay it on another model.
       let toolActivity = false;
+      // The consult owns one terminal lifecycle event across its fallback attempts, like a
+      // chat reply does. Otherwise each failed candidate records its own "ended before a
+      // reply" notice in the session even when a later candidate answers.
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
+        runId,
+        sessionKey: params.sessionKey,
+        getLifecycleGeneration: () => lifecycleGeneration,
+        resolveTerminationFields: (error) =>
+          resolveAgentRunErrorLifecycleFields(error, abortSignal),
+      });
 
       // Voice consults suppress verbose/reasoning output because the bridge needs a short,
       // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
@@ -573,6 +590,8 @@ export async function consultRealtimeVoiceAgent(params: {
           onAgentToolResult: () => {
             toolActivity = true;
           },
+          deferTerminalLifecycle: true,
+          onAgentEvent: (event) => lifecycleBackstop.note(event),
         });
 
       const runPromise = runWithModelFallback({
@@ -593,7 +612,31 @@ export async function consultRealtimeVoiceAgent(params: {
             isPrimary ? params.model : model,
           );
         },
-      }).then((fallbackResult) => fallbackResult.result);
+      }).then(
+        (fallbackResult) => {
+          const attemptResult = fallbackResult.result;
+          const error = attemptResult.meta.error?.message ?? lifecycleBackstop.getDeferredError();
+          lifecycleBackstop.emit(
+            error ? "error" : "end",
+            error ? new Error(error) : attemptResult,
+            {
+              ...resolveAgentLifecycleTerminalMetadata(attemptResult.meta),
+              ...(attemptResult.meta.agentMeta?.terminalReceipt
+                ? {
+                    assistantTranscriptIdempotencyKey:
+                      attemptResult.meta.agentMeta.terminalReceipt
+                        .assistantTranscriptIdempotencyKey,
+                  }
+                : {}),
+            },
+          );
+          return attemptResult;
+        },
+        (error: unknown) => {
+          lifecycleBackstop.emit("error", error);
+          throw error;
+        },
+      );
       const result = await runPromise
         .catch((error: unknown) => {
           assertRealtimeVoiceConsultNotInterrupted(abortSignal);
