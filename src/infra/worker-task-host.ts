@@ -1,3 +1,4 @@
+import { MessageChannel } from "node:worker_threads";
 import type { WorkerTaskHost } from "@openclaw/worker-runtime";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
@@ -26,8 +27,21 @@ export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): Wo
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
       if (owner.retainedTransport) {
-        const native = createRetainedNativeWorker(url, workerOptions, source, owner.nativeResource);
-        return { worker: native, native };
+        const { port1, port2 } = new MessageChannel();
+        try {
+          const native = createRetainedNativeWorker(
+            url,
+            workerOptions,
+            source,
+            owner.nativeResource,
+            { host: port1, worker: port2 },
+          );
+          return { worker: native, native };
+        } catch (error) {
+          port1.close();
+          port2.close();
+          throw error;
+        }
       }
       return { worker: createCpuTrackedWorker(url, workerOptions) };
     },

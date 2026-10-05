@@ -24,7 +24,7 @@ export type XPage = {
 export type XPostEnvelope = { post: XPost; users: XUser[] };
 export type XFetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type XTokenState = "idle" | "refreshing" | "ready" | "error";
-export type XAssertActive = () => void | Promise<void>;
+export type XAssertActive = () => void | (() => void) | Promise<void | (() => void)>;
 
 export class XApiError extends Error {
   constructor(
@@ -182,8 +182,9 @@ export function createXApiClient(options: {
     onDispatch?: () => void,
   ) {
     if (options.fetch) {
-      await assertActive?.();
+      const assertCurrent = await assertActive?.();
       init.signal?.throwIfAborted();
+      assertCurrent?.();
       onDispatch?.();
       return options.fetch(url, init);
     }
@@ -201,8 +202,9 @@ export function createXApiClient(options: {
       policy: { hostnameAllowlist: ["api.x.com"] },
       maxRedirects: 0,
       fetchImpl: async (input, prepared) => {
-        await assertActive?.();
+        const assertCurrent = await assertActive?.();
         prepared?.signal?.throwIfAborted();
+        assertCurrent?.();
         onDispatch?.();
         return fetchWithRuntimeDispatcher(input, prepared);
       },
@@ -325,7 +327,16 @@ export function createXApiClient(options: {
           params.assertActive
             ? async () => {
                 try {
-                  await params.assertActive?.();
+                  const assertCurrent = await params.assertActive?.();
+                  return () => {
+                    try {
+                      assertCurrent?.();
+                    } catch (error) {
+                      authorityRejected = true;
+                      authorityError = error;
+                      throw error;
+                    }
+                  };
                 } catch (error) {
                   authorityRejected = true;
                   authorityError = error;

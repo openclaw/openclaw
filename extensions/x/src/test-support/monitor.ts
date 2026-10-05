@@ -11,6 +11,7 @@ export function createQueue<T>(
     beforeEnqueue?: (id: string) => Promise<void>;
     onEnqueued?: (id: string) => void;
     onCompleted?: (id: string) => void;
+    onReleased?: (id: string) => void;
   } = {},
 ): ChannelIngressQueue<T> {
   const scope = { channelId: "x", accountId: "default", queueName: "x:default" };
@@ -93,7 +94,7 @@ export function createQueue<T>(
       options.onCompleted?.(id);
       return true;
     },
-    async release(ref) {
+    async release(ref, params) {
       const id = typeof ref === "string" ? ref : ref.id;
       const claimed = claims.get(id);
       if (!claimed || (typeof ref !== "string" && claimed.claim.token !== ref.claim.token)) {
@@ -101,7 +102,14 @@ export function createQueue<T>(
       }
       claims.delete(id);
       const { claim: _claim, ...record } = claimed;
-      pending.set(id, record);
+      pending.set(id, {
+        ...record,
+        ...(params?.recordAttempt === false
+          ? {}
+          : { attempts: record.attempts + 1, lastAttemptAt: Date.now() }),
+        ...(params?.lastError ? { lastError: params.lastError } : {}),
+      });
+      options.onReleased?.(id);
       return true;
     },
     async fail(ref) {

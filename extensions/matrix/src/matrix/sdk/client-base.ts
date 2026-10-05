@@ -234,7 +234,7 @@ export abstract class MatrixClientBase {
         this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
       ),
       store: this.syncStore,
-      cryptoCallbacks: cryptoCallbacks as never,
+      cryptoCallbacks,
       verificationMethods: [
         VerificationMethod.Sas,
         VerificationMethod.ShowQrCode,
@@ -303,49 +303,13 @@ export abstract class MatrixClientBase {
     this.verificationManager ??= new runtime.MatrixVerificationManager({
       onSummaryChanged: (summary) => this.emitter.emit("verification.summary", summary),
       trustOwnDeviceAfterSas: async (deviceId: string) => {
-        const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-        if (typeof crypto?.crossSignDevice !== "function") {
-          return;
-        }
-        await crypto.crossSignDevice(deviceId);
+        await this.client.getCrypto()?.crossSignDevice(deviceId);
       },
     });
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
-      canUnlockSecretStorage: async () => {
-        const secretStorage = (
-          this.client as {
-            secretStorage?: Partial<
-              Pick<MatrixJsClient["secretStorage"], "checkKey" | "getDefaultKeyId" | "getKey">
-            >;
-          }
-        ).secretStorage;
-        // Partial test/runtime facades can omit secretStorage; forced reset must fail closed
-        // without turning missing recovery access into a noisy caught TypeError.
-        if (
-          !secretStorage ||
-          typeof secretStorage.getDefaultKeyId !== "function" ||
-          typeof secretStorage.getKey !== "function" ||
-          typeof secretStorage.checkKey !== "function"
-        ) {
-          return false;
-        }
-        const defaultKeyId = await secretStorage.getDefaultKeyId();
-        if (!defaultKeyId) {
-          return false;
-        }
-        const keyTuple = await secretStorage.getKey(defaultKeyId);
-        const key = await this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
-        if (!keyTuple || !key) {
-          return false;
-        }
-        const keyInfo = keyTuple[1];
-        if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
-          return false;
-        }
-        return await secretStorage.checkKey(key, keyInfo);
-      },
+      canUnlockSecretStorage: async () => (await this.checkSecretStorageKey()) === true,
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,
@@ -361,6 +325,29 @@ export abstract class MatrixClientBase {
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
+  }
+
+  protected async checkSecretStorageKey(expectedKeyId?: string): Promise<boolean | undefined> {
+    const secretStorage = this.client.secretStorage;
+    const defaultKeyId = await secretStorage.getDefaultKeyId();
+    if (expectedKeyId !== undefined && defaultKeyId !== expectedKeyId) {
+      return false;
+    }
+    if (!defaultKeyId) {
+      return undefined;
+    }
+    const keyTuple = await secretStorage.getKey(defaultKeyId);
+    const key = await this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
+    if (!keyTuple || !key) {
+      return undefined;
+    }
+    const keyInfo = keyTuple[1];
+    // The SDK accepts metadata without a MAC; only authenticated metadata proves this key.
+    if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
+      return undefined;
+    }
+    const valid = await secretStorage.checkKey(key, keyInfo);
+    return (await secretStorage.getDefaultKeyId()) === defaultKeyId && valid;
   }
 
   async start(opts: { abortSignal?: AbortSignal; readyTimeoutMs?: number } = {}): Promise<void> {

@@ -13,7 +13,6 @@ import {
   type BrowserObservedDialogRecord,
   type BrowserObservedState,
   type BrowserConsoleMessage,
-  type DownloadPayload,
   type PageState,
   type RoleRefs,
   type RoleRefsCacheEntry,
@@ -249,7 +248,7 @@ export function ensurePageState(page: Page): PageState {
   page.on("dialog", (dialog: Dialog) => {
     observeDialog(state, dialog);
   });
-  page.on("download", (download: DownloadPayload) => {
+  page.on("download", (download) => {
     if (state.downloadWaiterDepth > 0) {
       return;
     }

@@ -38,6 +38,13 @@ Canonical shutdown joins accepted publication and planner lease cleanup; a newer
 scheduled owner cannot be consumed by an older retired pass. Schemas, retention,
 permissions, and update behavior are unchanged.
 
+The transcript reconcile pool admits the smallest pending session backlog first,
+with original operation order breaking ties. At a completed session boundary, a
+planner yields only to a strictly smaller waiting backlog and reserves its place
+before releasing the worker. Each resumed pass refreshes its backlog in preflight;
+startup still awaits the complete rebuild. The pool retains one worker, and lease
+release tasks bypass backlog admission.
+
 Deferred agent recovery reads deletion status through the shared-state worker.
 Native preparation checks the current journal before transaction and commit
 admission without reentering SQLite on the host. These checks belong to each

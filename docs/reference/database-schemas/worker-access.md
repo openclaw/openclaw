@@ -108,6 +108,28 @@ checks current request authority before disclosure. Date preparation stays with
 the caller's timezone owner. Export streaming keeps its distinct snapshot
 lifetime. Schemas, stored bytes, permissions, and update behavior are unchanged.
 
+Transcript source scans read at most 128 events and 8 MiB of stored payload per
+page. Each page releases its deferred read transaction before the next worker
+request. The initial indexed sequence and history window fence the scan: later
+appends are excluded, and a replaced or moved window fails the scan instead of
+mixing histories. The captured physical active-path tail also fences hidden
+controls before retained off-path branches are selected. Pages walk indexed
+active positions without rebuilding the whole marker projection each time.
+Retained off-path branches use the same sequence ceiling.
+Cold reset archives prepare their navigation index in bounded steps before
+returning payload pages. Preparation can return an empty page with a continuation;
+it closes its file handle after each step. File identity invalidates the existing
+index cache, including partial preparation. Ordinary exact archive reads retain
+their oversized image recovery contract.
+An individual record above the byte bound fails explicitly; cleanup never treats
+a truncated source scan as proof that an attachment is unused.
+
+Attachment cleanup and context reports consume pages incrementally. The
+`before_reset` plugin hook, legacy model-context fallback, and unlimited HTTP
+history still require complete results; their callers collect bounded pages and
+retain the corresponding total-result memory cost. No transcript bytes, schema,
+retention policy, or update behavior change.
+
 Ordinary `chat.send` turns prepare persisted session lookups and sharing facts
 through the existing session workers. Missing rows retain the selected store's routing
 facts without opening a writable database on the Gateway thread. The router
@@ -448,6 +470,45 @@ schemas, retention, permissions, and update behavior are unchanged; this stage
 retires no T1 sites. Pending-input staging, source, and withdrawal routing remain
 separate activation prerequisites.
 
+### Incognito pending input and collaboration (P7e, inactive)
+
+Pending-input staging, source reads, processing completion, and terminal
+disposition accept an explicitly captured actor. They reuse the durable custody
+kernel on the actor's retained connection. Staging rereads its prepared snapshot
+inside the synchronous transaction; transaction and commit grants recheck live
+host custody. Confirmed commit receipts publish accepted input ownership inside
+the actor FIFO, including when the ordinary reply is lost. Unknown outcomes never
+replay. Synchronous completion refuses an actor binding and names `completeAsync`.
+Freshly staged and transcript-recovered receipts both recheck the captured binding
+authority before invoking their execution callback.
+Admission may carry the enclosing close signal; accepted persistence does not
+inherit that cancellation, and the close prelude joins settlement before transport
+teardown.
+
+Collaboration composes suggestion add, claim, release, finalization and reads,
+owner assignment, membership, participants, and categories on the same actor.
+Existing suggestion tokens and claim rules remain unchanged. Committed changes
+publish through the existing session owner while retaining the FIFO turn, before
+result disclosure rechecks authority. A lost reply invalidates the committed
+targets from the native receipt without replaying the write;
+unsupported incognito involvement keeps its existing false result without opening
+a host database.
+
+ACP startup binding cleanup can retain a prepared actor read through the existing
+Discord and Telegram binding writers. The original actor snapshot is captured
+inside its FIFO; shared ACP commit receipts invalidate prepared sources before
+later writer grants. Both binding transactions and their pre-commit grants check
+that source, and cleanup releases its retained actor custody. Nested ended-session
+and synchronous-access refusals propagate through store reads and status probes;
+a refusal discovered after an acknowledged deletion preserves its publication
+before rejecting. Default startup routing remains native in this stage.
+
+These bindings remain inactive. Production routing stays host-owned until the
+atomic activation supplies them and removes the native arms together. This stage
+adds no schema, cache, retention, durability, permission, configuration, or update
+change, and retires no T1 sites. Queued-input withdrawal retains its existing
+incognito refusal.
+
 ### Incognito history and manager reads (P7f1, inactive)
 
 Transcript-anchor, accounting, and bounded-tail facades accept an explicit
@@ -575,9 +636,21 @@ Embedded writer claims, live-model-switch consolidation, and pending-final deliv
 preparation, settlement, and cleanup explicitly select that worker patch path.
 Their reducers prepare outside the transaction; the worker rereads the selected
 rows before applying the patch and publishes acknowledged results before releasing
-the existing writer queue. Uncertain writes never replay. Lifecycle-event
-persistence, cron preparation, and opaque SDK updaters retain their existing native
-routes; these callers do not change the default patch contract. Schemas, retention,
+the existing writer queue. Uncertain writes never replay. Durable lifecycle start
+and terminal persistence select their route from prepared physical store identities.
+Same-store recovery, companion, and scoped-abort source authority prepare session
+and transcript facts through the existing read worker before submission and revalidate
+after settlement. The writer compares every typed row, membership, and transcript-version
+predicate on its own connection; these same-store lifecycle source checks never read
+the agent database from a host grant. Cross-store patches retain the native transaction:
+event-loop atomicity across stores is required while the released synchronous transcript
+SDK can mutate the source outside any async queue; revisit at the next SDK major.
+This is an explicit locality decision, never an error fallback. Incognito sources
+carry that native requirement even when their target is durable. Predicate refusals
+retain the source owner's error ordering, and accepted lifecycle writes settle
+before shutdown closes database workers. Cron preparation and opaque SDK updaters
+retain their existing routes; these callers do not change the default patch
+contract. Schemas, retention,
 durability, and update behavior are unchanged.
 
 Per-turn model selection, harness admission, local-turn placement preparation,

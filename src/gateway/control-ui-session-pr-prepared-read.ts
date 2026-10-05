@@ -83,6 +83,8 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     assertCurrent: () => void,
     projection?: ControlUiSessionPrReadContext["projection"],
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
+    const state = keyStates.get(target.params.sessionKey);
+    const previous = state?.snapshot;
     const assertActive = () => {
       if (scope.isClosing) {
         throw new Error("Session pull-request owner is closed");
@@ -91,11 +93,12 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
       target.assertCurrent?.();
     };
     const publish = (snapshot: ControlUiSessionPullRequestSnapshot) => {
-      const state = keyStates.get(target.params.sessionKey);
+      // A retry may replace stale facts, but never a newer watcher publication.
       if (
         projection !== "publication" &&
         state?.prepared &&
-        state.snapshot === undefined &&
+        keyStates.get(target.params.sessionKey) === state &&
+        state.snapshot === previous &&
         state.target.identity === target.identity
       ) {
         publishSnapshot(state, snapshot);
@@ -131,7 +134,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
       }),
     );
   };
-  const readPrepared = (target: ControlUiSessionPrTarget) => {
+  const readPrepared = (target: ControlUiSessionPrTarget, admitLoad?: () => boolean) => {
     if (scope.isClosing) {
       return undefined;
     }
@@ -142,7 +145,12 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
       state.snapshot ??= { pullRequests: [], rateLimited: false, status: "ready" };
     }
     const getProjection = deps.getSessionRowProjection;
-    if (!state.snapshot && !preparing.has(state) && getProjection) {
+    if (
+      (!state.snapshot || state.snapshot.status !== "ready" || state.snapshot.rateLimited) &&
+      !preparing.has(state) &&
+      getProjection &&
+      (!admitLoad || admitLoad())
+    ) {
       const promise = runInDetachedAsyncContext(() =>
         scope.track(async () => {
           const current = await limit(async () => {

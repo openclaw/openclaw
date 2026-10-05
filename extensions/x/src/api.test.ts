@@ -172,4 +172,41 @@ describe("X API authentication", () => {
       }),
     ).rejects.toBe(rejected);
   });
+
+  it("rechecks authority after asynchronous preparation returns and before the final fetch", async () => {
+    let active = true;
+    const rejected = new PlatformMessageNotDispatchedError("Stored grant revoked", {
+      cause: undefined,
+      retryable: false,
+    });
+    const fetcher = vi.fn<XFetch>(async (url) =>
+      Response.json(
+        url.endsWith("/oauth2/token") ? { access_token: "access" } : { data: { id: "901" } },
+      ),
+    );
+    const api = createXApiClient({
+      clientId: "client",
+      clientSecret: "secret",
+      refreshToken: "seed",
+      saveRefreshToken: async () => {},
+      fetch: fetcher,
+    });
+    await expect(
+      api.reply({
+        text: "Reply",
+        inReplyToId: "20",
+        assertActive: async () => {
+          queueMicrotask(() => {
+            active = false;
+          });
+          return () => {
+            if (!active) {
+              throw rejected;
+            }
+          };
+        },
+      }),
+    ).rejects.toBe(rejected);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
 });

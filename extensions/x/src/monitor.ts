@@ -96,7 +96,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
     abortSignal: ctx.abortSignal,
     deliver: async ({ post, users }, lifecycle) => {
       let cfg = readConfig();
-      const initial = await resolveXIngress(account.accountId, post, cfg);
+      const { ingress: initial } = await resolveXIngress(account.accountId, post, cfg);
       if (post.author_id === account.userId || !initial.senderAccess.allowed) {
         publish({ droppedMentions: stats.droppedMentions + 1, lastDroppedAuthor: post.author_id });
         log.info(`mention post=${post.id} author=${post.author_id} dropped`);
@@ -116,15 +116,22 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         accountId: account.accountId,
         peer: { kind: "group", id: post.conversation_id },
       });
-      const channelIngress = await resolveXIngress(account.accountId, post, cfg, {
+      const authorization = await resolveXIngress(account.accountId, post, cfg, {
         agentId: route.agentId,
         sessionKey: route.sessionKey,
         messageId: post.id,
         inboundEventKind: "user_request",
       });
-      if (cfg !== readConfig()) {
-        throw new Error("X routing configuration changed during admission; retrying mention");
-      }
+      const assertAdmissionCurrent = () => {
+        assertCurrent();
+        lifecycle.abortSignal.throwIfAborted();
+        authorization.assertCurrent();
+        if (cfg !== readConfig()) {
+          throw new Error("X routing configuration changed during admission; retrying mention");
+        }
+      };
+      const channelIngress = authorization.ingress;
+      assertAdmissionCurrent();
       if (!channelIngress.senderAccess.allowed) {
         publish({ droppedMentions: stats.droppedMentions + 1, lastDroppedAuthor: post.author_id });
         log.info(`mention post=${post.id} author=${post.author_id} dropped`);
@@ -164,6 +171,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       });
       const sessions: XVisibleWorkSession[] = [];
       log.info(`mention post=${post.id} author=${post.author_id} allowed`);
+      assertAdmissionCurrent();
       await core.channel.inbound.dispatch({
         cfg,
         channel: "x",

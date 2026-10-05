@@ -4,6 +4,7 @@ import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type EligibleNodeMessages,
@@ -201,8 +202,15 @@ function mobileUiActIdempotencyKey(params: { scope?: string; toolCallId: string 
   if (!stableScope || !stableCallId) {
     return crypto.randomUUID();
   }
-  const digest = sha256Hex(JSON.stringify([stableScope, stableCallId, MOBILE_UI_ACT_COMMAND]));
-  return `mobile.ui.act:v1:${digest}`;
+  const digest = sha256Hex(
+    JSON.stringify([
+      stableScope,
+      getAgentToolAssistantTurnId() ?? "",
+      stableCallId,
+      MOBILE_UI_ACT_COMMAND,
+    ]),
+  );
+  return `mobile.ui.act:v2:${digest}`;
 }
 
 function payloadRecord(payload: unknown, label: string): Record<string, unknown> {

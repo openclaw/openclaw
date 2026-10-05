@@ -72,8 +72,8 @@ export function insertPane(
   sessionKey: string,
   edge: ChatSplitEdge,
 ): ChatSplitLayout {
-  const location = findPane(layout, targetPaneId);
   const next = structuredClone(layout);
+  const location = findPane(next, targetPaneId);
   if (!location) {
     return next;
   }
@@ -91,10 +91,7 @@ export function insertPane(
     });
     next.columnWeights.splice(location.columnIndex, 1, sourceWeight / 2, sourceWeight / 2);
   } else {
-    const column = next.columns[location.columnIndex];
-    if (!column) {
-      return next;
-    }
+    const { column } = location;
     const sourceWeight = expectDefined(
       column.paneWeights[location.paneIndex],
       "split pane weight for located pane",
@@ -112,15 +109,12 @@ export function closePane(
   paneId: string,
   keepSinglePaneIds?: ReadonlySet<string>,
 ): ChatSplitLayout | undefined {
-  const location = findPane(layout, paneId);
-  if (!location) {
-    return structuredClone(layout);
-  }
   const next = structuredClone(layout);
-  const column = next.columns[location.columnIndex];
-  if (!column) {
+  const location = findPane(next, paneId);
+  if (!location) {
     return next;
   }
+  const { column } = location;
   const activeWasClosed = next.activePaneId === paneId;
   let nextActivePaneId = next.activePaneId;
   if (activeWasClosed) {

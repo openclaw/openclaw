@@ -263,7 +263,8 @@ export async function supersedePackageActivationCustody(
   }
   if (
     record.intent?.kind !== "superseded-by-manual-install" &&
-    record.intent?.kind !== "recovery-lease-identity-changed"
+    record.intent?.kind !== "recovery-lease-identity-changed" &&
+    record.intent?.kind !== "recovery-lease-missing"
   ) {
     throw new Error("Package supersession fact is missing.");
   }

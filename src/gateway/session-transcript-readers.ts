@@ -28,6 +28,11 @@ import {
   toTranscriptReadScope,
 } from "./session-transcript-read-target.js";
 import type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadOptions,
+} from "./session-transcript-read.types.js";
+import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
+import type {
   SessionTranscriptSummaryQuery,
   SessionTranscriptSummaryResult,
 } from "./session-transcript-summary.js";
@@ -75,9 +80,13 @@ function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTran
 }
 
 export async function readSessionMessagesAsync(
-  ...args: Parameters<typeof sessionTranscriptReader.readSessionMessagesAsync>
+  scope: SessionTranscriptReadScope,
+  options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
 ): Promise<unknown[]> {
-  return (await readSessionMessagesWithSourceAsync(...args)).messages;
+  if (options.mode === "recent") {
+    return (await readRecentSessionMessagesWithStatsAsync(scope, options)).messages;
+  }
+  return collectSessionTranscriptMessages(readSessionMessagesWithSourceAsync, scope, options);
 }
 
 function createHistoryPageReader<Options, Result>(
@@ -113,7 +122,8 @@ function createHistoryPageReader<Options, Result>(
 
 export const readSessionMessagesWithSourceAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesWithSourceAsync,
-  (read, target, options) => read({ kind: "source-messages", params: { target, options } }),
+  (read, target, options, signal) =>
+    read({ kind: "source-messages", params: { target, options } }, signal),
 );
 
 const readSessionTranscriptAccounting = createHistoryPageReader(

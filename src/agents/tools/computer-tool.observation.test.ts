@@ -239,11 +239,11 @@ describe("computer targeted action observations", () => {
     const requests = fixture.invoke.mock.calls.map(([request]) => request);
     const mutationRequest = expectDefined(requests[1], "first input request");
     const observationRequest = expectDefined(requests[2], "automatic observation request");
-    const mutationKey = `computer.act:v1:${createHash("sha256")
-      .update(JSON.stringify(["run-1", "click-1", "computer.act"]))
+    const mutationKey = `computer.act:v2:${createHash("sha256")
+      .update(JSON.stringify(["run-1", "", "click-1", "computer.act"]))
       .digest("hex")}`;
     expect(mutationRequest.idempotencyKey).toBe(mutationKey);
-    expect(observationRequest.idempotencyKey).toMatch(/^computer\.observation:v1:/);
+    expect(observationRequest.idempotencyKey).toMatch(/^computer\.observation:v2:/);
     expect(new Set(requests.map((request) => request.idempotencyKey)).size).toBe(5);
     expect(observationRequest.commandParams).toEqual({
       action: "get_window_state",

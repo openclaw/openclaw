@@ -95,8 +95,9 @@ export function everySessionTranscriptUserInputFrom(
   scope: SessionTranscriptReadScope,
   idempotencyKey: string,
   accept: (message: unknown) => boolean,
+  preparedProjection?: CurrentTranscriptProjection,
 ): boolean {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
+  const read = (projection: CurrentTranscriptProjection) => {
     const db = getActiveTranscriptKysely(projection.database);
     const fence = resolveSqliteSessionTranscriptReadFence({
       database: projection.database,
@@ -156,7 +157,8 @@ export function everySessionTranscriptUserInputFrom(
       }
     }
     return seen;
-  });
+  };
+  return preparedProjection ? read(preparedProjection) : withCurrentProjectionSnapshot(scope, read);
 }
 
 /** Read one active identity using the caller's existing admitted snapshot. */
