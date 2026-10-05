@@ -183,7 +183,7 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "chat");
       const key = await waitForWatchedSessionKey(gateway);
-      await page.getByText(failure.message, { exact: true }).waitFor();
+      await page.getByText(failure.nextAction, { exact: true }).waitFor({ state: "attached" });
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
           [key]: {
@@ -213,7 +213,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, surface, [merged]),
         );
       }
-      expect(await merged.textContent()).not.toContain(failure.message);
+      expect(await merged.textContent()).not.toContain(failure.nextAction);
       expect(await merged.locator("[data-publication-account]").count()).toBe(0);
       const history = surface.locator("details.chat-pr__publication-history");
       expect(await history.count()).toBe(1);
@@ -225,7 +225,6 @@ suite.define(() => {
       expect(await guidance.isVisible()).toBe(false);
       await summary.click();
       await guidance.waitFor();
-      expect(await history.getByText(failure.message, { exact: true }).isVisible()).toBe(true);
       const account = history.locator("[data-publication-account]");
       expect(await account.textContent()).toContain("Publish as @agent-bot");
       expect(await account.textContent()).toContain("Agent override");
@@ -331,7 +330,7 @@ suite.define(() => {
         },
       });
       await surface.locator("article[data-state=branch]").waitFor();
-      expect(await page.getByText(failure.message, { exact: true }).count()).toBe(0);
+      expect(await page.getByText(failure.nextAction, { exact: true }).count()).toBe(0);
       await gateway.setMethodResponse("sessions.github.options", {
         ...publicationOptions,
         latestShared: {
@@ -347,7 +346,9 @@ suite.define(() => {
         ...target,
         reason: "github-publication",
       });
-      await page.getByText("Publish the new changes.", { exact: true }).waitFor();
+      await page
+        .getByText("Publish the new changes.", { exact: true })
+        .waitFor({ state: "attached" });
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
     });

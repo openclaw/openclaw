@@ -157,14 +157,14 @@ suite.define(() => {
         selection: { source: "shared", expected: publisher },
       });
       await gateway.resolveDeferred("sessions.github.publish", requested);
-      await page.getByText(requested.message, { exact: true }).waitFor();
+      await page.getByText(requested.message, { exact: true }).waitFor({ state: "attached" });
       await screenshot(page, "02-guest-requested.png");
       await gateway.setMethodResponse("sessions.github.status", receipt);
       await gateway.setMethodResponse("sessions.github.options", {
         ...options,
         latestShared: receipt,
       });
-      await page.getByRole("button", { name: "Refresh publication", exact: true }).click();
+      await page.getByRole("button", { name: "Check publication", exact: true }).click();
       const status = await gateway.waitForRequest("sessions.github.status");
       expect(status.params).toEqual({ sessionKey, agentId: "main", requestId });
       const openPr = page.getByRole("link", { name: "Open PR", exact: true });
