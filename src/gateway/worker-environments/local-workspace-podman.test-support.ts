@@ -7,7 +7,7 @@ import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { readLocalWorkspaceProjection } from "./local-workspace-store.js";
+import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);

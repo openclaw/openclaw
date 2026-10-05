@@ -80,21 +80,22 @@ async function awaitWithinCompletionBoundary<T>(params: {
   };
   // Start only after the abort listener exists. Pool/session factories may
   // synchronously trip cancellation before returning their promise.
-  const operation = Promise.resolve()
-    .then(() => {
-      assertCurrent();
-      return params.start(remainingMs);
-    })
-    .then((value) => {
-      try {
+  const operation = () =>
+    Promise.resolve()
+      .then(() => {
         assertCurrent();
-        return value;
-      } catch (error) {
-        // Retirement can reject an acquired resource before its caller owns cleanup.
-        startBestEffortCleanup(async () => await params.cleanupLate?.(value));
-        throw error;
-      }
-    });
+        return params.start(remainingMs);
+      })
+      .then((value) => {
+        try {
+          assertCurrent();
+          return value;
+        } catch (error) {
+          // Retirement can reject an acquired resource before its caller owns cleanup.
+          startBestEffortCleanup(async () => await params.cleanupLate?.(value));
+          throw error;
+        }
+      });
   try {
     return await raceWithTimeout(
       operation,

@@ -17,12 +17,15 @@ import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
-import { readLocalWorkspaceProjection, withLocalWorkspaceStore } from "./local-workspace-store.js";
+import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
   mutateLocalWorkspaceProjection,
   readLocalWorkspaceProjectionInDatabase,
 } from "./local-workspace-store.kernel.js";
-import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
+import {
+  localWorkspaceProjectionFixture,
+  readLocalWorkspaceProjection,
+} from "./local-workspace-store.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {

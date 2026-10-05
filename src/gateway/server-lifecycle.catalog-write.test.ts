@@ -15,11 +15,13 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
 import {
-  readLocalWorkspaceProjection,
   withLocalWorkspaceStore,
   type LocalWorkspaceStore,
 } from "./worker-environments/local-workspace-store.js";
-import { localWorkspaceProjectionFixture } from "./worker-environments/local-workspace-store.test-support.js";
+import {
+  localWorkspaceProjectionFixture,
+  readLocalWorkspaceProjection,
+} from "./worker-environments/local-workspace-store.test-support.js";
 
 it("settles an accepted catalog refresh before Gateway close retires its state writer", async ({
   signal,

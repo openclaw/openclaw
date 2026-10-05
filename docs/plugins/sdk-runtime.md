@@ -28,6 +28,18 @@ register(api) {
 
 `api.runtime.version` is the current OpenClaw product version, sourced from the shared version resolver so plugins see the same value the CLI reports.
 
+`api.runtime.capabilities` is an optional, read-only list of host behavior
+guarantees. Older hosts may omit it. Check a documented capability ID before
+enabling behavior that depends on it; equal product versions and tool names do
+not establish support. These process-stable facts do not grant caller authority,
+and they remain unavailable during metadata-only registration.
+
+`sender-restricted-hidden-helpers-v1` guarantees that sender-restricted requesters
+can start only hidden helpers of the same agent, retaining their restricted tool
+surface and session root. Channels may use this capability to enable helper
+tools for restricted senders. Core remains responsible for authorization and
+containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
+
 ## What each page covers
 
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.

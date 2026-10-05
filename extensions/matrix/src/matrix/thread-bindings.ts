@@ -28,7 +28,6 @@ import {
   resolveBindingKey,
   setBindingRecord,
   setMatrixThreadBindingManagerEntry,
-  toMatrixBindingTargetKind,
   toSessionBindingRecord,
   type MatrixThreadBindingManager,
   type MatrixThreadBindingRecord,
@@ -414,8 +413,8 @@ export async function createMatrixThreadBindingManager(params: {
     reason: string | ((record: MatrixThreadBindingRecord) => string | undefined),
   ) => {
     await Promise.all(
-      removed.map(async (record) => {
-        await sendFarewellMessage({
+      removed.map((record) =>
+        sendFarewellMessage({
           cfg: params.cfg,
           client: params.client,
           accountId: params.accountId,
@@ -423,8 +422,8 @@ export async function createMatrixThreadBindingManager(params: {
           defaultIdleTimeoutMs: defaults.idleTimeoutMs,
           defaultMaxAgeMs: defaults.maxAgeMs,
           reason: typeof reason === "function" ? reason(record) : reason,
-        });
-      }),
+        }),
+      ),
     );
   };
   const unbindRecords = async (records: MatrixThreadBindingRecord[], reason: string) => {
@@ -477,7 +476,7 @@ export async function createMatrixThreadBindingManager(params: {
         accountId: params.accountId,
         conversationId: boundConversationId,
         ...(boundParentConversationId ? { parentConversationId: boundParentConversationId } : {}),
-        targetKind: toMatrixBindingTargetKind(input.targetKind),
+        targetKind: input.targetKind === "subagent" ? "subagent" : "acp",
         targetSessionKey,
         agentId:
           normalizeOptionalString(input.metadata?.agentId) ??
@@ -522,7 +521,7 @@ export async function createMatrixThreadBindingManager(params: {
       manager.touchBinding(bindingId, at);
     },
     unbind: async (input) => {
-      const removed = await unbindRecords(
+      return unbindRecords(
         listBindingsForAccount(params.accountId).filter((record) => {
           if (input.bindingId?.trim()) {
             return resolveBindingKey(record) === input.bindingId.trim();
@@ -534,7 +533,6 @@ export async function createMatrixThreadBindingManager(params: {
         }),
         input.reason,
       );
-      return removed;
     },
   };
 

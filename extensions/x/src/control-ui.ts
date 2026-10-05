@@ -201,9 +201,17 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                 </div>
                               </dl>
                               <p class="x-replies__hint">
-                                Applies to the selected bot account. Guests get answers only: no
-                                writes, commands, work sessions, or subagents. Maintainers keep
-                                their normal access.
+                                ${
+                                  snapshot.guests.helpersAvailable
+                                    ? html`Applies to the selected bot account. Guests get
+                                      repository answers with hidden helpers of the same agent. No
+                                      writes, commands, visible work sessions, or other agents.
+                                      Maintainers keep their normal access.`
+                                    : html`Applies to the selected bot account. Guests can read the
+                                      repository without starting helpers. Upgrade OpenClaw to
+                                      enable hidden helpers safely. Maintainers keep their normal
+                                      access.`
+                                }
                                 <a
                                   href="https://docs.openclaw.ai/channels/x#guest-mode"
                                   target="_blank"

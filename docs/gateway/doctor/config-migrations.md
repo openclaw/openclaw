@@ -196,6 +196,15 @@ preserved. Current SQLite state and the supported config-health importer remain
 unchanged. Plugin-binding approvals retain their original default-home scope;
 a custom state directory does not inspect another profile's approval file.
 
+Startup leaves these retired files for Doctor. When `openclaw gateway run` or
+a local `openclaw message send` prepares that state, it continues without
+importing the files, logs a warning, and retains that deferred outcome in the
+startup diagnostics. Their presence alone does not prevent bootstrap or a
+recovery restart. Gateway-routed message clients leave state preparation to the
+running Gateway.
+If this advisory inspection fails, startup records the error with guidance to
+run `openclaw doctor` and continues without changing the files.
+
 Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent

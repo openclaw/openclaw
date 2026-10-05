@@ -34,6 +34,7 @@ export const GATEWAY_SERVER_CAPS = {
   SESSION_GOAL_START: "session-goal-start-v1",
   SESSION_SETTINGS_CONTRACT: "session-settings-contract",
   SESSION_SETTINGS_CAS: "session-settings-cas-v1",
+  SENDER_RESTRICTED_HIDDEN_HELPERS: "sender-restricted-hidden-helpers-v1",
   SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",

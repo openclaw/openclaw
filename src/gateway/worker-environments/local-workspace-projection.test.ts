@@ -20,8 +20,11 @@ import {
   withSettledLocalWorkspace,
 } from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
-import { readLocalWorkspaceProjection, withLocalWorkspaceStore } from "./local-workspace-store.js";
-import { observeLocalWorkspaceStoreSql } from "./local-workspace-store.test-support.js";
+import { withLocalWorkspaceStore } from "./local-workspace-store.js";
+import {
+  observeLocalWorkspaceStoreSql,
+  readLocalWorkspaceProjection,
+} from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 let root: string;

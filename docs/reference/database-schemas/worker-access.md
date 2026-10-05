@@ -1988,6 +1988,11 @@ history reads, publishing the response in that synchronous frame. Cron run
 history keeps its recorded transcript when the live session advances. Responses
 own their nested metadata independently of resident rows.
 
+`chat.message.get` uses the same prepared rows and final sharing checks.
+Usage listings prepare store discovery and selected context reports in workers;
+usage charts and logs hydrate durable transcripts through the history reader.
+These reads preserve missing-session results, stored bytes, and update behavior.
+
 Durable RPC history pages resolve profile avatars, automation labels, and legacy
 compaction metrics before the worker serializes the bounded message array. Its
 owned UTF-8 buffer transfers once to the host; coalesced readers share those

@@ -6,11 +6,11 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerWorktreesCli } from "../../cli/worktrees-cli.js";
+import { withLocalWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
 import {
+  observeLocalWorkspaceStoreSql,
   readLocalWorkspaceProjection,
-  withLocalWorkspaceStore,
-} from "../../gateway/worker-environments/local-workspace-store.js";
-import { observeLocalWorkspaceStoreSql } from "../../gateway/worker-environments/local-workspace-store.test-support.js";
+} from "../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";

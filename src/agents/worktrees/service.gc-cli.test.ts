@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { registerWorktreesCli } from "../../cli/worktrees-cli.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { withLocalWorkspaceProjection } from "../../gateway/worker-environments/local-workspace-projection.js";
-import { readLocalWorkspaceProjection } from "../../gateway/worker-environments/local-workspace-store.js";
+import { readLocalWorkspaceProjection } from "../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";

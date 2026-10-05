@@ -34,21 +34,6 @@ export async function hasLocalWorkspaceProjection(id: string, env?: NodeJS.Proce
   return reply.exists;
 }
 
-export async function readLocalWorkspaceProjection(id: string, env?: NodeJS.ProcessEnv) {
-  const reply = await executeExistingOpenClawStateRead(
-    { env },
-    { type: "localWorkspace.get", input: { id } },
-    { current: true, live: true },
-  );
-  if (!reply) {
-    return undefined;
-  }
-  if (!reply.ok || reply.type !== "localWorkspace.get") {
-    throw new Error("Unexpected local workspace result");
-  }
-  return reply.row;
-}
-
 export type LocalWorkspaceStore = {
   signal: AbortSignal;
   workerAuthority: WorktreeWorkerAuthority;

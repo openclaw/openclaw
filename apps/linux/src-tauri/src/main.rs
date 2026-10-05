@@ -950,7 +950,6 @@ impl DesktopState {
         &self,
         app: &AppHandle,
         action: GatewayAction,
-        _selection: u64,
     ) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
@@ -1217,7 +1216,6 @@ impl DesktopState {
                                 &mut commit_pending.lock().expect("pending SSH"),
                                 TunnelRoute {
                                     id: 0,
-                                    selection,
                                     request: request.clone(),
                                     url: gateway_url.clone(),
                                 },
@@ -1511,8 +1509,8 @@ impl DesktopState {
                     }
                     let ws_url = ws_url.ok_or("Select a Gateway in the desktop app first.")?;
                     let target = desktop_bridge::session_url(ws_url, session_key, agent_id)?;
-                    if !app.state::<gateway_windows::GatewayWindows>().main_is_primary(app) {
-                        gateway_windows::show_primary_url(app, target)?;
+                    if !app.state::<gateway_windows::GatewayWindows>().main_is_primary() {
+                        gateway_windows::show_primary_route(app, Some(target))?;
                         return Ok(None);
                     }
                     if navigation.remote_dashboard {
@@ -1687,7 +1685,7 @@ impl DesktopState {
         }
     }
 
-    pub fn show_error(&self, app: &AppHandle, _error: &str) {
+    pub fn show_error(&self, app: &AppHandle) {
         let _ = self.show_local(app, "error", false, None);
         self.update_tray(&GatewaySnapshot::reconnecting("Gateway action failed."));
         tray::show_window(app);
@@ -1863,7 +1861,6 @@ impl DesktopState {
         target: &str,
         force: bool,
         expected_generation: Option<u64>,
-        reveal_window: bool,
         dashboard: bool,
     ) -> Result<bool, String> {
         let target = target.to_string();
@@ -1872,13 +1869,7 @@ impl DesktopState {
             if state.is_quitting() || !navigation.permit_local(force, expected_generation) {
                 return Ok(false);
             }
-            state.navigate_local_document(
-                &app,
-                &mut navigation,
-                &target,
-                reveal_window,
-                dashboard,
-            )?;
+            state.navigate_local_document(&app, &mut navigation, &target, false, dashboard)?;
             Ok(true)
         })
     }
@@ -1901,7 +1892,7 @@ impl DesktopState {
             {
                 return Ok(());
             }
-        } else if !windows.main_is_primary(app) {
+        } else if !windows.main_is_primary() {
             // Primary recovery must not replace an independently selected dashboard.
             return Ok(());
         }
@@ -1956,7 +1947,7 @@ impl DesktopState {
         let mut url = self.inner.local_url.clone();
         url.query_pairs_mut().clear().append_pair("mode", mode);
         // Status/watchdog updates may change the hidden WebView, but must not reveal it.
-        self.navigate_local(app, url.as_str(), force, expected_generation, false, false)
+        self.navigate_local(app, url.as_str(), force, expected_generation, false)
     }
 
     fn cancel_watchdog(&self) {
@@ -2097,7 +2088,6 @@ impl DesktopState {
                                 &ready.dashboard_url,
                                 false,
                                 Some(generation),
-                                false,
                                 true,
                             ) {
                                 Ok(true) => {
@@ -2939,17 +2929,6 @@ pub(crate) async fn confirm_gateway_primary(app: &AppHandle, name: &str) -> Resu
         .map_err(|_| "Primary Gateway confirmation was closed.".into())
 }
 
-pub(crate) async fn promote_gateway_profile(
-    app: &AppHandle,
-    request: RemoteGatewayRequest,
-    guard: gateway_windows::PromotionGuard,
-) -> Result<(), String> {
-    app.state::<GatewayOperationQueue>()
-        .execute(GatewayOperation::PromoteProfile { request, guard })
-        .await
-        .map(|_| ())
-}
-
 // Called on the native thread after the window owner retires the failed document.
 pub(crate) fn recover_primary_navigation(
     app: &AppHandle,
@@ -3468,14 +3447,14 @@ fn main() {
                     operation_state.runtime_action(&operation_app, action, selection)
                 }
                 GatewayOperation::Action(action) => {
-                    operation_state.gateway_action(&operation_app, action, selection)
+                    operation_state.gateway_action(&operation_app, action)
                 }
                 GatewayOperation::RecoverRemote { child_id } => {
                     operation_state.recover_remote(&operation_app, selection, child_id)
                 }
             },
             move |error| match error {
-                GatewayOperationError::Action(error) => error_state.show_error(&error_app, &error),
+                GatewayOperationError::Action(_) => error_state.show_error(&error_app),
                 #[cfg(target_os = "linux")]
                 GatewayOperationError::Runtime(error) => {
                     tray::show_runtime_error(&error_app, &error)

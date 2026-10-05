@@ -2,7 +2,23 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { LocalWorkspaceProjection } from "./local-workspace-store.js";
+
+export async function readLocalWorkspaceProjection(id: string, env?: NodeJS.ProcessEnv) {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "localWorkspace.get", input: { id } },
+    { current: true, live: true },
+  );
+  if (!reply) {
+    return undefined;
+  }
+  if (!reply.ok || reply.type !== "localWorkspace.get") {
+    throw new Error("Unexpected local workspace result");
+  }
+  return reply.row;
+}
 
 export function observeLocalWorkspaceStoreSql() {
   const sql = observeHostDataSql();
