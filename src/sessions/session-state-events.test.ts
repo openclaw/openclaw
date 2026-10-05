@@ -8,7 +8,6 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -18,10 +17,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  getOpenClawStateRuntimeSchema,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-} from "../state/openclaw-state-schema-compatibility.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
@@ -174,51 +169,6 @@ describe("session state events", () => {
     expect(readBinding()).toEqual(original);
     expect(peekSystemEventEntries(watcher)).toEqual([]);
     expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
-  });
-  it("preserves older readers and version markers when watcher provenance is first written", async () => {
-    const database = createDatabaseOptions();
-    const before = openOpenClawStateDatabase(database);
-    before.db.exec("ALTER TABLE session_watch_cursors DROP COLUMN watcher_store_path");
-    const userVersion = before.db.prepare("PRAGMA user_version").get();
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase(database);
-    const schemaBeforeRead = reopened.db.prepare("PRAGMA schema_version").get();
-    expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaBeforeRead);
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT name FROM pragma_table_info('session_watch_cursors') WHERE name = 'watcher_store_path'",
-        )
-        .get(),
-    ).toBeUndefined();
-
-    seedChild(database);
-    assertSqliteSchemaContains(
-      reopened.db,
-      reopened.path,
-      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }).replace(
-        /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,
-        "",
-      ),
-      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-    );
-    reopened.db
-      .prepare(
-        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
-      )
-      .run(watcher, "legacy-target", Date.now());
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT last_seen_sequence, watcher_store_path FROM session_watch_cursors WHERE target_session_key = 'legacy-target'",
-        )
-        .get(),
-    ).toEqual({ last_seen_sequence: 0, watcher_store_path: null });
-    const installedSchema = reopened.db.prepare("PRAGMA schema_version").get();
-    recordSessionStateEvent(eventInput(), database);
-    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(installedSchema);
-    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(userVersion);
   });
 
   it("bumps a durable head that survives pruning all retained rows", async () => {

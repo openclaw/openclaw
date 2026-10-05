@@ -42,7 +42,7 @@ export function executeSessionStateCommand(
       const notices: SessionStateNotice[] = [];
       for (const { watcherSessionKey, targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
-        if (!row || row.watcher_store_path !== watcherStorePath) {
+        if (!row || (row.watcher_store_path ?? null) !== watcherStorePath) {
           continue;
         }
         const material = normalizeSqliteNumber(row.material_sequence) ?? 0;

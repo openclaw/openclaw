@@ -33,12 +33,13 @@ export const sessionStateReadOperations = {
       db,
       getSessionStateKysely(db)
         .selectFrom("session_watch_cursors")
-        .select(["watcher_session_key", "target_session_key", "watcher_store_path"])
+        // Older admitted stores omit watcher_store_path until the first feature write.
+        .selectAll()
         .whereRef("material_sequence", ">", "last_seen_sequence"),
     ).rows.map((row) => ({
       watcherSessionKey: row.watcher_session_key,
       targetSessionKey: row.target_session_key,
-      watcherStorePath: row.watcher_store_path,
+      watcherStorePath: row.watcher_store_path ?? null,
     })),
   }),
   "sessionState.ambientTargets": (input: { watcherSessionKey: string }, db) => ({
