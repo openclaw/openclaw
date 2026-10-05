@@ -649,9 +649,16 @@ export function buildChatItems(
         : undefined,
       props.showToolCalls,
     );
+  const activeInput = currentRunId
+    ? props.pendingInputs?.find((input) => input.state === "queued" && input.runId === currentRunId)
+    : undefined;
   return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden)), {
     items: hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined,
     people: props.replyPeople,
     localPerson: props.replyLocalPerson,
+    activeInput:
+      activeInput && currentRunId
+        ? { runId: currentRunId, message: activeInput.message }
+        : undefined,
   });
 }

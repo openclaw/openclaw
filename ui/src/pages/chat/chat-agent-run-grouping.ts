@@ -18,6 +18,7 @@ import {
   hasForwardedSource,
 } from "./chat-turn-boundary.ts";
 import { extractMessageMediaText } from "./components/chat-message-media.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -53,10 +54,10 @@ export function chatItemGroups(item: AgentRunFrameInput | AgentRunFrameRenderIte
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
+  if (item.kind === "group") {
+    return item.runId;
+  }
   if (item.kind === "work-group") {
-    if (item.replyRunId) {
-      return item.replyRunId;
-    }
     // Matching execution IDs cannot erase a forwarded presentation boundary.
     if (item.groups.some(hasForwardedSource)) {
       return undefined;
@@ -71,20 +72,18 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
 }
 
 function itemFailsFrame(item: AgentRunFramePart): boolean {
-  // A later reply owns completed work; recovered failures remain in the log,
-  // while the reply itself determines its frame’s terminal outcome.
-  if (item.kind === "work-group" && item.replyRunId) {
-    return false;
-  }
-  return chatItemGroups(item).some((group) =>
+  const fails = (group: MessageGroup) =>
     group.messages.some(
       ({ message }) =>
         assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
-    ),
-  );
+    );
+  return item.kind === "group" ? fails(item) : chatItemGroups(item).some(fails);
 }
 
 function itemIsActive(item: AgentRunFramePart): boolean {
+  if (item.kind === "group") {
+    return item.isStreaming;
+  }
   if (item.kind === "stream-run") {
     return item.parts.some(
       (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
@@ -103,20 +102,30 @@ function groupBoundaryId(group: MessageGroup): string | undefined {
   return identity?.id ? `entry:${identity.id}` : undefined;
 }
 
-function frameKey(runId: string, boundaryId: string, segmentId: string | undefined): string {
-  return `agent-run:${JSON.stringify(segmentId ? [runId, boundaryId, segmentId] : [runId, boundaryId])}`;
+function frameKey(runId: string, segmentId: string | undefined): string {
+  // Loaded prompt context is not row identity: prepending older history must
+  // not remount an existing resumed answer and its reader controls.
+  return `agent-run:${JSON.stringify(segmentId ? [runId, segmentId] : [runId])}`;
 }
 
 function frameSegmentId(
   parts: AgentRunFramePart[],
   hardBoundaryId: string | undefined,
 ): string | undefined {
-  return (
-    hardBoundaryId ??
-    parts
-      .flatMap((part) => (part.kind === "stream-run" ? part.parts : []))
-      .find((part) => part.kind === "stream" && part.key.includes(":after:"))?.key
-  );
+  if (hardBoundaryId !== undefined) {
+    return hardBoundaryId;
+  }
+  for (const part of parts) {
+    if (part.kind === "stream-run") {
+      const segment = part.parts.find(
+        (streamPart) => streamPart.kind === "stream" && streamPart.key.includes(":after:"),
+      );
+      if (segment) {
+        return segment.key;
+      }
+    }
+  }
+  return undefined;
 }
 
 function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): boolean {
@@ -140,6 +149,10 @@ function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): b
 function completedFrameActionOwner(
   parts: AgentRunFramePart[],
 ): MessageGroup["messages"][number] | null {
+  const only = parts.length === 1 ? parts[0] : undefined;
+  if (only?.kind === "group" && only.role !== "assistant") {
+    return null;
+  }
   const messages = parts
     .flatMap(chatItemGroups)
     .flatMap((group) => (group.role === "assistant" ? group.messages : []));
@@ -192,7 +205,9 @@ export function coalesceAgentRunFrames(
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
   let boundaryId: string | undefined;
   let presentationBoundaryKey: string | undefined;
+  let steerTargetRunId: string | null = null;
   const emittedFrameKeys = new Set<string>();
+  const emittedRuns = new Set<string>();
   let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
@@ -202,22 +217,20 @@ export function coalesceAgentRunFrames(
     }
     const active = parts.some(itemIsActive);
     const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
-    if (!boundaryId && !active && !actionOwner) {
-      result.push(...parts);
-      parts = [];
-      runId = undefined;
-      return;
-    }
     // A history window can start inside a known run. This frame-local identity
     // supplies no prompt/recipient facts and must not leak into the next run.
     const frameBoundaryId = boundaryId ?? `send:${runId}`;
-    const semanticKey = frameKey(runId, frameBoundaryId, frameSegmentId(parts, segmentId));
+    const displaySegment =
+      steerTargetRunId === runId || emittedRuns.has(runId) ? presentationBoundaryKey : undefined;
+    const frameSegment = frameSegmentId(parts, segmentId ?? displaySegment);
+    const semanticKey = frameKey(runId, frameSegment);
     // A peer input can split one causal run into separate presentation rows.
     // Reopening it must not reuse the earlier row’s DOM or measured height.
     const key = emittedFrameKeys.has(semanticKey)
-      ? frameKey(runId, frameBoundaryId, JSON.stringify([presentationBoundaryKey, parts[0]!.key]))
+      ? frameKey(runId, JSON.stringify([frameSegment, parts[0]!.key]))
       : semanticKey;
-    emittedFrameKeys.add(semanticKey);
+    emittedFrameKeys.add(key);
+    emittedRuns.add(runId);
     result.push({
       kind: "agent-run-frame",
       key,
@@ -238,13 +251,15 @@ export function coalesceAgentRunFrames(
       flush();
       result.push(item);
       boundaryId = item.kind === "notice" && item.startsTurn ? item.boundaryId : undefined;
+      steerTargetRunId = null;
       segmentId = boundaryId ? undefined : item.key;
       continue;
     }
-    const boundaryGroup = chatItemGroups(item)[0];
+    const boundaryGroup = item.kind === "group" ? item : chatItemGroups(item)[0];
     if (boundaryGroup && chatItemStartsDisplayTurn(boundaryGroup)) {
       flush();
       presentationBoundaryKey = boundaryGroup.key;
+      steerTargetRunId = persistedSteerTargetRunId(boundaryGroup.messages.at(-1)?.message);
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
       if (boundaryGroup.role === "user" || hasForwardedSource(boundaryGroup) || !nextBoundaryId) {
@@ -257,7 +272,7 @@ export function coalesceAgentRunFrames(
     const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
     if (candidateBoundaryId) {
       const effectiveBoundaryId = boundaryId ?? (runId ? `send:${runId}` : undefined);
-      if (candidateBoundaryId !== effectiveBoundaryId) {
+      if (candidateBoundaryId !== effectiveBoundaryId && candidateBoundaryId !== `send:${runId}`) {
         flush();
       }
       boundaryId = candidateBoundaryId;

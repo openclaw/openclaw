@@ -280,6 +280,40 @@ describe("chat transcript replies", () => {
     return strips;
   }
 
+  it.each(["pending", "missing"] as const)(
+    "keeps an unbound run's explicit reply while its original is %s in a one-person thread",
+    (status) => {
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const props = threadProps("unbound-explicit", "agent:main:dashboard:unbound-explicit", [
+        turn("p1", "user", "Latest prompt", { ...alice, runId: "run-r" }),
+        turn("a2", "assistant", "Explicit answer to the older question", {
+          runId: "run-x",
+          replyToId: "older",
+          replyToPreview: { senderLabel: "Alice", text: "Older question" },
+        }),
+      ]);
+      props.replyMessageAccess = {
+        revision: 1,
+        navigationId: null,
+        read: () => undefined,
+        open: vi.fn(),
+        status: () => status,
+      };
+      try {
+        render(renderChatThread(props, transcript), container);
+        const strip = requireElement(container, ".chat-reply-attribution--reply");
+        expect(strip.textContent).toContain("Alice");
+        expect(strip.textContent?.includes("Original message unavailable")).toBe(
+          status === "missing",
+        );
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+      }
+    },
+  );
+
   const currentReplyCases = [
     { linkage: "the prompt that owns its run", strips: ["Alice"] },
     { linkage: "its own prompt in a 1:1 thread", latest: null, strips: [] },

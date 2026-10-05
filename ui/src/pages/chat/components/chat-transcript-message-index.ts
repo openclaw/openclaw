@@ -227,13 +227,58 @@ export function projectTranscriptChain(
       return value;
     }
   }
-  const frames = coalesceAgentRunFrames(
-    coalesceActivityRuns(
-      collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options),
-      options,
-    ),
-    options,
-  );
+  // Set execution/display ownership before any rollup can erase it. Completion
+  // changes the disclosure, never which run owns earlier tools or failures.
+  const frames: ChatRenderItem[] = [];
+  const ownedItems = coalesceAgentRunFrames(coalesceStreamRuns(chatItems), options);
+  // A steer splits display frames, not the execution. Earlier segments must not
+  // collapse and replace open controls while that same run is still working.
+  const activeRunIds = new Set<string>();
+  for (const item of ownedItems) {
+    if (item.kind === "agent-run-frame" && item.outcome.kind === "active") {
+      activeRunIds.add(item.runId);
+    }
+  }
+  let unframed: Parameters<typeof collapseCompletedTurnWork>[0] = [];
+  const flushUnframed = () => {
+    if (unframed.length === 0) {
+      return;
+    }
+    frames.push(...coalesceActivityRuns(collapseCompletedTurnWork(unframed, options), options));
+    unframed = [];
+  };
+  for (const item of ownedItems) {
+    if (item.kind !== "agent-run-frame") {
+      // The raw projection has not created work or activity rollups yet.
+      if (item.kind === "work-group" || item.kind === "activity-run") {
+        unframed.push(...item.groups);
+      } else {
+        unframed.push(item);
+      }
+      continue;
+    }
+    flushUnframed();
+    // A single part cannot form either rollup. Reuse it instead of allocating
+    // and rescanning a turn for every independent tool-only execution.
+    if (item.parts.length === 1) {
+      frames.push(item);
+      continue;
+    }
+    const parts = item.parts.flatMap((part) =>
+      part.kind === "work-group" || part.kind === "activity-run" ? part.groups : [part],
+    );
+    frames.push({
+      ...item,
+      parts: coalesceActivityRuns(
+        collapseCompletedTurnWork(parts, {
+          ...options,
+          runWorking: activeRunIds.has(item.runId),
+        }),
+        options,
+      ),
+    });
+  }
+  flushUnframed();
   const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
