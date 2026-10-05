@@ -21,7 +21,6 @@ import type {
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
-import type { PreparedAgentFacts } from "./chat-metadata-facts.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 export type ChatMetadataProjectionFacts = {
@@ -35,7 +34,7 @@ export type ChatMetadataProjectionFacts = {
 export type PreparedChatMetadataProjection = Awaited<
   ReturnType<typeof prepareChatMetadataModelProjection>
 > & {
-  agent: PreparedAgentFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
+  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
 };
 
 export function readPreparedChatMetadata(
