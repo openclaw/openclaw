@@ -1,10 +1,12 @@
 import {
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
+  type AgentHarnessCompactParams,
   type CompactEmbeddedAgentSessionParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   retainCodexAppServerLiveThread,
@@ -12,6 +14,7 @@ import {
 } from "./client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
+import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
@@ -187,4 +190,17 @@ export function warnIfIgnoringOpenClawCompactionOverrides(
       ignoredConfig,
     },
   );
+}
+
+export function resolveCodexCompactionExecutionBlock(
+  params: AgentHarnessCompactParams<2> & { sandbox?: SandboxContext | null },
+) {
+  return resolveCodexNativeExecutionBlock({
+    config: params.config,
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.sandboxAgentId ?? params.agentId,
+    sandbox: params.sandbox,
+    surface: "native compaction",
+  });
 }

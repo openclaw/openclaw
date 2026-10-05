@@ -28,6 +28,7 @@ import {
 } from "./client.js";
 import {
   clearContextEngineProjectionBeforeNativeCompaction,
+  resolveCodexCompactionExecutionBlock,
   settleCodexCompactionSubscription,
   warnIfIgnoringOpenClawCompactionOverrides,
   isCodexThreadNotFoundError,
@@ -46,7 +47,6 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import type { JsonObject } from "./protocol.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
-import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
   sessionBindingIdentity,
@@ -105,13 +105,7 @@ export async function maybeCompactCodexAppServerSession(
       },
     });
   }
-  const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
-    config: params.config,
-    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.sandboxAgentId ?? params.agentId,
-    surface: "native compaction",
-  });
+  const nativeExecutionBlock = resolveCodexCompactionExecutionBlock(params);
   if (nativeExecutionBlock) {
     return { ok: false, compacted: false, reason: nativeExecutionBlock };
   }
