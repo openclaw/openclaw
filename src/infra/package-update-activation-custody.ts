@@ -187,14 +187,21 @@ export async function supersedePackageActivationCustody(
   journal: PackageActivationJournal,
   initial: PackageActivationRecord,
   assertion: () => void,
-  reason: Extract<PackageActivationIntent, { replacementIdentity: string }>["kind"],
+  settlement:
+    | Pick<
+        Extract<PackageActivationIntent, { kind: "publication-settled-external-change" }>,
+        "kind" | "detail"
+      >
+    | {
+        kind: "superseded-by-manual-install" | "recovery-lease-identity-changed";
+      },
 ) {
   let record = initial;
   const descriptor = record.descriptor;
   const live = descriptor.authority.installKey;
   const replacementIdentity = packageActivationIdentity(live, true);
   if (
-    reason === "superseded-by-manual-install" &&
+    settlement.kind === "superseded-by-manual-install" &&
     [descriptor.previous.identity, descriptor.candidate.identity].includes(replacementIdentity)
   ) {
     throw new Error("A recorded package generation still requires its original recovery.");
@@ -240,7 +247,7 @@ export async function supersedePackageActivationCustody(
       record,
       "superseded",
       {
-        kind: reason,
+        ...settlement,
         replacementIdentity,
         settled: false,
       },
@@ -263,7 +270,8 @@ export async function supersedePackageActivationCustody(
   }
   if (
     record.intent?.kind !== "superseded-by-manual-install" &&
-    record.intent?.kind !== "recovery-lease-identity-changed"
+    record.intent?.kind !== "recovery-lease-identity-changed" &&
+    record.intent?.kind !== "publication-settled-external-change"
   ) {
     throw new Error("Package supersession fact is missing.");
   }

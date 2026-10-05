@@ -442,11 +442,12 @@ registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
 describe("gateway update.run", () => {
   test("persists the accepted handoff before parking and restarting its foreground owner", async () => {
     await withoutSupervisorHints(async () => {
-      const [installSurface, gatewayOwner, handoff, restart] = await Promise.all([
+      const [installSurface, gatewayOwner, handoff, restart, installStatus] = await Promise.all([
         import("../infra/update-runner-install-surface.js"),
         import("../infra/gateway-owner-lease.js"),
         import("../infra/update-managed-service-handoff.js"),
         import("../infra/restart.js"),
+        import("../infra/update-install-status.js"),
       ]);
       const startedAt = getFileLockProcessStartTime(process.pid);
       if (startedAt === null) {
@@ -459,6 +460,12 @@ describe("gateway update.run", () => {
         mode: "git",
         root,
         packageRoot: root,
+      });
+      // Admission must inspect the synthetic installation, not the host checkout.
+      const discovery = vi.spyOn(installStatus, "resolveStartupInstallStatus").mockResolvedValue({
+        root,
+        status: { root, installKind: "git", packageManager: "pnpm" },
+        installReceipt: null,
       });
       // The shared server starts below the CLI run loop that publishes its owner.
       const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
@@ -555,6 +562,7 @@ describe("gateway update.run", () => {
           successorOwner: transfer.mock.calls[0]?.[0],
         });
       } finally {
+        discovery.mockRestore();
         restart.resetGatewayRestartStateForInProcessRestart();
         process.off("SIGUSR2", restartSignal);
         schedule.mockRestore();

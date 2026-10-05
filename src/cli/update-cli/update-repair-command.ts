@@ -24,6 +24,7 @@ import {
 } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
+  createUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
   reconcilePackageOwnerRefusal,
@@ -82,13 +83,27 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
     const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
     if (settled) {
-      defaultRuntime.error(
-        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-          settled.retained
-            ? `Recovery evidence retained at ${settled.retained}.`
-            : "The original package and launchers remain unchanged."
-        }`,
-      );
+      const message = `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+        settled.retained
+          ? `Recovery evidence retained at ${settled.retained}.`
+          : "The original package and launchers remain unchanged."
+      }${"detail" in settled ? ` ${settled.detail}` : ""}`;
+      defaultRuntime.error(message);
+      if (settled.reason === "publication-settled-external-change") {
+        // The operation UUID identifies this repair receipt, not the original failed run.
+        // Replaying it after interrupted reporting preserves the original update outcome.
+        createUpdateRun(
+          {
+            runId: settled.operationId,
+            trigger: "cli",
+            settlement: {
+              reason: settled.reason,
+              detail: `${"detail" in settled ? settled.detail : ""} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+            },
+          },
+          options,
+        );
+      }
     }
   }
   using handoff =

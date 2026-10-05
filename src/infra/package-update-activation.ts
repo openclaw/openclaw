@@ -23,6 +23,7 @@ import {
   resolvePackageActivationRecoveryCommand as recoveryCommand,
   type PackageActivationPreparation,
 } from "./package-update-activation-prepare.js";
+import { verifyPackagePublicationSettlement } from "./package-update-activation-settlement.js";
 import {
   readReleasedPackageActivationReceipt,
   readPackageActivationRecordStatus as status,
@@ -180,7 +181,15 @@ export async function settlePendingPackageActivation(installKey: string) {
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   if (isPackageActivationComplete(anchor, initial)) {
-    return undefined;
+    // Replay the receipt if reporting was interrupted after custody settled.
+    return initial.intent?.kind === "publication-settled-external-change"
+      ? {
+          operationId: initial.descriptor.operationId,
+          reason: initial.intent.kind,
+          retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
+          detail: initial.intent.detail,
+        }
+      : undefined;
   }
   const originalAuthority = initial.descriptor.authority;
   const currentDatabase = captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath);
@@ -192,6 +201,12 @@ export async function settlePendingPackageActivation(installKey: string) {
     ? "recovery-lease-identity-changed"
     : "superseded-by-manual-install";
   const replacementIdentity = packageActivationIdentity(installKey, true);
+  const externalPublication =
+    !leaseIdentityChanged &&
+    replacementIdentity === initial.descriptor.candidate.identity &&
+    (initial.phase === "publishing" ||
+      (initial.phase === "superseded" &&
+        initial.intent?.kind === "publication-settled-external-change"));
   const publicationNotStarted =
     !leaseIdentityChanged &&
     replacementIdentity === initial.descriptor.previous.identity &&
@@ -201,6 +216,7 @@ export async function settlePendingPackageActivation(installKey: string) {
       initial.phase === "aborted");
   if (
     !publicationNotStarted &&
+    !externalPublication &&
     !leaseIdentityChanged &&
     [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
@@ -218,6 +234,26 @@ export async function settlePendingPackageActivation(installKey: string) {
       journal.assertCurrent(initial);
       if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
         throw new Error("The installed package changed before recovery settlement.");
+      }
+      if (externalPublication) {
+        const verified = await verifyPackagePublicationSettlement(
+          anchor,
+          initial,
+          fence.assertCurrent,
+        );
+        const detail =
+          initial.intent?.kind === "publication-settled-external-change"
+            ? initial.intent.detail
+            : verified.detail;
+        const kind = "publication-settled-external-change";
+        const retained = await supersedePackageActivationCustody(
+          anchor,
+          journal,
+          initial,
+          verified.assertUnchanged,
+          { kind, detail },
+        );
+        return { operationId: initial.descriptor.operationId, reason: kind, retained, detail };
       }
       if (publicationNotStarted) {
         const assertPrevious = () => {
@@ -245,7 +281,7 @@ export async function settlePendingPackageActivation(installKey: string) {
         journal,
         initial,
         fence.assertCurrent,
-        reason,
+        { kind: reason },
       );
       return { operationId: initial.descriptor.operationId, retained, reason };
     },
