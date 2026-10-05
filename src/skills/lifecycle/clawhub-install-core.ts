@@ -410,8 +410,8 @@ export async function performClawHubSkillInstall(
         timeoutMs: 120_000,
         // GitHub paths are relative to the repository root; select before checking skill markers.
         ...(github ? {} : { rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS }),
-        onExtracted: async (rootDir) =>
-          await installExtractedSkillRoot({
+        onExtracted: async (rootDir) => {
+          const result = await installExtractedSkillRoot({
             workspaceDir: installParams.workspaceDir,
             slug: installParams.slug,
             extractedRoot: github
@@ -453,16 +453,20 @@ export async function performClawHubSkillInstall(
                 `clawhub:${formatClawHubSkillRef(installParams)}@${version}`,
             },
             rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
-          }),
+          });
+          return result.ok
+            ? result
+            : ({
+                ok: false,
+                error: result.error,
+                ...(result.replacementBlocked !== undefined
+                  ? { replacementBlocked: result.replacementBlocked }
+                  : {}),
+              } satisfies InstallClawHubSkillResult);
+        },
       });
       if (!install.ok) {
-        return {
-          ok: false,
-          error: install.error,
-          ...(install.replacementBlocked !== undefined
-            ? { replacementBlocked: install.replacementBlocked }
-            : {}),
-        };
+        return install;
       }
 
       const installedAt = Date.now();
@@ -471,7 +475,6 @@ export async function performClawHubSkillInstall(
         sha256: archive.sha256Hex,
         integrity: archive.integrity,
       };
-      const verificationVersion = github ? undefined : version;
       const [{ skillFile, fileTreeSha256 }, verification] = await Promise.all([
         (files?.readInstalledClawHubSkillFiles ?? readInstalledClawHubSkillFiles)({
           skillDir: install.targetDir,
@@ -480,7 +483,7 @@ export async function performClawHubSkillInstall(
           slug: params.slug,
           ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
           ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
-          version: verificationVersion,
+          version: github ? undefined : version,
           baseUrl: params.baseUrl,
           logger: params.logger,
         }),
