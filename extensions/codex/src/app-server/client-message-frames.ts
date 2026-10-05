@@ -1,3 +1,49 @@
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { RpcRequest, RpcResponse } from "./protocol.js";
+import type { CodexAppServerTransport } from "./transport.js";
+
+export function createCodexAppServerMessageWriter(options: {
+  getTransport: () => CodexAppServerTransport;
+  isClosed: () => boolean;
+  onNativeExecution: () => void;
+}) {
+  return (
+    message: RpcRequest | RpcResponse,
+    onError?: (error: Error) => void,
+    beforeWrite?: () => void,
+    onWriteResult?: (error?: Error | null) => void,
+  ): void => {
+    if (options.isClosed()) {
+      return;
+    }
+    const child = options.getTransport();
+    const id = "id" in message ? message.id : undefined;
+    const method = "method" in message ? message.method : undefined;
+    const frame = stringifyCodexAppServerMessage(message);
+    // Reject locally before declaring a possible write. Images count toward the
+    // transport frame limit even though Codex's text-input limit excludes them.
+    if (child.maxFrameBytes && Buffer.byteLength(frame) > child.maxFrameBytes) {
+      throw new Error(
+        "Codex request exceeds the transport frame limit; reduce attached images or context.",
+      );
+    }
+    beforeWrite?.();
+    if (method === "command/exec") {
+      options.onNativeExecution();
+    }
+    child.stdin.write(`${frame}\n`, (error?: Error | null) => {
+      onWriteResult?.(error);
+      if (error) {
+        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+        onError?.(error);
+      }
+    });
+  };
+}
+
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 /** One byte reader owns framing and stops at an asynchronous page decode. */
 export function listenCodexAppServerLines(
   input: NodeJS.ReadableStream,
@@ -179,4 +225,12 @@ export function readCodexCatalogDecodeRoute(line: Buffer): CodexCatalogDecodeRou
     }
   }
   return response || route ? "unresolved" : undefined;
+}
+
+function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {
+  return (
+    JSON.stringify(message, (_key, value) =>
+      typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
+    ) ?? "null"
+  );
 }

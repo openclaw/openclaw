@@ -1039,7 +1039,6 @@ describe("buildCodexMigrationProvider", () => {
     "installs selected $marketplace plugins as soon as the catalog loads",
     async ({ marketplace, initiallyMissing }) => {
       const fixture = await createCodexFixture();
-      const reportDir = path.join(fixture.root, "report");
       const configState = configWithCodex(fixture, {
         appServer: { command: "migration-codex", sandbox: "workspace-write" },
       });
@@ -1090,13 +1089,11 @@ describe("buildCodexMigrationProvider", () => {
           throw new Error(`unexpected request ${method}`);
         },
       );
-      const provider = buildCodexMigrationProvider({
+      const result = await buildCodexMigrationProvider({
         runtime: createConfigRuntime(configState),
-      });
-
-      const result = await provider.apply(
+      }).apply(
         contextFor(fixture, {
-          reportDir,
+          reportDir: path.join(fixture.root, "report"),
           config: configState,
         }),
       );

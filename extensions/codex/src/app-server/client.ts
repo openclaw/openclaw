@@ -24,6 +24,7 @@ import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
 import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
 import {
   listenCodexAppServerLines,
+  createCodexAppServerMessageWriter,
   readCodexCatalogDecodeRoute,
   type CodexCatalogDecodeRoute,
 } from "./client-message-frames.js";
@@ -69,8 +70,6 @@ import {
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
-const UNPAIRED_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 export {
   getCodexAppServerClientInstanceId,
@@ -787,40 +786,13 @@ export class CodexAppServerClient {
     }
   }
 
-  private writeMessage(
-    message: RpcRequest | RpcResponse,
-    onError?: (error: Error) => void,
-    beforeWrite?: () => void,
-    onWriteResult?: (error?: Error | null) => void,
-  ): void {
-    if (this.closed) {
-      return;
-    }
-    const id = "id" in message ? message.id : undefined;
-    const method = "method" in message ? message.method : undefined;
-    const frame =
-      JSON.stringify(message, (_key, value) =>
-        typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
-      ) ?? "null";
-    // Reject locally before declaring a possible write. Images count toward the
-    // transport frame limit even though Codex's text-input limit excludes them.
-    if (this.child.maxFrameBytes && Buffer.byteLength(frame) > this.child.maxFrameBytes) {
-      throw new Error(
-        "Codex request exceeds the transport frame limit; reduce attached images or context.",
-      );
-    }
-    beforeWrite?.();
-    if (method === "command/exec") {
+  private readonly writeMessage = createCodexAppServerMessageWriter({
+    getTransport: () => this.child,
+    isClosed: () => this.closed,
+    onNativeExecution: () => {
       this.nativeExecutionObserved = true;
-    }
-    this.child.stdin.write(`${frame}\n`, (error?: Error | null) => {
-      onWriteResult?.(error);
-      if (error) {
-        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
-        onError?.(error);
-      }
-    });
-  }
+    },
+  });
 
   /** Protect private loopback route capabilities before native diagnostics can mention them. */
   protectPrivateTransportSecret(secret: string): void {
