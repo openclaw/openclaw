@@ -113,6 +113,7 @@ const {
   getOnHandler,
   listSkillCommandsForAgents,
   onSpy,
+  readChannelAllowFromStore,
   replySpy,
   resolveExecApprovalSpy,
   sendMessageSpy,
@@ -1054,6 +1055,18 @@ describe("createTelegramBot", () => {
       expectedConfigReads: 1,
     },
     {
+      name: "blocks unpaired DM model selections",
+      telegram: { dmPolicy: "pairing", capabilities: { inlineButtons: "dm" } },
+      modelStore: "callback-authz",
+      emptyPairingStore: true,
+      callback: {
+        id: "cbq-model-authz-bypass-1",
+        data: "mdl_sel_openai/gpt-5.4",
+        from: { id: 999, first_name: "Mallory", username: "mallory" },
+        message: { message_id: 19 },
+      },
+    },
+    {
       name: "recomputes group model authorization from runtime commands",
       telegram: {
         dmPolicy: "open",
@@ -1108,6 +1121,7 @@ describe("createTelegramBot", () => {
     config?: Omit<OpenClawConfig, "channels">;
     startupCommands?: OpenClawConfig["commands"];
     modelStore?: string;
+    emptyPairingStore?: boolean;
     refreshAfterStartup?: boolean;
     expectedConfigReads?: number;
     callback: TelegramCallbackQueryOverrides;
@@ -1119,6 +1133,7 @@ describe("createTelegramBot", () => {
       config: rootConfig,
       startupCommands,
       modelStore,
+      emptyPairingStore,
       refreshAfterStartup,
       expectedConfigReads,
       callback,
@@ -1133,6 +1148,9 @@ describe("createTelegramBot", () => {
         ...(startupCommands ? { commands: startupCommands } : {}),
       };
       loadConfig.mockReturnValue(refreshAfterStartup ? startupConfig : config);
+      if (emptyPairingStore) {
+        readChannelAllowFromStore.mockResolvedValueOnce([]);
+      }
       const callbackHandler = await createCallbackHandler({ config: startupConfig });
       if (refreshAfterStartup) {
         loadConfig.mockReturnValue(config);

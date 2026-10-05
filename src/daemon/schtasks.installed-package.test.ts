@@ -636,14 +636,23 @@ describe("installed fingerprint source qualification", () => {
     expect(verifyInstalledFingerprintSource({ ...repo, toolingSha })).toEqual(paths.toSorted());
   });
 
-  it("rejects production renamed into a reviewed fixture", () => {
-    const repo = createRepository();
-    repo.git("mv", "--force", productionPath, fixturePath);
-    const toolingSha = repo.commit();
-    expect(() => verifyInstalledFingerprintSource({ ...repo, toolingSha })).toThrow(
-      `Candidate source differs outside reviewed proof fixtures: ${productionPath}`,
-    );
-  });
+  it.each(["production", "unreviewed test", "rename"])(
+    "rejects %s changes outside reviewed fixtures",
+    (kind) => {
+      const repo = createRepository();
+      const filename =
+        kind === "unreviewed test" ? "src/daemon/schtasks.unreviewed.test.ts" : productionPath;
+      if (kind === "rename") {
+        repo.git("mv", "--force", productionPath, fixturePath);
+      } else {
+        repo.write(filename);
+      }
+      const toolingSha = repo.commit();
+      expect(() => verifyInstalledFingerprintSource({ ...repo, toolingSha })).toThrow(
+        `Candidate source differs outside reviewed proof fixtures: ${filename}`,
+      );
+    },
+  );
 
   it.each(["wrong HEAD", "staged", "invalid pins"])(
     "rejects an unqualified source checkout: %s",

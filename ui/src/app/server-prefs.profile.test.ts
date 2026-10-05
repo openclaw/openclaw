@@ -163,10 +163,10 @@ describe("profile-bound appearance preferences", () => {
     expect(loadSettings()).toMatchObject({ ...mirror, chatShowThinking: false });
   });
 
-  it("persists a fontUi reset during profile loading", async () => {
-    const key = "fontUi";
-    const saved = "geist";
-    const fallback = undefined;
+  it.each([
+    ["theme", "rose", "absolutely"],
+    ["fontUi", "geist", undefined],
+  ] as const)("persists a %s reset during profile loading", async (key, saved, fallback) => {
     const preferenceKey = UI_APPEARANCE_PREFERENCE_KEYS[key];
     const config = configWithPrefs({ [key]: fallback });
     const savedEntries = { [preferenceKey]: saved };
@@ -194,9 +194,13 @@ describe("profile-bound appearance preferences", () => {
         }
         return { status: "ok", entries };
       }
-      expect(method).toBe("users.prefs.set");
-      expect(params).toEqual({ entries: { [preferenceKey]: null } });
-      entries = {};
+      expect(method).toBe(key === "theme" ? "themes.set" : "users.prefs.set");
+      expect(params).toEqual(
+        key === "theme"
+          ? { id: null, appearance: { accent: "theme", fontUi: null, fontChat: null } }
+          : { entries: { [preferenceKey]: null } },
+      );
+      entries = key === "theme" ? { "ui.accent": "theme" } : {};
       return { status: "ok" };
     });
     const writer = createWriter(request, false);
@@ -212,6 +216,7 @@ describe("profile-bound appearance preferences", () => {
     const delta = changedServerUiPrefs(previous, next);
     expect(delta).toEqual({
       [key]: null,
+      ...(key === "theme" ? { accent: "theme", fontUi: null, fontChat: null } : {}),
     });
     const committed = vi.fn();
     pushServerUiPrefs(writer, delta!, { profileId, canWrite: true, afterCommit: committed });
@@ -222,7 +227,7 @@ describe("profile-bound appearance preferences", () => {
     delayed.resolve({ status: "ok", entries: savedEntries });
     await pending;
     expect(loadSettings()[key]).toBe(fallback);
-    expect(entries).toEqual({});
+    expect(entries).toEqual(key === "theme" ? { "ui.accent": "theme" } : {});
 
     resetServerUiPrefsSync();
     const reloaded = createWriter(request);
@@ -230,7 +235,7 @@ describe("profile-bound appearance preferences", () => {
     expect(loadSettings()[key]).toBe(fallback);
   });
 
-  it.each([profileId])(
+  it.each([profileId, null])(
     "cancels a queued profile edit when reset after disconnect (%s)",
     async (profileIdAtEdit) => {
       const config = configWithPrefs({ accent: "#abcdef" });

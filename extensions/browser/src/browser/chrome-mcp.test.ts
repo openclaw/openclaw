@@ -1750,6 +1750,33 @@ describe("chrome MCP page parsing", () => {
     expect(factoryCalls).toBe(2);
   });
 
+  it("creates a fresh session when userDataDir changes for the same profile", async () => {
+    const createdSessions: ChromeMcpSession[] = [];
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factoryCalls: Array<{ profileName: string; userDataDir?: string }> = [];
+    const factory: ChromeMcpSessionFactory = async (profileName, options) => {
+      factoryCalls.push({ profileName, userDataDir: options?.userDataDir });
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      session.client.close = closeMock as typeof session.client.close;
+      createdSessions.push(session);
+      closeMocks.push(closeMock);
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/brave-a" });
+    await listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/brave-b" });
+
+    expect(factoryCalls).toEqual([
+      { profileName: "chrome-live", userDataDir: "/tmp/brave-a" },
+      { profileName: "chrome-live", userDataDir: "/tmp/brave-b" },
+    ]);
+    expect(createdSessions).toHaveLength(2);
+    expect(closeMocks[0]).toHaveBeenCalledTimes(1);
+    expect(closeMocks[1]).not.toHaveBeenCalled();
+  });
+
   it("clears cached sessions after repeated stale selected-page failures", async () => {
     let factoryCalls = 0;
     const factory: ChromeMcpSessionFactory = async () => {

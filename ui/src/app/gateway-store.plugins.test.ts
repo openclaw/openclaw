@@ -345,7 +345,7 @@ describe("warm admission ownership", () => {
     },
   );
 
-  it.each(["credential edit"])(
+  it.each(["rejection", "credential edit"])(
     "retires captured legacy and live owners after hello on %s",
     (transition) => {
       const settings = { ...loadSettings(), token: "test-token" };

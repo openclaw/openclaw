@@ -40,6 +40,8 @@ afterEach(() => {
 describe("pending Gateway credentials", () => {
   it.each([
     ["wss://gateway.example", "Bearer document-gateway-token"],
+    ["wss://gateway.example/other", null],
+    ["wss://gateway.example?tenant=other", null],
     ["wss://other-gateway.example", null],
   ])(
     "scopes browser recovery credentials to the document Gateway (%s)",

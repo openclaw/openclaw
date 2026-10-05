@@ -247,6 +247,20 @@ describe("createApplicationGateway authentication diagnostics", () => {
     expect(current().opts.bootstrapProfile).toBeUndefined();
   });
 
+  it("does not reload the serving document for a remote Gateway", async () => {
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    gateway.connect({
+      gatewayUrl: "wss://other-gateway.example",
+      bootstrapToken: "synthetic-remote-bootstrap",
+      bootstrapProfile: "owner",
+    });
+    rejectStaleBuild();
+    await nextTurn();
+    expect(replace).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(gateway.snapshot.phase).toBe("reload-required");
+  });
+
   it.each([
     { authReason: "trusted_proxy_user_not_allowed", expected: "trusted_proxy_user_not_allowed" },
   ])("projects only a current recognized auth reason: $authReason", ({ authReason, expected }) => {
