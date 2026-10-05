@@ -75,15 +75,26 @@ describe("X event transport", () => {
       data: { event_type: "post.mention.create", payload: { text: "private content" } },
       errors: [],
     });
+    const ignored = JSON.stringify({ data: { event_type: "post.create", payload: post("19") } });
     try {
       await vi.advanceTimersByTimeAsync(0);
+      for (let index = 0; index < 4; index++) {
+        test.send(ignored);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.warning).not.toHaveBeenCalled();
+      expect(test.admitted).toEqual([]);
       test.send(bad);
       test.send("");
+      test.send(ignored);
       test.send(bad);
       await vi.advanceTimersByTimeAsync(0);
       expect(test.warning).not.toHaveBeenCalled();
       test.send(bad);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.warning).toHaveBeenCalledOnce();
       test.send(bad);
+      test.send(ignored);
       await vi.advanceTimersByTimeAsync(0);
       expect(test.warning).toHaveBeenCalledOnce();
       const message = test.warning.mock.calls[0]![0];

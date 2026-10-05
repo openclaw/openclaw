@@ -126,10 +126,11 @@ recovers mentions missed by the stream. Only completed backfill pages advance
 the cursor, so newer stream events cannot hide older missed mentions. Post IDs
 deduplicate stream and polling events.
 
-After three consecutive non-keep-alive lines cannot be parsed, the plugin logs
-one warning and shows it in the channel status `message`. It includes the event
-type and top-level keys, without post content. The next parseable mention event
-clears the warning.
+After three consecutive unparseable mention events or malformed lines, the
+plugin logs one warning and shows it in the channel status `message`. Blank
+keep-alives and intentionally ignored event types do not count toward this
+warning. It includes the event type and top-level keys, without post content.
+The next parseable mention event clears the warning.
 
 In `auto` mode, any subscription setup failure switches to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the

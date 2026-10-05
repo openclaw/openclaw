@@ -170,9 +170,12 @@ async function receiveStream(options: XReceiveOptions, backfillMs: number): Prom
         }
         const envelope = eventEnvelope(value);
         if (!envelope) {
+          const event = asRecord(value);
+          const type = asRecord(event.data).event_type;
+          if (typeof type === "string" && type !== "post.mention.create") {
+            continue;
+          }
           if (++unparsed === 3) {
-            const event = asRecord(value);
-            const type = asRecord(event.data).event_type;
             const message = `X activity stream: 3 consecutive events could not be parsed; type=${JSON.stringify(typeof type === "string" ? type.slice(0, 96) : "unknown")} keys=${JSON.stringify(
               Object.keys(event)
                 .slice(0, 20)
