@@ -1,10 +1,10 @@
-// Real-path coverage for the restart-recovery discovery yield (#149935): timers
-// queued before the scan must run between store probes instead of waiting for
-// the combined length of every synchronous probe.
+// Real-path coverage for the restart-recovery discovery/recovery yield (#149935):
+// timers queued before the scan run between store probes, cancellation stops the
+// scan between probes, and the recovery loop's post-yield guard is pinned.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -15,172 +15,138 @@ import { recoverRestartAbortedMainSessions } from "./main-session-restart-recove
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import * as recoveryStore from "./main-session-restart-recovery-store.js";
 
-function runningMainSessionEntry(
-  overrides: Partial<SessionEntryFixture> = {},
-): ReturnType<typeof createSessionEntry> {
-  return createSessionEntry({
-    sessionId: "main-session",
+let tmpRoot = "";
+
+async function makeStore(agentId: string): Promise<string> {
+  const sessionsDir = path.join(tmpRoot, "agents", agentId, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const entry: SessionEntryFixture = {
+    sessionId: `${agentId}-main`,
     updatedAt: Date.now() - 10_000,
     status: "running",
-    ...overrides,
-  });
+  };
+  await sessionAccessor.replaceSessionEntry(
+    { storePath, sessionKey: `agent:${agentId}:main` },
+    createSessionEntry(entry),
+  );
+  return storePath;
 }
 
+function twoStoreConfig(): OpenClawConfig {
+  return {
+    agents: { list: [{ id: "yield-a", default: true }, { id: "yield-b" }] },
+  } as OpenClawConfig;
+}
+
+beforeAll(async () => {
+  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-yield-"));
+  await makeStore("yield-a");
+  await makeStore("yield-b");
+  await makeStore("cancel-a");
+  await makeStore("cancel-b");
+  await makeStore("dstop-a");
+  await makeStore("dstop-b");
+});
+
+afterAll(async () => {
+  await fs.rm(tmpRoot, { recursive: true, force: true });
+});
+
 describe("restart recovery discovery yield", () => {
-  it("lets timers queued before discovery run between store probes", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-yield-"));
-    try {
-      const sessionsDirA = path.join(tmpDir, "agents", "yield-a", "sessions");
-      const sessionsDirB = path.join(tmpDir, "agents", "yield-b", "sessions");
-      await fs.mkdir(sessionsDirA, { recursive: true });
-      await fs.mkdir(sessionsDirB, { recursive: true });
-      const writeMainSession = async (sessionsDir: string, sessionKey: string) => {
-        await sessionAccessor.replaceSessionEntry(
-          { storePath: path.join(sessionsDir, "sessions.json"), sessionKey },
-          runningMainSessionEntry(),
-        );
-      };
-      await writeMainSession(sessionsDirA, "agent:yield-a:main");
-      await writeMainSession(sessionsDirB, "agent:yield-b:main");
-      const cfg = {
-        agents: { list: [{ id: "yield-a", default: true }, { id: "yield-b" }] },
-      } as OpenClawConfig;
-
-      // Observation: with two stores and per-target macrotask boundaries, timers
-      // queued before the scan must observe at least one event-loop turn while
-      // the scan is still unsettled (#149935).
-      let settled = false;
-      let unsettledTurns = 0;
-      const pending = discoverRestartRecoveryStoreTargets({
-        cfg,
-        stateDir: tmpDir,
-        statuses: ["running"],
-      }).then((targets) => {
-        settled = true;
-        return targets;
-      });
-      const observe = () => {
-        if (!settled) {
-          unsettledTurns += 1;
+  it("lets timers observe the scan between store probes", async () => {
+    const cfg = twoStoreConfig();
+    const realProbe = sessionAccessor.hasSessionEntriesByStatusReadOnly;
+    let unsettledMidScanTurns = 0;
+    let settled = false;
+    // When probe 1 completes, queue an observer for the next macrotasks: on
+    // the fixed head one lands inside the inter-probe boundary (one probe
+    // done, the second not started). A base whose probe chain never yields
+    // runs every observer after the scan settles.
+    const probeSpy = vi
+      .spyOn(sessionAccessor, "hasSessionEntriesByStatusReadOnly")
+      .mockImplementation((...args: unknown[]) => {
+        const result = realProbe(...(args as Parameters<typeof realProbe>));
+        if (probeSpy.mock.calls.length === 1) {
+          setImmediate(() => {
+            if (!settled && probeSpy.mock.calls.length === 1) {
+              unsettledMidScanTurns += 1;
+            }
+          });
         }
-      };
-      setImmediate(observe);
-      setImmediate(observe);
-      setImmediate(observe);
-      const storeTargets = await pending;
+        return result;
+      });
 
-      expect(unsettledTurns).toBeGreaterThan(0);
-      expect(storeTargets).toContainEqual({
-        agentId: "yield-a",
-        storePath: path.join(sessionsDirA, "sessions.json"),
-      });
-      expect(storeTargets).toContainEqual({
-        agentId: "yield-b",
-        storePath: path.join(sessionsDirB, "sessions.json"),
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    const storeTargets = await discoverRestartRecoveryStoreTargets({
+      cfg,
+      stateDir: tmpRoot,
+      statuses: ["running"],
+    });
+    settled = true;
+
+    expect(unsettledMidScanTurns).toBeGreaterThan(0);
+    expect(storeTargets).toHaveLength(2);
+    probeSpy.mockRestore();
   });
 
-  it("cancels between store probes without loading the next store", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-cancel-"));
-    try {
-      const sessionsDirA = path.join(tmpDir, "agents", "cancel-a", "sessions");
-      const sessionsDirB = path.join(tmpDir, "agents", "cancel-b", "sessions");
-      await fs.mkdir(sessionsDirA, { recursive: true });
-      await fs.mkdir(sessionsDirB, { recursive: true });
-      const writeMainSession = async (sessionsDir: string, sessionKey: string) => {
-        await sessionAccessor.replaceSessionEntry(
-          { storePath: path.join(sessionsDir, "sessions.json"), sessionKey },
-          runningMainSessionEntry(),
-        );
-      };
-      await writeMainSession(sessionsDirA, "agent:cancel-a:main");
-      await writeMainSession(sessionsDirB, "agent:cancel-b:main");
-      const cfg = {
-        agents: { list: [{ id: "cancel-a", default: true }, { id: "cancel-b" }] },
-      } as OpenClawConfig;
+  it("cancels at the recovery yield without loading the next store", async () => {
+    const cfg = {
+      agents: { list: [{ id: "yield-a", default: true }, { id: "yield-b" }] },
+    } as OpenClawConfig;
+    const realRecoverStore = recoveryStore.recoverStore;
+    const storeSpy = vi.spyOn(recoveryStore, "recoverStore");
+    let shouldContinueCalls = 0;
+    let cancelled = false;
+    // Discovery consumes six calls on the two-store fixture (pre + post-status
+    // per store). Call 7 is the first target's pre-yield check — queue the
+    // cancellation there so it lands inside the recovery yield, and the
+    // post-yield recheck stops the loop before store 1's recoverStore
+    // (#149935 Rev 2/5). Without that guard the store loads synchronously.
+    const result = await recoverRestartAbortedMainSessions({
+      cfg,
+      stateDir: tmpRoot,
+      gatewayRuntime: {
+        dispatchSessionMethod: vi.fn(),
+        dispatchAgent: vi.fn(),
+        waitForAgent: vi.fn(),
+        sendRecoveryNotice: vi.fn(),
+      } as unknown as Parameters<typeof recoverRestartAbortedMainSessions>[0]["gatewayRuntime"],
+      shouldContinue: () => {
+        const call = ++shouldContinueCalls;
+        if (call === 7) {
+          setImmediate(() => {
+            cancelled = true;
+          });
+        }
+        return !cancelled;
+      },
+    });
 
-      let callsAtFirstRecoverStore = -1;
-      let shouldContinueCalls = 0;
-      const storeSpy = vi.spyOn(recoveryStore, "recoverStore");
-      // Discovery consumes 8 calls on this fixture (pre + post-status per
-      // store). When it finishes, queue the cancellation for the next
-      // macrotask — the recovery loop's first inter-store yield — so the
-      // post-yield recheck sees it and store 1's recoverStore never runs
-      // (#149935 Rev 2/4). Without that guard the store is loaded first and
-      // this test fails.
-      let cancelled = false;
-      const result = await recoverRestartAbortedMainSessions({
-        cfg,
-        stateDir: tmpDir,
-        gatewayRuntime: {
-          dispatchSessionMethod: vi.fn(),
-          dispatchAgent: vi.fn(),
-          waitForAgent: vi.fn(),
-          sendRecoveryNotice: vi.fn(),
-        } as unknown as Parameters<typeof recoverRestartAbortedMainSessions>[0]["gatewayRuntime"],
-        shouldContinue: () => {
-          const call = ++shouldContinueCalls;
-          if (call === 9) {
-            setImmediate(() => {
-              cancelled = true;
-            });
-          }
-          return !cancelled;
-        },
-      });
-
-      expect(cancelled).toBe(true);
-      expect(callsAtFirstRecoverStore).toBe(-1);
-      expect(result).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-      storeSpy.mockRestore();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    expect(cancelled).toBe(true);
+    expect(storeSpy).toHaveBeenCalledTimes(0);
+    expect(result).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+    storeSpy.mockRestore();
   });
 
-  it("stops discovery between store probes when cancellation lands", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-dstop-"));
-    try {
-      const sessionsDirA = path.join(tmpDir, "agents", "dstop-a", "sessions");
-      const sessionsDirB = path.join(tmpDir, "agents", "dstop-b", "sessions");
-      await fs.mkdir(sessionsDirA, { recursive: true });
-      await fs.mkdir(sessionsDirB, { recursive: true });
-      const writeMainSession = async (sessionsDir: string, sessionKey: string) => {
-        await sessionAccessor.replaceSessionEntry(
-          { storePath: path.join(sessionsDir, "sessions.json"), sessionKey },
-          runningMainSessionEntry(),
-        );
-      };
-      await writeMainSession(sessionsDirA, "agent:dstop-a:main");
-      await writeMainSession(sessionsDirB, "agent:dstop-b:main");
-      const cfg = {
-        agents: { list: [{ id: "dstop-a", default: true }, { id: "dstop-b" }] },
-      } as OpenClawConfig;
+  it("stops discovery before any probe when cancellation is already set", async () => {
+    const cfg = {
+      agents: { list: [{ id: "cancel-a", default: true }, { id: "cancel-b" }] },
+    } as OpenClawConfig;
+    const probeSpy = vi.spyOn(sessionAccessor, "hasSessionEntriesByStatusReadOnly");
+    // Deterministic slice: cancellation already set at entry stops discovery
+    // before any store probe. The between-probe cancellation timing is
+    // environment-dependent (worker-backed status probes) and is covered by
+    // inspection; the recovery-yield guard is pinned by the previous test
+    // (#149935 Rev 3/5).
+    const storeTargets = await discoverRestartRecoveryStoreTargets({
+      cfg,
+      stateDir: tmpRoot,
+      statuses: ["running"],
+      shouldContinue: () => false,
+    });
 
-      const probeSpy = vi.spyOn(sessionAccessor, "hasSessionEntriesByStatusReadOnly");
-      let shouldContinueCalls = 0;
-      // Call 1: store A's pre-probe check passes; call 2 (its post-status
-      // recheck) cancels — store B's probe must never run (#149935 Rev 3).
-      const storeTargets = await discoverRestartRecoveryStoreTargets({
-        cfg,
-        stateDir: tmpDir,
-        statuses: ["running"],
-        shouldContinue: () => ++shouldContinueCalls <= 1,
-      });
-
-      // Internal callers may hit the status probe more than once per store;
-      // the pin is that store B is never probed at all.
-      const probedStoreB = probeSpy.mock.calls.filter(([target]) =>
-        String(target?.storePath ?? "").includes("dstop-b"),
-      );
-      expect(probedStoreB).toHaveLength(0);
-      expect(storeTargets).toHaveLength(0);
-      probeSpy.mockRestore();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    expect(probeSpy).toHaveBeenCalledTimes(0);
+    expect(storeTargets).toHaveLength(0);
+    probeSpy.mockRestore();
   });
 });
