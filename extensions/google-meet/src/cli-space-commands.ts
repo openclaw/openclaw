@@ -77,7 +77,7 @@ function writeGoogleMeetCreateOutput(
 }
 
 export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandContext): void {
-  const { root, callGateway, operationTimeoutMs } = context;
+  const { root, operationTimeoutMs } = context;
 
   addGoogleMeetOAuthOptions(
     root.command("create").description("Create a new Google Meet space and print its meeting URL"),
@@ -101,7 +101,6 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
     .action(async (options: CreateOptions) => {
       if (options.join !== false) {
         const delegated = await callGoogleMeetGateway({
-          callGateway,
           method: "googlemeet.create",
           payload: { ...options },
           timeoutMs: operationTimeoutMs,

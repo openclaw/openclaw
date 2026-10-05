@@ -66,6 +66,20 @@ async function withTempHome<T>(
   }
 }
 
+function mockClaudeAuthentication(loggedIn: boolean) {
+  const stdout = JSON.stringify({ loggedIn });
+  const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+    pid: 1,
+    status: 0,
+    signal: null,
+    stdout,
+    stderr: "",
+    output: [null, stdout, ""],
+  });
+  syncBuiltinESMExports();
+  return spawn;
+}
+
 function noteBody(noteFn: ReturnType<typeof vi.fn>): string {
   const value = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call").at(0);
   if (typeof value !== "string") {
@@ -89,18 +103,19 @@ describe("noteClaudeCliHealth", () => {
       .mockReset()
       .mockReturnValue({ id: "openclaw", source: "implicit" });
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     syncBuiltinESMExports();
     clearHealthChecksForTest();
   });
 
   it("probes the executable resolved by the owning backend", async () => {
-    await withTempHome(({ homeDir, workspaceDir, commandPath }) => {
+    await withTempHome(({ workspaceDir, commandPath }) => {
       resolveCliBackendConfigMock.mockReturnValue({
         id: "claude-cli",
         pluginId: "custom-anthropic",
         config: { command: commandPath },
       });
-      const isAuthenticated = vi.fn(() => true);
+      const spawn = mockClaudeAuthentication(true);
 
       noteClaudeCliHealth(
         {
@@ -110,14 +125,16 @@ describe("noteClaudeCliHealth", () => {
           },
         },
         {
-          homeDir,
           workspaceDir,
           noteFn: vi.fn(),
-          isAuthenticated,
         },
       );
 
-      expect(isAuthenticated).toHaveBeenCalledWith(commandPath, expect.any(Object));
+      expect(spawn).toHaveBeenCalledWith(
+        commandPath,
+        ["auth", "status", "--json"],
+        expect.any(Object),
+      );
     });
   });
 
@@ -163,18 +180,20 @@ describe("noteClaudeCliHealth", () => {
           executable: commandPath,
         });
         const noteFn = vi.fn();
-        const isAuthenticated = vi.fn(() => true);
+        const spawn = mockClaudeAuthentication(true);
         noteClaudeCliHealth(defaultClaudeConfig, {
-          homeDir,
           workspaceDir,
           noteFn,
-          isAuthenticated,
         });
         expect(noteBody(noteFn)).toContain(
           `Binary: found at $OPENCLAW_HOME${path.sep}.local${path.sep}bin${path.sep}claude (not on service PATH).`,
         );
         expect(noteBody(noteFn)).not.toContain("- Fix:");
-        expect(isAuthenticated).toHaveBeenCalledWith(commandPath, expect.any(Object));
+        expect(spawn).toHaveBeenCalledWith(
+          commandPath,
+          ["auth", "status", "--json"],
+          expect.any(Object),
+        );
       });
     });
   });
@@ -185,11 +204,10 @@ describe("noteClaudeCliHealth", () => {
       fs.mkdirSync(projectDir, { recursive: true });
 
       const noteFn = vi.fn();
+      mockClaudeAuthentication(true);
       noteClaudeCliHealth(defaultClaudeConfig, {
-        homeDir,
         workspaceDir,
         noteFn,
-        isAuthenticated: () => true,
       });
 
       expect(noteFn).not.toHaveBeenCalled();
@@ -197,7 +215,7 @@ describe("noteClaudeCliHealth", () => {
   });
 
   it("probes auth with the same cleared environment as Claude execution", async () => {
-    await withTempHome(({ homeDir, workspaceDir, commandPath }) => {
+    await withTempHome(({ workspaceDir, commandPath }) => {
       resolveCliBackendConfigMock.mockReturnValue({
         id: "claude-cli",
         pluginId: "anthropic",
@@ -206,7 +224,10 @@ describe("noteClaudeCliHealth", () => {
           clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         },
       });
-      const isAuthenticated = vi.fn(() => true);
+      const spawn = mockClaudeAuthentication(true);
+      vi.stubEnv("ANTHROPIC_API_KEY", "ambient-api-key");
+      vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "ambient-oauth-token");
+      vi.stubEnv("CLAUDE_CONFIG_DIR", "/tmp/claude-config");
 
       noteClaudeCliHealth(
         {
@@ -216,25 +237,24 @@ describe("noteClaudeCliHealth", () => {
           },
         },
         {
-          env: {
-            HOME: homeDir,
-            ANTHROPIC_API_KEY: "ambient-api-key",
-            CLAUDE_CODE_OAUTH_TOKEN: "ambient-oauth-token",
-            CLAUDE_CONFIG_DIR: "/tmp/claude-config",
-            PATH: path.dirname(commandPath),
-          },
-          homeDir,
           workspaceDir,
-          isAuthenticated,
           noteFn: vi.fn(),
         },
       );
 
-      expect(isAuthenticated).toHaveBeenCalledWith(commandPath, {
-        HOME: homeDir,
-        CLAUDE_CONFIG_DIR: "/tmp/claude-config",
-        PATH: path.dirname(commandPath),
-      });
+      expect(spawn).toHaveBeenCalledWith(
+        commandPath,
+        ["auth", "status", "--json"],
+        expect.objectContaining({
+          env: expect.objectContaining({
+            CLAUDE_CONFIG_DIR: "/tmp/claude-config",
+            PATH: path.dirname(commandPath),
+          }),
+        }),
+      );
+      const authEnv = spawn.mock.calls[0]?.[2]?.env;
+      expect(authEnv).not.toHaveProperty("ANTHROPIC_API_KEY");
+      expect(authEnv).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
     });
   });
 
@@ -256,6 +276,7 @@ describe("noteClaudeCliHealth", () => {
       fs.mkdirSync(projectDir, { recursive: true });
 
       const noteFn = vi.fn();
+      mockClaudeAuthentication(true);
       noteClaudeCliHealth(
         {
           agents: {
@@ -277,9 +298,7 @@ describe("noteClaudeCliHealth", () => {
           },
         },
         {
-          homeDir,
           noteFn,
-          isAuthenticated: () => true,
         },
       );
 
@@ -288,13 +307,12 @@ describe("noteClaudeCliHealth", () => {
   });
 
   it("reports when Claude CLI owns no active login", async () => {
-    await withTempHome(({ homeDir, workspaceDir }) => {
+    await withTempHome(({ workspaceDir }) => {
       const noteFn = vi.fn();
+      mockClaudeAuthentication(false);
       noteClaudeCliHealth(defaultClaudeConfig, {
-        homeDir,
         workspaceDir,
         noteFn,
-        isAuthenticated: () => false,
       });
 
       const body = noteBody(noteFn);
@@ -305,11 +323,10 @@ describe("noteClaudeCliHealth", () => {
   });
 
   it("warns when the Claude binary is missing", async () => {
-    await withTempHome(({ homeDir, workspaceDir, commandPath }) => {
+    await withTempHome(({ workspaceDir, commandPath }) => {
       fs.rmSync(commandPath);
       const noteFn = vi.fn();
       noteClaudeCliHealth(defaultClaudeConfig, {
-        homeDir,
         workspaceDir,
         noteFn,
       });
@@ -322,7 +339,7 @@ describe("noteClaudeCliHealth", () => {
   });
 
   it("lists Claude CLI agents only when a problem is reported", async () => {
-    await withTempHome(({ homeDir, workspaceDir }) => {
+    await withTempHome(({ workspaceDir }) => {
       resolveModelAgentRuntimeMetadataMock.mockReturnValue({
         id: "claude-cli",
         source: "model",
@@ -334,6 +351,7 @@ describe("noteClaudeCliHealth", () => {
       fs.mkdirSync(zetaWorkspace, { recursive: true });
       const runtimeModel = "anthropic/claude-opus-4-7";
       const noteFn = vi.fn();
+      mockClaudeAuthentication(true);
 
       noteClaudeCliHealth(
         {
@@ -354,9 +372,7 @@ describe("noteClaudeCliHealth", () => {
           },
         },
         {
-          homeDir,
           noteFn,
-          isAuthenticated: () => true,
         },
       );
 

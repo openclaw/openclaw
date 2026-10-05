@@ -2,7 +2,7 @@ import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 // Github Copilot tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
@@ -431,6 +431,16 @@ describe("github-copilot runtime auth", () => {
 });
 
 describe("fetchCopilotModelCatalog", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function fetchCatalogWithFetch({
+    fetchImpl,
+    ...params
+  }: Parameters<typeof fetchCopilotModelCatalog>[0] & { fetchImpl: typeof fetch }) {
+    vi.stubGlobal("fetch", fetchImpl);
+    return fetchCopilotModelCatalog(params);
+  }
+
   // Trimmed sample of the real Copilot /models response shape captured against
   // api.githubcopilot.com against an Individual Copilot subscription. Includes
   // a chat model, a router (must be filtered), an embedding (must be filtered),
@@ -587,7 +597,7 @@ describe("fetchCopilotModelCatalog", () => {
   }
 
   async function fetchSelectionFixture(data: unknown[]) {
-    return await fetchCopilotModelCatalog({
+    return await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: vi.fn().mockResolvedValue(makeResponse(200, { data })) as unknown as typeof fetch,
@@ -765,7 +775,7 @@ describe("fetchCopilotModelCatalog", () => {
   it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, sampleApiResponse));
 
-    const out = await fetchCopilotModelCatalog({
+    const out = await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -839,7 +849,7 @@ describe("fetchCopilotModelCatalog", () => {
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, { data: [] }));
 
-    await fetchCopilotModelCatalog({
+    await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com/",
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -874,7 +884,7 @@ describe("fetchCopilotModelCatalog", () => {
       }),
     );
 
-    const out = await fetchCopilotModelCatalog({
+    const out = await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -918,7 +928,7 @@ describe("fetchCopilotModelCatalog", () => {
       }),
     );
 
-    const out = await fetchCopilotModelCatalog({
+    const out = await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -952,7 +962,7 @@ describe("fetchCopilotModelCatalog", () => {
     const fetchImpl = vi.fn().mockResolvedValue(response);
 
     await expect(
-      fetchCopilotModelCatalog({
+      fetchCatalogWithFetch({
         copilotApiToken: "tid=bad",
         baseUrl: "https://api.githubcopilot.com",
         fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -967,7 +977,7 @@ describe("fetchCopilotModelCatalog", () => {
       const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, payload));
 
       await expect(
-        fetchCopilotModelCatalog({
+        fetchCatalogWithFetch({
           copilotApiToken: "tid=test",
           baseUrl: "https://api.githubcopilot.com",
           fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -980,7 +990,7 @@ describe("fetchCopilotModelCatalog", () => {
     const fetchImpl = vi.fn();
 
     await expect(
-      fetchCopilotModelCatalog({
+      fetchCatalogWithFetch({
         copilotApiToken: "",
         baseUrl: "https://api.githubcopilot.com",
         fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -988,7 +998,7 @@ describe("fetchCopilotModelCatalog", () => {
     ).rejects.toThrow(/copilotApiToken required/);
 
     await expect(
-      fetchCopilotModelCatalog({
+      fetchCatalogWithFetch({
         copilotApiToken: "tid=test",
         baseUrl: "",
         fetchImpl: fetchImpl as unknown as typeof fetch,

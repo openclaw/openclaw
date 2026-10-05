@@ -277,8 +277,6 @@ type FetchCopilotModelCatalogParams = {
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
   headers?: Record<string, string>;
-  /** Optional fetch override for testing. */
-  fetchImpl?: typeof fetch;
   /** Optional AbortSignal; defaults to a 10s timeout. */
   signal?: AbortSignal;
 };
@@ -295,7 +293,6 @@ type FetchCopilotModelCatalogParams = {
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
 ): Promise<CopilotCatalogModel[]> {
-  const fetchImpl = params.fetchImpl ?? fetch;
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
     throw new Error("fetchCopilotModelCatalog: baseUrl required");
@@ -309,7 +306,7 @@ export async function fetchCopilotModelCatalog(
     ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
     : undefined;
   try {
-    const res = await fetchImpl(url, {
+    const res = await fetch(url, {
       method: "GET",
       headers: {
         Accept: "application/json",

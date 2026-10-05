@@ -1,3 +1,4 @@
+import "./chrome-mcp-process.test-support.js";
 import childProcess, { type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -5,15 +6,16 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createChromeMcpSession } from "./chrome-mcp-connect.js";
 import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
-import { parseChromeMcpUnixProcessListForTest } from "./chrome-mcp-process.js";
+import {
+  mockChromeMcpProcesses,
+  resetChromeMcpProcessMocks,
+} from "./chrome-mcp-process.test-support.js";
 import {
   getChromeMcpSessionOwner,
-  setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp-session.js";
 
@@ -23,7 +25,7 @@ vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
 }));
 
 afterEach(() => {
-  setChromeMcpProcessCleanupDepsForTest(null);
+  resetChromeMcpProcessMocks();
   setChromeMcpSessionFactoryForTest(null);
   vi.restoreAllMocks();
 });
@@ -239,17 +241,10 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
   it("does not admit initialize after close interrupts the initial process snapshot", async () => {
     const scanStarted = createDeferred<void>();
     const releaseScan = createDeferred<void>();
-    setChromeMcpProcessCleanupDepsForTest({
-      listProcesses: async () => {
-        const { stdout } = await promisify(childProcess.execFile)(
-          "ps",
-          ["-axww", "-o", "pid=,ppid=,lstart=,command="],
-          { env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, maxBuffer: 4 * 1024 * 1024 },
-        );
-        const snapshots = parseChromeMcpUnixProcessListForTest(stdout, process.platform);
+    mockChromeMcpProcesses({
+      afterCensus: async () => {
         scanStarted.resolve();
         await releaseScan.promise;
-        return snapshots;
       },
     });
     const fixture = await createHeldStdioPeer({ releaseCapture: releaseScan.resolve });
@@ -274,8 +269,8 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
   it("retains failed initial capture after the child exits with an untracked descendant", async () => {
     const scanStarted = createDeferred<void>();
     const releaseScan = createDeferred<void>();
-    setChromeMcpProcessCleanupDepsForTest({
-      listProcesses: async () => {
+    mockChromeMcpProcesses({
+      afterCensus: async () => {
         scanStarted.resolve();
         await releaseScan.promise;
         throw new Error("fixture process census failed");

@@ -91,11 +91,10 @@ function resolveChutesExpiresAt(value: unknown, now: number): number | undefined
 async function requestChutesTokenGrant(params: {
   body: URLSearchParams;
   responseLabel: "Chutes token exchange" | "Chutes token refresh";
-  fetchFn?: typeof fetch;
   now?: number;
   signal?: AbortSignal;
 }): Promise<{ access: string; refresh: string | undefined; expires: number }> {
-  const response = await (params.fetchFn ?? fetch)(CHUTES_TOKEN_ENDPOINT, {
+  const response = await fetch(CHUTES_TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.body,
@@ -124,11 +123,9 @@ async function requestChutesTokenGrant(params: {
 
 async function fetchChutesUserInfo(params: {
   accessToken: string;
-  fetchFn?: typeof fetch;
   signal?: AbortSignal;
 }): Promise<ChutesUserInfo | null> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
+  const response = await fetch(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
     signal: buildOAuthRequestSignal({
       timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
@@ -148,12 +145,9 @@ async function exchangeChutesCodeForTokens(params: {
   app: ChutesOAuthAppConfig;
   code: string;
   codeVerifier: string;
-  fetchFn?: typeof fetch;
-  now?: number;
   signal?: AbortSignal;
 }): Promise<ChutesStoredOAuth> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: params.app.clientId,
@@ -168,7 +162,6 @@ async function exchangeChutesCodeForTokens(params: {
   const token = await requestChutesTokenGrant({
     body,
     responseLabel: "Chutes token exchange",
-    fetchFn,
     now,
     ...(params.signal ? { signal: params.signal } : {}),
   });
@@ -180,7 +173,6 @@ async function exchangeChutesCodeForTokens(params: {
   try {
     info = await fetchChutesUserInfo({
       accessToken: token.access,
-      fetchFn,
       ...(params.signal ? { signal: params.signal } : {}),
     });
   } catch (error) {
@@ -203,7 +195,6 @@ async function exchangeChutesCodeForTokens(params: {
 /** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
 export async function refreshChutesOAuthCredential(
   credential: OAuthCredential,
-  options: { fetchFn?: typeof fetch; now?: number } = {},
 ): Promise<OAuthCredential> {
   const refreshToken = normalizeOptionalString(credential.refresh);
   if (!refreshToken) {
@@ -227,8 +218,6 @@ export async function refreshChutesOAuthCredential(
   const token = await requestChutesTokenGrant({
     body,
     responseLabel: "Chutes token refresh",
-    fetchFn: options.fetchFn,
-    now: options.now,
   });
 
   return {
@@ -245,17 +234,13 @@ export async function refreshChutesOAuthCredential(
 export async function loginChutes(params: {
   app: ChutesOAuthAppConfig;
   manual?: boolean;
-  timeoutMs?: number;
-  createState?: () => string;
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
-  fetchFn?: typeof fetch;
   signal?: AbortSignal;
 }): Promise<ChutesStoredOAuth> {
   const { verifier, challenge } = generatePkceVerifierChallenge();
-  const state = params.createState?.() ?? randomBytes(16).toString("hex");
-  const timeoutMs = params.timeoutMs ?? 3 * 60 * 1000;
+  const state = randomBytes(16).toString("hex");
   const query = new URLSearchParams({
     client_id: params.app.clientId,
     redirect_uri: params.app.redirectUri,
@@ -284,7 +269,7 @@ export async function loginChutes(params: {
     const redirect = parseRedirectUri(params.app.redirectUri);
     const callback = waitForLocalOAuthCallback({
       expectedState: state,
-      timeoutMs,
+      timeoutMs: 3 * 60 * 1000,
       port: redirect.port,
       callbackPath: redirect.pathname,
       redirectUri: params.app.redirectUri,
@@ -309,7 +294,6 @@ export async function loginChutes(params: {
     app: params.app,
     code: codeAndState.code,
     codeVerifier: verifier,
-    fetchFn: params.fetchFn,
     ...(params.signal ? { signal: params.signal } : {}),
   });
 }

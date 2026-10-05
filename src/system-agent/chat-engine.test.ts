@@ -21,6 +21,7 @@ import {
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
 import { loadSystemAgentOverview } from "./overview.js";
+import { withSystemAgentOverviewSources } from "./overview.test-support.js";
 
 describe("SystemAgentChatEngine facade", () => {
   it.each(["requester", "alternate"])("preserves runtime ownership for %s", async (requester) => {
@@ -148,14 +149,9 @@ describe("SystemAgentChatEngine facade", () => {
       requesterAgentId: "main",
       deps: {
         loadOverview: async (options?: { agentId?: string }) =>
-          loadSystemAgentOverview({
-            ...options,
-            deps: {
-              readConfigFileSnapshot: async () => configSnapshot(config),
-              probeLocalCommand: async (command) => ({ command, found: false }),
-              probeGatewayUrl: async (url) => ({ url, reachable: false }),
-            },
-          }),
+          withSystemAgentOverviewSources(configSnapshot(config), () =>
+            loadSystemAgentOverview(options),
+          ),
       },
     });
     try {
