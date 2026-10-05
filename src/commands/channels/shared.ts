@@ -1,7 +1,12 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { requireValidConfig } from "../config-validation.js";
 
 export type ChatChannel = ChannelId;
 
@@ -9,6 +14,23 @@ export const NO_CONFIGURED_CHAT_CHANNELS_LINE =
   "- no configured chat channels (run `openclaw channels list --all` to see installable channels)";
 
 export { requireValidConfigForWrite } from "../config-validation.js";
+
+/** Load valid channel command config with read-only secret resolution applied. */
+export async function requireValidChannelConfig(
+  runtime: RuntimeEnv,
+): Promise<OpenClawConfig | null> {
+  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
+  if (!cfg) {
+    return null;
+  }
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+    config: cfg,
+    commandName: "channels",
+    targetIds: getChannelsCommandSecretTargetIds(),
+    runtime,
+  });
+  return effectiveConfig;
+}
 
 export function formatChannelAccountLabel(params: {
   channel: ChatChannel;

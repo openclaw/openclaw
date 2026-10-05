@@ -10,8 +10,6 @@ import {
   resolveChannelAccountStatusRows,
   type RuntimeChannelStatusPayload,
 } from "../../channels/status/read-model.js";
-import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
-import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
@@ -19,8 +17,11 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
-import { requireValidConfig } from "../config-validation.js";
-import { formatChannelAccountLabel, NO_CONFIGURED_CHAT_CHANNELS_LINE } from "./shared.js";
+import {
+  formatChannelAccountLabel,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
+  requireValidChannelConfig,
+} from "./shared.js";
 
 type ChannelsListOptions = {
   json?: boolean;
@@ -103,16 +104,10 @@ export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const sourceConfig = await requireValidConfig(runtime, { skipPluginValidation: true });
-  if (!sourceConfig) {
+  const cfg = await requireValidChannelConfig(runtime);
+  if (!cfg) {
     return;
   }
-  const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
-    config: sourceConfig,
-    commandName: "channels",
-    targetIds: getChannelsCommandSecretTargetIds(),
-    runtime,
-  });
   const showAll = opts.all === true;
   const workspace = resolvePluginControlPlaneWorkspace({
     config: cfg,
