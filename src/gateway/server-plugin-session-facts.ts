@@ -15,7 +15,7 @@ import {
   type ControlUiSessionPrTarget,
 } from "./control-ui-session-pr-read.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
-import { sessionsListShareKey } from "./methods/read-share-keys.js";
+import { operatorReadShareKey } from "./methods/read-share-keys.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { withInProcessGatewayRead } from "./server-plugin-in-process-dispatch.js";
@@ -60,7 +60,7 @@ export async function withTrustedPluginSessionReadScope<T>(
       callerAuthorityError: "Session read caller authority is no longer active",
     },
     async ({ context }, assertCurrent) => {
-      const callerKey = () => sessionsListShareKey({ client: scope?.client ?? null }, {});
+      const callerKey = () => operatorReadShareKey({ client: scope?.client ?? null }, {});
       const key = callerKey();
       let token: string | undefined;
       let assertScopeCurrent = assertCurrent;
