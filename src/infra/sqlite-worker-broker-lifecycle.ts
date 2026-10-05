@@ -1,6 +1,8 @@
+import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
+import { formatErrorMessage } from "./errors.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
@@ -20,7 +22,7 @@ import type {
   PreparedSqliteWorkerOpen,
 } from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
+import { createCpuTrackedWorker, markWorkerRetirement } from "./worker-cpu.js";
 
 /** The broker retains these maps; this owner drains clients before native close custody. */
 export function createSqliteWorkerLifecycle({
@@ -120,12 +122,34 @@ export function createSqliteWorkerLifecycle({
     };
     const replyOwner = createReplyOwner(slot);
     slots.add(slot);
+    let departureReported = false;
+    const reportDeparture = (cause: unknown) => {
+      // A requested retirement reports through its caller; a surprise has no other witness.
+      if (departureReported || slot.retiring || slot.failed) {
+        return;
+      }
+      departureReported = true;
+      getChildLogger({ subsystem: "infra/sqlite-worker" }).warn(
+        `SQLite store worker left without a retirement request: ${formatErrorMessage(cause)}`,
+      );
+    };
     worker.on("message", (reply: SqliteWorkerReply) => slot.receiveReply(reply));
-    worker.on("error", (error) => fail(slot, error));
-    worker.on("messageerror", (error) => fail(slot, error));
+    worker.on("error", (error) => {
+      // The registry labels retirets at native exit, which the error event precedes.
+      markWorkerRetirement(worker, "failure");
+      reportDeparture(error);
+      fail(slot, error);
+    });
+    worker.on("messageerror", (error) => {
+      markWorkerRetirement(worker, "failure");
+      reportDeparture(error);
+      fail(slot, error);
+    });
     worker.once("exit", (code) => {
       slot.exited = true;
-      fail(slot, new Error(`SQLite worker exited with code ${code}`));
+      const error = new Error(`SQLite worker exited with code ${code}`);
+      reportDeparture(error);
+      fail(slot, error);
       for (const actor of slot.actors) {
         actor.backendClosed = true;
         actor.markNativeStopped();
@@ -286,6 +310,7 @@ export function createSqliteWorkerLifecycle({
     slot.retiring ??= (async () => {
       const errors: unknown[] = [];
       if (!slot.exited) {
+        markWorkerRetirement(slot.worker, slot.failed ? "failure" : "closed");
         try {
           await slot.worker.terminate();
         } catch (error) {
