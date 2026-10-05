@@ -16,6 +16,11 @@ type Swipe = {
   backdrop: HTMLElement | null;
 };
 
+function hasTextSelection(): boolean {
+  const selection = document.getSelection();
+  return Boolean(selection && !selection.isCollapsed);
+}
+
 export type NavDrawerHost = HTMLElement & {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
@@ -31,11 +36,13 @@ export class NavDrawerSwipeOwner {
   ) {}
 
   private canOpen(): boolean {
+    // A touch that extends or clears a text selection is not a drawer swipe.
     return (
       isMobileNavLayout() &&
       !this.host.navDrawerOpen &&
       !this.host.onboardingMode &&
-      !document.openClawModalLayers?.size
+      !document.openClawModalLayers?.size &&
+      !hasTextSelection()
     );
   }
 
