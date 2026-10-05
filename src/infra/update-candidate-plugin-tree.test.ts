@@ -106,7 +106,7 @@ it.each(["directory", "invalid YAML"])("rejects a listed .modules.yaml %s", asyn
   ).rejects.toThrow();
 });
 
-it.each(["auto", "off"] as const)(
+it.each(["auto", "off", "clone-denied"] as const)(
   "isolates plugin bytes and modes with native copying %s",
   async (nativeMode) => {
     const metadataStat = vi.spyOn(fsSync, "lstatSync");
@@ -127,10 +127,27 @@ it.each(["auto", "off"] as const)(
     const linked = `${f.file}.linked`;
     const before = await fs.stat(f.file, { bigint: true });
     const mkdir = vi.spyOn(fs, "mkdir");
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", nativeMode);
+    if (nativeMode === "clone-denied") {
+      const openRoot = fsSafe.root;
+      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        const root = await openRoot(...args);
+        const copyIn = root.copyIn.bind(root);
+        vi.spyOn(root, "copyIn").mockImplementation((relative, input, options) => {
+          if (options?.clone !== "never") {
+            throw new fsSafe.FsSafeError("helper-failed", "native file copy failed", {
+              cause: Object.assign(new Error("FICLONE: denied"), { code: "EPERM" }),
+            });
+          }
+          return copyIn(relative, input, options);
+        });
+        return root;
+      });
+    }
+    const configuredMode = nativeMode === "off" ? "off" : "auto";
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", configuredMode);
     try {
       // FreeBSD has no native binding; "off" exercises the real portable fallback.
-      expect(getFsSafeNativeConfig().mode).toBe(nativeMode);
+      expect(getFsSafeNativeConfig().mode).toBe(configuredMode);
       await f.copy();
     } finally {
       vi.unstubAllEnvs();
