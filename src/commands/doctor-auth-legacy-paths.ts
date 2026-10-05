@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { isLegacyOAuthRef } from "../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import {
@@ -211,9 +212,8 @@ export function listReferencedLegacyOAuthSidecarPaths(
     }
     const profiles = isRecord(raw) && isRecord(raw.profiles) ? Object.values(raw.profiles) : [];
     for (const profile of profiles) {
-      const ref = isRecord(profile) ? profile.oauthRef : undefined;
-      if (isRecord(ref) && typeof ref.id === "string") {
-        referencedIds.add(ref.id);
+      if (isRecord(profile) && isLegacyOAuthRef(profile.oauthRef)) {
+        referencedIds.add(profile.oauthRef.id);
       }
     }
   }

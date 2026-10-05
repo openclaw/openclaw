@@ -399,6 +399,8 @@ describe("candidate update admission", () => {
     { selector: "config", store: "referenced" },
     { selector: "prefixed-config", store: "referenced" },
     { selector: "prefixed-include", store: "referenced" },
+    // Only the caller's env selects this store; config selects a different agent dir.
+    { selector: "caller-agent-dir", store: "referenced" },
     { selector: "default", store: "unreadable" },
     { selector: "default", store: "other-id" },
     { selector: "config", store: "other-id" },
@@ -407,11 +409,15 @@ describe("candidate update admission", () => {
     async ({ selector, store: storeKind }) => {
       const stateDir = path.dirname(configPath);
       const oauthDir =
-        selector === "default"
+        selector === "default" || selector === "caller-agent-dir"
           ? path.join(stateDir, "credentials")
           : path.join(home, "external-auth");
       const selected = { env: { vars: { OPENCLAW_OAUTH_DIR: "~/external-auth" } } };
-      if (selector === "environment") {
+      if (selector === "caller-agent-dir") {
+        vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
+        vi.stubEnv("PI_CODING_AGENT_DIR", path.join(home, "caller-agent"));
+        writeConfig({ env: { vars: { OPENCLAW_AGENT_DIR: "~/config-agent" } } });
+      } else if (selector === "environment") {
         vi.stubEnv("OPENCLAW_OAUTH_DIR", oauthDir);
       } else if (selector === "prefixed-include") {
         fs.writeFileSync(path.join(stateDir, "auth-selector.json"), JSON.stringify(selected));
@@ -426,7 +432,10 @@ describe("candidate update admission", () => {
       const sidecar = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
       fs.mkdirSync(path.dirname(sidecar), { recursive: true });
       fs.writeFileSync(sidecar, "unparsed retired credential bytes\n", { mode: 0o600 });
-      const store = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+      const store =
+        selector === "caller-agent-dir"
+          ? path.join(home, "caller-agent", "auth-profiles.json")
+          : path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
       if (storeKind === "unreadable") {
         fs.mkdirSync(store, { recursive: true });
       } else {
