@@ -1,6 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
+import type { ToolResultMessage } from "../../llm/types.js";
+
+export type CacheTtlProjectionInput = {
+  replacements: Map<string, { content: ToolResultMessage["content"]; cacheTtl?: "soft" | "hard" }>;
+  frozen: Set<string>;
+  ambiguousBaseKeys: Set<string>;
+  sourceHashByKey: Map<string, string>;
+  /** Cache-TTL marks read from the transcript marker; the projection owner materializes them on the next replay. */
+  restoredCacheTtl: Map<string, { mode: "soft" } | { mode: "hard"; placeholder: string }>;
+};
 
 const prunedResult = z.union([
   z.object({ key: z.string(), mode: z.literal("soft") }),
@@ -169,7 +178,7 @@ export function readCacheTtlCheckpoint(
 }
 
 /** TTL trims are re-derived; ordinary trims retain only text, never images or tool metadata. */
-export function serializeCacheTtlToolResultProjections(state: ToolResultPromptProjectionState) {
+export function serializeCacheTtlToolResultProjections(state: CacheTtlProjectionInput) {
   const marks = new Map(state.restoredCacheTtl);
   for (const [key, projection] of state.replacements) {
     if (projection.cacheTtl === "soft") {

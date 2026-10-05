@@ -15,26 +15,19 @@ import {
   prepareCacheTtlCheckpoint,
   serializeCacheTtlToolResultProjections,
   type CacheTtlCheckpoint,
+  type CacheTtlProjectionInput,
 } from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 
-export type ToolResultPromptProjectionState = {
-  replacements: Map<string, { content: ToolResultMessage["content"]; cacheTtl?: "soft" | "hard" }>;
-  frozen: Set<string>;
-  ambiguousBaseKeys: Set<string>;
-  sourceHashByKey: Map<string, string>;
-  /** Cache-TTL marks read from the transcript marker; the projection owner materializes them on the next replay. */
-  restoredCacheTtl: Map<string, RestoredCacheTtlMark>;
+export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
   /** Null means an uncertain append requires a checkpoint, including for empty state. */
   cacheTtlCheckpoint?: CacheTtlCheckpoint | null;
   /** Every baseline publication, including an empty-branch restore, invalidates pending writes. */
   cacheTtlRevision?: number;
 };
-
-type RestoredCacheTtlMark = { mode: "soft" } | { mode: "hard"; placeholder: string };
 
 type EmbeddedSessionPromptState = {
   activeAttempts: number;
