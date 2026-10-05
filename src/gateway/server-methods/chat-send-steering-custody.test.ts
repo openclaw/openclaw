@@ -18,7 +18,6 @@ import {
   holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
 } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../agents/sessions/agent-session-types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";

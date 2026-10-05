@@ -216,7 +216,9 @@ it("refreshes every collected source after a non-revoking profile change", async
       for (const receipt of receipts) {
         receipt.finish("interrupted");
       }
-      await Promise.all(receipts.map((receipt) => receipt.settled?.()));
+      await Promise.all(
+        receipts.flatMap((receipt) => (receipt.settled ? [receipt.settled()] : [])),
+      );
     }
   });
 });
