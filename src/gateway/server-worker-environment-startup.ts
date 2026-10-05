@@ -10,6 +10,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../plugins/types.js";
+import { isGatewayWriterRetired } from "../process/gateway-work-admission.js";
 import {
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeEnvState,
@@ -411,6 +412,19 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       params.desktopSessionRegistry.hasActivity(environmentId, ownerEpoch),
     store: params.startup.store,
     getConfig: getRuntimeConfig,
+    resolveStandingImageDemand: () => {
+      if (process.env.FACTORY_AUTH_MODE !== "github" || isGatewayWriterRetired()) {
+        return undefined;
+      }
+      const config = getRuntimeConfig();
+      const profileId = configuredDefaultRepository(config)?.profileId;
+      if (!profileId || !config.cloudWorkers?.profiles?.[profileId]) {
+        return undefined;
+      }
+      const agentId = resolveDefaultAgentId(config);
+      const executionMode = resolveDefaultWorkerPlacementExecutionMode({ cfg: config, agentId });
+      return executionMode ? { profileId, executionMode } : undefined;
+    },
     resolveHumanPresenceDemand: () => {
       const config = getRuntimeConfig();
       const repository = configuredDefaultRepository(config);

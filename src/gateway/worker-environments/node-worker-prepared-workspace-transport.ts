@@ -2,6 +2,7 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import {
   parseNodeWorkerPreparedWorkspaceResult,
+  type NodeWorkerPreparedWorkspaceBinding,
   type NodeWorkerPreparedWorkspaceInput,
 } from "../../worker/node-workspace-prepared-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
@@ -13,6 +14,19 @@ import type { WorkerEnvironmentStore } from "./store.js";
 type PreparedWorkspaceTransport = Required<
   Pick<WorkerProviderLifecycleInputOptions, "registerPreparedWorkspace" | "bindPreparedWorkspace">
 >;
+
+/** An exact first-bind refusal, before session checkout or setup has begun. */
+export class PreparedWorkspaceRegistrationMissingError extends Error {
+  constructor(
+    readonly binding: NodeWorkerPreparedWorkspaceBinding,
+    readonly placementGeneration: number,
+  ) {
+    super(
+      "Prepared workspace bind failed: INVALID_REQUEST: prepared workspace registration is missing",
+    );
+    this.name = "PreparedWorkspaceRegistrationMissingError";
+  }
+}
 
 /** Register and bind only while the durable owner and paired node still authorize the operation. */
 export function createNodeWorkerPreparedWorkspaceTransport(options: {
@@ -26,6 +40,7 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     input: NodeWorkerPreparedWorkspaceInput;
     signal?: AbortSignal;
     assertCurrent: () => void;
+    missingRegistration?: () => PreparedWorkspaceRegistrationMissingError;
   }) => {
     const { input, signal } = request;
     const assertCurrent = () => {
@@ -61,6 +76,15 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     });
     assertCurrent();
     if (!result.ok) {
+      if (
+        input.action === "bind" &&
+        result.error?.code === "INVALID_REQUEST" &&
+        result.error.message === "INVALID_REQUEST: prepared workspace registration is missing" &&
+        transport.isCurrent(node) &&
+        request.missingRegistration
+      ) {
+        throw request.missingRegistration();
+      }
       throw new Error(
         `Prepared workspace ${input.action} failed${result.error?.message ? `: ${result.error.message}` : ""}`,
       );
@@ -162,6 +186,15 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
       return await invokePreparedWorkspace({
         deviceId,
         assertCurrent: assertBindingCurrent,
+        ...(placement?.state === "syncing"
+          ? {
+              missingRegistration: () =>
+                new PreparedWorkspaceRegistrationMissingError(
+                  { action: "bind", gatewayNamespace: options.gatewayNamespace, ...binding },
+                  placement.generation,
+                ),
+            }
+          : {}),
         signal,
         input: { action: "bind", gatewayNamespace: options.gatewayNamespace, ...binding },
       });

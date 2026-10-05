@@ -37,41 +37,6 @@ import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
-type WorkerLocalDispatchBarrier = (params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  executionMode: WorkerPlacementDispatchRequest["executionMode"];
-  authorize?: WorkerPlacementAuthorization;
-  signal?: AbortSignal;
-  startDispatch: () => Promise<WorkerDispatchPlacement>;
-}) => Promise<WorkerDispatchPlacement>;
-
-type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
-  WorkerPlacementReclaimOptions &
-  Pick<
-    PlacementRecoveryDeps,
-    "resolveWorkspace" | "prepareAcceptedWorkspacePublication" | "publishAcceptedWorkspace"
-  > & {
-    environments: WorkerDispatchEnvironmentService &
-      Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> &
-      Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
-    isShuttingDown?: () => boolean;
-    runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
-    runLocalBarrier: WorkerLocalDispatchBarrier;
-    runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
-    runActivationBarrier: WorkerActivationBarrier;
-    runMoveBarrier: WorkerPlacementMoveBarrier;
-    resolveMoveDestination: (
-      identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
-      target: WorkerPlacementMoveRequest["target"],
-    ) => Promise<WorkerPlacementMoveDestination | undefined>;
-    onActivated?: (request: WorkerPlacementDispatchRequest) => void;
-    resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
-    resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
-    isCurrentNodePlacement?: WorkerNodePlacementAuthority;
-  };
-
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
@@ -113,21 +78,58 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         authorize: assertCurrent,
         signal,
         startDispatch: async () => {
+          const assertStartCurrent = () => {
+            assertCurrent();
+            const previous = placements.get(request.sessionId);
+            if (
+              (previous?.state === "failed" || previous?.state === "reclaimed") &&
+              previous.environmentId
+            ) {
+              const environment = environments.get(previous.environmentId);
+              if (!environment) {
+                throw new Error(
+                  "Previous worker ownership is unavailable before replacement allocation",
+                );
+              }
+              assertWorkerRecoveryExecutorReleased(environment);
+            }
+            if (coldSource) {
+              const current = placements.get(request.sessionId);
+              if (
+                !matchesWorkerPlacementTarget(current, coldSource) ||
+                current?.sessionKey !== request.sessionKey ||
+                current.agentId !== request.agentId ||
+                current.executionMode !== request.executionMode
+              ) {
+                throw new Error("Settled prepared worker changed before cold dispatch admission");
+              }
+            }
+          };
+          assertStartCurrent();
+          const expectedPlacement = coldSource
+            ? {
+                state: coldSource.state,
+                generation: coldSource.generation,
+                environmentId: coldSource.environmentId,
+                activeOwnerEpoch: coldSource.activeOwnerEpoch,
+              }
+            : request.expectedPlacement;
           placement = await placements.startDispatch(
             {
               sessionId: request.sessionId,
               sessionKey: request.sessionKey,
               agentId: request.agentId,
               executionMode: request.executionMode,
-              ...(request.expectedPlacement
-                ? { expectedPlacement: request.expectedPlacement }
-                : {}),
+              ...(expectedPlacement ? { expectedPlacement } : {}),
             },
-            { assertCurrent },
+            { assertCurrent: assertStartCurrent },
           );
           reportPlacementTransition(onTransition, placement);
           return placement;
         },
+      });
+      recordWorkerPlacementStage(request.sessionId, "local_barrier_completed", {
+        generation: placement.generation,
       });
       if (
         !request.deviceId &&
@@ -197,18 +199,50 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 ? workspace.repository.runSetupScript && request.runSetupScript !== false
                 : request.runSetupScript,
             setupAuthorized: request.runSetupScript !== undefined,
+            readNativeCredential: request.readNativeCredential,
           })
         : undefined;
       assertCurrent();
-      const prepared = preparedIntent
-        ? await startup.bindPreparedPlacement({
-            request,
-            placement,
-            intent: preparedIntent,
-            assertCurrent,
-          })
-        : undefined;
+      recordWorkerPlacementStage(request.sessionId, "intent_prepare_completed", {
+        generation: placement.generation,
+        preparationKey: preparedIntent?.preparationKey,
+      });
+      const prepared =
+        selectPrepared && preparedIntent
+          ? await startup.bindPreparedPlacement({
+              request,
+              placement,
+              intent: preparedIntent,
+              workspace,
+              assertCurrent,
+            })
+          : undefined;
+      selectedEnvironment = prepared?.environment;
       assertCurrent();
+      let allocationIntent = preparedIntent;
+      if (
+        process.env.FACTORY_AUTH_MODE === "github" &&
+        workspace.kind === "repository" &&
+        !request.deviceId &&
+        !prepared
+      ) {
+        if (!preparedIntent) {
+          throw new Error("Factory cold startup requires its admitted provider intent");
+        }
+        await environments.revalidatePreparedIntentRepository(request.profileId, preparedIntent);
+        assertCurrent();
+        environments.assertPreparedIntentCurrent(request.profileId, preparedIntent);
+        // The node owns Factory checkout; cold allocation must not seed a Gateway repository pack.
+        allocationIntent = await environments.prepareProjectIntent(request.profileId, {
+          machineClass: request.machineClass,
+          executionMode: request.executionMode,
+          inherited: request.inheritedProfile,
+          signal,
+          os: request.os,
+        });
+        assertCurrent();
+        environments.assertPreparedIntentCurrent(request.profileId, preparedIntent);
+      }
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
       // Select the reserve before assigning a cold environment identity.
@@ -240,25 +274,108 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             signal,
             os: request.os,
             runSetupScript: request.runSetupScript,
-            admittedIntent: preparedIntent,
+            admittedIntent: allocationIntent,
             inheritedProfile: request.inheritedProfile,
           });
+      recordWorkerPlacementStage(request.sessionId, "environment_ready", {
+        generation: placement.generation,
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
+        prepared: prepared !== undefined,
+      });
       return await startup.continueProvisionedDispatch({
         request,
         placement,
         environment,
         expectedEnvironmentId,
         workspace,
+        intent: preparedIntent,
         onTransition,
         authorize: assertCurrent,
         signal,
         ...(prepared ? { admittedNode: prepared.admittedNode } : {}),
       });
     } catch (error) {
-      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+      recordWorkerPlacementStage(request.sessionId, "dispatch_failed", {
+        generation: placement?.generation,
+        environmentId: placement?.environmentId,
+      });
+      if (
+        error instanceof AcceptedWorkspacePublicationIndeterminateError ||
+        error instanceof PreparedEnvironmentBindingIndeterminateError
+      ) {
         throw error;
       }
       try {
+        if (
+          selectPrepared &&
+          selectedEnvironment?.preparation &&
+          selectedEnvironment.preparation.purpose === "reserve" &&
+          selectedEnvironment.preparation.consumedAtMs === null &&
+          error instanceof PreparedWorkspaceRegistrationMissingError &&
+          error.binding.environmentId === selectedEnvironment.environmentId &&
+          error.binding.sessionId === request.sessionId &&
+          error.binding.sessionKey === request.sessionKey &&
+          error.binding.preparationKey === selectedEnvironment.preparation.key
+        ) {
+          const current = placements.get(request.sessionId);
+          const attached = environments.get(selectedEnvironment.environmentId);
+          const assertClaimCurrent = () => {
+            assertCurrent();
+            const owned = placements.get(request.sessionId);
+            if (
+              owned?.state !== "syncing" ||
+              owned.generation !== error.placementGeneration ||
+              owned.environmentId !== selectedEnvironment?.environmentId ||
+              owned.sessionKey !== request.sessionKey ||
+              owned.agentId !== request.agentId ||
+              owned.executionMode !== request.executionMode ||
+              owned.turnClaim !== null
+            ) {
+              throw new Error("Rejected prepared worker lost its exact dispatch owner", {
+                cause: error,
+              });
+            }
+          };
+          assertClaimCurrent();
+          if (
+            !current ||
+            attached?.state !== "attached" ||
+            attached.ownerEpoch !== error.binding.ownerEpoch ||
+            attached.destroyRequestedAtMs !== null ||
+            attached.leaseId !== selectedEnvironment.leaseId ||
+            attached.nodeDeviceId !== selectedEnvironment.nodeDeviceId ||
+            attached.attachedSessionIds.length !== 1 ||
+            attached.attachedSessionIds[0] !== request.sessionId ||
+            attached.preparation?.consumedAtMs === null ||
+            attached.preparation?.key !== selectedEnvironment.preparation.key
+          ) {
+            throw error;
+          }
+          // Only first-bind rejection attests no session work. Join cleanup before another allocation.
+          const failed = await failure.teardownEnvironment({
+            placement: current,
+            environmentId: attached.environmentId,
+            ownerEpoch: attached.ownerEpoch,
+            primaryError: error,
+            authorize: assertClaimCurrent,
+            requireSettledCleanup: true,
+          });
+          reportPlacementTransition(onTransition, failed);
+          assertCurrent();
+          const settled = placements.get(request.sessionId);
+          if (
+            settled?.state !== "failed" ||
+            settled.generation !== failed.generation ||
+            settled.environmentId !== attached.environmentId ||
+            settled.sessionKey !== request.sessionKey ||
+            settled.agentId !== request.agentId ||
+            environments.get(attached.environmentId)?.state !== "destroyed"
+          ) {
+            throw error;
+          }
+          return await dispatchOnce(request, onTransition, authorize, signal, settled);
+        }
         if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
           throw error;
         }
@@ -291,6 +408,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       throw error;
     }
   };
+
+  const dispatch = (
+    request: WorkerPlacementDispatchRequest,
+    onTransition?: (placement: WorkerDispatchPlacement) => void,
+    authorize?: WorkerPlacementAuthorization,
+    signal?: AbortSignal,
+  ) => dispatchOnce(request, onTransition, authorize, signal);
 
   const reclaimOnce = createWorkerPlacementReclaim(options);
 

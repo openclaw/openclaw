@@ -13,6 +13,7 @@ import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -69,6 +70,7 @@ describe("worker turn launcher remote handoff", () => {
       ...sessionTarget,
       agentId: "worker-agent",
       sessionKey: "agent:worker-agent:worker-turn",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "worker-agent" }),
     });
     await upsertSessionEntryCore(sessionTarget, {
       sessionId: SESSION_ID,

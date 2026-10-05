@@ -12,6 +12,8 @@ import {
   registerGatewayPolicyResponse,
 } from "../server/ws-policy-close.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { imageReserveProject, readImageReserveProject } from "./image-reserve.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import {
   PREPARATION_KEY,
@@ -44,6 +46,7 @@ describe("authenticated human prepared-pool demand", () => {
     initial?: PreparedPoolPresenceDemand,
     executionMode: "worker-turn" | "remote-exec" = "remote-exec",
     overrides: Partial<PoolOptions> = {},
+    standingImage = false,
   ) {
     let persisted = initial;
     let currentRepository = repository;
@@ -59,18 +62,25 @@ describe("authenticated human prepared-pool demand", () => {
     fixture.developmentProfile.readyWorkers = 3;
     const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>(async (_profileId, options) => {
       const project = options.projectRepository ?? currentRepository;
-      const preparationKey =
-        project.baseCommit === repository.baseCommit ? PREPARATION_KEY : "e".repeat(64);
+      const preparationKey = PREPARATION_KEY;
       const { executionMode: _defaultExecutionMode, ...profile } = fixture.profile(
         PROJECT_KEY,
         preparationKey,
         undefined,
         project,
       );
-      const profileSnapshot = {
+      const profileSnapshot = requireWorkerProfile({
         ...profile,
+        ...(options.imageReserve
+          ? {
+              project: {
+                ...imageReserveProject("gateway-test"),
+                preparation: readWorkerProjectPreparation(profile.project),
+              },
+            }
+          : {}),
         ...(options.executionMode ? { executionMode: options.executionMode } : {}),
-      };
+      });
       return {
         providerId: fixture.provider.id,
         profileSnapshot,
@@ -79,6 +89,12 @@ describe("authenticated human prepared-pool demand", () => {
     });
     const owner = fixture.pool({
       prepareIntent,
+      ...(standingImage
+        ? {
+            resolveStandingImageDemand: () =>
+              sourceEnabled ? { profileId: "development", executionMode } : undefined,
+          }
+        : {}),
       resolveHumanPresenceDemand: () =>
         sourceEnabled
           ? {
@@ -103,6 +119,114 @@ describe("authenticated human prepared-pool demand", () => {
       },
     };
   }
+
+  it("does not infer standing demand from Factory mode without the host input", async () => {
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    try {
+      const presence = presencePool(undefined, "worker-turn");
+      await fixture.schedule(presence.owner);
+      expect(fixture.reserves()).toEqual([]);
+      expect(presence.prepareIntent).not.toHaveBeenCalled();
+      expect(presence.write).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps standing image reserves selectable without human presence across restart and a claim", async () => {
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    try {
+      const first = presencePool(undefined, "worker-turn", {}, true);
+      await fixture.schedule(first.owner);
+      expect(fixture.reserves()).toHaveLength(3);
+      expect(first.write).not.toHaveBeenCalled();
+      expect(first.read()).toBeUndefined();
+      const ready = await Promise.all(fixture.reserves().map((record) => fixture.ready(record)));
+      const originalIds = ready.map((record) => record.environmentId);
+      fixture.nowMs += 20 * 60_000;
+      await fixture.reopenStore();
+      const reopened = presencePool(undefined, "worker-turn", {}, true);
+      await fixture.schedule(reopened.owner);
+      expect(reopened.write).not.toHaveBeenCalled();
+      expect(fixture.reserves().map((record) => record.environmentId)).toEqual(originalIds);
+      const intent = await reopened.prepareIntent("development", {
+        projectRepository: repository,
+        executionMode: "worker-turn",
+      });
+      intent.preparationKey = "c".repeat(64);
+      expect(
+        reopened.owner.candidates(intent, "development").map((record) => record.environmentId),
+      ).toEqual(originalIds);
+      expect(
+        reopened.owner.canPruneDemand(fixture.store.get(originalIds[0]!)!, fixture.nowMs),
+      ).toBe(false);
+      const active = await fixture.attach(fixture.store.get(originalIds[0]!)!);
+      await Promise.all([fixture.schedule(reopened.owner), fixture.schedule(reopened.owner)]);
+      expect(reopened.owner.summary().reservedEnvironmentIds).toHaveLength(3);
+      expect(fixture.reserves()).toHaveLength(4);
+      expect(fixture.store.get(active.environmentId)).toMatchObject({
+        state: "attached",
+        destroyRequestedAtMs: null,
+      });
+      expect(
+        reopened.owner.candidates(intent, "development").map((record) => record.environmentId),
+      ).not.toContain(active.environmentId);
+      expect(reopened.write).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["disabled", "cap0", "mode", "shutdown"] as const)(
+    "does not admit standing image reserves after %s changes during preparation",
+    async (change) => {
+      vi.stubEnv("FACTORY_AUTH_MODE", "github");
+      try {
+        const standing = presencePool(undefined, "worker-turn", {}, true);
+        const prepare = standing.prepareIntent.getMockImplementation()!;
+        standing.prepareIntent.mockImplementationOnce(async (...args) => {
+          const intent = await prepare(...args);
+          if (change === "disabled") {
+            standing.disableSource();
+          } else if (change === "cap0") {
+            fixture.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
+          } else if (change === "mode") {
+            vi.stubEnv("FACTORY_AUTH_MODE", "other");
+          } else {
+            fixture.abort.abort();
+          }
+          return intent;
+        });
+        await expect(fixture.schedule(standing.owner)).rejects.toThrow();
+        expect(fixture.reserves()).toHaveLength(0);
+        expect(standing.write).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("stops standing refill at cap zero without retiring an attached worker", async () => {
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    try {
+      const standing = presencePool(undefined, "worker-turn", {}, true);
+      await fixture.schedule(standing.owner);
+      const ready = await Promise.all(fixture.reserves().map((record) => fixture.ready(record)));
+      const active = await fixture.attach(ready[0]!);
+      fixture.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
+      await fixture.schedule(standing.owner);
+      expect(fixture.store.get(active.environmentId)).toMatchObject({
+        state: "attached",
+        destroyRequestedAtMs: null,
+      });
+      for (const unused of ready.slice(1)) {
+        expect(fixture.store.get(unused.environmentId)?.destroyRequestedAtMs).toBe(fixture.nowMs);
+      }
+      expect(standing.write).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it.each(["admission", "effect"] as const)(
     "fences presence %s before a held policy response closes the last browser",
@@ -331,6 +455,134 @@ describe("authenticated human prepared-pool demand", () => {
       }
     },
   );
+  it("clears removed presence policy and invalidates its unused indefinite reserves before the grace period", async () => {
+    const presence = presencePool();
+    await presence.owner.setHumanPresence(true);
+    const original = fixture.reserves();
+    expect(original).toHaveLength(3);
+    presence.disableSource();
+    await fixture.schedule(presence.owner);
+    expect(presence.read()).toBeUndefined();
+    for (const retired of original) {
+      expect(fixture.store.get(retired.environmentId)?.destroyRequestedAtMs).toBe(fixture.nowMs);
+    }
+    expect(fixture.reserves().filter((record) => record.destroyRequestedAtMs === null)).toEqual([]);
+  });
+
+  it("keeps ordinary image activation and consumed image workers when presence policy disappears", async () => {
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    try {
+      const presence = presencePool(undefined, "worker-turn");
+      await presence.owner.setHumanPresence(true);
+      const original = fixture.reserves();
+      const first = original[0]!;
+      const active = await fixture.attach(await fixture.ready(first));
+      fixture.config.cloudWorkers!.preparedPool = { maxTotal: 4 };
+      fixture.developmentProfile.readyWorkers = 4;
+      const image = readImageReserveProject(first.profileSnapshot.project);
+      if (!image) {
+        throw new Error("Factory fixture did not produce an image reserve");
+      }
+      const independent = await fixture.store.ensurePreparedIntent({
+        intent: {
+          environmentId: "ordinary-image-reserve",
+          providerId: first.providerId,
+          profileId: first.profileId,
+          provisionOperationId: "provision-ordinary-image",
+          profileSnapshot: first.profileSnapshot,
+          preparation: {
+            purpose: "reserve",
+            key: first.preparation!.key,
+            demandAtMs: fixture.nowMs,
+            expiresAtMs: fixture.nowMs + 300_000,
+          },
+        },
+        projectKey: image.key,
+        target: 4,
+        maxTotal: 4,
+        assertCurrent: () => {},
+      });
+      if (!independent) {
+        throw new Error("Ordinary image fixture lacked capacity");
+      }
+      const ready = await fixture.ready(independent);
+      presence.disableSource();
+      await fixture.schedule(presence.owner);
+      expect(fixture.store.get(active.environmentId)).toMatchObject({
+        state: "attached",
+        destroyRequestedAtMs: null,
+      });
+      expect(fixture.store.get(ready.environmentId)).toMatchObject({
+        state: "ready",
+        destroyRequestedAtMs: null,
+      });
+      expect(
+        original
+          .slice(1)
+          .every(
+            (record) => fixture.store.get(record.environmentId)?.destroyRequestedAtMs !== null,
+          ),
+      ).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("fills three repository-free image reserves and offers them to a verified repository claim", async () => {
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    try {
+      const presence = presencePool();
+      await presence.owner.setHumanPresence(true);
+      const reserved = fixture.reserves();
+      expect(reserved).toHaveLength(3);
+      expect(
+        reserved.every(
+          (record) => readImageReserveProject(record.profileSnapshot.project) !== undefined,
+        ),
+      ).toBe(true);
+      expect(presence.prepareIntent).toHaveBeenCalledWith(
+        "development",
+        expect.objectContaining({ imageReserve: true }),
+      );
+      const ready = await Promise.all(reserved.map((record) => fixture.ready(record)));
+      const repositoryIntent = await presence.prepareIntent("development", {
+        projectRepository: repository,
+        executionMode: "remote-exec",
+      });
+      repositoryIntent.preparationKey = "c".repeat(64);
+      expect(
+        presence.owner
+          .candidates(repositoryIntent, "development")
+          .map((record) => record.environmentId),
+      ).toEqual(ready.map((record) => record.environmentId));
+      expect(presence.owner.candidates(repositoryIntent, "another-profile")).toEqual([]);
+      const rejected = vi.fn();
+      await fixture.store.requestDestroy({
+        environmentId: ready[0]!.environmentId,
+        state: "ready",
+      });
+      const expectedIds = ready.slice(1).map((record) => record.environmentId);
+      expect(
+        presence.owner
+          .candidates(repositoryIntent, "development", rejected)
+          .map((record) => record.environmentId),
+      ).toEqual(expectedIds);
+      expect(rejected).toHaveBeenCalledWith(ready[0]!.environmentId, "destroy_requested");
+      expect(rejected).toHaveBeenCalledTimes(1);
+      expect(
+        presence.owner
+          .candidates(repositoryIntent, "development", () => {
+            throw new Error("synthetic observer failure");
+          })
+          .map((record) => record.environmentId),
+      ).toEqual(expectedIds);
+      const otherProfile = vi.fn();
+      presence.owner.candidates(repositoryIntent, "another-profile", otherProfile);
+      expect(otherProfile).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("fills three exact-repository reserves, stops refill on departure, and retires after 15m", async () => {
     const presence = presencePool();
@@ -445,9 +697,7 @@ describe("authenticated human prepared-pool demand", () => {
     );
   });
 
-  it("refreshes main with live reserves, retires only unused old workers, and claims the new generation", async () => {
-    // Old activation demand is still valid when the ref refreshes. It must not
-    // keep unused A reserves occupying capacity for the newly selected B.
+  it("keeps ready reserves claimable while main advances", async () => {
     fixture.provider.resolvePreparedIdleTimeoutMs = () => 300_000;
     const presence = presencePool(undefined, "worker-turn");
     await presence.owner.setHumanPresence(true);
@@ -467,34 +717,22 @@ describe("authenticated human prepared-pool demand", () => {
 
     fixture.nowMs = 61_000;
     await fixture.schedule(presence.owner);
-    expect(presence.read()?.project.baseCommit).toBe(nextRepository.baseCommit);
-    expect(presence.read()?.preparationKey).toBe("e".repeat(64));
+    expect(presence.read()?.project).toMatchObject({ baseCommit: nextRepository.baseCommit });
+    expect(presence.read()?.preparationKey).toBe(PREPARATION_KEY);
     expect(fixture.store.get(active.environmentId)).toMatchObject({
       state: "attached",
       destroyRequestedAtMs: null,
     });
-    // Refill may have admitted another A reserve after the first claim. Every
-    // unused A obligation must settle before all three B slots are available.
-    const obsolete = fixture
+    const current = fixture
       .reserves()
       .filter((record) => record.preparation?.consumedAtMs === null);
-    for (const record of obsolete) {
-      expect(record.destroyRequestedAtMs).toBe(61_000);
-      if (record.state === "requested") {
-        await fixture.store.transition({
-          environmentId: record.environmentId,
-          from: "requested",
-          to: "failed",
-          patch: { lastError: "fixture cancelled unused allocation" },
-        });
-      } else {
-        await fixture.destroy(record);
-      }
-    }
-    await fixture.schedule(presence.owner);
-    const next = fixture.reserves().filter((record) => record.preparation?.key === "e".repeat(64));
-    expect(next).toHaveLength(3);
-    const ready = await Promise.all(next.map((record) => fixture.ready(record)));
+    expect(current).toHaveLength(3);
+    expect(current.every((record) => record.destroyRequestedAtMs === null)).toBe(true);
+    const ready = await Promise.all(
+      current.map((record) =>
+        record.state === "ready" ? Promise.resolve(record) : fixture.ready(record),
+      ),
+    );
     const intent = await presence.prepareIntent("development", {
       projectRepository: nextRepository,
       executionMode: "worker-turn",
@@ -508,10 +746,10 @@ describe("authenticated human prepared-pool demand", () => {
     expect(presence.owner.candidates(intent).map((record) => record.environmentId)).not.toContain(
       claimed.environmentId,
     );
-    const staleIntent = await presence.prepareIntent("development", {
+    const pinnedOldIntent = await presence.prepareIntent("development", {
       projectRepository: repository,
     });
-    expect(presence.owner.candidates(staleIntent)).toEqual([]);
+    expect(presence.owner.candidates(pinnedOldIntent)).toHaveLength(2);
   });
 
   it("retains and refills current reserves after a newer old-base foreground activation", async () => {
@@ -546,7 +784,7 @@ describe("authenticated human prepared-pool demand", () => {
           record.preparation?.consumedAtMs === null && record.destroyRequestedAtMs === null,
       );
     expect(retained).toHaveLength(3);
-    expect(retained.every((record) => record.preparation?.key === "e".repeat(64))).toBe(true);
+    expect(retained.every((record) => record.preparation?.key === PREPARATION_KEY)).toBe(true);
     expect(fixture.store.get(activated.environmentId)).toEqual(activated);
   });
 
@@ -688,60 +926,93 @@ describe("authenticated human prepared-pool demand", () => {
     expect(presence.read()?.retireAtMs).toBe(961_000);
   });
 
-  it("retires stale preparation generations before current presence demand can refill", async () => {
-    const staleKey = "e".repeat(64);
-    const oldRepository = {
-      ...repository,
-      key: "c".repeat(64),
-      source: {
-        ...repository.source,
-        url: "https://github.com/acme/old-repo.git",
-        repositoryId: "R_acme_old_repo",
-      },
-    };
-    fixture.config.cloudWorkers!.profiles!.legacy = {
-      provider: fixture.provider.id,
-      settings: {},
-    };
-    for (const [index, stale] of [
-      { profileId: "development", repository },
-      { profileId: "development", repository: oldRepository },
-      { profileId: "legacy", repository },
-    ].entries()) {
-      await fixture.seed(`stale-presence-${index}`, {
-        reserve: true,
-        profileId: stale.profileId,
-        repository: stale.repository,
-        preparationKey: staleKey,
-        expiresAtMs: Number.MAX_SAFE_INTEGER,
-      });
-    }
-    fixture.nowMs = 2_001;
-    const presence = presencePool();
+  it.each([false, true])(
+    "refills current demand after confirmed stale cleanup (standing=%s)",
+    async (standingImage) => {
+      if (standingImage) {
+        vi.stubEnv("FACTORY_AUTH_MODE", "github");
+      }
+      try {
+        const staleKey = "e".repeat(64);
+        const oldRepository = {
+          ...repository,
+          key: "c".repeat(64),
+          source: {
+            ...repository.source,
+            url: "https://github.com/acme/old-repo.git",
+            repositoryId: "R_acme_old_repo",
+          },
+        };
+        fixture.config.cloudWorkers!.profiles!.legacy = {
+          provider: fixture.provider.id,
+          settings: {},
+        };
+        for (const [index, stale] of [
+          { profileId: "development", repository },
+          { profileId: "development", repository: oldRepository },
+          { profileId: "legacy", repository },
+        ].entries()) {
+          await fixture.seed(`stale-presence-${index}`, {
+            reserve: true,
+            profileId: stale.profileId,
+            repository: stale.repository,
+            preparationKey: staleKey,
+            expiresAtMs: Number.MAX_SAFE_INTEGER,
+          });
+        }
+        fixture.nowMs = 2_001;
+        let cleanupConfirmed = false;
+        const reservedCounts: number[] = [];
+        const reconcile = vi.fn<PoolOptions["reconcile"]>(
+          async (record, _signal, beforeReconcile) => {
+            beforeReconcile();
+            reservedCounts.push(fixture.store.preparedReservationEnvironmentIds().length);
+            if (record.destroyRequestedAtMs !== null && cleanupConfirmed) {
+              await fixture.store.transition({
+                environmentId: record.environmentId,
+                from: "requested",
+                to: "failed",
+                patch: { lastError: "fixture confirmed allocation cleanup" },
+              });
+            }
+          },
+        );
+        const presence = presencePool(undefined, "remote-exec", { reconcile }, standingImage);
 
-    await presence.owner.setHumanPresence(true);
-    const stale = fixture.reserves().filter((record) => record.preparation?.key === staleKey);
-    expect(stale).toHaveLength(3);
-    expect(stale.every((record) => record.destroyRequestedAtMs === 2_001)).toBe(true);
-    expect(
-      fixture.reserves().filter((record) => record.preparation?.key === PREPARATION_KEY),
-    ).toHaveLength(0);
+        if (standingImage) {
+          await fixture.schedule(presence.owner);
+        } else {
+          await presence.owner.setHumanPresence(true);
+        }
+        const stale = fixture.reserves().filter((record) => record.preparation?.key === staleKey);
+        expect(stale).toHaveLength(3);
+        expect(stale.every((record) => record.destroyRequestedAtMs === 2_001)).toBe(true);
+        expect(
+          fixture.reserves().filter((record) => record.preparation?.key === PREPARATION_KEY),
+        ).toHaveLength(0);
 
-    for (const record of stale) {
-      await fixture.store.transition({
-        environmentId: record.environmentId,
-        from: "requested",
-        to: "failed",
-        patch: { lastError: "fixture cleanup" },
-      });
-    }
-    await fixture.schedule(presence.owner);
-    expect(
-      fixture
-        .reserves()
-        .filter(
-          (record) => record.state !== "destroyed" && record.preparation?.key === PREPARATION_KEY,
-        ),
-    ).toHaveLength(3);
-  });
+        cleanupConfirmed = true;
+        await fixture.schedule(presence.owner);
+        const current = fixture
+          .reserves()
+          .filter((record) => record.preparation?.key === PREPARATION_KEY);
+        expect(current).toHaveLength(3);
+        expect(current.every((record) => record.state === "requested")).toBe(true);
+        expect(current.map((record) => record.profileSnapshot.project)).toEqual([
+          expect.objectContaining(standingImage ? imageReserveProject("gateway-test") : repository),
+          expect.objectContaining(standingImage ? imageReserveProject("gateway-test") : repository),
+          expect.objectContaining(standingImage ? imageReserveProject("gateway-test") : repository),
+        ]);
+        expect(fixture.store.preparedReservationEnvironmentIds()).toHaveLength(3);
+        expect(Math.max(...reservedCounts)).toBe(3);
+        expect(fixture.nowMs).toBe(2_001);
+        expect(fixture.provider.notePreparedDemand).not.toHaveBeenCalled();
+        if (standingImage) {
+          expect(presence.write).not.toHaveBeenCalled();
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 });

@@ -520,14 +520,34 @@ describe("prepared node workspace ownership", () => {
       sequence: 1,
       retain: [],
     };
-    const acquired = await f.runtime.acquireManagedWorkspaceAsync(f.request);
     await expect(f.runtime.applyRetainSnapshot(retain, async () => [])).resolves.toMatchObject({
+      deleted: 0,
+    });
+    await expect(f.runtime.exec(f.command)).resolves.toMatchObject({ code: 0 });
+    const acquired = await f.runtime.acquireManagedWorkspaceAsync(f.request);
+    await expect(
+      f.runtime.applyRetainSnapshot(
+        {
+          ...retain,
+          sequence: 2,
+          retain: [
+            {
+              environmentId: binding.environmentId,
+              sessionId: binding.sessionId,
+              generation: binding.ownerEpoch,
+              manifestRefs: null,
+            },
+          ],
+        },
+        async () => [],
+      ),
+    ).resolves.toMatchObject({
       deleted: 0,
     });
     expect((await fsp.stat(f.workspaceDir)).isDirectory()).toBe(true);
     acquired.release();
     await expect(
-      f.runtime.applyRetainSnapshot({ ...retain, sequence: 2 }, async () => []),
+      f.runtime.applyRetainSnapshot({ ...retain, sequence: 3 }, async () => []),
     ).resolves.toMatchObject({ deleted: 1 });
     expect(
       await new NodeWorkerPreparedWorkspaceStore({ env: f.env }).find(binding.environmentId),
@@ -567,10 +587,22 @@ describe("prepared node workspace ownership", () => {
       gatewayNamespace: binding.gatewayNamespace,
       controllerId: "retirement-owner",
       sequence: 1,
-      retain: [],
+      retain: [
+        {
+          environmentId: binding.environmentId,
+          sessionId: binding.sessionId,
+          generation: binding.ownerEpoch,
+          manifestRefs: null,
+        },
+      ],
     };
+    await f.runtime.applyRetainSnapshot(retain, async () => []);
     const operation = f.runtime
-      .applyRetainSnapshot(retain, async () => [], controller.signal)
+      .applyRetainSnapshot(
+        { ...retain, sequence: 2, retain: [] },
+        async () => [],
+        controller.signal,
+      )
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -589,7 +621,7 @@ describe("prepared node workspace ownership", () => {
     const restarted = new NodeWorkerWorkspaceRuntime(f.options);
     await expect(restarted.exec(f.command)).rejects.toThrow("does not own");
     await expect(
-      restarted.applyRetainSnapshot({ ...retain, sequence: 2 }, async () => []),
+      restarted.applyRetainSnapshot({ ...retain, sequence: 3, retain: [] }, async () => []),
     ).resolves.toMatchObject({ deleted: 1 });
     expect((await store.find(binding.environmentId))?.state).toBe("retired");
   });

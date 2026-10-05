@@ -1,3 +1,4 @@
+import type { WorkerProviderError } from "../../plugins/capability-provider.types.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import type { WorkerEnvironmentStore } from "./store.js";
@@ -23,6 +24,19 @@ export class WorkerEnvironmentServiceError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+/** Produced only after the provision cleanup owner has committed exact retirement. */
+export class WorkerEnvironmentCapacityError extends Error {
+  constructor(
+    readonly environment: Pick<
+      WorkerEnvironmentRecord,
+      "environmentId" | "ownerEpoch" | "provisionOperationId" | "providerId" | "profileId"
+    >,
+    readonly receipt: ReturnType<typeof WorkerProviderError.capacityShortage>["receipt"],
+  ) {
+    super("Waiting for worker capacity");
   }
 }
 

@@ -109,10 +109,16 @@ describe("node worker tunnel lifetime", () => {
     const record = environment();
     let currentClaim = turnClaim();
     const authorizations: boolean[] = [];
+    const beforeLaunch = vi.fn(async () => {});
+    const onExecutionAccepted = vi.fn(async () => {});
     const launchSizes: number[] = [];
     const manager = createManager(record, {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
         authorizations.push(request.isDispatchAuthorized());
+        if (request.isDispatchAuthorized()) {
+          await request.beforeLaunch?.();
+          await request.onExecutionAccepted?.();
+        }
         launchSizes.push(measureNodeWorkerLaunchBytes(request.deviceId, request.input));
         return {
           launchId: request.input.launchId,
@@ -138,9 +144,16 @@ describe("node worker tunnel lifetime", () => {
       handle.measureLaunchTurn(launchPlan, claim),
     );
     await handle.launchTurn({ plan: launchPlan, turnClaim: staleClaim });
-    await handle.launchTurn({ plan: launchPlan, turnClaim: currentClaim });
+    await handle.launchTurn({
+      plan: launchPlan,
+      turnClaim: currentClaim,
+      beforeLaunch,
+      onExecutionAccepted,
+    });
 
     expect(authorizations).toEqual([false, true]);
+    expect(beforeLaunch).toHaveBeenCalledOnce();
+    expect(onExecutionAccepted).toHaveBeenCalledOnce();
     expect(launchSizes).toEqual(sizes);
     expect(launchPlan).toEqual(snapshot);
   });

@@ -74,6 +74,21 @@ describe("project GitHub search", () => {
     },
   );
 
+  it("keeps required bot authentication on rejected discovery reads", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer synthetic-required-bot");
+      return json({}, 401);
+    });
+    await expect(
+      searchRemoteProjects("required-bot-search", {
+        token: "synthetic-required-bot",
+        requireAuthentication: true,
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({ statusCode: 401 });
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+
   it.each([302, 401])("rechecks reader authority before retrying HTTP %s", async (status) => {
     let current = true;
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
@@ -156,6 +171,31 @@ describe("project GitHub search", () => {
       "https://b.ghe.example.test",
       "https://b.ghe.example.test",
     ]);
+  });
+
+  it("rejects a retired explicit host selection before serving cached search results", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => json({ items: [] }));
+    const options = {
+      token: "synthetic-host-token",
+      host: "github.com",
+      apiBaseUrl: "https://api.github.com",
+      fetchImpl,
+      now: 1_000,
+    };
+    await searchRemoteProjects("retained-host-cache", options);
+    fetchImpl.mockClear();
+    setRuntimeConfigSnapshot({
+      gateway: {
+        github: {
+          host: "replaced.ghe.example.test",
+          apiBaseUrl: "https://replaced.ghe.example.test/api/v3",
+        },
+      },
+    });
+    await expect(searchRemoteProjects("retained-host-cache", options)).rejects.toThrow(
+      "GitHub host changed",
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("returns anonymous public results with a typed missing-credential state", async () => {
@@ -391,5 +431,43 @@ describe("project GitHub search", () => {
       expect.objectContaining({ fullName: "acme/token-rotation-b" }),
     );
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+  it("discovers App installation repositories without the human affiliation endpoint", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("/installation/repositories")) {
+        return Response.json({
+          total_count: 1,
+          repositories: [
+            {
+              id: 1044511,
+              name: "lobster",
+              full_name: "bic/lobster",
+              html_url: "https://github.com/bic/lobster",
+              clone_url: "https://github.com/bic/lobster.git",
+              description: "App repository",
+              private: true,
+            },
+          ],
+        });
+      }
+      if (url.includes("/user/repos")) {
+        throw new Error("Human endpoint forbidden");
+      }
+      return Response.json({ items: [] });
+    });
+    const result = await searchRemoteProjects("lobster", {
+      fetchImpl,
+      token: "synthetic-installation",
+      requireAuthentication: true,
+      appInstallation: true,
+    });
+    expect(
+      fetchImpl.mock.calls.some(([url]) => requestUrl(url).includes("/installation/repositories")),
+    ).toBe(true);
+    expect(fetchImpl.mock.calls.some(([url]) => requestUrl(url).includes("/user/repos"))).toBe(
+      false,
+    );
+    expect(result.projects.map((value) => value.fullName)).toContain("bic/lobster");
   });
 });

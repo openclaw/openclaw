@@ -38,6 +38,8 @@ for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
 if (token) Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http." + origin + ".extraheader", GIT_CONFIG_VALUE_0: "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64") });
 const args = process.argv.slice(1);
+const nil = process.platform === "win32" ? "NUL" : "/dev/null";
+args.unshift("-c", "core.hooksPath=" + nil, "-c", "core.fsmonitor=false");
 // Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
 if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
 const result = spawnSync("git", args, { env, stdio: ["ignore", "inherit", "inherit"] });
@@ -46,7 +48,7 @@ process.exitCode = result.status ?? 1;`;
 
 const BIND_PREPARED_REPOSITORY_JS = String.raw`const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { origin, commit, branch, workspaceDir, author } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { origin, commit, branch, workspaceDir, author, allowRefRefresh } = JSON.parse(fs.readFileSync(0, "utf8"));
 if (fs.realpathSync(process.cwd()) !== fs.realpathSync(workspaceDir)) throw Error("Prepared repository workspace changed");
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
@@ -60,12 +62,14 @@ const git = (args, allowDetached = false) => {
   if (result.error || result.status !== 0) throw Error("Prepared repository Git verification failed");
   return result.stdout.trim();
 };
-if (git(["rev-parse", "--verify", "HEAD^{commit}"]) !== commit ||
-    git(["remote", "get-url", "origin"]) !== origin) throw Error("Prepared repository differs from its admitted source");
+const head = git(["rev-parse", "--verify", "HEAD^{commit}"]);
+if (git(["remote", "get-url", "origin"]) !== origin) throw Error("Prepared repository differs from its admitted source");
 git(["check-ref-format", "--branch", branch]);
 const current = git(["symbolic-ref", "--quiet", "--short", "HEAD"], true);
-if (current !== branch) {
-  if (current !== undefined) throw Error("Prepared repository already belongs to another session branch");
+if (current === branch) {
+  if (head !== commit && !allowRefRefresh) throw Error("Prepared repository differs from its admitted source");
+} else {
+  if (head !== commit || current !== undefined) throw Error("Prepared repository already belongs to another session branch");
   git(["checkout", "-b", branch, commit]);
 }
 for (const [key, value] of Object.entries(author ?? {})) {
@@ -90,7 +94,7 @@ function gitFailure(
   stage: string,
   result: SpawnResult,
   invariant?: string,
-): NodeWorkerRepositoryOutcome {
+): Extract<NodeWorkerRepositoryOutcome, { kind: "failed" }> {
   return {
     kind: "failed",
     reason,
@@ -145,12 +149,12 @@ export function createNodeWorkerRepositoryPreparation(
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "idempotent",
     });
-  const checkoutAndCapture = async (
+  const fetchRevision = async (
     identity: RepositoryIdentity,
-    workspaceDir: string,
-    expectedManifestRef: string | undefined,
-    seeded: boolean,
-  ): Promise<NodeWorkerRepositoryOutcome> => {
+  ): Promise<
+    | { kind: "revision"; revision: string }
+    | Extract<NodeWorkerRepositoryOutcome, { kind: "failed" }>
+  > => {
     // Restore asks for the immutable SHA even when a force push removed its branch ref.
     const fetched = await git(identity, [
       "fetch",
@@ -173,14 +177,40 @@ export function createNodeWorkerRepositoryPreparation(
     if (identity.commit !== undefined && revision !== identity.commit) {
       return gitFailure("checkout-failed", "git rev-parse", resolved, "requested commit mismatch");
     }
-    const checkedOut = await git(identity, ["checkout", "--detach", "--force", revision]);
+    return { kind: "revision", revision };
+  };
+  const checkoutAndCapture = async (
+    identity: RepositoryIdentity,
+    workspaceDir: string,
+    expectedManifestRef: string | undefined,
+    seeded: boolean,
+    boundBranch?: string,
+    prefetchedRevision?: string,
+  ): Promise<NodeWorkerRepositoryOutcome> => {
+    const selected = prefetchedRevision
+      ? { kind: "revision" as const, revision: prefetchedRevision }
+      : await fetchRevision(identity);
+    if (selected.kind === "failed") {
+      return selected;
+    }
+    const revision = selected.revision;
+    const checkedOut = await git(
+      identity,
+      boundBranch
+        ? ["checkout", "--force", "-B", boundBranch, revision]
+        : ["checkout", "--detach", "--force", revision],
+    );
     if (!succeeded(checkedOut)) {
-      return gitFailure("checkout-failed", "git checkout --detach", checkedOut);
+      return gitFailure(
+        "checkout-failed",
+        boundBranch ? "git checkout -B" : "git checkout --detach",
+        checkedOut,
+      );
     }
     if (checkedOut.workspaceDir !== workspaceDir) {
       return gitFailure(
         "checkout-failed",
-        "git checkout --detach",
+        boundBranch ? "git checkout -B" : "git checkout --detach",
         checkedOut,
         "workspace directory changed during checkout",
       );
@@ -204,9 +234,79 @@ export function createNodeWorkerRepositoryPreparation(
       },
     };
   };
+  const observeBoundPreparedRepository = async (
+    bound: WorkerWorkspaceSyncResult & { mode: "repository" },
+  ): Promise<WorkerWorkspaceSyncResult & { mode: "repository" }> => {
+    const observed = await git(undefined, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    const revision = observed.stdout.trim();
+    if (
+      !succeeded(observed) ||
+      observed.workspaceDir !== bound.remoteWorkspaceDir ||
+      !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(revision)
+    ) {
+      throw new Error("Bound prepared repository commit could not be verified");
+    }
+    if (revision === bound.baseCommit) {
+      return bound;
+    }
+    const captured = await capture(bound.remoteWorkspaceDir, revision);
+    const manifestRef = captured.stdout.trim();
+    if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
+      throw new Error("Bound prepared repository manifest could not be verified");
+    }
+    return {
+      mode: "repository",
+      remoteWorkspaceDir: bound.remoteWorkspaceDir,
+      baseCommit: revision,
+      baseManifestRef: manifestRef,
+      manifestRef,
+    };
+  };
   return {
+    observeBoundPreparedRepository,
+    refreshBoundPreparedRepository: async (
+      identity: RepositoryIdentity & { branch: string },
+      bound: WorkerWorkspaceSyncResult & { mode: "repository" },
+    ): Promise<WorkerWorkspaceSyncResult & { mode: "repository" }> => {
+      if (identity.commit) {
+        const local = await observeBoundPreparedRepository(bound);
+        if (local.baseCommit === identity.commit) {
+          return local;
+        }
+        if (local.baseCommit !== bound.baseCommit) {
+          throw new Error("Bound prepared repository changed after source selection");
+        }
+      }
+      const selected = await fetchRevision(identity);
+      if (selected.kind === "failed") {
+        throw new Error(
+          `Prepared repository refresh failed: ${selected.reason}${selected.detail ? `: ${selected.detail}` : ""}`,
+        );
+      }
+      if (selected.revision === bound.baseCommit) {
+        return bound;
+      }
+      const refreshed = await checkoutAndCapture(
+        identity,
+        bound.remoteWorkspaceDir,
+        undefined,
+        false,
+        identity.branch,
+        selected.revision,
+      );
+      if (refreshed.kind === "failed") {
+        throw new Error(
+          `Prepared repository refresh failed: ${refreshed.reason}${refreshed.detail ? `: ${refreshed.detail}` : ""}`,
+        );
+      }
+      return {
+        ...refreshed.result,
+        mode: "repository",
+        baseManifestRef: refreshed.result.manifestRef,
+      };
+    },
     bindPreparedRepository: async (
-      identity: RepositoryIdentity & { commit: string; branch: string },
+      identity: RepositoryIdentity & { commit: string; branch: string; allowRefRefresh?: boolean },
       prepared: PreparedRepositoryWorkspace,
       author?: { name?: string; email?: string },
     ): Promise<WorkerWorkspaceSyncResult & { mode: "repository" }> => {
@@ -221,6 +321,7 @@ export function createNodeWorkerRepositoryPreparation(
           origin: identity.origin,
           commit: identity.commit,
           branch: identity.branch,
+          allowRefRefresh: identity.allowRefRefresh === true,
           workspaceDir: prepared.workspaceDir,
           author,
         }),

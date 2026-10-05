@@ -17,6 +17,7 @@ import type {
   WorkerEnvironmentBootstrapReceipt,
   WorkerEnvironmentRecord,
   WorkerEnvironmentTeardownTerminalState,
+  WorkerEnvironmentCustodyHold,
 } from "./environment-record.js";
 import { readWorkerEnvironmentPreparation } from "./prepared-environment-store.js";
 import { readWorkerEnvironmentSessionAttachments } from "./session-attachment-store.js";

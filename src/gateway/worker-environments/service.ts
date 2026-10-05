@@ -242,6 +242,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     signal: scope.signal,
     warn,
     resolveHumanPresenceDemand: options.resolveHumanPresenceDemand,
+    resolveStandingImageDemand: options.resolveStandingImageDemand,
     presenceDemandStore: options.presenceDemandStore,
   });
   const schedulePreparedRefill = (environmentId?: string) =>

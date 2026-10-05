@@ -5,14 +5,47 @@ import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readImageReserveProject } from "./image-reserve.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
+import * as projectSource from "./workspace-git-base.js";
 
 describe("prepared worker intent admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("prepares a Factory image reserve without admitting a repository or checkout", async () => {
+    const f = await fixture();
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    try {
+      const intent = await f.owner.prepareIntent("development", {
+        imageReserve: true,
+        executionMode: "remote-exec",
+      });
+      expect(readImageReserveProject(intent.profileSnapshot.project)).toEqual({
+        kind: "image",
+        key: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      });
+      expect(readWorkerProjectPreparation(intent.profileSnapshot.project)?.key).toBe(
+        intent.preparationKey,
+      );
+      expect(support.testState.store.list()).toEqual([]);
+      expect(f.prepareNodeArtifacts).toHaveBeenCalledOnce();
+      await f.owner.createWithProfile(
+        "development",
+        "image-only",
+        { executionMode: "remote-exec" },
+        intent,
+      );
+      expect(support.testState.store.list()[0]?.profileSnapshot.project).toEqual(
+        intent.profileSnapshot.project,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   async function fixture(setup = false) {
     const projectPath = path.join(support.testState.root, "project");
@@ -86,6 +119,86 @@ describe("prepared worker intent admission", () => {
       },
     };
   }
+
+  it.each(["success", "profile changed", "artifact changed", "aborted"] as const)(
+    "overlaps authorized artifact preparation with source admission and preserves %s",
+    async (outcome) => {
+      const f = await fixture();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      const original = projectSource.prepareWorkerProjectSnapshot;
+      const sourceSpy = vi
+        .spyOn(projectSource, "prepareWorkerProjectSnapshot")
+        .mockImplementation(async (params) => {
+          entered.resolve();
+          await release.promise;
+          return original(params);
+        });
+      const pending = f.owner.prepareIntent("development", {
+        projectPath: f.projectPath,
+        setupAuthorized: true,
+        signal: controller.signal,
+      });
+      const settled = pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          settled.then(() => {
+            throw new Error("Preparation settled before source admission");
+          }),
+        ]);
+        expect(f.prepareNodeArtifacts).toHaveBeenCalledOnce();
+        expect(support.testState.store.list()).toEqual([]);
+        if (outcome === "profile changed") {
+          support.getDevelopmentProfile().settings = { region: "changed" };
+        } else if (outcome === "artifact changed") {
+          f.invalidateArtifacts();
+        } else if (outcome === "aborted") {
+          controller.abort(new Error("caller aborted"));
+        }
+      } finally {
+        release.resolve();
+        await settled;
+        sourceSpy.mockRestore();
+      }
+      if (outcome === "success") {
+        await expect(pending).resolves.toHaveProperty("preparationKey");
+      } else {
+        await expect(pending).rejects.toThrow(
+          outcome === "profile changed"
+            ? "profile changed during preparation"
+            : outcome === "aborted"
+              ? "caller aborted"
+              : "runtime changed",
+        );
+      }
+    },
+  );
+
+  it("retains source failure precedence over concurrent artifact failure", async () => {
+    const f = await fixture();
+    const sourceFailure = new Error("source admission failed");
+    const sourceSpy = vi
+      .spyOn(projectSource, "prepareWorkerProjectSnapshot")
+      .mockRejectedValue(sourceFailure);
+    f.prepareNodeArtifacts.mockRejectedValue(new Error("artifact preparation failed"));
+    try {
+      await expect(
+        f.owner.prepareIntent("development", {
+          projectPath: f.projectPath,
+          setupAuthorized: true,
+        }),
+      ).rejects.toBe(sourceFailure);
+      expect(f.prepareNodeArtifacts).toHaveBeenCalledOnce();
+      expect(support.testState.store.list()).toEqual([]);
+    } finally {
+      sourceSpy.mockRestore();
+    }
+  });
 
   it("admits exact local source and OS without allocating, and retains reusable facts after caller abort", async () => {
     const f = await fixture();

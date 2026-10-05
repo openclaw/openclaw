@@ -649,6 +649,8 @@ describe("node worker launch adapter", () => {
   ])(
     "fails $code before admission without retrying or cancelling",
     async ({ code, rejection, message }) => {
+      const input = launchInput();
+      const onExecutionAccepted = vi.fn(async () => {});
       let nowMs = 0;
       const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
         if (request.command === "worker.cancel.v1" && code === "INVALID_REQUEST") {
@@ -666,12 +668,88 @@ describe("node worker launch adapter", () => {
         },
       });
 
-      await expect(adapter.launch(launchRequest())).rejects.toMatchObject({ code, message });
+      await expect(
+        adapter.launch({ ...launchRequest(input), onExecutionAccepted }),
+      ).rejects.toMatchObject({
+        code,
+        message,
+        ...(code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+          ? {
+              refusal: {
+                launchId: input.launchId,
+                planHash: nodeWorkerPlanHash(input),
+                sessionId: input.descriptor.admission.sessionId,
+                ownerEpoch: input.descriptor.admission.ownerEpoch,
+                environmentId: input.descriptor.admission.environmentId,
+                placementGeneration: input.placementGeneration,
+                runId: input.descriptor.assignment.runId,
+                nodeDeviceId: DEVICE_ID,
+                connId: "conn-1",
+                pairingGeneration: "generation-1",
+              },
+            }
+          : {}),
+      });
+      expect(onExecutionAccepted).not.toHaveBeenCalled();
       expect(invoke).toHaveBeenCalledOnce();
       expect(invoke.mock.calls.map(([request]) => request.command)).toEqual(["worker.launch.v1"]);
       expect(nowMs).toBe(0);
     },
   );
+
+  it("never treats a status capacity error as proof an accepted child stayed absent", async () => {
+    const input = launchInput();
+    const onExecutionAccepted = vi.fn(async () => {});
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      request.onDispatchReady?.("invoke-1");
+      if (request.command === "worker.launch.v1") {
+        return wire(receipt(input, "running"));
+      }
+      if (request.command === "worker.cancel.v1") {
+        return wire(receipt(input, "cancelled"));
+      }
+      return {
+        ok: false,
+        error: { code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE, message: "capacity" },
+      };
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      sleep: async () => {},
+    });
+    await expect(
+      adapter.launch({ ...launchRequest(input), onExecutionAccepted }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(onExecutionAccepted).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      "worker.launch.v1",
+      "worker.status.v1",
+      "worker.cancel.v1",
+    ]);
+  });
+
+  it("checks current recovery intent after node discovery before sending a launch", async () => {
+    let paused = false;
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
+    const list = vi.fn(async () => {
+      paused = true;
+      return [nodeProof()];
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke, list),
+    });
+    await expect(
+      adapter.launch({
+        ...launchRequest(),
+        beforeLaunch: async () => {
+          if (paused) {
+            throw new Error("recovery goal paused");
+          }
+        },
+      }),
+    ).rejects.toThrow("recovery goal paused");
+    expect(invoke).not.toHaveBeenCalled();
+  });
 
   it("cancels an invalid launch replay when an earlier dispatch may have registered it", async () => {
     const input = launchInput();

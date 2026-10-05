@@ -52,7 +52,14 @@ it.each(["win32", "linux", "darwin"] as const)(
         });
         expect(spawnSync).toHaveBeenCalledExactlyOnceWith(
           "git",
-          platform === "win32" ? ["-c", "core.longpaths=true", ...gitArgs] : gitArgs,
+          [
+            ...(platform === "win32" ? ["-c", "core.longpaths=true"] : []),
+            "-c",
+            `core.hooksPath=${platform === "win32" ? "NUL" : "/dev/null"}`,
+            "-c",
+            "core.fsmonitor=false",
+            ...gitArgs,
+          ],
           {
             stdio: ["ignore", "inherit", "inherit"],
             env: {
@@ -412,4 +419,142 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
   expect(replacementCommands).toContainEqual(
     expect.arrayContaining(["fetch", "--no-tags", "origin", commit]),
   );
+});
+
+it("refreshes a claimed prepared checkout to the selected ref without reseeding", async () => {
+  const root = await fs.realpath(tempDirs.make("node-prepared-ref-refresh-"));
+  const origin = path.join(root, "origin");
+  await fs.mkdir(origin);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
+      timeoutMs: 10_000,
+      baseEnv: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1" },
+    });
+    expect(result.code, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  await git(origin, "init", "--quiet");
+  await git(origin, "checkout", "-B", "main");
+  await fs.writeFile(path.join(origin, "tracked.txt"), "old\n");
+  await git(origin, "add", ".");
+  await git(
+    origin,
+    "-c",
+    "user.name=Repository Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "old",
+  );
+  const oldCommit = await git(origin, "rev-parse", "HEAD");
+  const commands: Array<{ seed: unknown; resetWorkspace: unknown }> = [];
+  const runtime = new NodeWorkerWorkspaceRuntime({
+    root: path.join(root, "node-state"),
+    env: { PATH: process.env.PATH, HOME: path.join(root, "node-home") },
+  });
+  const repository = createNodeWorkerRepositoryPreparation((command) => {
+    commands.push({ seed: command.seed, resetWorkspace: command.resetWorkspace });
+    return runtime.exec({
+      gatewayNamespace: "gateway-1",
+      environmentId: "environment-1",
+      sessionId: "session-1",
+      generation: 1,
+      ...command,
+      argv: [...command.argv],
+    });
+  });
+  const url = pathToFileURL(origin).href;
+  const prepared = await repository.prepareRepository({ origin: url, commit: oldCommit });
+  expect(prepared.kind).toBe("prepared");
+  if (prepared.kind !== "prepared") {
+    throw new Error(prepared.reason);
+  }
+  const attested = {
+    baseCommit: oldCommit,
+    workspaceDir: prepared.result.remoteWorkspaceDir,
+    sourceManifestRef: prepared.result.manifestRef,
+    preparedManifestRef: prepared.result.manifestRef,
+  };
+  const branch = "clawson/prepared-test";
+  const bound = await repository.bindPreparedRepository(
+    { origin: url, commit: oldCommit, branch },
+    attested,
+  );
+  const unchanged = await repository.refreshBoundPreparedRepository(
+    { origin: url, ref: "main", branch },
+    bound,
+  );
+  expect(unchanged).toEqual(bound);
+  await fs.writeFile(path.join(origin, "tracked.txt"), "selected head\n");
+  await git(
+    origin,
+    "-c",
+    "user.name=Repository Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--quiet",
+    "-am",
+    "new",
+  );
+  const selectedHead = await git(origin, "rev-parse", "HEAD");
+  commands.length = 0;
+  const refreshed = await repository.refreshBoundPreparedRepository(
+    { origin: url, ref: "main", branch },
+    bound,
+  );
+  expect(refreshed).toMatchObject({
+    mode: "repository",
+    baseCommit: selectedHead,
+    remoteWorkspaceDir: attested.workspaceDir,
+  });
+  expect(refreshed.baseManifestRef).toBe(refreshed.manifestRef);
+  expect(await git(attested.workspaceDir, "rev-parse", "HEAD")).toBe(selectedHead);
+  expect(await git(attested.workspaceDir, "symbolic-ref", "--short", "HEAD")).toBe(branch);
+  expect(await fs.readFile(path.join(attested.workspaceDir, "tracked.txt"), "utf8")).toBe(
+    "selected head\n",
+  );
+  expect(
+    commands.every((command) => command.seed === undefined && command.resetWorkspace === undefined),
+  ).toBe(true);
+  await expect(
+    repository.bindPreparedRepository({ origin: url, commit: oldCommit, branch }, attested),
+  ).rejects.toThrow("session binding failed");
+  const rebound = await repository.bindPreparedRepository(
+    { origin: url, commit: oldCommit, branch, allowRefRefresh: true },
+    attested,
+  );
+  const offlineOrigin = `${origin}-offline`;
+  await fs.rename(origin, offlineOrigin);
+  const replay = await repository.refreshBoundPreparedRepository(
+    { origin: url, commit: selectedHead, branch },
+    rebound,
+  );
+  expect(replay.baseCommit).toBe(selectedHead);
+  expect(await fs.readFile(path.join(attested.workspaceDir, "tracked.txt"), "utf8")).toBe(
+    "selected head\n",
+  );
+  await fs.writeFile(path.join(attested.workspaceDir, "tracked.txt"), "authored session work\n");
+  await git(attested.workspaceDir, "add", ".");
+  await git(
+    attested.workspaceDir,
+    "-c",
+    "user.name=Repository Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "authored",
+  );
+  const authoredHead = await git(attested.workspaceDir, "rev-parse", "HEAD");
+  await expect(
+    repository.refreshBoundPreparedRepository(
+      { origin: url, commit: selectedHead, branch },
+      rebound,
+    ),
+  ).rejects.toThrow("changed after source selection");
+  expect(await git(attested.workspaceDir, "rev-parse", "HEAD")).toBe(authoredHead);
 });

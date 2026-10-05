@@ -5,7 +5,10 @@
   "description": "OpenClaw cloud worker provider backed by the Crabbox CLI",
   "type": "module",
   "exports": {
-    "./cli-runtime-api.js": "./cli-runtime-api.ts"
+    "./cli-runtime-api.js": {
+      "types": "./cli-runtime-api.ts",
+      "default": "./dist/cli-runtime-api.js"
+    }
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

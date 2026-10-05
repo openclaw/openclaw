@@ -62,6 +62,36 @@ function rewritePackageEntry(entry: unknown, extension: string): string | undefi
   return `./${rewritten}`;
 }
 
+function rewritePackageExports(
+  value: unknown,
+  sourceEntries: readonly string[],
+  extension: string,
+  types = false,
+): unknown {
+  if (typeof value === "string") {
+    if (!/\.[cm]?[jt]s$/u.test(value)) {
+      return value;
+    }
+    const stem = value.replace(/^\.\/(?:dist\/)?/u, "").replace(/\.[cm]?[jt]s$/u, "");
+    const source = sourceEntries.find(
+      (entry) => entry.replace(/^\.\//u, "").replace(/\.[cm]?[jt]s$/u, "") === stem,
+    );
+    return source ? rewritePackageEntry(source, types ? ".d.ts" : extension) : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewritePackageExports(entry, sourceEntries, extension, types));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        rewritePackageExports(entry, sourceEntries, extension, types || key === "types"),
+      ]),
+    );
+  }
+  return value;
+}
+
 function ensurePathInsideRoot(rootDir: string, rawPath: string): string {
   const resolved = path.resolve(rootDir, rawPath);
   const relative = path.relative(rootDir, resolved);
@@ -411,6 +441,13 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
           ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry, extension) }
           : {}),
       };
+      if (packageJson.exports !== undefined) {
+        packageJson.exports = rewritePackageExports(
+          packageJson.exports,
+          buildEntry.sourceEntries,
+          extension,
+        );
+      }
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);

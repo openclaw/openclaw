@@ -19,7 +19,10 @@ import {
   syncCanonicalGitHubIdentity,
 } from "../state/user-profile-writes.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
-import type { CachedGitHubIdentityBinding } from "../state/user-profiles.types.js";
+import type {
+  CachedGitHubIdentityBinding,
+  CachedGitHubIdentitySelector,
+} from "../state/user-profiles.types.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
@@ -308,6 +311,72 @@ function cloudflareAccessAssertion(params: {
   return principal && assertion ? { assertion, principal } : undefined;
 }
 
+/** A Factory principal is authoritative only after trusted-proxy admission. */
+export function resolveTrustedFactoryGitHubAccountId(params: {
+  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
+  authConfig?: GatewayAuthConfig;
+}): number | undefined {
+  if (
+    !params.authResult.ok ||
+    params.authResult.method !== "trusted-proxy" ||
+    params.authConfig?.mode !== "trusted-proxy" ||
+    normalizeLowercaseStringOrEmpty(params.authConfig.trustedProxy?.userHeader) !==
+      "x-factory-principal"
+  ) {
+    return undefined;
+  }
+  const matched = FACTORY_GITHUB_PRINCIPAL.exec(params.authResult.user ?? "");
+  const accountId = matched ? Number(matched[1]) : undefined;
+  return accountId && Number.isSafeInteger(accountId) ? accountId : undefined;
+}
+
+/** Metadata is accepted only from the same trusted hop that asserted the immutable account. */
+export function resolveTrustedFactoryGitHubMetadata(params: {
+  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
+  authConfig?: GatewayAuthConfig;
+  requestHeaders?: IncomingHttpHeaders;
+}) {
+  const accountId = resolveTrustedFactoryGitHubAccountId(params);
+  if (!accountId) {
+    return undefined;
+  }
+  const rawLogin = firstHeaderValue(params.requestHeaders?.["x-factory-github-login"]);
+  const login = rawLogin && rawLogin.length <= 39 ? normalizeGitHubLogin(rawLogin) : undefined;
+  const rawName = firstHeaderValue(params.requestHeaders?.["x-factory-github-name"]);
+  const name =
+    rawName && rawName.length <= 128 && !/[\p{Cc}\p{Cf}]/u.test(rawName)
+      ? rawName.trim()
+      : undefined;
+  const rawAvatar = firstHeaderValue(params.requestHeaders?.["x-factory-github-avatar-url"]);
+  const email = normalizeVerifiedEmail(params.requestHeaders?.["x-factory-github-email"]);
+  let avatarUrl: string | undefined;
+  if (rawAvatar && rawAvatar.length <= 512) {
+    try {
+      const url = new URL(rawAvatar);
+      if (
+        url.origin === "https://microsoft.ghe.com" &&
+        url.pathname === `/avatars/u/${accountId}` &&
+        !url.username &&
+        !url.password &&
+        !url.hash
+      ) {
+        avatarUrl = url.href;
+      }
+    } catch {
+      /* Invalid metadata never grants authority. */
+    }
+  }
+  return login
+    ? {
+        accountId,
+        login,
+        ...(name ? { name } : {}),
+        ...(email ? { email } : {}),
+        ...(avatarUrl ? { avatarUrl } : {}),
+      }
+    : undefined;
+}
+
 export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
@@ -316,7 +385,10 @@ export function createAuthenticatedGitHubIdentitySync(params: {
 }): AuthenticatedGitHubIdentitySync | undefined {
   const options = { assertCurrent: params.assertCurrent };
   // A retryable GitHub outage may reuse only an exact binding verified earlier.
-  const reuseVerifiedBinding = async (error: unknown, binding: CachedGitHubIdentityBinding) => {
+  const reuseVerifiedBinding = async (
+    error: unknown,
+    binding: CachedGitHubIdentityBinding | CachedGitHubIdentitySelector,
+  ) => {
     if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable)) {
       return undefined;
     }
@@ -325,6 +397,30 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     params.assertCurrent?.();
     return cached;
   };
+  const factory = resolveTrustedFactoryGitHubMetadata(params);
+  if (factory) {
+    return createLazyPromise(async () => {
+      params.assertCurrent?.();
+      const profile = isGatewayReadonlyWork()
+        ? await readCanonicalExistingProfileForEmail(params.authResult.user!)
+        : await ensureCanonicalFactoryGitHubProfile(
+            params.authResult.user!,
+            factory.name ?? factory.login,
+            options,
+            { login: factory.login, email: factory.email },
+          );
+      params.assertCurrent?.();
+      return {
+        profileId: profile.id,
+        updatedAt: profile.updatedAt,
+        factory: {
+          accountId: factory.accountId,
+          login: factory.login,
+          ...(factory.avatarUrl ? { avatarUrl: factory.avatarUrl } : {}),
+        },
+      };
+    });
+  }
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
     : undefined;

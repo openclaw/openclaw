@@ -3,6 +3,7 @@ import {
   createWorkerProjectPreparationIdentity,
   readWorkerProjectPreparation,
 } from "./preparation-identity.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import type { WorkerLocalProjectSnapshot } from "./workspace-git-base.js";
 
 const input: Omit<Parameters<typeof createWorkerProjectPreparationIdentity>[0], "project"> & {
@@ -30,6 +31,30 @@ const input: Omit<Parameters<typeof createWorkerProjectPreparationIdentity>[0], 
 };
 
 describe("worker preparation identity", () => {
+  it("keeps repository reserve compatibility across a moving ref and recipe", () => {
+    const project: RepositoryWorkerProjectSnapshot = {
+      key: "a".repeat(64),
+      baseCommit: "b".repeat(40),
+      source: {
+        kind: "repository",
+        url: "https://github.com/bic/lobster.git",
+        repositoryId: "R_bic_lobster",
+        owner: {
+          agent: { agentId: "main", provenance: null },
+          identity: { source: "anonymous" },
+        },
+      },
+    };
+    const original = createWorkerProjectPreparationIdentity({ ...input, project });
+    const moved = createWorkerProjectPreparationIdentity({
+      ...input,
+      project: { ...project, baseCommit: "1".repeat(40) },
+      setupRecipe: "2".repeat(40),
+    });
+    expect(moved.key).toBe(original.key);
+    expect(moved.cacheKey).not.toBe(original.cacheKey);
+  });
+
   it("shares identity across linked source paths, JSON field order and plugin order", () => {
     const equivalent = structuredClone(input);
     equivalent.project.root = "/source/second-worktree";

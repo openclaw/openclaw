@@ -51,21 +51,15 @@ import {
   resolveNodePreparedWorkspaceIdentity,
   type NodeWorkerManagedWorkspaceRequest,
   type NodeWorkerWorkspaceLaunchReference,
-  type NodeWorkerWorkspaceSession as WorkspaceSession,
 } from "./node-worker-workspace-identity.js";
+import { listNodeWorkerWorkspaceSessions } from "./node-worker-workspace-inventory.js";
 import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
 import { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
-import {
-  listOwnedEntries,
-  listOwnedDirectories,
-  removeIfEmpty,
-} from "./node-worker-workspace-retention.js";
+import { listOwnedEntries, removeIfEmpty } from "./node-worker-workspace-retention.js";
 import { runNodeWorkerWorkspaceSeed } from "./node-worker-workspace-seeds.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
-const ENVIRONMENT_HASH_PATTERN = /^[a-f0-9]{16}$/u;
-const SESSION_HASH_PATTERN = /^[a-f0-9]{32}$/u;
 const MANIFEST_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
 
 function projectWorkspaceOperationResult(
@@ -233,32 +227,6 @@ export class NodeWorkerWorkspaceRuntime {
     return protectedGenerations;
   }
 
-  private async listWorkspaceSessions(gatewayNamespace: string): Promise<WorkspaceSession[]> {
-    const gatewayRoot = path.join(this.root, gatewayNamespace);
-    const workspacesRoot = path.join(gatewayRoot, "workspaces");
-    const sessions: WorkspaceSession[] = [];
-    for (const environmentHash of await listOwnedDirectories(workspacesRoot)) {
-      if (!ENVIRONMENT_HASH_PATTERN.test(environmentHash)) {
-        continue;
-      }
-      const environmentRoot = path.join(workspacesRoot, environmentHash);
-      for (const sessionHash of await listOwnedDirectories(environmentRoot)) {
-        if (!SESSION_HASH_PATTERN.test(sessionHash)) {
-          continue;
-        }
-        sessions.push({
-          gatewayNamespace,
-          environmentHash,
-          sessionHash,
-          workspacesRoot,
-          environmentRoot,
-          sessionRoot: path.join(environmentRoot, sessionHash),
-        });
-      }
-    }
-    return sessions;
-  }
-
   async applyRetainSnapshot(
     input: NodeWorkerWorkspaceRetainInput,
     listNonterminal: () => Promise<readonly NodeWorkerWorkspaceLaunchReference[]>,
@@ -315,6 +283,7 @@ export class NodeWorkerWorkspaceRuntime {
       this.currentLocalProtection(params.gatewayNamespace, params.retainedDuringPass, launches);
     const retired = await this.prepared.collect(
       params.gatewayNamespace,
+      (generationKey) => params.snapshot.retainedGenerations.has(generationKey),
       (generationKey) =>
         params.snapshot.retainedGenerations.has(generationKey) ||
         currentProtection().has(generationKey),
@@ -333,7 +302,10 @@ export class NodeWorkerWorkspaceRuntime {
     }
     let deleted = retired.deleted;
     let hasMore = false;
-    for (const session of await this.listWorkspaceSessions(params.gatewayNamespace)) {
+    for (const session of await listNodeWorkerWorkspaceSessions(
+      this.root,
+      params.gatewayNamespace,
+    )) {
       params.signal?.throwIfAborted();
       await serializeNodeWorkerWorkspace(session.sessionRoot, async () => {
         params.signal?.throwIfAborted();

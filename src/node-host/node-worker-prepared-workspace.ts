@@ -26,6 +26,7 @@ import {
 export class NodeWorkerPreparedWorkspaceRuntime {
   readonly store?: NodeWorkerPreparedWorkspaceStore;
   readonly root: string;
+  private readonly observedRetain = new Set<string>();
   constructor(
     home: string,
     options: Pick<OpenClawStateDatabaseOptions, "env" | "path">,
@@ -197,6 +198,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
 
   async collect(
     gatewayNamespace: string,
+    isRetained: (generationKey: string) => boolean,
     isProtected: (generationKey: string) => boolean,
     signal?: AbortSignal,
     prepareProtection?: () => Promise<void>,
@@ -221,6 +223,14 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         sessionId: row.session_id,
         ownerEpoch: row.owner_epoch,
       });
+      if (isRetained(generationKey)) {
+        this.observedRetain.add(generationKey);
+      }
+      // A bound reserve cannot be retired by a retain snapshot issued before
+      // its attachment. First observe its exact owner, then allow later expiry.
+      if (row.state === "bound" && !this.observedRetain.has(generationKey)) {
+        continue;
+      }
       await prepareProtection?.();
       if (isProtected(generationKey)) {
         continue;

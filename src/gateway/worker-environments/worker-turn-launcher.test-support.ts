@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
 import {
@@ -14,6 +13,7 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -173,7 +173,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     agentId: "main",
     sessionId: SESSION_ID,
     sessionKey: SESSION_KEY,
-    storePath: path.join(root, "sessions.json"),
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: testState.env }),
   };
   const entry = {
     sessionId: SESSION_ID,
@@ -273,6 +273,7 @@ export function createWorkerSessionTurnPlacementProvider(
   options: Omit<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption> &
     Partial<Pick<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption>>,
 ) {
+  options.environments.createGatewayTools ??= prepareGatewayTools;
   return createRawWorkerSessionTurnPlacementProvider({
     waitForAdmissionNode: async () => {},
     reconcileActivePlacement: async () => {
@@ -284,10 +285,6 @@ export function createWorkerSessionTurnPlacementProvider(
     resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
-    environments: {
-      createGatewayTools: prepareGatewayTools,
-      ...options.environments,
-    },
   });
 }
 

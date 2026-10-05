@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import * as oauthClient from "../../agents/github-oauth-client.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
+import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import {
@@ -26,6 +29,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { redeemFactoryGitHubProof } from "../factory-github-proof.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
+import * as oauthLifecycle from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import * as projectGitHubSearch from "../project-github-search.js";
 import type { GatewayClient } from "./client-types.js";
@@ -55,6 +59,77 @@ afterEach(() => {
 function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
   return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
 }
+
+test("project discovery uses the configured bot and never borrows service or anonymous credentials", async () => {
+  await withProjectState(async () => {
+    const profileId = "ghp_11111111111111111111111111111111";
+    const cfg = {
+      tools: { github: { profileId } },
+      gateway: { controlUi: { github: { token: "synthetic-service-token" } } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const directory = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+    });
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(directory, "hosts.yml"),
+      "github.com:\n  oauth_token: synthetic-project-bot\n",
+      { mode: 0o600 },
+    );
+    const refresh = vi
+      .spyOn(oauthLifecycle, "requestCurrentGitHubOAuthRefresh")
+      .mockResolvedValue();
+    const verify = vi.spyOn(oauthClient, "verifyGitHubCredential").mockResolvedValue({
+      status: "available",
+      scopes: [],
+      account: { accountId: 202, login: "system-bot", avatarUrl: null },
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer synthetic-project-bot");
+      return new Response(JSON.stringify({ items: [] }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      expect(
+        await invokeProjectMethod("projects.searchRemote", { query: "selected-bot-search" }, cfg),
+      ).toMatchObject({ ok: true });
+      expect(fetchImpl).toHaveBeenCalled();
+      fetchImpl.mockClear();
+      verify.mockImplementation(async () => {
+        setRuntimeConfigSnapshot({
+          ...cfg,
+          tools: { github: { profileId: "ghp_22222222222222222222222222222222" } },
+        });
+        return {
+          status: "available",
+          scopes: [],
+          account: { accountId: 202, login: "system-bot", avatarUrl: null },
+        };
+      });
+      expect(
+        await invokeProjectMethod(
+          "projects.searchRemote",
+          { query: "selected-bot-stale" },
+          cfg,
+          ["operator.write"],
+          undefined,
+          projectsHandlers,
+          undefined,
+          () => getRuntimeConfigSnapshot() ?? cfg,
+        ),
+      ).toMatchObject({ ok: false });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      refresh.mockRestore();
+      verify.mockRestore();
+    }
+  });
+});
 
 test("projects.searchRemote sends only the selected host's service credential", async () => {
   vi.stubEnv("GH_TOKEN", "public-host-token");
@@ -107,12 +182,6 @@ test("projects.searchRemote sends only the selected host's service credential", 
 
 test("projects.searchRemote binds native tokens to the host through final fetch", async () => {
   const cfg = {
-    tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
-    agents: {
-      entries: {
-        main: { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } },
-      },
-    },
     gateway: {
       github: { host: "a.ghe.example.test", apiBaseUrl: "https://a.ghe.example.test/api/v3" },
       projects: { nativeGitHubSearch: true },
@@ -160,7 +229,7 @@ test("projects.searchRemote binds native tokens to the host through final fetch"
   }
 });
 
-test.each(["revoked", "aborted"] as const)(
+test.each(["revoked", "aborted", "guard"] as const)(
   "registered projects.searchRemote refuses %s callers before credentialed I/O",
   async (closed) => {
     const cfg = {
@@ -199,7 +268,15 @@ test.each(["revoked", "aborted"] as const)(
         registeredProjectsHandlers,
         undefined,
         () => cfg,
-        { signal: controller.signal, hasCurrentClientAuthority: () => active },
+        {
+          signal: controller.signal,
+          hasCurrentClientAuthority: () => closed === "guard" || active,
+          sessionMutationCommitGuard: () => {
+            if (closed === "guard" && !active) {
+              throw new Error("request guard revoked");
+            }
+          },
+        },
       );
       expect(result).toMatchObject({ ok: false });
       expect(fetchImpl).not.toHaveBeenCalled();
@@ -327,6 +404,7 @@ test("projects.searchRemote uses the opted-in native system GitHub identity", as
       signal: undefined,
       host: "github.com",
       apiBaseUrl: "https://api.github.com",
+      requireAuthentication: false,
     });
   } finally {
     search.mockRestore();
@@ -450,40 +528,50 @@ test("projects.list exposes a normalized configured default repository", async (
   });
 });
 
-test("projects.list refuses a default repository from a replaced config during registry lookup", async () => {
-  const original = {
-    gateway: {
-      github: { host: "ghe.example.test" },
-      projects: { defaultRepository: { url: "https://ghe.example.test/acme/private-repo.git" } },
-    },
-  };
-  let current: OpenClawConfig = original;
-  const list = vi
-    .spyOn(await import("../../projects/project-registry.js"), "listProjectRegistry")
-    .mockImplementation(async () => {
-      current = { gateway: { github: { host: "github.com" } } };
-      return [];
-    });
-  try {
-    expect(
-      await invokeProjectMethod(
-        "projects.list",
-        {},
-        original,
-        ["operator.write"],
-        undefined,
-        projectsHandlers,
-        undefined,
-        () => current,
-      ),
-    ).toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", message: expect.stringContaining("Project access changed") },
-    });
-  } finally {
-    list.mockRestore();
-  }
-});
+test.each(["config", "access", "default-repository"] as const)(
+  "projects.list refuses changed %s during registry lookup",
+  async (change) => {
+    const original = {
+      gateway: {
+        github: { host: "ghe.example.test" },
+        projects: { defaultRepository: { url: "https://ghe.example.test/acme/private-repo.git" } },
+      },
+    };
+    let current: OpenClawConfig = original;
+    const list = vi
+      .spyOn(await import("../../projects/project-registry.js"), "listProjectRegistry")
+      .mockImplementation(async () => {
+        if (change === "config") {
+          current = { gateway: { github: { host: "github.com" } } };
+        } else if (change === "access") {
+          bumpGatewayAccessRevision();
+        } else {
+          original.gateway.projects.defaultRepository.url =
+            "https://ghe.example.test/acme/replaced.git";
+        }
+        return [];
+      });
+    try {
+      expect(
+        await invokeProjectMethod(
+          "projects.list",
+          {},
+          original,
+          ["operator.write"],
+          undefined,
+          projectsHandlers,
+          undefined,
+          () => current,
+        ),
+      ).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: expect.stringContaining("Project access changed") },
+      });
+    } finally {
+      list.mockRestore();
+    }
+  },
+);
 
 test("projects.list coalesces concurrent observed Git discovery and refreshes later reads", async () => {
   await withProjectState(async (state) => {

@@ -22,6 +22,60 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service provision replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it.each(["settled", "wrong-operation", "wrong-lease", "lost-reply", "cancelled"] as const)(
+    "retires only an exact settled provider shortage without replay or another cleanup (%s)",
+    async (change) => {
+      const controller = new AbortController();
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({
+        provision: async (_profile, operationId) => {
+          if (change === "cancelled") {
+            controller.abort(new Error("cancelled"));
+          }
+          if (change === "lost-reply") {
+            throw new Error("allocation response lost");
+          }
+          throw WorkerProviderError.capacityShortage({
+            operationId: change === "wrong-operation" ? "other-operation" : operationId,
+            leaseId: change === "wrong-lease" ? "other-lease" : "lease-1",
+            attemptName: "fixed-vm",
+            attemptNonce: "fixed-nonce",
+            providerCode: "AllocationFailed",
+          });
+        },
+        destroy,
+      });
+      const service = support.createService(provider);
+      const result = await service
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: "settled-capacity",
+          signal: controller.signal,
+        })
+        .catch((error: unknown) => error);
+      const record = support.testState.store.list()[0]!;
+      if (change === "settled") {
+        expect(result).toMatchObject({
+          environment: { environmentId: record.environmentId, ownerEpoch: record.ownerEpoch },
+          receipt: { leaseId: "lease-1" },
+        });
+        expect(record).toMatchObject({
+          state: "destroyed",
+          leaseId: "lease-1",
+          teardownTerminalState: "destroyed",
+        });
+        await support.reopenWorkerEnvironmentStore();
+        const restarted = support.createService(provider);
+        await restarted.reconcileOnce();
+        expect(support.testState.store.get(record.environmentId)).toEqual(record);
+        expect(destroy).not.toHaveBeenCalled();
+      } else {
+        expect(record.state).not.toBe("destroyed");
+        expect(result).not.toHaveProperty("receipt");
+      }
+    },
+  );
+
   it("retains an indeterminate node lease when runtime preflight fails after restart", async () => {
     const provision = vi.fn<WorkerProvider["provision"]>(async () => {
       throw new Error("node allocation response was lost");

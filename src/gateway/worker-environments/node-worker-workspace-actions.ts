@@ -388,14 +388,24 @@ export function createNodeWorkerWorkspaceActions(params: {
     };
     let baseline: WorkerWorkspaceSyncResult & { baseCommit: string };
     if (source.prepared) {
-      if (!source.baseCommit || source.runSetupScript) {
-        throw new Error("Prepared repository requires its pinned commit and completed setup");
+      if (source.runSetupScript) {
+        throw new Error("Prepared repository requires completed setup");
       }
-      baseline = await repository.bindPreparedRepository(
-        { ...identity, commit: source.baseCommit },
+      const bound = await repository.bindPreparedRepository(
+        {
+          ...identity,
+          commit: source.prepared.baseCommit,
+          allowRefRefresh: source.preparedRefMode !== undefined,
+        },
         source.prepared,
         request.gitAuthor,
       );
+      baseline =
+        source.preparedRefMode === "fetch"
+          ? await repository.refreshBoundPreparedRepository(identity, bound)
+          : source.preparedRefMode === "recover"
+            ? await repository.observeBoundPreparedRepository(bound)
+            : bound;
     } else {
       const prepared = await repository.prepareRepository(identity);
       if (prepared.kind === "failed") {

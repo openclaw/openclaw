@@ -6,6 +6,7 @@ import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.j
 import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { readImageReserveProject } from "./image-reserve.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
 import {
   createProjectSetupScript,
@@ -41,6 +42,10 @@ export async function readWorkerProjectSetupRecipe(
 
 export function readWorkerProjectSnapshot(value: unknown): WorkerProjectSnapshot | undefined {
   if (value === undefined) {
+    return undefined;
+  }
+  // Image-only reserves deliberately have no source checkout to read or prepare.
+  if (readImageReserveProject(value)) {
     return undefined;
   }
   if (isRecord(value) && value.source !== undefined) {
@@ -174,6 +179,7 @@ export function createWorkerProjectPreparation(params: {
   };
   const scriptInput = {
     ...sourceInput,
+    ...("source" in params.project ? { repositoryUrl: params.project.source.url } : {}),
     ...(preparationInput ? { preparation: preparationInput } : {}),
   };
   const prepareSeed: ProjectPreparation["prepare"] = async (transport) => {

@@ -16,6 +16,7 @@ import type {
   WorkerEnvironmentPreparation,
   WorkerEnvironmentPreparationIntent,
   WorkerEnvironmentRecord,
+  WorkerEnvironmentCustodyHold,
 } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";

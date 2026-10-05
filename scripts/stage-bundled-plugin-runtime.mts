@@ -376,6 +376,67 @@ function generateBundledPluginRuntime(repoRoot: string, runtimeRoot: string, ali
   }
 }
 
+/** Source-discovered package self-exports use the same compiled modules as the runtime overlay. */
+function stageSourcePackageExports(repoRoot: string): void {
+  const distExtensions = path.join(repoRoot, "dist", "extensions");
+  if (!fs.existsSync(distExtensions)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(distExtensions, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === "node_modules") {
+      continue;
+    }
+    const sourceRoot = path.join(repoRoot, "extensions", entry.name);
+    const builtRoot = path.join(distExtensions, entry.name);
+    const source = tryReadJsonFile(path.join(sourceRoot, "package.json"));
+    const built = tryReadJsonFile(path.join(builtRoot, "package.json"));
+    if (!isRecord(source) || !isRecord(built)) {
+      continue;
+    }
+    const stage = (declared: unknown, compiled: unknown) => {
+      if (typeof declared === "string" && typeof compiled === "string") {
+        if (
+          !declared.startsWith("./dist/") ||
+          !/\.[cm]?js$/u.test(declared) ||
+          !compiled.startsWith("./")
+        ) {
+          return;
+        }
+        const target = path.resolve(sourceRoot, declared);
+        const module = path.resolve(builtRoot, compiled);
+        if (
+          !target.startsWith(path.join(sourceRoot, "dist") + path.sep) ||
+          !module.startsWith(builtRoot + path.sep)
+        ) {
+          throw new Error("Plugin public export escapes its compiled package");
+        }
+        let directory = path.dirname(target);
+        while (directory !== sourceRoot) {
+          assertRealOutputRoot(directory);
+          directory = path.dirname(directory);
+        }
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        assertRealOutputRoot(target);
+        removePathIfExists(target);
+        if (shouldWrapRuntimeJsFile(module)) {
+          writeRuntimeModuleWrapper(module, target);
+        } else {
+          symlinkPath(module, target);
+        }
+      } else if (Array.isArray(declared) && Array.isArray(compiled)) {
+        declared.forEach((value, index) => stage(value, compiled[index]));
+      } else if (isRecord(declared) && isRecord(compiled)) {
+        for (const [condition, value] of Object.entries(declared)) {
+          if (condition !== "types") {
+            stage(value, compiled[condition]);
+          }
+        }
+      }
+    };
+    stage(source.exports, built.exports);
+  }
+}
+
 /** Stages runtime plugin entries and aliases used by packaged bundled plugins. */
 export function stageBundledPluginRuntime(params: { cwd?: string; repoRoot?: string } = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
@@ -384,6 +445,7 @@ export function stageBundledPluginRuntime(params: { cwd?: string; repoRoot?: str
   assertRealOutputRoot(runtimeRoot);
   removePathIfExists(runtimeRoot);
   generateBundledPluginRuntime(repoRoot, runtimeRoot);
+  stageSourcePackageExports(repoRoot);
 }
 
 function runtimeTreesEqual(expected: string, actual: string, finalPath = actual): boolean {

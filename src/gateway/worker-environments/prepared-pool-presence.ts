@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
+import { readImageReserveProject } from "./image-reserve.js";
 import {
   readWorkerProjectPreparation,
   type WorkerProviderPreparedIntent,
 } from "./preparation-identity.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
+import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
@@ -16,30 +18,44 @@ const HUMAN_PRESENCE_RETIRE_AFTER_MS = 15 * 60 * 1_000;
 const REPOSITORY_REF_REFRESH_INTERVAL_MS = 60_000;
 const PRESENCE_RESERVE_EXPIRY_MS = Number.MAX_SAFE_INTEGER;
 
-export function matchingPreparedPoolPresenceDemand(
-  record: WorkerEnvironmentRecord,
-  demand: PreparedPoolPresenceDemand | undefined,
-): PreparedPoolPresenceDemand | undefined {
+export function matchingPreparedPoolPresenceDemand<
+  T extends Pick<PreparedPoolPresenceDemand, "profileId" | "preparationKey" | "project">,
+>(record: WorkerEnvironmentRecord, demand: T | undefined): T | undefined {
   return demand?.profileId === record.profileId &&
     demand.preparationKey === record.preparation?.key &&
-    demand.project.key === readWorkerProjectSnapshot(record.profileSnapshot.project)?.key
+    demand.project.key ===
+      (
+        readImageReserveProject(record.profileSnapshot.project) ??
+        readWorkerProjectSnapshot(record.profileSnapshot.project)
+      )?.key
     ? demand
     : undefined;
 }
 
 export function isSupersededPresenceReserve(
   record: WorkerEnvironmentRecord,
-  demand: PreparedPoolPresenceDemand | undefined,
+  demand: Pick<PreparedPoolPresenceDemand, "profileId" | "preparationKey" | "project"> | undefined,
 ): boolean {
-  // Only presence admission grants an unbounded reserve deadline.
+  // Only the presence owner grants an unbounded reserve deadline.
   if (
     record.preparation?.purpose !== "reserve" ||
+    record.preparation.consumedAtMs !== null ||
     record.preparation.expiresAtMs !== PRESENCE_RESERVE_EXPIRY_MS
   ) {
     return false;
   }
   return !matchingPreparedPoolPresenceDemand(record, demand);
 }
+
+export type StandingImageDemandSource = {
+  profileId: string;
+  executionMode: "worker-turn" | "remote-exec";
+};
+
+export type EffectivePreparedDemand = Pick<
+  PreparedPoolPresenceDemand,
+  "profileId" | "project" | "preparationKey" | "retireAtMs"
+> & { demandAtMs: number; requestedRef?: string | null };
 
 export type PreparedPoolPresenceOptions = {
   store: WorkerEnvironmentStore;
@@ -49,6 +65,7 @@ export type PreparedPoolPresenceOptions = {
     options: {
       projectRepository?: RepositoryWorkerProjectSnapshot;
       repository?: { agentId: string; url: string; ref?: string };
+      imageReserve?: boolean;
       executionMode?: "worker-turn" | "remote-exec";
       signal?: AbortSignal;
     },
@@ -61,6 +78,7 @@ export type PreparedPoolPresenceOptions = {
         repository: { agentId: string; url: string; ref?: string };
       }
     | undefined;
+  resolveStandingImageDemand?: () => StandingImageDemandSource | undefined;
   presenceDemandStore?: {
     read: () => Promise<PreparedPoolPresenceDemand | undefined>;
     write: (
@@ -82,11 +100,144 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   let loaded = false;
   let loading: Promise<void> | undefined;
   let demand: PreparedPoolPresenceDemand | undefined;
+  let standing:
+    | {
+        source: StandingImageDemandSource;
+        policy: { providerId: string; target: number; maxTotal: number };
+        intent: WorkerProviderPreparedIntent;
+        demand: EffectivePreparedDemand;
+      }
+    | undefined;
   let refResolvedAtMs: number | undefined;
   const current = () => signal.throwIfAborted();
+  const standingSource = () =>
+    process.env.FACTORY_AUTH_MODE === "github" ? options.resolveStandingImageDemand?.() : undefined;
+  const workerPolicy = (profileId: string) => {
+    const config = options.getConfig().cloudWorkers;
+    const profile = config?.profiles?.[profileId];
+    const providerId = profile && normalizeCapabilityProviderId(profile.provider);
+    return profile && providerId
+      ? {
+          providerId,
+          target: profile.readyWorkers ?? 1,
+          maxTotal: config?.preparedPool?.maxTotal ?? 4,
+        }
+      : undefined;
+  };
+  const readStanding = () => {
+    if (
+      !standing ||
+      signal.aborted ||
+      !isDeepStrictEqual(standing.source, standingSource()) ||
+      !isDeepStrictEqual(standing.policy, workerPolicy(standing.source.profileId))
+    ) {
+      return undefined;
+    }
+    try {
+      options.assertIntentCurrent(standing.source.profileId, standing.intent);
+      return standing.demand;
+    } catch {
+      // A changed preparation cannot authorize image selection between maintenance passes.
+      return undefined;
+    }
+  };
+  const admitReserves = async (
+    intent: WorkerProviderPreparedIntent,
+    state: EffectivePreparedDemand,
+    assertSourceCurrent: () => void,
+  ) => {
+    const limits = workerPolicy(state.profileId);
+    if (!limits || limits.providerId !== intent.providerId) {
+      throw new Error("Prepared-pool worker profile changed during preparation");
+    }
+    const assertCurrent = () => {
+      current();
+      assertSourceCurrent();
+      if (!isDeepStrictEqual(limits, workerPolicy(state.profileId))) {
+        throw new Error("Prepared-pool admission limits changed");
+      }
+      options.assertIntentCurrent(state.profileId, intent);
+    };
+    assertCurrent();
+    const slots = store.preparedCapacity({
+      profileId: state.profileId,
+      projectKey: state.project.key,
+      ...limits,
+    });
+    for (let index = 0; index < slots; index += 1) {
+      const admitted = await store.ensurePreparedIntent({
+        intent: {
+          ...deriveEnvironmentIntent(`prepared:${randomUUID()}`),
+          providerId: limits.providerId,
+          profileId: state.profileId,
+          profileSnapshot: intent.profileSnapshot,
+          preparation: {
+            purpose: "reserve",
+            key: state.preparationKey,
+            demandAtMs: state.demandAtMs,
+            expiresAtMs: PRESENCE_RESERVE_EXPIRY_MS,
+          },
+        },
+        projectKey: state.project.key,
+        ...limits,
+        assertCurrent,
+      });
+      assertCurrent();
+      if (!admitted) {
+        break;
+      }
+    }
+  };
+  const maintainStanding = async (source: StandingImageDemandSource) => {
+    const limits = workerPolicy(source.profileId);
+    if (!limits || limits.target <= 0 || limits.maxTotal <= 0) {
+      standing = undefined;
+      return undefined;
+    }
+    const assertCurrent = () => {
+      current();
+      if (
+        !isDeepStrictEqual(source, standingSource()) ||
+        !isDeepStrictEqual(limits, workerPolicy(source.profileId))
+      ) {
+        throw new Error("Standing image demand changed during preparation");
+      }
+    };
+    assertCurrent();
+    const preparedAtMs = now();
+    const intent = await options.prepareIntent(source.profileId, {
+      imageReserve: true,
+      executionMode: source.executionMode,
+      signal,
+    });
+    assertCurrent();
+    options.assertIntentCurrent(source.profileId, intent);
+    const project = readImageReserveProject(intent.profileSnapshot.project);
+    const preparation = readWorkerProjectPreparation(intent.profileSnapshot.project);
+    if (!project || !preparation) {
+      throw new Error("Standing demand requires an admitted image preparation");
+    }
+    const state: EffectivePreparedDemand = {
+      profileId: source.profileId,
+      project,
+      preparationKey: preparation.key,
+      demandAtMs: preparedAtMs,
+      retireAtMs: null,
+    };
+    standing = { source, policy: limits, intent, demand: state };
+    await admitReserves(intent, state, assertCurrent);
+    return state;
+  };
   const policy = () => {
     const source = options.resolveHumanPresenceDemand?.();
-    return source && options.presenceDemandStore ? { ...source } : undefined;
+    if (!source || !options.presenceDemandStore) {
+      return undefined;
+    }
+    return {
+      ...source,
+      imageOnly: process.env.FACTORY_AUTH_MODE === "github",
+      retireAfterMs: HUMAN_PRESENCE_RETIRE_AFTER_MS,
+    };
   };
   const read = async () => {
     if (!loaded) {
@@ -119,15 +270,26 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     assertCurrent();
   };
   const matches = (
-    state: PreparedPoolPresenceDemand,
+    state: Pick<PreparedPoolPresenceDemand, "profileId" | "project"> & {
+      requestedRef?: string | null;
+    },
     source: NonNullable<ReturnType<typeof policy>>,
   ) =>
     state.profileId === source.profileId &&
-    state.project.source.url === source.repository.url &&
-    state.project.source.owner.agent.agentId === source.repository.agentId &&
-    state.requestedRef === (source.repository.ref ?? null);
+    (readImageReserveProject(state.project)
+      ? source.imageOnly
+      : !source.imageOnly &&
+        "source" in state.project &&
+        state.project.source.url === source.repository.url &&
+        state.project.source.owner.agent.agentId === source.repository.agentId &&
+        state.requestedRef === (source.repository.ref ?? null));
 
   const maintain = async () => {
+    const configuredStanding = standingSource();
+    if (configuredStanding) {
+      return maintainStanding({ ...configuredStanding });
+    }
+    standing = undefined;
     const expectedVersion = version;
     let state = await read();
     current();
@@ -162,9 +324,10 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
         };
         await write(state, expectedVersion, assertPolicyCurrent);
       }
-      return state;
+      return state && { ...state, demandAtMs: state.lastPresentAtMs };
     }
     const previous = state;
+    const imageOnly = source.imageOnly;
     const retained =
       previous &&
       matches(previous, source) &&
@@ -174,9 +337,11 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     // reserves must not pin a mutable ref indefinitely, including after restart.
     const resolutionStartedAtMs = now();
     const intent = await options.prepareIntent(source.profileId, {
-      ...(retained && previous
-        ? { projectRepository: previous.project }
-        : { repository: source.repository }),
+      ...(imageOnly
+        ? { imageReserve: true }
+        : retained && previous && "source" in previous.project
+          ? { projectRepository: previous.project }
+          : { repository: source.repository }),
       executionMode: source.executionMode,
       signal,
     });
@@ -185,15 +350,17 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       throw new Error("Authenticated human presence changed during repository preparation");
     }
     assertPolicyCurrent();
-    const project = readWorkerProjectSnapshot(intent.profileSnapshot.project);
+    const project = imageOnly
+      ? readImageReserveProject(intent.profileSnapshot.project)
+      : readRepositoryWorkerProjectSnapshot(intent.profileSnapshot.project);
     const preparation = readWorkerProjectPreparation(intent.profileSnapshot.project);
-    if (!project || !("source" in project) || !preparation) {
+    if (!project || !preparation) {
       throw new Error("Human-presence demand requires an admitted repository preparation");
     }
     state = {
       revision: (state?.revision ?? 0) + 1,
       profileId: source.profileId,
-      requestedRef: source.repository.ref ?? null,
+      requestedRef: imageOnly ? null : (source.repository.ref ?? null),
       preparationKey: preparation.key,
       project,
       lastPresentAtMs: now(),
@@ -203,68 +370,47 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     if (!retained) {
       refResolvedAtMs = resolutionStartedAtMs;
     }
-    const config = options.getConfig().cloudWorkers;
-    const profile = config?.profiles?.[source.profileId];
-    const providerId = profile && normalizeCapabilityProviderId(profile.provider);
-    if (!profile || !providerId || providerId !== intent.providerId) {
-      throw new Error("Human-presence worker profile changed during preparation");
-    }
-    const limits = {
-      target: profile.readyWorkers ?? 1,
-      maxTotal: config?.preparedPool?.maxTotal ?? 4,
-    };
-    const slots = store.preparedCapacity({
-      profileId: source.profileId,
-      projectKey: project.key,
-      ...limits,
-    });
-    for (let index = 0; index < slots; index += 1) {
-      const admitted = await store.ensurePreparedIntent({
-        intent: {
-          ...deriveEnvironmentIntent(`prepared:${randomUUID()}`),
-          providerId,
-          profileId: source.profileId,
-          profileSnapshot: intent.profileSnapshot,
-          preparation: {
-            purpose: "reserve",
-            key: preparation.key,
-            demandAtMs: state.lastPresentAtMs,
-            expiresAtMs: PRESENCE_RESERVE_EXPIRY_MS,
-          },
-        },
-        projectKey: project.key,
-        ...limits,
-        assertCurrent: () => {
-          current();
-          assertPolicyCurrent();
-          if (expectedVersion !== version || !humanPresent) {
-            throw new Error("Authenticated human presence changed before reserve admission");
-          }
-          options.assertIntentCurrent(source.profileId, intent);
-        },
-      });
-      if (!admitted) {
-        break;
+    const effective = { ...state, demandAtMs: state.lastPresentAtMs };
+    await admitReserves(intent, effective, () => {
+      assertPolicyCurrent();
+      if (expectedVersion !== version || !humanPresent) {
+        throw new Error("Authenticated human presence changed before reserve admission");
       }
-    }
-    return state;
+    });
+    return effective;
   };
 
   return {
     maintain,
     ready: read,
-    current: () => {
+    current: (): EffectivePreparedDemand | undefined => {
+      if (standing || standingSource()) {
+        return readStanding();
+      }
       // A held repository admission must not extend the last browser's grace.
       // Persistence catches up through maintain; reads use the same observed departure.
       if (demand?.retireAtMs === null && !humanPresent) {
         const absentAtMs = humanPresenceObserved
           ? humanPresenceChangedAtMs
           : demand.lastPresentAtMs;
-        return { ...demand, retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS };
+        return {
+          ...demand,
+          demandAtMs: demand.lastPresentAtMs,
+          retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS,
+        };
       }
-      return demand;
+      return demand && { ...demand, demandAtMs: demand.lastPresentAtMs };
     },
-    matchesCurrentPolicy: (state: PreparedPoolPresenceDemand) => {
+    matchesCurrentPolicy: (state: EffectivePreparedDemand) => {
+      if (standing || standingSource()) {
+        const admitted = readStanding();
+        return Boolean(
+          admitted &&
+          state.profileId === admitted.profileId &&
+          state.preparationKey === admitted.preparationKey &&
+          state.project.key === admitted.project.key,
+        );
+      }
       const source = policy();
       return Boolean(source && matches(state, source));
     },
@@ -279,5 +425,6 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       return options.schedule();
     },
     isPresent: () => humanPresent,
+    isActive: () => readStanding() !== undefined || humanPresent,
   };
 }

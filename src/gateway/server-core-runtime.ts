@@ -472,6 +472,7 @@ export async function startGatewayCoreRuntime(input: {
       },
       afterCommit: () => {
         nodeRegistry.refreshRuntimePolicy();
+        runtime.prepareWorkerRuntimeArtifacts?.();
       },
     };
   };

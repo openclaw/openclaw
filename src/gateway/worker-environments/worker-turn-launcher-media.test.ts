@@ -593,12 +593,10 @@ describe("cloud turn media boundary", () => {
       const rig = harness();
       const input = turn("in-flight-media");
       let cancelledAtBoundary: boolean | undefined;
-      let launchCancelled: boolean | undefined;
       let transferSignal: AbortSignal | undefined;
       const launchMock = vi.spyOn(rig.tunnel, "launchTurn");
       const launch = launchMock.getMockImplementation()!;
       launchMock.mockImplementation(async (request) => {
-        launchCancelled = request.signal?.aborted;
         request.signal?.throwIfAborted();
         return await launch(request);
       });
@@ -651,7 +649,8 @@ describe("cloud turn media boundary", () => {
       }
       expect(cancelledAtBoundary).toBe(closure !== "unrelated" && closure !== "dispatch");
       if (closure === "dispatch") {
-        expect(launchCancelled).toBe(true);
+        expect(launchMock).not.toHaveBeenCalled();
+        expect(transferSignal?.aborted).toBe(true);
       }
       expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
       expect(rig.runLocal).not.toHaveBeenCalled();

@@ -11,6 +11,7 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import { createProjectsHandlers } from "./projects.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const execFileAsync = promisify(execFile);
 export const listRegistryRecords = vi.fn(async () => []);
@@ -52,7 +53,10 @@ export async function invokeProjectMethod(
   handlers = projectsHandlers,
   projection?: SessionRowProjection,
   getConfig: () => OpenClawConfig = () => cfg as OpenClawConfig,
-  lifetime: { signal?: AbortSignal; hasCurrentClientAuthority?: () => boolean } = {},
+  lifetime: Pick<
+    GatewayRequestHandlerOptions,
+    "signal" | "hasCurrentClientAuthority" | "sessionMutationCommitGuard"
+  > = {},
 ) {
   const capture: {
     result: {

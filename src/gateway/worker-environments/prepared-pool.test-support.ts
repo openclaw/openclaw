@@ -204,7 +204,7 @@ export function usePreparedPoolFixture() {
           leaseId: record.leaseId!,
           bundleHash: BUNDLE_HASH,
           assertCurrent: () => {},
-        })!
+        }))!
       : await placements.transition({
           sessionId,
           from: "requested",

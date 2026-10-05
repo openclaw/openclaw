@@ -565,6 +565,9 @@ it.each(["baseCommit", "baseManifestRef", "remoteWorkspaceDir"] as const)(
   "does not accept a prepared source when sync changes its attested %s",
   async (field) => {
     const f = await fixture();
+    await f.start();
+    const pinned = (await f.store.get(f.repository.workspaceId))!;
+    f.reconcileWorkspace.mockClear();
     f.syncWorkspace.mockResolvedValueOnce({
       mode: "repository",
       baseCommit: f.baseCommit,
@@ -575,6 +578,7 @@ it.each(["baseCommit", "baseManifestRef", "remoteWorkspaceDir"] as const)(
     });
     await expect(
       f.start({
+        repository: pinned,
         preparedRepository: {
           baseCommit: f.baseCommit,
           workspaceDir: f.remote,
@@ -583,19 +587,68 @@ it.each(["baseCommit", "baseManifestRef", "remoteWorkspaceDir"] as const)(
         },
       }),
     ).rejects.toThrow("attested prepared workspace");
-    expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+    expect(await f.store.get(f.repository.workspaceId)).toEqual(pinned);
     expect(f.reconcileWorkspace).not.toHaveBeenCalled();
   },
 );
+
+it("replays a claimed ref refresh after its new base was durably pinned", async () => {
+  const f = await fixture();
+  const selectedHead = "f".repeat(40);
+  const selectedManifest = `sha256:${"f".repeat(64)}`;
+  const pinned = await f.store.bindBase({
+    workspaceId: f.repository.workspaceId,
+    expectedRevision: f.repository.revision,
+    baseCommit: selectedHead,
+    baseManifestHash: selectedManifest,
+    assertCurrent: () => {},
+  });
+  const preparedRepository = {
+    baseCommit: f.baseCommit,
+    workspaceDir: f.remote,
+    sourceManifestRef: f.base.manifestRef,
+    preparedManifestRef: f.base.manifestRef,
+  };
+  f.syncWorkspace.mockResolvedValueOnce({
+    mode: "repository",
+    remoteWorkspaceDir: f.remote,
+    baseCommit: selectedHead,
+    baseManifestRef: selectedManifest,
+    manifestRef: selectedManifest,
+  });
+  f.reconcileWorkspace.mockResolvedValueOnce({
+    manifestRef: selectedManifest,
+    changed: false,
+    verifyStable: async () => {},
+    verifyLocalStable: async () => {},
+    publishStagedResult: async () => {},
+    discardPreparedStagedResult: async () => {},
+  });
+
+  await expect(
+    f.start({ repository: pinned, preparedRepository, recovery: true }),
+  ).resolves.toMatchObject({
+    baseCommit: selectedHead,
+    baseManifestRef: selectedManifest,
+  });
+  expect(prepareWorkerRepositoryGitHubIdentity).toHaveBeenCalledOnce();
+  expect(f.syncWorkspace.mock.calls[0]?.[0].source).toMatchObject({
+    prepared: preparedRepository,
+    preparedRefMode: "fetch",
+    baseCommit: selectedHead,
+    gitToken: token,
+  });
+  expect((await f.store.get(pinned.workspaceId))?.baseCommit).toBe(selectedHead);
+});
 
 it.each(["identity", "sync", "verification"] as const)(
   "cannot accept startup state after authority closes during %s",
   async (phase) => {
     const f = await fixture();
     if (phase === "identity") {
-      vi.mocked(prepareWorkerGitHubBinding).mockImplementationOnce(async () => {
+      vi.mocked(prepareWorkerRepositoryGitHubIdentity).mockImplementationOnce(async () => {
         f.closeAuthority();
-        return undefined;
+        throw new Error("placement authority closed");
       });
     } else if (phase === "sync") {
       const sync = f.syncWorkspace.getMockImplementation()!;

@@ -95,6 +95,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "bindPreparedWorkspace"
   | "prepareProjectIntent"
   | "assertPreparedIntentCurrent"
+  | "revalidatePreparedIntentRepository"
   | "getPreparedCandidates"
   | "schedulePreparedRefill"
   | "createWithRequest"
@@ -257,15 +258,30 @@ export function createPlacementFailureActions(deps: {
     environmentId: string | null;
     ownerEpoch: number | null;
     primaryError: unknown;
+    authorize?: WorkerPlacementAuthorization;
+    requireSettledCleanup?: true;
   }): Promise<WorkerDispatchPlacement> => {
     const environmentId = params.environmentId;
     const teardownErrors = environmentId
       ? await cleanupEnvironment({
           environmentId,
           ownerEpoch: params.ownerEpoch,
+          authorize: params.authorize,
         })
       : [];
-    return updateFailure(params.placement, params.primaryError, teardownErrors);
+    params.authorize?.();
+    const failed = await updateFailure(
+      params.placement,
+      params.primaryError,
+      teardownErrors,
+      params.authorize,
+    );
+    if (params.requireSettledCleanup && teardownErrors.length > 0) {
+      throw new Error(
+        boundedError([boundedError(params.primaryError), ...teardownErrors].join("; ")),
+      );
+    }
+    return failed;
   };
 
   const cancelProvisioning = (

@@ -51,6 +51,32 @@ export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseS
   }
 }
 
+/** Doctor and worker first use install the same optional recovery companion. */
+export function ensureWorkerEnvironmentRecoveryHoldSchema(database: DatabaseSync): void {
+  const table = "worker_environment_recovery_holds";
+  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table);
+  if (tableExists(database, table)) {
+    // Admit only the exact predecessor before rebuilding; unknown columns or constraints refuse.
+    assertSqliteSchemaContains(database, table, schema, {
+      allowedColumnDefinitions: { [`${table}.session_id`]: ["session_id TEXT NOT NULL UNIQUE"] },
+    });
+    const session = database
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .find((column) => column.name === "session_id");
+    if (session?.notnull === 1) {
+      const replacement = "worker_environment_recovery_holds_migration";
+      database.exec(
+        schema.replace(`CREATE TABLE IF NOT EXISTS ${table}`, `CREATE TABLE ${replacement}`),
+      );
+      database.exec(`INSERT INTO ${replacement} SELECT environment_id, session_id, hold_json FROM ${table};
+        DROP TABLE ${table}; ALTER TABLE ${replacement} RENAME TO ${table};`);
+    }
+  } else {
+    database.exec(schema);
+  } // sqlite-allow-raw -- Exact owner-approved predecessor migration and canonical DDL.
+}
+
 export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): void {
   ensureTable(database, "session_repository_workspaces", {
     errorMessage: "Repository workspace schema marker is missing.",

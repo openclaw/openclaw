@@ -79,8 +79,18 @@ function startWorkerPlacementDispatchInWorker(
           const environment = current.environmentId
             ? findWorkerEnvironment(db, current.environmentId)
             : undefined;
+          // A rejected first bind never activated a session owner. Its exact destroyed
+          // allocation can retry after cleanup without inventing an execution epoch.
+          const destroyedBeforeActivation =
+            current.activeOwnerEpoch === null &&
+            environment?.state === "destroyed" &&
+            environment.recoveryHold === undefined &&
+            current.workspaceBaseManifestRef === null &&
+            current.remoteWorkspaceDir === null &&
+            current.lastTranscriptAckCursor === null &&
+            current.lastLiveEventAckCursor === null;
           if (
-            current.activeOwnerEpoch === null ||
+            (current.activeOwnerEpoch === null && !destroyedBeforeActivation) ||
             !environment ||
             !isFailedWorkerPlacementEnvironmentGone({
               environmentService: { get: () => environment },

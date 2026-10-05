@@ -365,6 +365,7 @@ export function createHarness(
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     assertPreparedIntentCurrent: vi.fn(),
+    revalidatePreparedIntentRepository: vi.fn(async () => {}),
     prepareProjectIntent: vi.fn(async (_profileId, request) => ({
       providerId: request?.inherited?.providerId ?? ready.providerId,
       profileSnapshot: request?.inherited?.profileSnapshot ?? ready.profileSnapshot,

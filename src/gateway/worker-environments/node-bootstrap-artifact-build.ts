@@ -31,6 +31,8 @@ import {
   composePackagePlugins,
   type DistributionPackageManifest,
 } from "../../infra/package-plugin-composition.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleArchiveManifest,
@@ -235,6 +237,15 @@ export async function prepareNodeBootstrapArtifact(
   temporaryRoot: string,
   usePrebuilt = true,
 ): Promise<NodeBootstrapArtifact> {
+  const timing = createStageTimingTracker(
+    () => performance.now(),
+    (phase) => {
+      createSubsystemLogger("gateway/node-bootstrap").info("node_bootstrap_artifact_phase", {
+        buildId: options.runningBuildId,
+        ...phase,
+      });
+    },
+  );
   const packageRoot = await fs.realpath(options.packageRoot);
   const sourcePackage = await readPackageManifest(packageRoot);
   if (sourcePackage.name !== "openclaw") {
@@ -327,7 +338,9 @@ export async function prepareNodeBootstrapArtifact(
     .filter((plugin) => !plugin.bundled)
     .map(({ id }) => `dist/extensions/${id}/`);
   const publicFiles = (
-    await collectPackageDistInventory(packageRoot, { packageManifest: packageJson })
+    await timing.measure("distribution-inventory", () =>
+      collectPackageDistInventory(packageRoot, { packageManifest: packageJson }),
+    )
   ).filter(
     // The Gateway serves Control UI assets; nodes install their worker bundle separately.
     // Neither belongs in the node runtime's packaging, validation, or download work.
@@ -341,10 +354,12 @@ export async function prepareNodeBootstrapArtifact(
     (relative) =>
       relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/"),
   );
-  const { files, sourceFacts } = await resolveNodeBootstrapRuntimeChunks(
-    packageRoot,
-    [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
-      (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  const { files, sourceFacts } = await timing.measure("runtime-import-discovery", () =>
+    resolveNodeBootstrapRuntimeChunks(
+      packageRoot,
+      [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
+        (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+      ),
     ),
   );
   if (!files.includes("dist/entry.js") && !files.includes("dist/entry.mjs")) {
@@ -482,7 +497,9 @@ export async function prepareNodeBootstrapArtifact(
   }
   const tarballPath = path.join(temporaryRoot, NODE_BOOTSTRAP_PREBUILT_ARCHIVE);
   const prebuiltManifest = usePrebuilt
-    ? await copyNodeBootstrapPrebuiltArchive(packageRoot, temporaryRoot)
+    ? await timing.measure("prebuilt-copy-validation", () =>
+        copyNodeBootstrapPrebuiltArchive(packageRoot, temporaryRoot),
+      )
     : undefined;
   let entryConsumed = Promise.resolve();
   const pack = prebuiltManifest
@@ -503,115 +520,124 @@ export async function prepareNodeBootstrapArtifact(
   // Observe output errors immediately, but join the pipeline after in-flight reads drain.
   void archiveDone.catch(() => undefined);
   const manifest: WorkerBundleHashEntry[] = [];
-  try {
-    // One batch holds at most 16 source buffers under the existing expanded-byte budget.
-    // Pack's jobs limit does not bound ReadEntry input, so consume each output entry below.
-    for (let offset = 0; offset < ordered.length; offset += READ_CONCURRENCY) {
-      const batch = ordered.slice(offset, offset + READ_CONCURRENCY);
-      const read = await runTasksWithConcurrency({
-        tasks: batch.map(
-          ([relative, entry]) =>
-            () =>
-              readEntry(relative, entry),
-        ),
-        limit: READ_CONCURRENCY,
-        errorMode: "stop",
-      });
-      if (read.hasError) {
-        throw read.firstError;
-      }
-      for (let index = 0; index < batch.length; index += 1) {
-        const [relative, entry] = batch[index]!;
-        const { contents, mode } = read.results[index]!;
-        const importerPath = relative.slice(entry.scope.prefix.length);
-        if (path.posix.basename(relative) === "package.json") {
-          const text = contents.toString("utf8");
-          mainScope.packageJsons.set(relative, text);
-          entry.scope.packageJsons.set(importerPath, text);
+  await timing.measure(
+    prebuiltManifest ? "source-verification" : "source-verification-and-gzip",
+    async () => {
+      try {
+        // One batch holds at most 16 source buffers under the existing expanded-byte budget.
+        // Pack's jobs limit does not bound ReadEntry input, so consume each output entry below.
+        for (let offset = 0; offset < ordered.length; offset += READ_CONCURRENCY) {
+          const batch = ordered.slice(offset, offset + READ_CONCURRENCY);
+          const read = await runTasksWithConcurrency({
+            tasks: batch.map(
+              ([relative, entry]) =>
+                () =>
+                  readEntry(relative, entry),
+            ),
+            limit: READ_CONCURRENCY,
+            errorMode: "stop",
+          });
+          if (read.hasError) {
+            throw read.firstError;
+          }
+          for (let index = 0; index < batch.length; index += 1) {
+            const [relative, entry] = batch[index]!;
+            const { contents, mode } = read.results[index]!;
+            const importerPath = relative.slice(entry.scope.prefix.length);
+            if (path.posix.basename(relative) === "package.json") {
+              const text = contents.toString("utf8");
+              mainScope.packageJsons.set(relative, text);
+              entry.scope.packageJsons.set(importerPath, text);
+            }
+            const identity = {
+              path: `package/${relative}`,
+              size: contents.byteLength,
+              mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : mode,
+              sha256: createHash("sha256").update(contents).digest("hex"),
+            };
+            const inspected = sourceFacts.get(relative);
+            if (inspected && identity.sha256 !== inspected.sha256) {
+              throw new Error(`Node distribution changed after import inspection: ${relative}`);
+            }
+            if (entry.scope.patchedMcp) {
+              entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
+            } else {
+              entry.scope.imports.push(
+                ...(inspected?.imports ??
+                  collectPackageDistImports({
+                    files: [importerPath],
+                    packageJsons: entry.scope.packageJsons,
+                    readText: () => contents.toString("utf8"),
+                  })),
+              );
+            }
+            manifest.push(identity);
+            if (!pack) {
+              continue;
+            }
+            const input = new tar.ReadEntry(
+              new tar.Header({
+                path: identity.path,
+                size: identity.size,
+                mode,
+                type: "File",
+              }),
+            );
+            pack.add(input);
+            input.end(contents);
+            // Wait for tar's output entry, not merely the input buffer, before feeding another.
+            await Promise.race([entryConsumed, archiveDone]);
+          }
         }
-        const identity = {
-          path: `package/${relative}`,
-          size: contents.byteLength,
-          mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : mode,
-          sha256: createHash("sha256").update(contents).digest("hex"),
-        };
-        const inspected = sourceFacts.get(relative);
-        if (inspected && identity.sha256 !== inspected.sha256) {
-          throw new Error(`Node distribution changed after import inspection: ${relative}`);
+        for (const scope of [...scopes, mainScope]) {
+          const errors = scope.patchedMcp
+            ? collectPatchedMcpArtifactErrors({
+                manifest: scope.patchedMcp.manifest,
+                files: new Set(scope.files),
+                sha256: (file) => scope.patchedMcp?.hashes.get(file),
+              })
+            : collectPackageDistImportErrors(scope);
+          if (errors.length > 0) {
+            throw new Error(
+              `Node distribution ${scope.label} ${scope.patchedMcp ? "has an invalid patched dependency" : "has an incomplete built import closure"}; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
+            );
+          }
         }
-        if (entry.scope.patchedMcp) {
-          entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
-        } else {
-          entry.scope.imports.push(
-            ...(inspected?.imports ??
-              collectPackageDistImports({
-                files: [importerPath],
-                packageJsons: entry.scope.packageJsons,
-                readText: () => contents.toString("utf8"),
-              })),
+        if (!isDeepStrictEqual(await observeBootstrapModes(temporaryRoot), modes)) {
+          throw new Error("Node bootstrap file creation policy changed while packaging");
+        }
+        if (
+          (await fs.readFile(buildInfoPath, "utf8")) !== buildInfo ||
+          !isDeepStrictEqual(await readPackageManifest(packageRoot), sourcePackage)
+        ) {
+          throw new Error(
+            "Gateway build changed while preparing cloud bootstrap; restart the Gateway and retry",
           );
         }
-        manifest.push(identity);
-        if (!pack) {
-          continue;
-        }
-        const input = new tar.ReadEntry(
-          new tar.Header({
-            path: identity.path,
-            size: identity.size,
-            mode,
-            type: "File",
-          }),
+        pack?.end();
+        await archiveDone;
+      } catch (error) {
+        // Minipass needs an error event; argumentless destroy does not settle Node's pipeline.
+        pack?.destroy(
+          error instanceof Error
+            ? error
+            : new Error("Node bootstrap archive failed", { cause: error }),
         );
-        pack.add(input);
-        input.end(contents);
-        // Wait for tar's output entry, not merely the input buffer, before feeding another.
-        await Promise.race([entryConsumed, archiveDone]);
+        pack?.zip?.destroy();
+        await archiveDone.catch(() => undefined);
+        throw error;
       }
-    }
-    for (const scope of [...scopes, mainScope]) {
-      const errors = scope.patchedMcp
-        ? collectPatchedMcpArtifactErrors({
-            manifest: scope.patchedMcp.manifest,
-            files: new Set(scope.files),
-            sha256: (file) => scope.patchedMcp?.hashes.get(file),
-          })
-        : collectPackageDistImportErrors(scope);
-      if (errors.length > 0) {
-        throw new Error(
-          `Node distribution ${scope.label} ${scope.patchedMcp ? "has an invalid patched dependency" : "has an incomplete built import closure"}; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
-        );
-      }
-    }
-    if (!isDeepStrictEqual(await observeBootstrapModes(temporaryRoot), modes)) {
-      throw new Error("Node bootstrap file creation policy changed while packaging");
-    }
-    if (
-      (await fs.readFile(buildInfoPath, "utf8")) !== buildInfo ||
-      !isDeepStrictEqual(await readPackageManifest(packageRoot), sourcePackage)
-    ) {
-      throw new Error(
-        "Gateway build changed while preparing cloud bootstrap; restart the Gateway and retry",
-      );
-    }
-    pack?.end();
-    await archiveDone;
-  } catch (error) {
-    // Minipass needs an error event; argumentless destroy does not settle Node's pipeline.
-    pack?.destroy(
-      error instanceof Error ? error : new Error("Node bootstrap archive failed", { cause: error }),
-    );
-    pack?.zip?.destroy();
-    await archiveDone.catch(() => undefined);
-    throw error;
-  }
+    },
+  );
   const tarballBytes = (await fs.stat(tarballPath)).size;
   if (tarballBytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
     throw new Error("Node bootstrap archive exceeds the transfer limit");
   }
   const archiveManifest =
     prebuiltManifest ??
-    (await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS));
+    (await timing.measure("archive-manifest-validation", () =>
+      readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
+    ));
   manifest.sort((left, right) => compareWorkerBundlePaths(left.path, right.path));
   if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(archiveManifest)) {
     if (prebuiltManifest) {
@@ -623,7 +649,9 @@ export async function prepareNodeBootstrapArtifact(
     throw new Error("Node bootstrap archive does not match the verified distribution");
   }
   await using handle = await fs.open(tarballPath, "r");
-  const { digest: tarballSha256 } = await sha256File(handle);
+  const { digest: tarballSha256 } = await timing.measure("archive-digest", () =>
+    sha256File(handle),
+  );
   return Object.freeze({
     tarballPath,
     tarballSha256,

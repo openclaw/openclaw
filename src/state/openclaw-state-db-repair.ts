@@ -247,6 +247,11 @@ export function repairStateSchema(
         // before its later read-only workspace and agent readers can consume it.
         if (preAuditSchema || tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db, "repair");
+          const hadRecoveryHolds = tableExists(db, "worker_environment_recovery_holds");
+          ensureWorkerEnvironmentRecoveryHoldSchema(db);
+          if (!hadRecoveryHolds) {
+            applied.push("Added optional worker recovery hold schema");
+          }
           for (const migration of versionedStateMigrations) {
             if (migration.migrate(db, previousVersion)) {
               applied.push(migration.applied);

@@ -1,23 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
-import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
+import type { WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { readImageReserveProject } from "./image-reserve.js";
 import {
   readWorkerProjectPreparation,
   type WorkerProviderPreparedIntent,
 } from "./preparation-identity.js";
+import { createPreparedWorkerCandidateSelection } from "./prepared-pool-candidates.js";
 import {
   createPreparedPoolPresence,
   isSupersededPresenceReserve,
   matchingPreparedPoolPresenceDemand,
-  type PreparedPoolPresenceOptions,
 } from "./prepared-pool-presence.js";
+import type { PreparedWorkerPoolOptions } from "./prepared-pool.types.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
-import type {
-  createWorkerProviderIntent,
-  WorkerProviderIntentPreparationOptions,
-} from "./provider-intent.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -26,27 +24,13 @@ const DEFAULT_READY_WORKERS = 1;
 const DEFAULT_MAX_TOTAL = 4;
 const PREPARATION_CONCURRENCY = 2;
 
-type PoolOptions = Omit<PreparedPoolPresenceOptions, "schedule" | "prepareIntent"> & {
-  resolveProvider: (providerId: string) => WorkerProvider | undefined;
-  prepareIntent: (
-    profileId: string,
-    options: WorkerProviderIntentPreparationOptions,
-  ) => Promise<WorkerProviderPreparedIntent>;
-  prepareRetention: ReturnType<typeof createWorkerProviderIntent>["prepareRetention"];
-  reconcile: (
-    record: WorkerEnvironmentRecord,
-    signal: AbortSignal,
-    beforeReconcile: () => void,
-  ) => Promise<void>;
-  warn: (message: string) => void;
-};
-
 /** Environment rows own inventory; placement activation and explicit builds establish demand. */
-export function createPreparedWorkerPool(options: PoolOptions) {
+export function createPreparedWorkerPool(options: PreparedWorkerPoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
   let requested = false;
   let presenceInFlight: Promise<void> | undefined;
+  let presenceRequested = false;
   let presenceAdmitted = false;
   const preparations = new Map<string, AbortController>();
   const current = () => signal.throwIfAborted();
@@ -68,8 +52,11 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       maxTotal: config.maxTotal,
     };
   };
+  const poolProject = (record: WorkerEnvironmentRecord) =>
+    readImageReserveProject(record.profileSnapshot.project) ??
+    readWorkerProjectSnapshot(record.profileSnapshot.project);
   const groupKey = (record: WorkerEnvironmentRecord) => {
-    const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
+    const project = poolProject(record);
     return project ? JSON.stringify([record.providerId, record.profileId, project.key]) : undefined;
   };
   const presence = createPreparedPoolPresence({ ...options, schedule: () => schedule() });
@@ -114,6 +101,14 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         record.destroyRequestedAtMs === null &&
         record.state !== "failed" &&
         record.state !== "destroyed";
+      // The Factory's image-only reserves replace repository-keyed spare capacity.
+      // Already attached workers keep their placement; unused old reserves retire.
+      if (
+        readImageReserveProject(activePresenceDemand?.project) &&
+        !readImageReserveProject(record.profileSnapshot.project)
+      ) {
+        continue;
+      }
       if (key && build && record.state !== "ready") {
         buildingKeys.add(key);
       }
@@ -124,8 +119,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         activePresenceDemand &&
         (activePresenceDemand.retireAtMs ?? Infinity) > now() &&
         activePresenceDemand.profileId === record.profileId &&
-        activePresenceDemand.project.key ===
-          readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
+        activePresenceDemand.project.key === poolProject(record)?.key &&
         activePresenceDemand.preparationKey !== record.preparation?.key
       ) {
         continue;
@@ -212,9 +206,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           eligible.set(key, {
             source: record,
             preparationKey,
-            demandAtMs: presenceOwned
-              ? Math.max(presenceOwned.lastPresentAtMs, demandAtMs)
-              : demandAtMs,
+            demandAtMs: presenceOwned ? Math.max(presenceOwned.demandAtMs, demandAtMs) : demandAtMs,
             expiresAtMs: Math.max(
               presenceOwned ? presenceExpiresAtMs : 0,
               activationExpiresAtMs ?? 0,
@@ -409,7 +401,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           }
         } else if (
           !generation?.deferred &&
-          (!generation?.presenceOwned || generation.activationEligible || presence.isPresent())
+          (!generation?.presenceOwned || generation.activationEligible || presence.isActive())
         ) {
           work.push(latest);
         }
@@ -443,7 +435,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       }
       const { source } = generation;
       const limits = policy(source);
-      const project = readWorkerProjectSnapshot(source.profileSnapshot.project)!;
+      const project = poolProject(source)!;
       const slots = store.preparedCapacity({
         profileId: source.profileId,
         projectKey: project.key,
@@ -453,7 +445,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       if (
         slots === 0 ||
         generation.expiresAtMs <= now() ||
-        (!presence.isPresent() &&
+        (!presence.isActive() &&
           activePresenceDemand &&
           generation.preparationKey === activePresenceDemand.preparationKey &&
           !generation.activationEligible)
@@ -463,9 +455,11 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       try {
         const preparation = readWorkerProjectPreparation(source.profileSnapshot.project)!;
         const intent = await options.prepareIntent(source.profileId, {
-          ...("source" in project
-            ? { projectRepository: project }
-            : { projectPath: project.root, projectCommit: project.baseCommit }),
+          ...("kind" in project
+            ? { imageReserve: true }
+            : "source" in project
+              ? { projectRepository: project }
+              : { projectPath: project.root, projectCommit: project.baseCommit }),
           ...(typeof source.profileSnapshot.machineClass === "string"
             ? { machineClass: source.profileSnapshot.machineClass }
             : {}),
@@ -498,14 +492,15 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     }
     const retained = await retain(true);
     await reconcileAll(retained.cleanup);
-    const work = retained.work;
     for (const generation of eligible.values()) {
       const { source, intent, demandAtMs, expiresAtMs } = generation;
       if (!intent) {
         continue;
       }
       const limits = policy(source);
-      const project = readWorkerProjectSnapshot(intent.profileSnapshot.project)!;
+      const project =
+        readImageReserveProject(intent.profileSnapshot.project) ??
+        readWorkerProjectSnapshot(intent.profileSnapshot.project)!;
       for (let index = 0; index < generation.slots!; index += 1) {
         current();
         const admitted = await store.ensurePreparedIntent({
@@ -535,10 +530,31 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         if (!admitted) {
           break;
         }
-        work.push(admitted);
+        retained.work.push(admitted);
       }
     }
-    await reconcileAll(work);
+    await reconcileAll(retained.work);
+    const currentPresenceDemand = presence.current();
+    if (
+      currentPresenceDemand &&
+      presence.isActive() &&
+      [...cleaned].some((environmentId) => {
+        const record = store.get(environmentId);
+        return (
+          ["failed", "destroyed"].includes(record?.state ?? "") ||
+          record?.recoveryHold?.phase === "held"
+        );
+      }) &&
+      store.preparedCapacity({
+        profileId: currentPresenceDemand.profileId,
+        projectKey: currentPresenceDemand.project.key,
+        ...configuredPolicy(currentPresenceDemand.profileId),
+      }) > 0
+    ) {
+      // Refill needs fresh presence admission after cleanup frees a full pool.
+      // Its existing owner joins inventory, so request a tail without joining it here.
+      presenceRequested = true;
+    }
   };
   const scheduleInventory = () => {
     if (signal.aborted) {
@@ -566,16 +582,22 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     // Repository admission has one owner and one in-flight operation, but cannot
     // hold inventory cleanup or independently authorized project refill hostage.
     const admission = (presenceInFlight ??= (async () => {
-      presenceAdmitted = false;
-      const previousDemand = presence.current();
       try {
-        await presence.maintain();
-        presenceAdmitted = true;
+        do {
+          presenceRequested = false;
+          presenceAdmitted = false;
+          const previousDemand = presence.current();
+          try {
+            await presence.maintain();
+            presenceAdmitted = true;
+          } finally {
+            if (previousDemand || presence.current()) {
+              await scheduleInventory();
+            }
+          }
+        } while (presenceRequested && !signal.aborted);
       } finally {
         presenceInFlight = undefined;
-        if (previousDemand || presence.current()) {
-          await scheduleInventory();
-        }
       }
     })());
     const results = await Promise.allSettled([admission, scheduleInventory()]);

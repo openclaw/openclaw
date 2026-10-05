@@ -295,11 +295,25 @@ export function createWorkerPlacementDispatchStartup(options: {
         assertAttachmentCurrent();
         requireAttachedEnvironment();
       };
+      recordWorkerPlacementStage(request.sessionId, "workspace_sync_started", {
+        environmentId: provisioned.environmentId,
+        ownerEpoch,
+      });
       const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
       let preparedRepository: Parameters<
         typeof syncSessionRepositoryWorkspace
       >[0]["preparedRepository"];
-      if (preparation) {
+      if (preparation && !readImageReserveProject(params.environment.profileSnapshot.project)) {
+        if (project && "source" in project) {
+          if (
+            params.workspace.kind !== "repository" ||
+            project.source.url !== params.workspace.repository.url
+          ) {
+            throw new Error("Prepared repository does not match this session's source");
+          }
+        }
+        // Every command to a prepared workspace needs its session binding.
+        // Reuse the checkout only when its immutable base matches or is unpinned.
         const prepared = await environments.bindPreparedWorkspace({
           environmentId: provisioned.environmentId,
           ownerEpoch,
@@ -311,21 +325,21 @@ export function createWorkerPlacementDispatchStartup(options: {
           assertCurrent: assertSyncOwner,
         });
         assertSyncOwner();
-        if (project && "source" in project) {
+        if (project && "source" in project && params.workspace.kind === "repository") {
           if (
-            params.workspace.kind !== "repository" ||
-            project.source.url !== params.workspace.repository.url
+            !params.workspace.repository.baseCommit ||
+            project.baseCommit === params.workspace.repository.baseCommit
           ) {
-            throw new Error("Prepared repository does not match this session's source");
+            preparedRepository = {
+              baseCommit: project.baseCommit,
+              workspaceDir: prepared.workspaceDir,
+              sourceManifestRef: prepared.sourceManifestRef,
+              preparedManifestRef: prepared.preparedManifestRef,
+            };
           }
-          preparedRepository = {
-            baseCommit: project.baseCommit,
-            workspaceDir: prepared.workspaceDir,
-            sourceManifestRef: prepared.sourceManifestRef,
-            preparedManifestRef: prepared.preparedManifestRef,
-          };
         }
       }
+      const retainedSource = environments.readRecoveryHold?.(request.sessionId);
       const synced =
         params.workspace.kind === "repository"
           ? await syncSessionRepositoryWorkspace({
@@ -354,6 +368,18 @@ export function createWorkerPlacementDispatchStartup(options: {
               authorize: assertSyncOwner,
             });
       assertSyncOwner();
+      recordWorkerPlacementStage(request.sessionId, "workspace_sync_completed", {
+        environmentId: provisioned.environmentId,
+        ownerEpoch,
+      });
+      if (params.intent) {
+        await environments.revalidatePreparedIntentRepository(
+          request.profileId,
+          params.intent,
+          params.signal,
+        );
+        assertSyncOwner();
+      }
       params.signal?.throwIfAborted();
       params.authorize?.();
       const assertActivationCurrent = () => {

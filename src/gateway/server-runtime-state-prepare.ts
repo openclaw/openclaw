@@ -530,6 +530,7 @@ export async function prepareGatewayKernelState(params: {
   });
   return {
     ...bootstrap,
+    prepareWorkerRuntimeArtifacts: workerEnvironmentRuntime.prepareRuntimeArtifacts,
     scheduler,
     bootId,
     pluginRuntime,

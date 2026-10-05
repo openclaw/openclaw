@@ -55,19 +55,6 @@ export function createWorkerPreparedPlacementBinder(options: {
       environments.assertPreparedIntentCurrent(params.request.profileId, params.intent);
     };
     assertCurrent();
-    await recordWorkerPlacementAwait(
-      params.request.sessionId,
-      "prepared_repository_revalidation",
-      async () => {
-        await environments.revalidatePreparedIntentRepository(
-          params.request.profileId,
-          params.intent,
-        );
-        assertCurrent();
-      },
-      { generation: params.placement.generation },
-      "dispatch",
-    );
     const expectedBuild = {
       bundleHash: preparation.artifacts.workerBundleHash,
       openclawVersion: preparation.artifacts.openclawVersion,
@@ -97,6 +84,23 @@ export function createWorkerPreparedPlacementBinder(options: {
         environmentId,
         prepared: environmentId !== undefined,
       });
+    if (candidates.length === 0) {
+      selected();
+      return undefined;
+    }
+    await recordWorkerPlacementAwait(
+      params.request.sessionId,
+      "prepared_repository_revalidation",
+      async () => {
+        await environments.revalidatePreparedIntentRepository(
+          params.request.profileId,
+          params.intent,
+        );
+        assertCurrent();
+      },
+      { generation: params.placement.generation },
+      "dispatch",
+    );
     for (const environment of candidates) {
       const project = readWorkerProjectSnapshot(environment.profileSnapshot.project);
       const reservePreparation = readWorkerProjectPreparation(environment.profileSnapshot.project);

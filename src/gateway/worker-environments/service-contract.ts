@@ -56,6 +56,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
+  recoveryHold?: import("./environment-record.js").WorkerEnvironmentCustodyHold;
   environmentId: string;
   providerId: string;
   profileId: string;

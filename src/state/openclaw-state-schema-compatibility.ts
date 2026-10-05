@@ -107,6 +107,7 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
   allowedMissingTables: DOCTOR_OWNED_STATE_TABLES,
   allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
+    "worker_environment_recovery_holds.session_id": ["session_id TEXT NOT NULL UNIQUE"],
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "claw_package_refs.package_integrity": [
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",

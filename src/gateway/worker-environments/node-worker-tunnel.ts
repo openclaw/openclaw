@@ -29,6 +29,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { readImageReserveProject } from "./image-reserve.js";
 import {
   measureNodeWorkerLaunchBytes,
   nodeWorkerSpawnResultFromReceipt,
@@ -134,10 +135,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const isEnvironmentOwner = (entry: NodeTunnelEntry): boolean =>
     hasDurableBinding(entry) && isLiveEntry(entry);
 
-  const readPreparation = (entry: NodeTunnelEntry) =>
-    readWorkerProjectPreparation(
-      options.getEnvironment(entry.environmentId)?.profileSnapshot.project,
-    );
+  const readPreparation = (entry: NodeTunnelEntry) => {
+    const project = options.getEnvironment(entry.environmentId)?.profileSnapshot.project;
+    return readImageReserveProject(project) ? undefined : readWorkerProjectPreparation(project);
+  };
   const findNode = async (
     entry: NodeEnvironmentOwner,
     signal: AbortSignal,
@@ -399,6 +400,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             ? {}
             : { credentialExpiresAtMs: request.credentialExpiresAtMs }),
           onDispatchReady: request.onDispatchReady,
+          ...(request.onExecutionAccepted
+            ? { onExecutionAccepted: request.onExecutionAccepted }
+            : {}),
+          ...(request.beforeLaunch ? { beforeLaunch: request.beforeLaunch } : {}),
           signal: request.signal
             ? AbortSignal.any([entry.abortController.signal, request.signal])
             : entry.abortController.signal,

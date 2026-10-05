@@ -27,10 +27,15 @@ export type WorkerEnvironmentCreateRequest = {
   runSetupScript?: boolean;
   inheritedProfile?: { providerId: string; profileSnapshot: WorkerProfile };
   admittedIntent?: WorkerProviderPreparedIntent;
+  /** Captured dispatch authority, rechecked by the provider owner before effects. */
+  assertCurrent?: () => void;
 };
 
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
-  Pick<PreparedPoolPresenceOptions, "resolveHumanPresenceDemand" | "presenceDemandStore"> &
+  Pick<
+    PreparedPoolPresenceOptions,
+    "resolveHumanPresenceDemand" | "resolveStandingImageDemand" | "presenceDemandStore"
+  > &
   WorkerEnvironmentSessionAttachmentOptions & {
     prepareComputer?: (
       claim: import("./placement-store.js").WorkerSessionTurnClaim,

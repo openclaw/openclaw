@@ -23,6 +23,7 @@ export async function runProjectScriptWithGitProbe(
     args: string[],
     options: childProcess.SpawnSyncOptionsWithStringEncoding,
   ) => childProcess.SpawnSyncReturns<string> | undefined,
+  imageInventoryPath?: string,
 ): Promise<string> {
   let stdout = "";
   let stderr = "";
@@ -39,12 +40,24 @@ export async function runProjectScriptWithGitProbe(
   // Both provider scripts wrap their Node program in a shell heredoc.
   await runInNewContext(script.split("\n").slice(2, -1).join("\n"), {
     Buffer,
+    URL,
     performance,
     setTimeout,
     clearTimeout,
     process: guestProcess,
     console: { error: (text: string) => (stderr += text) },
     require: (id: string) => {
+      if (id === "node:fs" && imageInventoryPath) {
+        const native = requireModule(id) as typeof import("node:fs");
+        const inventory = (file: import("node:fs").PathLike) =>
+          file === "/opt/teamclaw/repositories.json" ? imageInventoryPath : file;
+        return {
+          ...native,
+          lstatSync: (file: import("node:fs").PathLike) => native.lstatSync(inventory(file)),
+          readFileSync: (file: import("node:fs").PathLike, encoding: BufferEncoding) =>
+            native.readFileSync(inventory(file), encoding),
+        };
+      }
       if (id === "node:os") {
         return { ...os, homedir: () => home };
       }

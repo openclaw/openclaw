@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
@@ -52,7 +53,7 @@ import {
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
 } from "../method-scopes.js";
-import { readFactoryProjectToken } from "../project-github-proof.js";
+import { prepareFactoryProjectIdentity, readFactoryProjectToken } from "../project-github-proof.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import {
   getSessionRowProjection,
@@ -60,8 +61,10 @@ import {
 } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
+import { projectCheckoutError } from "./projects-errors.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
 import { listProjectRecents } from "./projects-recents.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
@@ -164,13 +167,6 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
     ...record,
     ...(sanitizedOriginUrl ? { originUrl: sanitizedOriginUrl } : {}),
   };
-}
-
-function projectCheckoutError(error: unknown) {
-  return errorShape(
-    error instanceof ProjectCheckoutError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-    formatErrorMessage(error),
-  );
 }
 
 function projectCandidatesToSummaries(candidates: readonly ProjectCandidate[]): ProjectSummary[] {
@@ -371,7 +367,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
           client?.authenticatedUserId !== requesterUserId ||
           readGatewayAccessRevision() !== accessRevision ||
-          context.getRuntimeConfig() !== cfg
+          context.getRuntimeConfig() !== cfg ||
+          !isDeepStrictEqual(configuredDefaultRepository(cfg), defaultRepository)
         ) {
           throw new Error("Project access changed while preparing the listing. Retry the request.");
         }
@@ -520,13 +517,25 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           }
         };
         assertCurrent();
-        const token = factoryEnv
-          ? await readFactoryProjectToken(
-              { client, context, signal, hasCurrentClientAuthority, assertCurrent },
-              "project-add",
-              params.gitUrl,
-            )
-          : githubApiToken(process.env, cfg);
+        const identity = await prepareFactoryProjectIdentity(
+          { client, context, signal, hasCurrentClientAuthority, assertCurrent },
+          { config: cfg, getCurrentConfig: context.getRuntimeConfig, assertCurrent },
+          "project-add",
+          params.gitUrl,
+        );
+        const assertCredentialCurrent = () => {
+          assertCurrent();
+          identity?.assertSelected();
+        };
+        const token = identity
+          ? identity.token
+          : factoryEnv
+            ? await readFactoryProjectToken(
+                { client, context, signal, hasCurrentClientAuthority, assertCurrent },
+                "project-add",
+                params.gitUrl,
+              )
+            : githubApiToken(process.env, cfg);
         assertCurrent();
         if (factoryEnv && !token) {
           throw new Error("Verified GitHub repository access is unavailable.");
@@ -535,7 +544,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           true,
           await materializeProjectClone(
             { cfg, gitUrl: params.gitUrl, name: params.name },
-            { signal, token, assertCurrent },
+            { signal, token, assertCurrent: assertCredentialCurrent },
           ),
           undefined,
         );
@@ -578,14 +587,24 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
     "projects.searchRemote": defineValidatedGatewayHandler(
       "projects.searchRemote",
       validateProjectsSearchRemoteParams,
-      async ({ params, respond, context, signal, hasCurrentClientAuthority }) => {
+      async (options) => {
+        const { params, respond, context, client, signal, hasCurrentClientAuthority } = options;
+        const authority = readGatewayRequestMutationAuthority(options);
         const cfg = context.getRuntimeConfig();
+        const factoryEnv = factoryGitHubActorEnvironment(client, client?.connId ?? "");
+        const factoryProfileId = client?.authenticatedUserProfile?.profileId;
         const host = resolveConfiguredGitHubHost(cfg);
         const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(cfg);
         const assertCurrent = () => {
-          signal?.throwIfAborted();
-          if (hasCurrentClientAuthority?.() === false) {
-            throw new Error("Project requester authority changed during search");
+          authority.assertCurrent();
+          if (
+            factoryEnv &&
+            (factoryGitHubActorEnvironment(client, client?.connId ?? "")
+              ?.OPENCLAW_FACTORY_ACTOR_ID !== factoryEnv.OPENCLAW_FACTORY_ACTOR_ID ||
+              client?.connId !== factoryEnv.OPENCLAW_FACTORY_SESSION_KEY ||
+              client?.authenticatedUserProfile?.profileId !== factoryProfileId)
+          ) {
+            throw new Error("Factory project requester changed during preparation");
           }
           if (context.getRuntimeConfig() !== cfg) {
             throw new gitHubPublicApi.ControlUiGitHubError(
@@ -595,29 +614,43 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           }
         };
         assertCurrent();
-        const nativeToken = factoryEnv
-          ? await readFactoryProjectToken(
-              { client, context, signal, hasCurrentClientAuthority, assertCurrent },
-              "project-search",
-              params.query,
-            )
-          : cfg.gateway?.projects?.nativeGitHubSearch === true
-            ? await readCachedNativeGitHubToken(process.env)
-            : undefined;
+        const identity = await prepareFactoryProjectIdentity(
+          { client, context, signal, hasCurrentClientAuthority, assertCurrent },
+          { config: cfg, getCurrentConfig: context.getRuntimeConfig, assertCurrent },
+          "project-search",
+          params.query,
+        );
+        const assertCredentialCurrent = () => {
+          assertCurrent();
+          identity?.assertSelected();
+        };
+        const nativeToken = identity
+          ? identity.token
+          : factoryEnv
+            ? await readFactoryProjectToken(
+                { client, context, signal, hasCurrentClientAuthority, assertCurrent },
+                "project-search",
+                params.query,
+              )
+            : cfg.gateway?.projects?.nativeGitHubSearch === true
+              ? await readCachedNativeGitHubToken(process.env)
+              : undefined;
         if (factoryEnv && !nativeToken) {
           throw new Error("Verified GitHub repository access is unavailable.");
         }
         assertCurrent();
         const result = await searchRemoteProjects(params.query, {
-          assertCurrent,
+          assertCurrent: assertCredentialCurrent,
           signal,
           host,
           apiBaseUrl,
-          ...(factoryEnv || cfg.gateway?.projects?.nativeGitHubSearch === true
+          requireAuthentication: Boolean(identity),
+          appInstallation: identity?.selection.executionKind === "app-installation",
+          ...(identity || factoryEnv || cfg.gateway?.projects?.nativeGitHubSearch === true
             ? { token: nativeToken ?? "" }
             : {}),
         });
-        assertCurrent();
+        assertCredentialCurrent();
         respond(true, result, undefined);
       },
       (error) => {

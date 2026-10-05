@@ -3,6 +3,7 @@ import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { readImageReserveProject } from "./image-reserve.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 
 export async function readPreparedPoolPresenceDemand(): Promise<
@@ -23,11 +24,15 @@ export function writePreparedPoolPresenceDemand(
   assertCurrent: () => void,
 ): Promise<PreparedPoolPresenceDemand | undefined> {
   const host = value ? resolveGitHubHost() : undefined;
+  const factory = process.env.FACTORY_AUTH_MODE === "github";
   const assertSelected = () => {
     assertCurrent();
     if (
       value &&
-      (resolveGitHubHost() !== host || new URL(value.project.source.url).hostname !== host)
+      (resolveGitHubHost() !== host ||
+        (readImageReserveProject(value.project)
+          ? !factory || process.env.FACTORY_AUTH_MODE !== "github"
+          : !("source" in value.project) || new URL(value.project.source.url).hostname !== host))
     ) {
       throw new Error("Prepared-pool presence demand is invalid");
     }

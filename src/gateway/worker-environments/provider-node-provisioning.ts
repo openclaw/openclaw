@@ -333,44 +333,68 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         record.profileSnapshot.executionMode !== "remote-exec" &&
         !(await options.store.hasSessionAttachment(record.environmentId));
       assertCurrent();
-      nodeBuild = await options.ensureNodeWorkerBundle({
-        reason: "provision",
-        environmentId: record.environmentId,
-        deviceId: lease.node.deviceId,
-        artifact,
-        prewarm,
-        signal: cancellation?.signal,
-        assertCurrent,
-      });
+      nodeBuild = await withWorkerProvisionStage(
+        record,
+        "node-bundle-install",
+        () =>
+          ensureNodeWorkerBundle({
+            reason: "provision",
+            environmentId: record.environmentId,
+            deviceId: lease.node.deviceId,
+            artifact,
+            prewarm,
+            signal: cancellation?.signal,
+            assertCurrent,
+          }),
+        lease.leaseId,
+      );
       assertCurrent();
       if (preparation) {
-        if (
-          lease.sharedHost !== false ||
-          !preparedWorkspace ||
-          preparedWorkspace.preparationKey !== preparation.key ||
-          preparedWorkspace.cacheKey !== preparation.cacheKey ||
-          !options.registerPreparedWorkspace
-        ) {
+        const imageReserve = readImageReserveProject(record.profileSnapshot.project);
+        if (lease.sharedHost !== false || (imageReserve && preparedWorkspace !== undefined)) {
           throw new Error("Prepared worker requires its dedicated registered workspace");
         }
-        await options.registerPreparedWorkspace({
-          record: options.store.get(record.environmentId)!,
-          deviceId: lease.node.deviceId,
-          workspace: preparedWorkspace,
-          assertCurrent,
-          signal: cancellation?.signal,
-        });
-        assertCurrent();
+        if (!imageReserve) {
+          const registerPreparedWorkspace = options.registerPreparedWorkspace;
+          if (
+            !preparedWorkspace ||
+            preparedWorkspace.preparationKey !== preparation.key ||
+            preparedWorkspace.cacheKey !== preparation.cacheKey ||
+            !registerPreparedWorkspace
+          ) {
+            throw new Error("Prepared worker requires its dedicated registered workspace");
+          }
+          await withWorkerProvisionStage(
+            record,
+            "workspace-registration",
+            () =>
+              registerPreparedWorkspace({
+                record: assertCurrent(),
+                deviceId: lease.node.deviceId,
+                workspace: preparedWorkspace,
+                assertCurrent,
+                signal: cancellation?.signal,
+              }),
+            lease.leaseId,
+          );
+          assertCurrent();
+        }
       }
     } catch (error) {
       await cancellation?.settleStopIntent();
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }
-    return options.commitReady(
+    return withWorkerProvisionStage(
       record,
-      { ...nodeBuild, installKind: "bundle" },
-      nodePatch,
-      assertCurrent,
+      "ready-commit",
+      () =>
+        options.commitReady(
+          record,
+          { ...nodeBuild, installKind: "bundle" },
+          nodePatch,
+          assertCurrent,
+        ),
+      lease.leaseId,
     );
   };
 

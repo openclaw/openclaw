@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { readImageReserveProject, type ImageReserveProject } from "./image-reserve.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
@@ -25,9 +26,11 @@ function parsePresenceDemand(value: unknown): PreparedPoolPresenceDemand {
   const preparationKey = candidate.preparationKey;
   const lastPresentAtMs = candidate.lastPresentAtMs;
   const retireAtMs = candidate.retireAtMs;
-  let project: RepositoryWorkerProjectSnapshot | undefined;
+  let project: RepositoryWorkerProjectSnapshot | ImageReserveProject | undefined;
   try {
-    project = readRepositoryWorkerProjectSnapshot(candidate.project);
+    project =
+      readImageReserveProject(candidate.project) ??
+      readRepositoryWorkerProjectSnapshot(candidate.project);
   } catch {
     throw new Error("Prepared-pool presence demand is invalid");
   }

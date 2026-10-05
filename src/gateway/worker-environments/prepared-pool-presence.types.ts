@@ -1,3 +1,4 @@
+import type { ImageReserveProject } from "./image-reserve.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 export type PreparedPoolPresenceDemand = {
@@ -5,7 +6,7 @@ export type PreparedPoolPresenceDemand = {
   profileId: string;
   requestedRef: string | null;
   preparationKey: string;
-  project: RepositoryWorkerProjectSnapshot;
+  project: RepositoryWorkerProjectSnapshot | ImageReserveProject;
   lastPresentAtMs: number;
   retireAtMs: number | null;
 };

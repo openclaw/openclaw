@@ -1,6 +1,7 @@
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { NodeWorkerSupervisorIdentity } from "../../worker/node-supervisor-protocol.js";
 import type {
   NodeWorkerWorkspaceSeedInput,
   NodeWorkerWorkspaceQuiescenceInput,
@@ -52,10 +53,16 @@ export class WorkerRunnerUnavailableError extends Error {
   }
 }
 
+export type WorkerCapacityRefusal = NodeWorkerSupervisorIdentity & {
+  nodeDeviceId: string;
+  connId: string;
+  pairingGeneration: string;
+};
+
 export class WorkerRunnerCapacityError extends Error {
   readonly code = NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE;
 
-  constructor() {
+  constructor(readonly refusal?: WorkerCapacityRefusal) {
     super("device worker capacity remained full");
     this.name = "WorkerRunnerCapacityError";
   }
@@ -127,10 +134,14 @@ type WorkerRepositoryWorkspaceSource = {
   kind: "repository";
   /** Owner-held result of binding this exact dedicated prepared workspace. */
   prepared?: PreparedRepositoryWorkspace;
+  /** Fresh claims fetch the selected ref; interrupted unpinned recovery observes local state. */
+  preparedRefMode?: "fetch" | "recover";
   url: string;
   ref?: string;
   branch: string;
   baseCommit?: string;
+  /** Verified recovery history; restoring it must preserve the accepted working bytes. */
+  recoveryHeadCommit?: string;
   gitToken?: string;
   runSetupScript?: boolean;
   checkpoint?: Pick<
@@ -234,6 +245,9 @@ type WorkerTurnLaunchRequest = {
   credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
+  /** Matched node journal acceptance, distinct from transport dispatch or capacity refusal. */
+  onExecutionAccepted?: () => Promise<void>;
+  beforeLaunch?: () => Promise<void>;
 };
 
 export type WorkerWorkspaceTunnelHandle = {

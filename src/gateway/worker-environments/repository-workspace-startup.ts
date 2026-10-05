@@ -28,19 +28,54 @@ export async function syncSessionRepositoryWorkspace(params: {
   gitAuthor?: { name?: string; email?: string };
   runSetupScript?: boolean;
   recovery?: true;
+  recoveryHeadCommit?: string;
   preparedRepository?: PreparedRepositoryWorkspace;
   assertCurrent: () => void;
+  signal?: AbortSignal;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  readNativeCredential?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
 }) {
   const store = getSessionRepositoryWorkspaceStore();
   let repository = params.repository;
+  if (repository.checkpointRef && repositoryWorkspaceArtifactsAreEphemeral()) {
+    try {
+      await fs.access(store.artifactPath(repository.workspaceId));
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      params.assertCurrent();
+      repository = await store.discardCheckpoint({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        assertCurrent: params.assertCurrent,
+      });
+      params.assertCurrent();
+    }
+  }
   const prepared = params.preparedRepository;
-  if (prepared && repository.baseCommit && prepared.baseCommit !== repository.baseCommit) {
+  const preparedRefMode = prepared
+    ? !repository.baseCommit
+      ? params.recovery
+        ? "recover"
+        : "fetch"
+      : repository.baseCommit !== prepared.baseCommit
+        ? "fetch"
+        : undefined
+    : undefined;
+  if (
+    prepared &&
+    repository.baseCommit &&
+    prepared.baseCommit !== repository.baseCommit &&
+    !params.recovery
+  ) {
     throw new Error("Prepared repository does not match the pinned session commit");
   }
   if (
     prepared &&
     repository.baseManifestHash &&
-    prepared.sourceManifestRef !== repository.baseManifestHash
+    prepared.sourceManifestRef !== repository.baseManifestHash &&
+    !params.recovery
   ) {
     throw new Error("Prepared repository does not match the pinned source manifest");
   }
@@ -113,15 +148,16 @@ export async function syncSessionRepositoryWorkspace(params: {
         sync,
       )
     : await sync();
-  params.assertCurrent();
+  assertCurrent();
   if (synced.mode !== "repository") {
     throw new Error("Repository preparation did not return a repository workspace");
   }
   if (
     prepared &&
-    (synced.baseCommit !== prepared.baseCommit ||
-      synced.baseManifestRef !== prepared.sourceManifestRef ||
-      synced.remoteWorkspaceDir !== prepared.workspaceDir)
+    (synced.remoteWorkspaceDir !== prepared.workspaceDir ||
+      (repository.baseCommit === prepared.baseCommit &&
+        (synced.baseCommit !== prepared.baseCommit ||
+          synced.baseManifestRef !== prepared.sourceManifestRef)))
   ) {
     throw new Error("Repository preparation changed its attested prepared workspace");
   }

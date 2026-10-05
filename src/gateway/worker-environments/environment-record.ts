@@ -39,6 +39,7 @@ export type PreparedEnvironmentSelection = WorkerSessionPlacementDispatchIdentit
 };
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
+  recoveryHold?: WorkerEnvironmentCustodyHold;
   profileSnapshot: WorkerProfile;
   preparation: WorkerEnvironmentPreparation | null;
   provisionOperationId: string;

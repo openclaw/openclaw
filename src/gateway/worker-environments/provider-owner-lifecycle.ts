@@ -27,10 +27,16 @@ import {
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 
+// Resource attestation permits ten minutes plus child-process settlement.
+const FAILED_LEASE_HOLD_CALL_TIMEOUT_MS = 10 * 60_000 + 10_000;
+
 export function createWorkerProviderOwnerLifecycle(
   options: Pick<
     WorkerProviderLifecycleOptions,
     | "store"
+    | "now"
+    | "resolveProvider"
+    | "getConfig"
     | "tunnelManager"
     | "callProvider"
     | "providerCallTimeoutMs"
