@@ -754,7 +754,7 @@ describe("Codex app-server main thread cleanup", () => {
         "thread/start",
         "turn/start",
         "turn/interrupt",
-        ...(!interruptFails ? ["thread/unsubscribe"] : []),
+        ...(interruptFails ? [] : ["thread/unsubscribe"]),
       ]);
       expect(harness.stdinDestroyed).toBe(interruptFails);
     },
@@ -920,10 +920,8 @@ describe("Codex app-server main thread cleanup", () => {
         expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });
       }
       expect(
-        harness.writes
-          .map((entry) => JSON.parse(entry).method)
-          .filter((method) => method === "thread/unsubscribe"),
-      ).toEqual(["thread/unsubscribe"]);
+        harness.writes.filter((entry) => JSON.parse(entry).method === "thread/unsubscribe"),
+      ).toHaveLength(1);
       expect(close).not.toHaveBeenCalled();
       expect(harness.stdinDestroyed).toBe(false);
     },
