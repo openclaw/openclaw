@@ -211,7 +211,9 @@ export function sendTalkRealtimeRelayAudio(params: {
   connId: string;
   audioBase64: string;
   timestamp?: number;
+  assertCurrent?: () => void;
 }): void | Promise<void> {
+  params.assertCurrent?.();
   if (params.audioBase64.length > MAX_AUDIO_BASE64_BYTES) {
     throw new Error("Realtime relay audio frame is too large");
   }
@@ -251,7 +253,9 @@ export function submitTalkRealtimeRelayToolResult(params: {
   callId: string;
   result: unknown;
   options?: RealtimeVoiceToolResultOptions;
+  assertCurrent?: () => void;
 }): void | Promise<void> {
+  params.assertCurrent?.();
   const session = getRelaySession(params.relaySessionId, params.connId);
   if (session.toolCalls.isAgentCompleted(params.callId)) {
     return;
@@ -278,6 +282,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
     return submitForcedTalkRealtimeRelayToolResult(session, forcedConsult, {
       result: params.result,
       options: params.options,
+      assertCurrent: params.assertCurrent,
     });
   }
 
@@ -345,15 +350,18 @@ export function submitTalkRealtimeRelayToolResult(params: {
       result: params.result,
       options: params.options,
       onAccepted,
+      assertCurrent: params.assertCurrent,
     });
     return trackToolResultCompletion(session.pendingFinalToolResults, params.callId, completion);
   }
-  const submit = () =>
-    session.bridge.submitToolResult(
+  const submit = () => {
+    params.assertCurrent?.();
+    return session.bridge.submitToolResult(
       resolveRelayProviderToolCallId(session, params.callId),
       params.result,
       params.options,
     );
+  };
   const pendingWorking = session.pendingWorkingToolResults.get(params.callId);
   if (pendingWorking) {
     const submission = pendingWorking.then(async () => {

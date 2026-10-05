@@ -1,4 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
@@ -12,6 +14,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
+import type { RealtimeVoiceBridge } from "../../../talk/provider-types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,6 +23,12 @@ import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
+import {
+  createIdleRelayProvider,
+  drainRelayTestSessions,
+  makeRelayTransport,
+} from "../relay/index.test-support.js";
+import { relaySessions, type CreateTalkRealtimeRelaySessionParams } from "../relay/state.js";
 import { cleanupTalkConnection } from "../session-registry.js";
 import { createTalkClient } from "./client-create.js";
 import { talkClientHandlers } from "./client.js";
@@ -28,7 +37,7 @@ import { talkSessionHandlers } from "./session.js";
 const mocks = vi.hoisted(() => ({
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   bootstrap: vi.fn(async () => "Agent context fixture."),
-  createRelay: vi.fn(() => ({
+  createRelay: vi.fn((_params: CreateTalkRealtimeRelaySessionParams) => ({
     relaySessionId: "test-relay",
     provider: "test-voice",
     transport: "gateway-relay",
@@ -159,6 +168,141 @@ afterEach(async () => {
 });
 
 describe("Talk target preparation through Gateway authorization", () => {
+  it.each([false, true])(
+    "retains non-admin authority through a queued provider result (replaced=%s)",
+    async (replaced, { signal }) => {
+      const accepted = createDeferredCore();
+      const started = createDeferredCore();
+      const queued = createDeferredCore();
+      const activeRelays = new Map<string, string>();
+      const pending: Array<ReturnType<typeof dispatch>> = [];
+      const submitToolResult = vi
+        .fn<RealtimeVoiceBridge["submitToolResult"]>()
+        .mockImplementationOnce(() => {
+          started.resolve();
+          return accepted.promise;
+        })
+        .mockReturnValue(undefined);
+      const provider = createIdleRelayProvider(() => makeRelayTransport({ submitToolResult }));
+      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+        provider,
+        providerConfig: {},
+        capabilities: { supportsToolCalls: true },
+      });
+      const actual = await vi.importActual<typeof import("../relay/index.js")>("../relay/index.js");
+      mocks.createRelay.mockImplementationOnce((params) => {
+        const session = actual.createTalkRealtimeRelaySession(params);
+        activeRelays.set(session.relaySessionId, params.connId);
+        return session;
+      });
+      const target = { agentId: "voice", sessionKey: "agent:voice:main" };
+      const entry = {
+        sessionId: "shared-session",
+        lifecycleRevision: "original-lifecycle",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human", source: "profile", id: "another-person" } as const,
+      };
+      await replaceSessionEntry(target, entry);
+      try {
+        expect(client.connect.scopes).not.toContain("operator.admin");
+        expect(
+          await dispatch("talk.session.create", {
+            mode: "realtime",
+            transport: "gateway-relay",
+            brain: "agent-consult",
+            sessionKey: target.sessionKey,
+          }),
+        ).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ sessionId: expect.any(String) }),
+          undefined,
+        );
+        const sessionId = expectDefined(activeRelays.keys().next().value, "created Talk relay");
+        const params = { sessionId, callId: "queued-call" };
+        const working = dispatch("talk.session.submitToolResult", {
+          ...params,
+          result: { status: "working" },
+          options: { willContinue: true },
+        });
+        pending.push(working);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            started.promise,
+            working,
+            "working result did not reach provider",
+          ),
+          signal,
+        );
+        const final = dispatch(
+          "talk.session.submitToolResult",
+          { ...params, result: { answer: "done" } },
+          {
+            "talk.session.submitToolResult": (request) => {
+              const completion = expectDefined(
+                talkSessionHandlers["talk.session.submitToolResult"],
+                "Talk result handler",
+              )(request);
+              queued.resolve();
+              return completion;
+            },
+          },
+        );
+        pending.push(final);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            queued.promise,
+            final,
+            "final result did not reach relay queue",
+          ),
+          signal,
+        );
+        expect(relaySessions.get(sessionId)?.pendingFinalToolResults.has(params.callId)).toBe(true);
+        expect(submitToolResult).toHaveBeenCalledOnce();
+        if (replaced) {
+          await replaceSessionEntry(target, {
+            ...entry,
+            sessionId: "replacement-session",
+            lifecycleRevision: "replacement-lifecycle",
+          });
+        }
+        accepted.resolve();
+        expect(await withinTest(working, signal)).toHaveBeenCalledWith(
+          true,
+          { ok: true },
+          undefined,
+        );
+        const respond = await withinTest(final, signal);
+        if (replaced) {
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "INVALID_REQUEST",
+              message: expect.stringContaining("changed"),
+            }),
+          );
+          expect(submitToolResult).toHaveBeenCalledOnce();
+        } else {
+          expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+          expect(submitToolResult).toHaveBeenNthCalledWith(
+            2,
+            params.callId,
+            { answer: "done" },
+            undefined,
+          );
+        }
+        expect(loadSessionEntry(target)?.sessionId).toBe(
+          replaced ? "replacement-session" : entry.sessionId,
+        );
+      } finally {
+        accepted.resolve();
+        await Promise.allSettled(pending);
+        await drainRelayTestSessions(activeRelays);
+      }
+    },
+  );
+
   it.each(["main", undefined])("uses the configured Talk owner for %s", async (sessionKey) => {
     const respond = await dispatch("talk.client.create", {
       ...createParams,

@@ -459,8 +459,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
   "talk.session.appendAudio": defineValidatedGatewayHandler(
     "talk.session.appendAudio",
     validateTalkSessionAppendAudioParams,
-    async ({ params, respond, client }) => {
+    async ({ params, respond, client, sessionMutationAuthorization }) => {
       try {
+        sessionMutationAuthorization?.assertCurrent();
         const session = getUnifiedTalkSession(params.sessionId);
         if (session.kind === "realtime-relay") {
           const connId = requireUnifiedTalkSessionConn(session, client?.connId);
@@ -469,6 +470,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             connId,
             audioBase64: params.audioBase64,
             timestamp: params.timestamp,
+            assertCurrent: sessionMutationAuthorization?.assertCurrent,
           });
           respondOk(respond);
           return;
@@ -519,8 +521,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
   "talk.session.submitToolResult": defineValidatedGatewayHandler(
     "talk.session.submitToolResult",
     validateTalkSessionSubmitToolResultParams,
-    async ({ params, respond, client }) => {
+    async ({ params, respond, client, sessionMutationAuthorization }) => {
       try {
+        sessionMutationAuthorization?.assertCurrent();
         const session = getUnifiedTalkSession(params.sessionId);
         if (session.kind !== "realtime-relay") {
           respondInvalidRequest(
@@ -536,6 +539,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           callId: params.callId,
           result: params.result,
           options: params.options,
+          assertCurrent: sessionMutationAuthorization?.assertCurrent,
         });
         respondOk(respond);
       } catch (err) {

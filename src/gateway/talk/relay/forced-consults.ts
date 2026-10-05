@@ -231,6 +231,7 @@ function drainForcedTerminalProviderResults(
           callId,
           result: terminal.result,
           options: terminal.options,
+          assertCurrent: terminal.assertCurrent,
         }),
       )
       .filter((submission): submission is Promise<void> => submission !== undefined);
@@ -315,8 +316,10 @@ export function submitForcedTalkRealtimeRelayToolResult(
   params: {
     result: unknown;
     options?: RealtimeVoiceToolResultOptions;
+    assertCurrent?: () => void;
   },
 ): void | Promise<void> {
+  params.assertCurrent?.();
   const callId = forcedConsult.id;
   const cancelled = session.harness.forcedConsults.isCancelled(forcedConsult);
   const turnId = cancelled
@@ -389,6 +392,7 @@ export function submitForcedTalkRealtimeRelayToolResult(
     options: providerOptions,
     turnId,
     epoch: session.toolResultEpoch,
+    assertCurrent: params.assertCurrent,
   };
   session.forcedTerminalProviderResults.set(forcedConsult.id, terminal);
   const submission = drainForcedTerminalProviderResults(session, forcedConsult, terminal);
@@ -396,6 +400,7 @@ export function submitForcedTalkRealtimeRelayToolResult(
     if (session.toolResultEpoch !== terminal.epoch) {
       return;
     }
+    params.assertCurrent?.();
     session.harness.forcedConsults.markDelivered(forcedConsult);
     clearRelayAgentToolCall(session, callId);
     if (!session.toolCalls.markAgentCompleted([callId])) {
