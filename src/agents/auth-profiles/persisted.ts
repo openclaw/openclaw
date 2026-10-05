@@ -48,14 +48,6 @@ type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider"
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
-const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
-
-function isRetainedUsageStatsId(
-  profileId: string,
-  profiles: AuthProfileStore["profiles"],
-): boolean {
-  return Boolean(profiles[profileId]) || profileId.startsWith(INLINE_API_KEY_USAGE_ID_PREFIX);
-}
 
 function parseCredentialEntry(
   raw: unknown,
@@ -68,16 +60,17 @@ function parseCredentialEntry(
   if (!typed) {
     return { ok: false, reason: "invalid_type" };
   }
-  const provider = typed.provider || fallbackProvider;
-  const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
-  if (!normalizedProvider) {
+  const provider =
+    typed.provider ||
+    (typeof fallbackProvider === "string" ? normalizeProviderId(fallbackProvider) : "");
+  if (!provider) {
     return { ok: false, reason: "missing_provider" };
   }
   return {
     ok: true,
     credential: {
       ...typed,
-      provider: normalizedProvider,
+      provider,
     } as AuthProfileCredential,
   };
 }
@@ -193,17 +186,6 @@ function findOrderEntryKey(
   providerKey: string,
 ): string | undefined {
   return Object.keys(order ?? {}).find((key) => normalizeProviderId(key) === providerKey);
-}
-
-function mergeProfileRecordsWithOverridePrecedence(
-  base: AuthProfileStore["profiles"],
-  override: AuthProfileStore["profiles"],
-): AuthProfileStore["profiles"] {
-  const overrideProfileIds = new Set(Object.keys(override));
-  return Object.fromEntries([
-    ...Object.entries(override),
-    ...Object.entries(base).filter(([profileId]) => !overrideProfileIds.has(profileId)),
-  ]);
 }
 
 function mergeProfileOrderWithOverridePrecedence(params: {
@@ -479,7 +461,10 @@ export function mergeAuthProfileStores(
         )
       : [],
   );
-  const profiles = mergeProfileRecordsWithOverridePrecedence(base.profiles, override.profiles);
+  const profiles = Object.fromEntries([
+    ...Object.entries(override.profiles),
+    ...Object.entries(base.profiles).filter(([profileId]) => !overrideProfileIds.has(profileId)),
+  ]);
   // Authoritative runtime snapshots may remove stale external profiles that are
   // no longer observed, unless the caller is intentionally preserving base ones.
   for (const profileId of removedRuntimeExternalProfileIds) {
@@ -512,8 +497,8 @@ export function mergeAuthProfileStores(
     : undefined;
   const usageStats = mergedState.usageStats
     ? Object.fromEntries(
-        Object.entries(mergedState.usageStats).filter(([profileId]) =>
-          isRetainedUsageStatsId(profileId, profiles),
+        Object.entries(mergedState.usageStats).filter(
+          ([profileId]) => profiles[profileId] || profileId.startsWith("inline-api-key:"),
         ),
       )
     : undefined;

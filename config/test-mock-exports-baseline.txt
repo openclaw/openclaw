@@ -7932,7 +7932,6 @@
 ["src/gateway/server-methods/sessions-github-read.test.ts","../github-oauth-lifecycle.js","2a8a9b2d2d0a8b5ae09c02eabf29806b24672658175bdeb7bd5ea941016676a1",1]
 ["src/gateway/server-methods/sessions-goal.event-custody.test.ts","../../../packages/gateway-protocol/src/index.js","dc2bd69555874c90c4663002cbea8b3046b837aabbdf6632435cedfd082d332c",1]
 ["src/gateway/server-methods/sessions-goal.event-custody.test.ts","../../config/sessions/goals-operations.js","443405f139c70879fca6fdd5ee2e86941d2ad6f7c5e2c344ce6d090f39db058b",1]
-["src/gateway/server-methods/sessions-goal.event-custody.test.ts","../../infra/kysely-sync.js","c668116e5ab74d318bfd0c74deb087fa8c32f300745376155223fd116a8b10b2",1]
 ["src/gateway/server-methods/sessions-goal.event-custody.test.ts","../../infra/node-sqlite.js","eb435b55af55df78b3f9ba141b669ae7ab874eb6f1f505bb82fbf2fa2e225418",1]
 ["src/gateway/server-methods/sessions-goal.event-custody.test.ts","../../sessions/session-state-events.js","17242a8d2838be0df89bc006bf5d49418deae88b78e81e7f258ba21cb0dcdd29",1]
 ["src/gateway/server-methods/sessions-goal.event-custody.test.ts","../session-plugin-ownership.js","960c81ffa742f4a53faad3e31d9c0f5f460db0c245e4f265f8a445343d904081",1]

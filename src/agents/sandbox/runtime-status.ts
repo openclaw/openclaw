@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
@@ -263,13 +264,6 @@ function resolveSandboxRuntimeStatusForClassification(
   };
 }
 
-function hasUnsafeControlChars(value: string): boolean {
-  return Array.from(value).some((char) => {
-    const codePoint = char.codePointAt(0) ?? 0;
-    return codePoint < 0x20 || codePoint === 0x7f;
-  });
-}
-
 function redactSessionKey(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -359,7 +353,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     lines.push("- Use the agent main session instead of a non-main session.");
   }
   const explainCommand =
-    runtime.sessionKey && !hasUnsafeControlChars(runtime.sessionKey)
+    runtime.sessionKey && !containsAsciiControlCharacter(runtime.sessionKey)
       ? `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)} --agent ${runtime.agentId}`
       : `openclaw sandbox explain --agent ${runtime.agentId}`;
   lines.push(`- See: ${formatCliCommand(explainCommand)}`);

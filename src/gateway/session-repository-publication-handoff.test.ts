@@ -25,7 +25,6 @@ import {
   claimGitHubPublicationExecution,
   createGitHubPublicationExecutionStore,
   isGitHubPublicationExecutionOwner,
-  projectGitHubPublicationResult,
 } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
@@ -427,7 +426,6 @@ it.each([
         },
         assertWorkflowChangesAllowed: () =>
           assertGitHubPublicationWorkflowChangesAllowed(requester),
-        projectResult: projectGitHubPublicationResult,
       }).finally(requester.release);
       const localHead = git(worktree.path, "rev-parse", "HEAD");
       const receipt = {

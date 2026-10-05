@@ -1,8 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   emitAgentActivityEvent,
@@ -70,30 +67,26 @@ function reserveQuestionPromptDelivery(
   }
 }
 
-function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
-  const groups: readonly RequiredParamGroup[] | undefined =
-    TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
-  if (!groups?.length) {
-    return [];
-  }
-  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
-  return missingRequiredParamLabels(record, groups);
-}
-
-function buildToolExecutionStartTraceMeta(params: {
+function traceToolExecutionStart(params: {
   ctx: ToolHandlerContext;
   toolName: string;
   toolCallId: string;
   args: unknown;
-}): Record<string, unknown> {
+}) {
+  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
+    return;
+  }
   const args = params.args;
   const argsType = Array.isArray(args) ? "array" : typeof args;
   const argsKeys =
     args && typeof args === "object" && !Array.isArray(args)
       ? Object.keys(args as Record<string, unknown>).toSorted()
       : undefined;
-  const requiredParamsMissing = collectMissingRequiredParamLabels(params.toolName, args);
-  return {
+  const groups =
+    TRACE_REQUIRED_PARAM_GROUPS[params.toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  const requiredParamsMissing = groups?.length ? missingRequiredParamLabels(record, groups) : [];
+  params.ctx.log.trace("embedded run tool start", {
     event: "embedded_tool_execution_start",
     tags: ["tool_start", "embedded", "trace"],
     runId: params.ctx.params.runId,
@@ -105,19 +98,7 @@ function buildToolExecutionStartTraceMeta(params: {
     ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
     ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
     ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
-  };
-}
-
-function traceToolExecutionStart(params: {
-  ctx: ToolHandlerContext;
-  toolName: string;
-  toolCallId: string;
-  args: unknown;
-}) {
-  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
-    return;
-  }
-  params.ctx.log.trace("embedded run tool start", buildToolExecutionStartTraceMeta(params));
+  });
 }
 
 const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
@@ -316,8 +297,7 @@ export function finalizeToolActivity(ctx: ToolHandlerContext): void {
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(toolName);
-  if (normalized !== "exec" && normalized !== "bash") {
+  if (!isExecToolName(toolName)) {
     return meta;
   }
   if (!args || typeof args !== "object") {

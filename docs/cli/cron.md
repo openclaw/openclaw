@@ -226,6 +226,8 @@ openclaw automations run <job-id>
 openclaw automations runs <job-id> --run-id <run-id>
 ```
 
+A forced run skips the job's `trigger.script` condition gate and executes the payload directly. An `agentTurn` payload therefore wakes the model even if the gate would return `fire: false`. The `automations` tool also skips the gate when called with `action: "run", runMode: "force"`; its default `runMode` is `"due"`.
+
 Add `--wait` when a script should block until that exact queued run records a terminal status:
 
 ```bash
@@ -235,7 +237,7 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`. It does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`. `failed`, `unknown`, execution errors or skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
 
 <Note>
-Use `--due` when you want the manual command to run only if the job is currently due. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling.
+Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `trigger.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
 </Note>
 
 ## Models

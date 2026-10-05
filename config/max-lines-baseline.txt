@@ -249,7 +249,6 @@ src/agents/embedded-agent-runner.e2e.test.ts
 src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
 src/agents/embedded-agent-runner/compact.hooks.test.ts
-src/agents/embedded-agent-runner/extra-params.ts
 src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts
 src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
