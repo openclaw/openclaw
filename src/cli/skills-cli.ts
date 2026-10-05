@@ -25,6 +25,10 @@ import {
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  formatAgentSkillAllowlistBlockHint,
+  resolveAgentSkillAllowlistBlockPath,
+} from "../skills/discovery/agent-filter.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
@@ -880,17 +884,16 @@ export function registerSkillsCli(program: Command) {
     opts: { agent?: string; json?: boolean },
     command: Command,
     action: (resolved: ResolvedSkillsWorkspace) => Promise<T>,
-    format: (result: T) => string,
+    format: (result: T, resolved: ResolvedSkillsWorkspace) => string,
   ): Promise<void> => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const result = await action(
-        resolveSkillsWorkspace({ agentId: resolveAgentOption(command, opts) }),
-      );
+      const resolved = resolveSkillsWorkspace({ agentId: resolveAgentOption(command, opts) });
+      const result = await action(resolved);
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);
         return;
       }
-      defaultRuntime.writeStdout(format(result));
+      defaultRuntime.writeStdout(format(result, resolved));
     });
   };
 
@@ -1061,7 +1064,18 @@ export function registerSkillsCli(program: Command) {
         opts,
         command,
         (resolved) => runSkillProposalApply(resolved, proposalId),
-        (applied) => `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
+        (applied, resolved) => {
+          const appliedSkillName = applied.record.target.skillName;
+          const blockedAllowlistPath = resolveAgentSkillAllowlistBlockPath({
+            config: resolved.config,
+            agentId: resolved.agentId,
+            skillName: appliedSkillName,
+          });
+          const base = `Applied ${applied.record.id} -> ${applied.targetSkillFile}`;
+          return blockedAllowlistPath
+            ? `${base}\n${formatAgentSkillAllowlistBlockHint({ configPath: blockedAllowlistPath, skillName: appliedSkillName })}\n`
+            : `${base}\n`;
+        },
       ),
     );
 

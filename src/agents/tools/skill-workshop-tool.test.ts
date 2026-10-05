@@ -765,6 +765,32 @@ describe("skill_workshop tool", () => {
     await expect(fs.access(workshopSkillPath("quarantined-skill", "SKILL.md"))).rejects.toThrow();
   });
 
+  it("warns when the applied skill is hidden by the agent skill allowlist", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-allowlist-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      agentId: "main",
+      config: { agents: { entries: { main: { skills: ["another-skill"] } } } },
+    });
+    const created = await tool.execute("allowlist-create", {
+      action: "create",
+      name: "Hidden Helper",
+      description: "Applied but hidden by the agent allowlist",
+      proposal_content: "# Hidden Helper\n\nHidden steps.\n",
+    });
+    const createdId = (created.details as { id: string }).id;
+
+    const applied = await tool.execute("allowlist-apply", {
+      action: "apply",
+      proposal_id: createdId,
+    });
+
+    const text = (applied.content[0] as { text: string }).text;
+    expect(text).toContain(`Applied skill proposal ${createdId}.`);
+    expect(text).toContain("agents.entries.main.skills");
+    expect(text).toContain("cannot see or use it");
+  });
+
   it.each(["off", "propose", "auto"] as const)(
     "enforces foreground repair receipts in autonomous mode %s",
     async (mode) => {
