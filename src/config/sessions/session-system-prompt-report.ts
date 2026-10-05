@@ -42,6 +42,8 @@ export type SessionSystemPromptReport = {
       path: string;
       missing: boolean;
       rawChars: number;
+      /** Personal USER.md overlay; older reports omit it and are read as shared files. */
+      personalUser?: true;
     } & (
       | {
           injectionStatus?: "verified";

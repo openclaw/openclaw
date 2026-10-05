@@ -221,6 +221,65 @@ describe("analyzeBootstrapBudget", () => {
     expect(analysis.truncatedFiles[0]?.effectiveFileLimit).toBe(4_000);
   });
 
+  it("accounts for an opted-in USER.md budget bounded by bootstrapMaxChars", () => {
+    const raised = analyzeBootstrapBudget({
+      files: [createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 10_000, 8_000)],
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 60_000,
+      userBootstrapMaxChars: 8_000,
+    });
+    expect(raised.truncatedFiles[0]?.effectiveFileLimit).toBe(8_000);
+    expect(raised.truncatedFiles[0]?.causes).toEqual(["per-file-limit"]);
+
+    const bounded = analyzeBootstrapBudget({
+      files: [createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 10_000, 6_000)],
+      bootstrapMaxChars: 6_000,
+      bootstrapTotalMaxChars: 60_000,
+      userBootstrapMaxChars: 8_000,
+    });
+    expect(bounded.truncatedFiles[0]?.effectiveFileLimit).toBe(6_000);
+  });
+
+  it("keeps the 4,000-character ceiling for personal USER.md overlays", () => {
+    const [personal] = buildBootstrapInjectionStats({
+      bootstrapFiles: [
+        {
+          name: "USER.md",
+          path: "/tmp/users/alice/USER.md",
+          content: "p".repeat(5_000),
+          missing: false,
+          personalUser: true,
+        },
+      ],
+      injectedFiles: [],
+    });
+    if (!personal) {
+      throw new Error("expected a personal USER.md stat");
+    }
+    expect(personal.personalUser).toBe(true);
+
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        personal,
+        {
+          name: "USER.md",
+          path: "/tmp/users/bob/USER.md",
+          missing: false,
+          rawChars: 3_900,
+          injectedChars: 3_900,
+          truncated: false,
+          personalUser: true,
+        },
+      ],
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 60_000,
+      userBootstrapMaxChars: 12_000,
+    });
+    expect(analysis.files.map((file) => file.effectiveFileLimit)).toEqual([4_000, 4_000]);
+    expect(analysis.truncatedFiles[0]?.causes).toEqual(["per-file-limit"]);
+    expect(analysis.nearLimitFiles.map((file) => file.path)).toContain("/tmp/users/bob/USER.md");
+  });
+
   it("distinguishes lower per-file and exhausted total limits for USER.md", () => {
     const lowerPerFile = analyzeBootstrapBudget({
       files: [createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 3_000, 2_000)],

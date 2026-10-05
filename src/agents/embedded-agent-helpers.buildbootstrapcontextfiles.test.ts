@@ -5,6 +5,10 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
+import {
+  buildBootstrapContextForFiles,
+  resolveUserBootstrapMaxChars,
+} from "./embedded-agent-helpers/bootstrap.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
@@ -100,6 +104,56 @@ describe("buildBootstrapContextFiles", () => {
     expect(result[0]?.content).toContain("read USER.md for full content");
     expect(result[1]?.content).toBe("m".repeat(10_000));
   });
+  it("raises the shared USER.md budget only through the dedicated limit", () => {
+    const user = makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "u".repeat(10_000) });
+
+    expect(buildBootstrapContextFiles([user], { userMaxChars: 12_000 })[0]?.content).toBe(
+      "u".repeat(10_000),
+    );
+    // Bounded by the general per-file limit and the remaining total budget.
+    const perFile = buildBootstrapContextFiles([user], { maxChars: 6_000, userMaxChars: 12_000 });
+    expect(perFile[0]?.content.length).toBeLessThanOrEqual(6_000);
+    const total = buildBootstrapContextFiles([makeFile({ content: "a".repeat(3_000) }), user], {
+      totalMaxChars: 8_000,
+      userMaxChars: 12_000,
+    });
+    expect(total[1]?.content.length).toBeLessThanOrEqual(5_000);
+    expect(total[1]?.content).toContain("read USER.md for full content");
+  });
+  it("keeps the 4,000-character limit for personal USER.md overlays", () => {
+    const warnings: string[] = [];
+    const result = buildBootstrapContextFiles(
+      [
+        makeFile({
+          name: "USER.md",
+          path: "/tmp/users/alice/USER.md",
+          content: "p".repeat(5_000),
+          personalUser: true,
+        }),
+      ],
+      { userMaxChars: 12_000, warn: (message) => warnings.push(message) },
+    );
+
+    expect(result).toEqual([]);
+    expect(warnings).toEqual([
+      "Personal USER.md exceeds the bootstrap budget; using shared defaults.",
+    ]);
+  });
+  it.each([
+    ["unset", {}, 4_000],
+    ["bootstrapMaxChars alone", { bootstrapMaxChars: 50_000 }, 4_000],
+    ["userBootstrapMaxChars", { userBootstrapMaxChars: 12_000 }, 10_000],
+  ] satisfies [string, NonNullable<OpenClawConfig["agents"]>["defaults"], number][])(
+    "injects shared USER.md from config with %s",
+    (_name, defaults, expectedMax) => {
+      const [result] = buildBootstrapContextForFiles(
+        [makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "u".repeat(10_000) })],
+        { config: { agents: { defaults } } },
+      );
+      expect(result?.content.length).toBeLessThanOrEqual(expectedMax);
+      expect(result?.content === "u".repeat(10_000)).toBe(expectedMax === 10_000);
+    },
+  );
   it("keeps non-Latin mandatory policy lines from oversized AGENTS.md middle content", () => {
     const mandatory = "禁止在此子树使用共享账号";
     const ordinary = "请保持本段内容简洁";
@@ -270,6 +324,34 @@ describe("bootstrap limit resolvers", () => {
         resolveBootstrapMaxChars(cfg, agentId),
         resolveBootstrapTotalMaxChars(cfg, agentId),
       ]).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["unset", undefined, undefined, 4_000],
+    ["bootstrapMaxChars only", { agents: { defaults } }, undefined, 4_000],
+    ["defaults", { agents: { defaults: { userBootstrapMaxChars: 9_000 } } }, "worker", 9_000],
+    [
+      "agent override",
+      {
+        agents: {
+          defaults: { userBootstrapMaxChars: 9_000 },
+          entries: { worker: { userBootstrapMaxChars: 6_000 } },
+        },
+      },
+      "worker",
+      6_000,
+    ],
+    [
+      "invalid zero",
+      { agents: { entries: { worker: { userBootstrapMaxChars: 0 } } } },
+      "worker",
+      4_000,
+    ],
+  ] satisfies [string, OpenClawConfig | undefined, string | undefined, number][])(
+    "resolves the USER.md limit for %s",
+    (_name, cfg, agentId, expected) => {
+      expect(resolveUserBootstrapMaxChars(cfg, agentId)).toBe(expected);
     },
   );
 });

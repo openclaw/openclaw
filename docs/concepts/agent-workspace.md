@@ -77,7 +77,7 @@ Standard files OpenClaw expects inside the workspace:
     Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
   </Accordion>
   <Accordion title="USER.md - directive-based user model (optional)">
-    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
+    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget (opt-in override: `agents.defaults.userBootstrapMaxChars`). See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
   </Accordion>
   <Accordion title="IDENTITY.md - name, vibe, emoji">
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual. Template: [IDENTITY.md](/reference/templates/IDENTITY).
@@ -103,7 +103,7 @@ Standard files OpenClaw expects inside the workspace:
 </AccordionGroup>
 
 <Note>
-If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap. `openclaw setup` can recreate missing defaults without overwriting existing files.
+If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap, which only the opt-in `agents.defaults.userBootstrapMaxChars` setting can raise. `openclaw setup` can recreate missing defaults without overwriting existing files.
 </Note>
 
 ## What is NOT in the workspace

@@ -88,7 +88,9 @@ export function stripThoughtSignatures<T>(
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 // USER.md stays directive-sized so profile guidance cannot crowd out project
-// rules or durable facts from the shared bootstrap budget.
+// rules or durable facts from the shared bootstrap budget. Operators can opt in
+// to a larger shared USER.md only through the dedicated userBootstrapMaxChars
+// setting; bootstrapMaxChars alone never raises this default.
 export const USER_BOOTSTRAP_MAX_CHARS = 4_000;
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 // Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
@@ -126,7 +128,7 @@ type PolicyDigest = {
 function resolveBootstrapCharLimit(
   cfg: OpenClawConfig | undefined,
   agentId: string | null | undefined,
-  key: "bootstrapMaxChars" | "bootstrapTotalMaxChars",
+  key: "bootstrapMaxChars" | "bootstrapTotalMaxChars" | "userBootstrapMaxChars",
   fallback: number,
 ): number {
   const raw =
@@ -153,6 +155,18 @@ export function resolveBootstrapTotalMaxChars(
     "bootstrapTotalMaxChars",
     DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
   );
+}
+
+/**
+ * Resolves the shared USER.md per-file ceiling. Unset keeps the 4,000-character
+ * default; the result is still bounded by bootstrapMaxChars and the remaining
+ * total budget when the context is built.
+ */
+export function resolveUserBootstrapMaxChars(
+  cfg?: OpenClawConfig,
+  agentId?: string | null,
+): number {
+  return resolveBootstrapCharLimit(cfg, agentId, "userBootstrapMaxChars", USER_BOOTSTRAP_MAX_CHARS);
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
@@ -386,9 +400,15 @@ function clampToBudget(content: string, budget: number): string {
 
 export function buildBootstrapContextFiles(
   files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
-  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+  opts?: {
+    warn?: (message: string) => void;
+    maxChars?: number;
+    totalMaxChars?: number;
+    userMaxChars?: number;
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
+  const userMaxChars = opts?.userMaxChars ?? USER_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(
     1,
     Math.floor(opts?.totalMaxChars ?? Math.max(maxChars, DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS)),
@@ -425,9 +445,12 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
+    // Personal USER.md overlays keep the default ceiling: their editor and tool
+    // enforce it on write, and one operator setting must not widen every member's
+    // always-on profile. userBootstrapMaxChars only governs the shared file.
     const fileBudget =
       file.name?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase()
-        ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+        ? Math.min(maxChars, file.personalUser ? USER_BOOTSTRAP_MAX_CHARS : userMaxChars)
         : maxChars;
     const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
     // Personal instructions are indivisible: never turn a cut-off directive into new policy.
@@ -467,6 +490,7 @@ export function buildBootstrapContextForFiles(
   return buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+    userMaxChars: resolveUserBootstrapMaxChars(params.config, params.agentId),
     warn: params.warn,
   });
 }

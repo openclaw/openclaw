@@ -81,6 +81,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
     .optional(),
   bootstrapMaxChars: z.number().int().positive().optional(),
   bootstrapTotalMaxChars: z.number().int().positive().optional(),
+  userBootstrapMaxChars: z.number().int().positive().optional(),
   experimental: z
     .strictObject({
       /** Global opt-in for automatic Decision experiments; model selection is separate. */

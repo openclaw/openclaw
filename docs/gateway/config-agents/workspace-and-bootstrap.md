@@ -122,8 +122,10 @@ Per-agent override: `agents.entries.*.contextInjection`. Omitted values inherit
 ## `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
-Exception: `USER.md` has a fixed 4,000-character cap; this setting can only
-lower it for `USER.md`, never raise it. See [User model](/concepts/user-model).
+Exception: `USER.md` has its own 4,000-character cap; this setting can only
+lower it for `USER.md`, never raise it. To opt in to a larger shared `USER.md`,
+use `agents.defaults.userBootstrapMaxChars` (below).
+See [User model](/concepts/user-model).
 
 ```json5
 {
@@ -146,6 +148,26 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 
 Per-agent override: `agents.entries.*.bootstrapTotalMaxChars`. Omitted values
 inherit `agents.defaults.bootstrapTotalMaxChars`.
+
+## `agents.defaults.userBootstrapMaxChars`
+
+Opt-in max characters for the shared workspace `USER.md` before truncation.
+Default: `4000` (unset keeps the default cap). `bootstrapMaxChars` never raises
+the `USER.md` cap; this is the only setting that does. The effective limit is
+still bounded by `bootstrapMaxChars` and by the remaining
+`bootstrapTotalMaxChars` budget. Every raised character is injected into every
+turn that loads `USER.md`, so raise it only for a profile that is already
+curated. Personal `USER.md` files keep the 4,000-character limit. See
+[User model](/concepts/user-model#keep-it-compact).
+
+```json5
+{
+  agents: { defaults: { userBootstrapMaxChars: 12000 } },
+}
+```
+
+Per-agent override: `agents.entries.*.userBootstrapMaxChars`. Omitted values
+inherit `agents.defaults.userBootstrapMaxChars`.
 
 ## Per-agent bootstrap profile overrides
 
@@ -200,6 +222,7 @@ Matching per-agent overrides:
 - `agents.entries.*.contextInjection`
 - `agents.entries.*.bootstrapMaxChars`
 - `agents.entries.*.bootstrapTotalMaxChars`
+- `agents.entries.*.userBootstrapMaxChars`
 - `agents.entries.*.contextLimits.*`
 
 ### `agents.defaults.startupContext`

@@ -13,6 +13,7 @@ import type {
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
+  resolveUserBootstrapMaxChars,
   USER_BOOTSTRAP_MAX_CHARS,
 } from "./embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
@@ -39,22 +40,31 @@ function normalizePositiveLimit(value: number): number {
   return Math.floor(value);
 }
 
-function effectiveBootstrapFileLimit(name: string, bootstrapMaxChars: number): number {
-  return name.toLowerCase() === "user.md"
-    ? Math.min(bootstrapMaxChars, USER_BOOTSTRAP_MAX_CHARS)
+function effectiveBootstrapFileLimit(
+  file: { name: string; personalUser?: true },
+  bootstrapMaxChars: number,
+  userBootstrapMaxChars: number,
+): number {
+  return file.name.toLowerCase() === "user.md"
+    ? Math.min(
+        bootstrapMaxChars,
+        file.personalUser ? USER_BOOTSTRAP_MAX_CHARS : userBootstrapMaxChars,
+      )
     : bootstrapMaxChars;
 }
 
 /**
- * USER.md carries a deliberate fixed cap: tuning bootstrapMaxChars can only
- * lower it, so per-file remediation must never suggest raising that setting
- * for it. The effective limit equals the fixed cap exactly when the cap (not
- * the configured limit) is the binding constraint.
+ * USER.md carries its own ceiling (userBootstrapMaxChars, default 4,000):
+ * tuning bootstrapMaxChars can only lower it, so per-file remediation must
+ * never suggest raising that setting for it. The effective limit equals the
+ * USER.md ceiling exactly when that ceiling (not bootstrapMaxChars) binds.
  */
-export function isFixedUserCapFile(file: { name: string; effectiveFileLimit: number }): boolean {
-  return (
-    file.name.toLowerCase() === "user.md" && file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS
-  );
+export function isUserCapFile(
+  file: { name: string; effectiveFileLimit: number; personalUser?: true },
+  userBootstrapMaxChars: number,
+): boolean {
+  const ceiling = file.personalUser ? USER_BOOTSTRAP_MAX_CHARS : userBootstrapMaxChars;
+  return file.name.toLowerCase() === "user.md" && file.effectiveFileLimit === ceiling;
 }
 
 /** Restores prompt-warning dedupe state from a previous bootstrap report. */
@@ -114,6 +124,7 @@ export function buildBootstrapInjectionStats(params: {
       rawChars,
       injectedChars,
       truncated,
+      ...(file.personalUser ? { personalUser: true as const } : {}),
     };
   });
 }
@@ -123,9 +134,14 @@ export function analyzeBootstrapBudget(params: {
   files: BootstrapInjectionStat[];
   bootstrapMaxChars: number;
   bootstrapTotalMaxChars: number;
+  /** Shared USER.md ceiling; omit for the 4,000-character default. */
+  userBootstrapMaxChars?: number;
   nearLimitRatio?: number;
 }): BootstrapBudgetAnalysis {
   const bootstrapMaxChars = normalizePositiveLimit(params.bootstrapMaxChars);
+  const userBootstrapMaxChars = normalizePositiveLimit(
+    params.userBootstrapMaxChars ?? USER_BOOTSTRAP_MAX_CHARS,
+  );
   const bootstrapTotalMaxChars = normalizePositiveLimit(params.bootstrapTotalMaxChars);
   const nearLimitRatio =
     typeof params.nearLimitRatio === "number" &&
@@ -138,7 +154,11 @@ export function analyzeBootstrapBudget(params: {
   let injectedChars = 0;
   let remainingTotalChars = bootstrapTotalMaxChars;
   const files = params.files.map((file) => {
-    const effectiveFileLimit = effectiveBootstrapFileLimit(file.name, bootstrapMaxChars);
+    const effectiveFileLimit = effectiveBootstrapFileLimit(
+      file,
+      bootstrapMaxChars,
+      userBootstrapMaxChars,
+    );
     const availableTotalChars = remainingTotalChars;
     remainingTotalChars = Math.max(0, remainingTotalChars - file.injectedChars);
     if (file.missing) {
@@ -195,6 +215,7 @@ export function buildBootstrapBudgetState(params: {
     files: params.files,
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
+    userBootstrapMaxChars: resolveUserBootstrapMaxChars(params.config, params.agentId),
   });
   const bootstrapPromptWarningMode: BootstrapPromptWarningMode = "always";
   const bootstrapPromptWarning = buildBootstrapPromptWarning({

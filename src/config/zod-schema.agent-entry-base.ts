@@ -113,6 +113,7 @@ export const AgentEntryBaseSchema = z.strictObject({
     .optional(),
   bootstrapMaxChars: z.number().int().positive().optional(),
   bootstrapTotalMaxChars: z.number().int().positive().optional(),
+  userBootstrapMaxChars: z.number().int().positive().optional(),
   experimental: z
     .strictObject({
       localModelLean: z.boolean().optional(),

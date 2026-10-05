@@ -10,4 +10,5 @@ export const WORKSPACE_FIELD_LABELS: Record<string, string> = {
   "agents.defaults.contextInjection": "Context Injection",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.bootstrapTotalMaxChars": "Bootstrap Total Max Chars",
+  "agents.defaults.userBootstrapMaxChars": "USER.md Bootstrap Max Chars",
 };

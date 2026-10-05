@@ -171,7 +171,7 @@ describe("core/doctor/bootstrap-size", () => {
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
         severity: "warning",
-        fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
+        fixHint: expect.stringContaining("has a 4,000-character bootstrap cap"),
       }),
     );
     expect(userFinding?.fixHint).not.toContain("tune");
@@ -194,7 +194,7 @@ describe("core/doctor/bootstrap-size", () => {
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
         severity: "info",
-        fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
+        fixHint: expect.stringContaining("has a 4,000-character bootstrap cap"),
       }),
     );
     expect(userFinding?.fixHint).not.toContain("tune");
@@ -205,6 +205,23 @@ describe("core/doctor/bootstrap-size", () => {
         fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
       }),
     );
+  });
+
+  it("follows an opted-in USER.md cap and names the setting", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-optin-"));
+    await fs.writeFile(join(tmp, "USER.md"), "u".repeat(5_000), "utf-8");
+    const cfg = { agents: { defaults: { workspace: tmp, userBootstrapMaxChars: 8_000 } } };
+
+    await expect(
+      getBootstrapSizeCheck().detect({ mode: "lint", runtime, cfg, cwd: tmp }),
+    ).resolves.toEqual([]);
+
+    await fs.writeFile(join(tmp, "USER.md"), "u".repeat(9_000), "utf-8");
+    const findings = await getBootstrapSizeCheck().detect({ mode: "lint", runtime, cfg, cwd: tmp });
+    const userFinding = findings.find((finding) => finding.message.includes("USER.md"));
+    expect(userFinding?.fixHint).toContain("has a 8,000-character bootstrap cap");
+    expect(userFinding?.fixHint).toContain("agents.defaults.userBootstrapMaxChars");
+    expect(userFinding?.fixHint).not.toContain("tune");
   });
 
   it("retains total-budget guidance when missing-file markers exhaust the USER.md budget", async () => {
@@ -219,7 +236,7 @@ describe("core/doctor/bootstrap-size", () => {
     });
 
     const userFinding = findings.find((finding) => finding.message.includes("USER.md"));
-    expect(userFinding?.fixHint).toContain("fixed 4,000-character bootstrap cap");
+    expect(userFinding?.fixHint).toContain("has a 4,000-character bootstrap cap");
     expect(userFinding?.fixHint).toContain("agents.entries.*.bootstrapTotalMaxChars");
     expect(userFinding?.fixHint).not.toContain("tune `agents.entries.*.bootstrapMaxChars`");
     expect(findings.some((finding) => finding.message.startsWith("Total bootstrap context"))).toBe(

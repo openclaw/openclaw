@@ -11,6 +11,7 @@ const listAgentIds = vi.hoisted(() => vi.fn(() => ["main"]));
 const resolveBootstrapContextForDiagnostics = vi.hoisted(() => vi.fn());
 const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
 const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
+const resolveUserBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 4_000));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
@@ -26,9 +27,11 @@ vi.mock("../agents/bootstrap-files-diagnostics.js", () => ({
   resolveBootstrapContextForDiagnostics,
 }));
 
-vi.mock("../agents/embedded-agent-helpers.js", () => ({
+vi.mock("../agents/embedded-agent-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent-helpers.js")>()),
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
+  resolveUserBootstrapMaxChars,
 }));
 
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
@@ -153,9 +156,7 @@ describe("noteBootstrapFileSize", () => {
     const [message] = note.mock.calls[0] ?? [];
     expect(message).toContain("Workspace bootstrap files are near configured limits:");
     expect(message).toContain("- USER.md: 3,500 chars (88% of max/file 4,000)");
-    expect(message).toContain(
-      "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
-    );
+    expect(message).toContain("USER.md has a 4,000-character bootstrap cap; keep it compact.");
     expect(message).not.toContain("bootstrapMaxChars");
   });
 
@@ -174,10 +175,29 @@ describe("noteBootstrapFileSize", () => {
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] ?? [];
-    expect(message).toContain(
-      "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
-    );
+    expect(message).toContain("USER.md has a 4,000-character bootstrap cap; keep it compact.");
     expect(message).not.toContain("bootstrapMaxChars");
+  });
+
+  it("names a raised USER.md cap and the opt-in setting", async () => {
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
+      bootstrapFiles: [
+        {
+          name: "USER.md",
+          path: "/tmp/workspace/USER.md",
+          content: "u".repeat(10_000),
+          missing: false,
+        },
+      ],
+      contextFiles: [{ path: "/tmp/workspace/USER.md", content: "u".repeat(8_000) }],
+    });
+    resolveUserBootstrapMaxChars.mockReturnValueOnce(8_000);
+    await noteBootstrapFileSize({} as OpenClawConfig);
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] ?? [];
+    expect(message).toContain("USER.md has a 8,000-character bootstrap cap; keep it compact.");
+    expect(message).toContain("set `agents.entries.*.userBootstrapMaxChars` for this agent");
+    expect(message).not.toContain("tune `agents.entries.*.bootstrapMaxChars`");
   });
 
   it("keeps the tuning tip when another file hits a configurable per-file limit", async () => {
@@ -204,9 +224,7 @@ describe("noteBootstrapFileSize", () => {
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] ?? [];
-    expect(message).toContain(
-      "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
-    );
+    expect(message).toContain("USER.md has a 4,000-character bootstrap cap; keep it compact.");
     expect(message).toContain("tune `agents.entries.*.bootstrapMaxChars`");
   });
 
@@ -227,7 +245,7 @@ describe("noteBootstrapFileSize", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] ?? [];
     expect(message).toContain("tune `agents.entries.*.bootstrapMaxChars`");
-    expect(message).not.toContain("fixed 4,000-character bootstrap cap");
+    expect(message).not.toContain("4,000-character bootstrap cap");
   });
 
   it("labels a secondary agent whose bootstrap files exceed the limit", async () => {

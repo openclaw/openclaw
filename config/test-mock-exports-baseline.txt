@@ -5902,7 +5902,6 @@
 ["src/commands/doctor-bootstrap-size.test.ts","../../packages/terminal-core/src/note.js","76670fde754352037ee3f1cff2949e0c48732334c728d7f48a5d9d44cdbed947",1]
 ["src/commands/doctor-bootstrap-size.test.ts","../agents/agent-scope.js","827e1e436728206dccbcb253bb091e4257b226e4e2775bc9925d6b524f1cc917",1]
 ["src/commands/doctor-bootstrap-size.test.ts","../agents/bootstrap-files-diagnostics.js","26b63e78edd97eecde3ee47cca77faeb01e93c0d018996a013f2267c5f878073",1]
-["src/commands/doctor-bootstrap-size.test.ts","../agents/embedded-agent-helpers.js","de2a2fc9f9535ff98a1fe2fb761202e8cb704d8746ec0eef49e33fb1941dc0f1",1]
 ["src/commands/doctor-browser.facade.test.ts","../plugin-sdk/facade-loader.js","89624e65c05e1540f4edf426d62bb0933161416e36340e4e061dc0a79900bad9",1]
 ["src/commands/doctor-bun-cli-launcher.test.ts","../../packages/terminal-core/src/note.js","336fc791de8ce9b19eba2b7bc282f83250c9743ee50617878e94ae793b1f1113",1]
 ["src/commands/doctor-bun-cli-launcher.test.ts","./onboard-helpers.js","ed6f5a9370cf07ee6c03c34b04609666e431bb8e78408b1d4a588865af720eab",1]

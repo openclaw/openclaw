@@ -54,6 +54,7 @@ entry points at the page that now holds the content.
 - <a id="agents.defaults.contextinjection" /><a id="agents-defaults-contextinjection" />[`agents.defaults.contextInjection`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.contextinjection)
 - <a id="agents.defaults.bootstrapmaxchars" /><a id="agents-defaults-bootstrapmaxchars" />[`agents.defaults.bootstrapMaxChars`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.bootstrapmaxchars)
 - <a id="agents.defaults.bootstraptotalmaxchars" /><a id="agents-defaults-bootstraptotalmaxchars" />[`agents.defaults.bootstrapTotalMaxChars`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.bootstraptotalmaxchars)
+- <a id="agents.defaults.userbootstrapmaxchars" /><a id="agents-defaults-userbootstrapmaxchars" />[`agents.defaults.userBootstrapMaxChars`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.userbootstrapmaxchars)
 - <a id="per-agent-bootstrap-profile-overrides" />[Per-agent bootstrap profile overrides](/gateway/config-agents/workspace-and-bootstrap#per-agent-bootstrap-profile-overrides)
 - <a id="bootstrap-truncation-notice" />[Bootstrap truncation notice](/gateway/config-agents/workspace-and-bootstrap#bootstrap-truncation-notice)
 - <a id="context-budget-ownership-map" />[Context budget ownership map](/gateway/config-agents/workspace-and-bootstrap#context-budget-ownership-map)

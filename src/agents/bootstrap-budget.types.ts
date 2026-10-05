@@ -8,6 +8,8 @@ export type BootstrapInjectionStat = {
   rawChars: number;
   injectedChars: number;
   truncated: boolean;
+  /** Personal USER.md overlay; keeps the 4,000-character ceiling. Absent means shared. */
+  personalUser?: true;
 };
 
 type BootstrapAnalyzedFile = BootstrapInjectionStat & {

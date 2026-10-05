@@ -9,6 +9,7 @@ import { createRealConversationClassifier } from "../../agents/compaction-real-c
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
+  resolveUserBootstrapMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
 import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -316,6 +317,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     ),
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
+    userBootstrapMaxChars: resolveUserBootstrapMaxChars(params.cfg, sessionAgentId),
   });
   const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
   const perFile = truncatedBootstrapFiles.filter((file) =>

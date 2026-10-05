@@ -7,14 +7,14 @@ import {
 import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
-  isFixedUserCapFile,
+  isUserCapFile,
 } from "../agents/bootstrap-budget.js";
 import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
+  resolveUserBootstrapMaxChars,
 } from "../agents/embedded-agent-helpers.js";
-import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.
@@ -48,6 +48,7 @@ export async function collectBootstrapFileSize(
 ) {
   const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
+  const userBootstrapMaxChars = resolveUserBootstrapMaxChars(cfg, agentId);
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
     workspaceDir,
     config: cfg,
@@ -55,10 +56,12 @@ export async function collectBootstrapFileSize(
   });
   return {
     bootstrapTotalMaxChars,
+    userBootstrapMaxChars,
     analysis: analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: contextFiles }),
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
+      userBootstrapMaxChars,
     }),
   };
 }
@@ -68,11 +71,8 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const agentIds = listAgentIds(cfg);
   let defaultAnalysis: ReturnType<typeof analyzeBootstrapBudget> | undefined;
   for (const agentId of agentIds) {
-    const { analysis, bootstrapTotalMaxChars } = await collectBootstrapFileSize(
-      cfg,
-      resolveAgentWorkspaceDir(cfg, agentId),
-      agentId,
-    );
+    const { analysis, bootstrapTotalMaxChars, userBootstrapMaxChars } =
+      await collectBootstrapFileSize(cfg, resolveAgentWorkspaceDir(cfg, agentId), agentId);
     if (agentId === defaultAgentId) {
       defaultAnalysis = analysis;
     }
@@ -110,25 +110,28 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
-    // Report USER.md's fixed cap separately from tunable per-file limits.
-    const fixedUserCapApplied = analysis.truncatedFiles.some(
-      (file) => isFixedUserCapFile(file) && file.causes.includes("per-file-limit"),
+    // Report USER.md's own ceiling separately from bootstrapMaxChars, which cannot raise it.
+    const isUserCap = (file: { name: string; effectiveFileLimit: number; personalUser?: true }) =>
+      isUserCapFile(file, userBootstrapMaxChars);
+    const userCapApplied = analysis.truncatedFiles.some(
+      (file) => isUserCap(file) && file.causes.includes("per-file-limit"),
     );
-    const fixedUserCapNearLimit = analysis.nearLimitFiles.some(isFixedUserCapFile);
-    const fixedUserCapRelevant = fixedUserCapApplied || fixedUserCapNearLimit;
+    const userCapNearLimit = analysis.nearLimitFiles.some(isUserCap);
+    const userCapRelevant = userCapApplied || userCapNearLimit;
     const needsPerFileTip =
       analysis.truncatedFiles.some(
-        (file) => file.causes.includes("per-file-limit") && !isFixedUserCapFile(file),
-      ) || analysis.nearLimitFiles.some((file) => !isFixedUserCapFile(file));
+        (file) => file.causes.includes("per-file-limit") && !isUserCap(file),
+      ) || analysis.nearLimitFiles.some((file) => !isUserCap(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;
-    if (needsPerFileTip || needsTotalTip || fixedUserCapRelevant) {
+    if (needsPerFileTip || needsTotalTip || userCapRelevant) {
       lines.push("");
     }
-    if (fixedUserCapRelevant) {
+    if (userCapRelevant) {
       lines.push(
-        `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`,
+        `USER.md has a ${formatInt(userBootstrapMaxChars)}-character bootstrap cap; keep it compact.`,
+        "- Tip: to opt in to a larger shared USER.md, set `agents.entries.*.userBootstrapMaxChars` for this agent, or `agents.defaults.userBootstrapMaxChars` as fallback.",
       );
     }
     if (needsPerFileTip) {

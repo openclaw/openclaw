@@ -325,6 +325,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
   "agents.entries.*.bootstrapTotalMaxChars":
     "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
+  "agents.entries.*.userBootstrapMaxChars":
+    "Per-agent opt-in ceiling for the shared workspace USER.md injected into this agent's system prompt. Omit to inherit agents.defaults.userBootstrapMaxChars (default: 4000). Still bounded by bootstrapMaxChars and bootstrapTotalMaxChars; personal USER.md files keep the 4000-character limit.",
   "agents.entries.*.experimental":
     "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
   "agents.entries.*.experimental.localModelLean":

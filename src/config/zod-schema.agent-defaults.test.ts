@@ -184,6 +184,26 @@ describe("agent defaults schema", () => {
     ).toBe(true);
   });
 
+  it("accepts a positive integer userBootstrapMaxChars on defaults and entries", () => {
+    expect(
+      AgentDefaultsSchema.parse({ userBootstrapMaxChars: 12_000 })?.userBootstrapMaxChars,
+    ).toBe(12_000);
+    expect(
+      AgentEntrySchema.parse({ id: "ops", userBootstrapMaxChars: 8_000 }).userBootstrapMaxChars,
+    ).toBe(8_000);
+  });
+
+  it.each([0, -1, 1.5, "12000"])("rejects userBootstrapMaxChars %j", (value) => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ userBootstrapMaxChars: value }),
+      "userBootstrapMaxChars",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", userBootstrapMaxChars: value }),
+      "userBootstrapMaxChars",
+    );
+  });
+
   it("accepts contextInjection: never", () => {
     expect(AgentDefaultsSchema.parse({ contextInjection: "never" })?.contextInjection).toBe(
       "never",

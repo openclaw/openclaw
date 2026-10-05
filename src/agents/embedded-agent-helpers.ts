@@ -4,6 +4,7 @@ export {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
+  resolveUserBootstrapMaxChars,
 } from "./embedded-agent-helpers/bootstrap.js";
 export {
   classifyAssistantFailoverReason,

@@ -341,24 +341,24 @@ const bootstrapSizeCheck: CoreHealthCheck = {
       return [];
     }
     const { collectBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
-    const { isFixedUserCapFile } = await import("../agents/bootstrap-budget.js");
-    const { USER_BOOTSTRAP_MAX_CHARS } =
-      await import("../agents/embedded-agent-helpers/bootstrap.js");
+    const { isUserCapFile } = await import("../agents/bootstrap-budget.js");
     const workspaceDir = ctx.cwd;
-    const { analysis } = await collectBootstrapFileSize(
+    const { analysis, userBootstrapMaxChars } = await collectBootstrapFileSize(
       ctx.cfg,
       workspaceDir,
       tryResolveSoleAgentId(ctx.cfg),
     );
-    // USER.md's fixed cap makes per-file tuning advice a dead end: name the cap
-    // and the compaction action instead, matching the interactive Doctor note.
-    const fixedCapHint = `Reduce the file size; USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS.toLocaleString("en-US")}-character bootstrap cap that \`bootstrapMaxChars\` cannot raise.`;
+    // bootstrapMaxChars cannot raise USER.md's ceiling, so per-file tuning advice is a
+    // dead end: name the cap, compaction, and the dedicated opt-in, matching the Doctor note.
+    const isUserCap = (file: { name: string; effectiveFileLimit: number; personalUser?: true }) =>
+      isUserCapFile(file, userBootstrapMaxChars);
+    const userCapHint = `Reduce the file size; USER.md has a ${userBootstrapMaxChars.toLocaleString("en-US")}-character bootstrap cap that \`bootstrapMaxChars\` cannot raise. To opt in to a larger shared USER.md, set \`agents.entries.*.userBootstrapMaxChars\` for this agent, or \`agents.defaults.userBootstrapMaxChars\` as fallback.`;
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
       let fixHint =
         "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.";
-      if (file.causes.includes("per-file-limit") && isFixedUserCapFile(file)) {
-        fixHint = fixedCapHint;
+      if (file.causes.includes("per-file-limit") && isUserCap(file)) {
+        fixHint = userCapHint;
         if (file.causes.includes("total-limit")) {
           fixHint +=
             " Also reduce total bootstrap size or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.";
@@ -381,8 +381,8 @@ const bootstrapSizeCheck: CoreHealthCheck = {
         severity: "info",
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
-        fixHint: isFixedUserCapFile(file)
-          ? fixedCapHint
+        fixHint: isUserCap(file)
+          ? userCapHint
           : "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }

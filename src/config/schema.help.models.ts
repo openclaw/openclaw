@@ -153,6 +153,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 60000).",
+  "agents.defaults.userBootstrapMaxChars":
+    "Opt-in max characters of the shared workspace USER.md injected into the system prompt (default: 4000). bootstrapMaxChars cannot raise the USER.md ceiling; set this to allow a larger profile. Still bounded by bootstrapMaxChars and bootstrapTotalMaxChars; personal USER.md files keep the 4000-character limit.",
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.decisionAssistance":
