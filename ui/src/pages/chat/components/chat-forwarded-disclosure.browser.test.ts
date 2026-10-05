@@ -118,14 +118,9 @@ it.each([
       ".chat-message-disclosure__toggle",
     )!;
     await expect.poll(() => toggle.hidden).toBe(false);
-    const lineHeight = Number.parseFloat(
-      getComputedStyle(content!.querySelector(".chat-text")!).lineHeight,
-    );
-    expect(
-      Math.abs(content!.getBoundingClientRect().height - lineHeight * 2.5),
-    ).toBeLessThanOrEqual(1);
-    expect(getComputedStyle(content!).maskImage).not.toBe("none");
-    expect(content!.textContent?.trim()).toBe(longText);
+    expect(getComputedStyle(content!).maskImage).toBe("none");
+    expect(content!.scrollHeight - content!.clientHeight).toBeLessThanOrEqual(1);
+    expect(content!.textContent?.trim()).toBe("Instruction 1.\nInstruction 2.\nInstruction 3.");
     const box = bubbles[0]!.getBoundingClientRect();
     const button = toggle.getBoundingClientRect();
     const above = button.top - content!.getBoundingClientRect().bottom;
@@ -139,7 +134,7 @@ it.each([
         ".chat-message-disclosure__toggle",
       );
       await expect.poll(() => !shortToggle || shortToggle.hidden).toBe(true);
-      const short = bubble.querySelector<HTMLElement>(".chat-message-disclosure__content")!;
+      const short = bubble.querySelector<HTMLElement>(".chat-text")!;
       expect(getComputedStyle(short).maskImage).toBe("none");
       expect(short.scrollHeight - short.clientHeight).toBeLessThanOrEqual(1);
     }
@@ -154,6 +149,7 @@ it.each([
     await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
     expect(getComputedStyle(content!).maskImage).toBe("none");
     expect(content!.scrollHeight - content!.clientHeight).toBeLessThanOrEqual(1);
+    expect(content!.textContent?.trim()).toBe(longText);
     expect(bubbles[1]!.querySelector("button[aria-expanded='false']")).not.toBeNull();
     draw();
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -177,32 +173,27 @@ it("keeps a forwarded stream open until final while collapsing prior messages", 
     .toBe(true);
 });
 
-it("rechecks wrapped content when the transcript width changes", async () => {
+it("reflows the same complete sentences when the transcript width changes", async () => {
   const { group, draw } = fixture("assistant", 1000);
+  const sentence = "A scheduled update keeps the complete instruction available. ";
   group.messages = [
     {
       key: "wrapped",
       hasVisibleContent: true,
-      message: {
-        role: "assistant",
-        content:
-          "A scheduled update preserves the full instruction text while keeping the conversation readable. ".repeat(
-            3,
-          ),
-      },
+      message: { role: "assistant", content: sentence.repeat(10) },
     },
   ];
   draw();
-  const toggle = host.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")!;
   const content = host.querySelector<HTMLElement>(".chat-message-disclosure__content")!;
-  await expect.poll(() => toggle.hidden).toBe(true);
-  expect(getComputedStyle(content).maskImage).toBe("none");
+  const preview = content.textContent;
+  const desktopHeight = content.clientHeight;
   host.style.width = "240px";
-  await expect.poll(() => toggle.hidden).toBe(false);
-  expect(getComputedStyle(content).maskImage).not.toBe("none");
-  host.style.width = "1000px";
-  await expect.poll(() => toggle.hidden).toBe(true);
+  expect(content.clientHeight).toBeGreaterThan(desktopHeight);
+  expect(content.textContent).toBe(preview);
+  expect(getComputedStyle(content).maskImage).toBe("none");
   expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
+  host.style.width = "1000px";
+  expect(content.clientHeight).toBe(desktopHeight);
 });
 
 it.each([
@@ -237,3 +228,109 @@ it.each([
     expect(slot.scrollHeight).toBe(18);
   },
 );
+
+it.each([390, 1280])(
+  "keeps complete glyph rows and full Markdown accessible at %i px",
+  async (width) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, 800);
+    const { group, draw } = fixture("assistant", width);
+    const tail = "Supporting details remain in the full report. ".repeat(18);
+    const cases = [
+      "A **complete** sentence with [the review](https://example.com/review). " + tail,
+      "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n\n" + tail,
+      "- First item.\n- Second item.\n- Third item.\n- " + tail,
+      "~~~ts\nconst first = 1;\nconst second = 2;\nconst third = 3;\nconst fourth = 4;\n~~~",
+      "https://example.com/" + "longpath".repeat(120),
+      "unpunctuated words ".repeat(80),
+    ];
+    group.messages = cases.map((content, index) => ({
+      key: "case-" + index,
+      hasVisibleContent: true,
+      message: { role: "assistant", content },
+    }));
+    draw();
+    await document.fonts.ready;
+    const contents = host.querySelectorAll<HTMLElement>(".chat-message-disclosure__content");
+    expect(contents).toHaveLength(cases.length);
+    for (const content of contents) {
+      const style = getComputedStyle(content);
+      expect(style.maskImage).toBe("none");
+      expect(style.maxHeight).toBe("none");
+      // List-marker ink can extend past the line box; it must remain visible.
+      expect(style.overflowY).toBe("visible");
+      const bottom = content.getBoundingClientRect().bottom;
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) {
+          continue;
+        }
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          expect(rect.bottom, "all preview glyphs fit, including descenders").toBeLessThanOrEqual(
+            bottom + 1,
+          );
+        }
+      }
+    }
+    expect(contents[0]!.querySelector("strong")?.textContent).toBe("complete");
+    expect(contents[0]!.querySelector("a")?.getAttribute("href")).toBe(
+      "https://example.com/review",
+    );
+    expect(contents[1]!.querySelectorAll("p")).toHaveLength(3);
+    expect(contents[2]!.querySelectorAll("li")).toHaveLength(3);
+    expect(contents[3]!.querySelector("pre code")).not.toBeNull();
+    expect(contents[3]!.querySelector("button")).toBeNull();
+    const codeToggle = contents[3]!.parentElement!.querySelector<HTMLButtonElement>(
+      ".chat-message-disclosure__toggle",
+    )!;
+    codeToggle.focus();
+    const { userEvent } = await import("vitest/browser");
+    await userEvent.keyboard("{Enter}");
+    expect(codeToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(contents[3]!.querySelector(".code-block-copy")).not.toBeNull();
+    expect(contents[3]!.textContent).toContain("const fourth = 4;");
+    codeToggle.click();
+    expect(codeToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(contents[3]!.textContent).not.toContain("fourth");
+  },
+);
+
+it("keeps blank code rows and positioned media behind Show more", async () => {
+  const { group, draw } = fixture("assistant", 700);
+  group.messages = [
+    {
+      key: "blank-code",
+      hasVisibleContent: true,
+      message: { role: "assistant", content: "~~~\n" + "\n".repeat(100) + "final row\n~~~" },
+    },
+    {
+      key: "media",
+      hasVisibleContent: true,
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Chart context." },
+          {
+            type: "image",
+            url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='600'%3E%3Crect width='64' height='600' fill='teal'/%3E%3C/svg%3E",
+          },
+        ],
+      },
+    },
+  ];
+  draw();
+  const contents = host.querySelectorAll<HTMLElement>(".chat-message-disclosure__content");
+  expect(contents).toHaveLength(2);
+  expect(contents[0]!.clientHeight).toBeLessThan(120);
+  expect(contents[1]!.textContent).toContain("Chart context.");
+  expect(contents[1]!.textContent).not.toContain("OPENCLAWMEDIASLOT");
+  expect(contents[1]!.querySelector("img")).toBeNull();
+  const toggle = contents[1]!.parentElement!.querySelector<HTMLButtonElement>(
+    ".chat-message-disclosure__toggle",
+  )!;
+  toggle.click();
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(contents[1]!.querySelector("img")).not.toBeNull();
+});
