@@ -165,7 +165,7 @@ describe("probeGatewayReachable", () => {
         gatewayReached: true,
         configSnapshot: {
           valid: true,
-          config: { agents: { list: [{ id: "work", default: true, model: "openai/gpt-5.5" }] } },
+          config: { agents: { entries: { work: { model: "openai/gpt-5.5" } } } },
         },
       })
       .mockResolvedValueOnce({

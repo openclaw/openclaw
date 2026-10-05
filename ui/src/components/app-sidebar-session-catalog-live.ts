@@ -7,8 +7,12 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { isAwaitingGatewayFailure } from "../lib/gateway-availability.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  isAwaitingGatewayFailure,
+  resolveGatewayReadRetryDelayMs,
+} from "../lib/gateway-availability.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -28,9 +32,8 @@ export function sessionCatalogListClient(
 ): GatewayBrowserClient | null {
   if (
     !connected ||
-    snapshot?.phase !== "connected" ||
-    !snapshot.client ||
-    isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
+    !snapshot?.client ||
+    !canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }
@@ -90,6 +93,7 @@ export class SessionCatalogLiveState {
   private requestOwner: symbol | null = null;
   private retryAttempts = 0;
   private retryAt = 0;
+  startupPending = false;
 
   get retryDelayMs() {
     return Math.max(0, this.retryAt - Date.now());
@@ -98,9 +102,16 @@ export class SessionCatalogLiveState {
   resetRetry() {
     this.retryAttempts = 0;
     this.retryAt = 0;
+    this.startupPending = false;
   }
 
   retryRequest(error: unknown): number | null {
+    this.startupPending = isAgentDatabaseInspectionPendingError(error);
+    if (this.startupPending) {
+      const delay = resolveGatewayReadRetryDelayMs(error, this.retryAttempts++);
+      this.retryAt = Date.now() + delay;
+      return delay;
+    }
     if (
       !(error instanceof GatewayRequestError) ||
       !error.retryable ||
@@ -477,7 +488,9 @@ export async function refreshSessionCatalogsLive(params: {
     // A transient refresh failure must not collapse already visible or expanded pages.
     if (revisionIsCurrent()) {
       retryDelayMs = live.retryRequest(error);
-      if (retryDelayMs === null) {
+      if (live.startupPending) {
+        params.applyError(error);
+      } else if (retryDelayMs === null) {
         live.warnRequestError(error);
         params.applyError(error);
       }

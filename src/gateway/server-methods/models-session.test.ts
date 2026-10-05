@@ -410,10 +410,12 @@ describe("direct session model catalogs", () => {
       const f = fixture();
       f.config.agents = {
         ...f.config.agents,
-        list: [
-          { id: "main", default: true },
-          { id: "other", default: false },
-        ],
+        ownership: "explicit",
+        defaults: {
+          ...f.config.agents?.defaults,
+          systemAgent: { agentId: "main" },
+        },
+        entries: { main: {}, other: {} },
       };
       await state.writeConfig(f.config);
       const sessionKey = "agent:main:saved";

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -293,7 +294,7 @@ describe("createCopilotToolBridge", () => {
   it("throws on duplicate tool names and lists all duplicates", async () => {
     await expect(
       createCopilotToolBridge({
-        attemptParams: { toolsAllow: ["alpha", "beta"] },
+        attemptParams: { config: { tools: { toolSearch: false } }, toolsAllow: ["alpha", "beta"] },
         createOpenClawCodingTools: () => makeTools("alpha", "beta", "alpha", "beta"),
       }),
     ).rejects.toThrow("duplicate tool names: alpha, beta");
@@ -345,7 +346,7 @@ describe("createCopilotToolBridge", () => {
             sessionId,
             workspaceDir,
             attemptParams: {
-              config: { tools: { fs: { workspaceOnly: true } } },
+              config: { tools: { fs: { workspaceOnly: true }, toolSearch: false } },
               onToolOutcome,
               isTurnTainted,
               runId: sessionId,
@@ -724,6 +725,7 @@ describe("createCopilotToolBridge", () => {
       const createOpenClawCodingTools = vi.fn(() => makeTools("read", "message"));
       const result = await createCopilotToolBridge({
         attemptParams: {
+          config: { tools: { toolSearch: false } },
           toolsAllow: ["read"],
           forceMessageTool: true,
           disableMessageTool: true,
@@ -975,6 +977,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const observeTerminal = createContractToolTerminalObserver("copilot-ordering-run");
     const bridge = await createCopilotToolBridge({
       attemptParams: {
+        config: { tools: { toolSearch: false } },
         observeToolTerminal: (observation) => {
           if (observation.toolCallId === "call-0") {
             throw failure;
@@ -1029,6 +1032,32 @@ describe("createCopilotToolBridge tool conversion", () => {
     );
   });
 
+  it("runs SDK-dispatched tools in the attempt's async context, not the pooled connection's", async () => {
+    const turn = new AsyncLocalStorage<string>();
+    let seen: string | undefined;
+    const bridge = await turn.run("turn-2", () =>
+      createCopilotToolBridge({
+        attemptParams: { config: { tools: { codeMode: false, toolSearch: false } } },
+        createOpenClawCodingTools: () => [
+          makeTool({
+            name: "probe",
+            execute: vi.fn(async () => {
+              seen = turn.getStore();
+              return { content: [], details: {} };
+            }),
+          }),
+        ],
+      }),
+    );
+    try {
+      // The pooled SDK connection was opened during turn 1 and dispatches from there.
+      await turn.run("turn-1", () => runSdkTool(sdkToolNamed(bridge, "probe"), {}));
+      expect(seen).toBe("turn-2");
+    } finally {
+      bridge.cleanup?.();
+    }
+  });
+
   it("rechecks abort before a queued tool starts without blocking another attempt", async () => {
     const controller = new AbortController();
     const started = createDeferred<void>();
@@ -1038,6 +1067,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       createCopilotToolBridge({
         sessionId,
         abortSignal,
+        attemptParams: { config: { tools: { toolSearch: false } } },
         createOpenClawCodingTools: () => [
           makeTool({
             name: "exclusive",

@@ -1,4 +1,5 @@
 import type { ConfigSchemaLookupResult as ProtocolConfigSchemaLookupResult } from "../../packages/gateway-protocol/src/schema/config.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { ConfigUiHints } from "./schema.hints.js";
 import {
@@ -11,7 +12,6 @@ import {
 
 type JsonSchemaNode = Record<string, unknown>;
 
-const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
   "$id",
   "$schema",
@@ -89,7 +89,7 @@ function resolveLookupChildSchema(
   schema: JsonSchemaObject,
   segment: string,
 ): JsonSchemaObject | null {
-  if (FORBIDDEN_LOOKUP_SEGMENTS.has(segment)) {
+  if (isBlockedObjectKey(segment)) {
     return null;
   }
 

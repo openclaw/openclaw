@@ -9,6 +9,7 @@ import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import {
@@ -96,6 +97,7 @@ import {
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     baseSnapshot,
     configSnapshot,
@@ -206,27 +208,41 @@ describe("update-cli", () => {
     );
   });
 
-  it("renders update status when unrelated config validation would fail", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      valid: false,
-      config: {} as OpenClawConfig,
-    });
-    vi.mocked(readSourceConfigBestEffort).mockResolvedValue({
-      update: { channel: "dev" },
-    } as OpenClawConfig);
+  it.each([false, true])(
+    "renders update status before invalid config warnings with json=%s",
+    async (json) => {
+      const sourceConfig = {
+        update: { channel: "dev" as const },
+        meta: { lastTouchedVersion: "2026.7.35", lastTouchedAt: "2026-07-31T12:00:00.000Z" },
+      };
+      vi.mocked(readSourceConfigBestEffort).mockResolvedValue(sourceConfig);
 
-    await updateStatusCommand({ json: true });
+      await updateStatusCommand({ json });
 
-    const last = requireValue(lastWriteJsonCall(), "update status JSON output");
-    const parsed = last as Record<string, unknown>;
-    const channel = parsed.channel as { value?: unknown; config?: unknown };
-    expect(channel.value).toBe("dev");
-    expect(channel.config).toBe("dev");
-    expect(checkUpdateStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ useDetachedDevUpstream: true }),
-    );
-  });
+      const issue = 'meta: Unrecognized key: "lastTouchedAt"';
+      if (json) {
+        expect(requireValue(lastWriteJsonCall(), "update status JSON output")).toMatchObject({
+          channel: { value: "dev", config: "dev" },
+          configWarnings: expect.arrayContaining([
+            expect.stringContaining(issue),
+            expect.stringContaining("openclaw doctor --fix"),
+          ]),
+        });
+      } else {
+        const output = getLogOutput();
+        expect(output).toContain("OpenClaw update status");
+        expect(output).toContain(`Warning: ${issue}`);
+        expect(output).toContain("openclaw doctor --fix");
+        expect(output.indexOf(`Warning: ${issue}`)).toBeGreaterThan(output.indexOf("Channel"));
+      }
+      expect(checkUpdateStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ useDetachedDevUpstream: true }),
+      );
+      expect(readSourceConfigBestEffort).toHaveBeenCalledOnce();
+      expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(sourceConfig.meta.lastTouchedAt).toBe("2026-07-31T12:00:00.000Z");
+    },
+  );
 
   it.each([
     {
@@ -712,7 +728,11 @@ describe("update-cli", () => {
         steps: [],
         durationMs: 100,
       };
-      mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+      mockRunningManagedGateway([
+        nodeExecutable,
+        path.join(process.cwd(), "dist", "index.js"),
+        "gateway",
+      ]);
       mockOwnedGitService();
       primeServiceCommand(
         [process.execPath, path.join(process.cwd(), "dist", "index.js"), "gateway"],
@@ -822,7 +842,12 @@ describe("update-cli", () => {
   });
   it("reports activation failure when the updated CLI entrypoint is missing", async () => {
     const root = await mockPackageInstallAtCaseDir();
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    mockRunningManagedGateway([
+      nodeExecutable,
+      path.join(root, "dist", "index.js"),
+      "gateway",
+      "run",
+    ]);
     vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(undefined);
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
@@ -840,7 +865,7 @@ describe("update-cli", () => {
     async (json) => {
       const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
       serviceLoaded.mockResolvedValue(true);
-      primeServiceCommand(["node", updatedEntrypoint, "gateway", "run"]);
+      primeServiceCommand([nodeExecutable, updatedEntrypoint, "gateway", "run"]);
       mockGatewayInstallFailure(updatedEntrypoint, json ? "runtime warning" : undefined);
       mockGatewayHealth("2026.4.24", "updated-gateway");
 
@@ -883,7 +908,7 @@ describe("update-cli", () => {
         }),
     });
     serviceLoaded.mockResolvedValue(true);
-    primeServiceCommand(["node", oldEntrypoint, "gateway", "run"]);
+    primeServiceCommand([nodeExecutable, oldEntrypoint, "gateway", "run"]);
     mockGatewayInstallFailure(updatedEntrypoint);
     mockGatewayHealth("2026.4.24", "matching-old-service");
 
@@ -908,7 +933,7 @@ describe("update-cli", () => {
 
     expectNoSideEffects(runDaemonRestart);
     const restartCall = gatewayCommandCall(updatedEntrypoint, "restart");
-    expect(restartCall?.[0][0]).toContain("node");
+    expect(restartCall?.[0][0]).toBe(process.execPath);
     expect(restartCall?.[0].slice(4)).toEqual([
       "--preserve-definition",
       "--json",

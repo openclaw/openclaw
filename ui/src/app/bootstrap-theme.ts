@@ -2,6 +2,7 @@ import {
   BUILTIN_THEMES,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
+import { registerListener } from "../../../src/shared/listeners.js";
 import type {
   ApplicationGateway,
   ApplicationTheme,
@@ -283,10 +284,7 @@ export function createApplicationTheme(
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
       catalog?.dispose();

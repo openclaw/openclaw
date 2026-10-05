@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { emitAgentEvent, emitAgentEventForRunContext } from "../../infra/agent-events.js";
@@ -23,21 +23,21 @@ vi.mock("../../status/status-plugin-health.runtime.js", () => ({
 }));
 
 describe("buildStatusReply execution observations", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     clearAgentHarnesses();
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearAgentHarnesses();
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   it("shows canonical successor tool activity resuming after approval without changing counts", async () => {
     const runId = "status-observed-successor";
     const taskRunId = "status-observed-original";
     const childSessionKey = "agent:main:subagent:status-observed";
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId,
       taskRunId,
       generation: 2,
@@ -148,36 +148,13 @@ describe("buildStatusReply execution observations", () => {
     }
   });
 
-  it("keeps recent ownerless rows and task counts while reporting unknown activity", async () => {
-    const runId = "status-ownerless";
-    const childSessionKey = "agent:main:subagent:status-ownerless";
-    addSubagentRunForTests({
-      runId,
-      generation: 1,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "retained worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
-    });
-
-    const reply = await buildStatusReplyForTest({});
-    const detail = reply?.text?.split("\n").find((line) => line.includes("• retained worker"));
-
-    expect(reply?.text).toContain("Subagents: 1 active");
-    expect(detail).toMatch(/unknown|unavailable/i);
-    expect(detail).not.toMatch(/\b(running|queued)\b/i);
-  });
-
   it.each(["task", "generation", "incarnation"] as const)(
     "does not borrow activity from a different canonical %s in the same child session",
     async (replacement) => {
       const childSessionKey = "agent:main:subagent:status-replaced";
       const previousRunId = replacement === "incarnation" ? "status-current" : "status-previous";
       const now = Date.now();
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: previousRunId,
         generation: 1,
         childSessionKey,
@@ -205,7 +182,7 @@ describe("buildStatusReply execution observations", () => {
           data: { approval: { id: "previous-approval", state: "pending" } },
         });
         expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
-        addSubagentRunForTests({
+        seedSubagentRunForReadTest({
           runId: "status-current",
           taskRunId: replacement === "generation" ? previousRunId : "status-current",
           generation: 2,
@@ -234,6 +211,9 @@ describe("buildStatusReply execution observations", () => {
         expect(reply?.text).toContain("Subagents: 1 active");
         expect(detail).toMatch(replacement === "incarnation" ? /running/i : /unknown|unavailable/i);
         expect(detail).not.toMatch(/approval|old-tool/i);
+        if (replacement !== "incarnation") {
+          expect(detail).not.toMatch(/\b(running|queued)\b/i);
+        }
         expect(reply?.text).not.toContain("• previous worker");
       } finally {
         clearAgentRunContext(previousRunId);
@@ -245,7 +225,7 @@ describe("buildStatusReply execution observations", () => {
   it("retains ended child delivery debt without calling the child active", async () => {
     const parentKey = "agent:main:subagent:status-delivery-parent";
     const now = Date.now();
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "status-delivery-parent",
       childSessionKey: parentKey,
       task: "delivery orchestrator",
@@ -254,7 +234,7 @@ describe("buildStatusReply execution observations", () => {
       endedAt: now - 60_000,
       outcome: { status: "ok" },
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "status-delivery-child",
       childSessionKey: `${parentKey}:subagent:child`,
       requesterSessionKey: parentKey,

@@ -5,14 +5,16 @@ import {
   type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import type { CommandLaneTaskMarker } from "../process/command-queue.js";
+import type { PreparedEffectUse } from "../shared/effect-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CronStandingGrantAuthority } from "./standing-grant-authority.types.js";
 
 type CronActiveJobState = {
   activeJobs: Map<string, CronActiveJobMarker>;
   selfRemovalOwners: WeakMap<() => void, () => CronActiveJobMarker | undefined>;
   admittedJobRuns: WeakMap<
     CronActiveJobMarker,
-    { context: AdmittedRunContext; assertActive: () => void }
+    { context: AdmittedRunContext; assertActive: () => void; signal: AbortSignal }
   >;
   generation: number;
   nextToken: number;
@@ -28,7 +30,7 @@ export function bindCronJobAdmittedRun(
 ): void {
   const assertActive = resolveAdmittedRunActiveAssertion(context, signal);
   if (marker && assertActive && isCronActiveJobMarkerCurrent(marker)) {
-    getCronActiveJobState().admittedJobRuns.set(marker, { context, assertActive });
+    getCronActiveJobState().admittedJobRuns.set(marker, { context, assertActive, signal });
   }
 }
 
@@ -39,7 +41,9 @@ function captureCronJobMessageAuthority(
     operationalRunInstance: OperationalRunInstanceRef;
   },
   sourceSensitive: boolean,
-): (() => void) | undefined {
+):
+  | ((() => void) & { prepareUse?: (assertCurrent?: () => void) => Promise<PreparedEffectUse> })
+  | undefined {
   const { jobId } = params;
   const marker = getCurrentCronActiveJobMarker(jobId);
   const isAuthorityCurrent = sourceSensitive
@@ -58,7 +62,7 @@ function captureCronJobMessageAuthority(
     !marker.jobRemoved &&
     marker.cancellation?.kind !== "requested";
   const inactive = () => new Error("cron message action authority is no longer active");
-  return () => {
+  const assertLocal = () => {
     const admitted = admittedJobRuns.get(marker);
     if (
       !isMarkerCurrent() ||
@@ -71,6 +75,9 @@ function captureCronJobMessageAuthority(
     }
     owner ??= admitted;
     owner.assertActive();
+  };
+  const assertCurrent = () => {
+    assertLocal();
     if (!isAuthorityCurrent()) {
       if (sourceSensitive) {
         marker.messageSourceAuthorityRevoked = true;
@@ -79,25 +86,82 @@ function captureCronJobMessageAuthority(
       }
       throw inactive();
     }
-    owner.assertActive();
-    if (!isMarkerCurrent() || admittedJobRuns.get(marker) !== owner) {
-      throw inactive();
-    }
+    assertLocal();
   };
+  const prepare = marker.prepareMessageUse;
+  return Object.assign(
+    assertCurrent,
+    prepare
+      ? {
+          prepareUse: (assertCallerCurrent?: () => void) => {
+            assertLocal();
+            return prepare(
+              sourceSensitive,
+              () => {
+                assertLocal();
+                assertCallerCurrent?.();
+              },
+              owner?.signal,
+            );
+          },
+        }
+      : {},
+  );
 }
 
 export function captureCronJobMessageActionAuthority(params: {
   jobId: string;
   operationalRunInstance: OperationalRunInstanceRef;
-}): (() => void) | undefined {
+}) {
   return captureCronJobMessageAuthority(params, false);
 }
 
 export function captureCronJobMessageSourceAuthority(params: {
   jobId: string;
   operationalRunInstance: OperationalRunInstanceRef;
-}): (() => void) | undefined {
+}) {
   return captureCronJobMessageAuthority(params, true);
+}
+
+export function captureCronJobStandingGrantAuthority(params: {
+  jobId: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+}): CronStandingGrantAuthority | undefined {
+  const marker = getCurrentCronActiveJobMarker(params.jobId);
+  const receipt = marker?.standingGrantAuthority;
+  if (!marker || !receipt) {
+    return undefined;
+  }
+  const { instanceId, runId } = params.operationalRunInstance;
+  const { admittedJobRuns } = getCronActiveJobState();
+  let owner: ReturnType<typeof admittedJobRuns.get>;
+  const assertCurrent = () => {
+    const admitted = admittedJobRuns.get(marker);
+    if (
+      getCurrentCronActiveJobMarker(params.jobId) !== marker ||
+      marker.jobRemoved ||
+      marker.cancellation?.kind === "requested" ||
+      !admitted ||
+      admitted.context.operationalRunInstance.instanceId !== instanceId ||
+      admitted.context.operationalRunInstance.runId !== runId ||
+      (owner !== undefined && admitted !== owner)
+    ) {
+      throw new Error("Cron standing-grant occurrence is no longer active");
+    }
+    owner ??= admitted;
+    owner.assertActive();
+    receipt.assertCurrent();
+  };
+  return {
+    context: receipt.context,
+    handle: { ...receipt.handle },
+    assertCurrent,
+    acquireUse: (assertUseCurrent, signal) =>
+      receipt.acquireUse(() => {
+        assertCurrent();
+        assertUseCurrent();
+      }, signal),
+  };
 }
 
 /** Captures host-owned admission; neither a copied token nor a same-id run can redeem it. */
@@ -134,6 +198,7 @@ export function bindCronSelfRemovalCommitGuard(
 
 export type CronActiveJobMarker = {
   jobId: string;
+  standingGrantAuthority?: CronStandingGrantAuthority;
   agentId?: string;
   stateIdentityKey?: string;
   declarationKey?: string;
@@ -146,6 +211,11 @@ export type CronActiveJobMarker = {
   triggerMutated?: true;
   isMessageActionAuthorityCurrent?: () => boolean;
   isMessageSourceAuthorityCurrent?: () => boolean;
+  prepareMessageUse?: (
+    sourceSensitive: boolean,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ) => Promise<PreparedEffectUse>;
   messageActionAuthorityRevoked?: true;
   messageSourceAuthorityRevoked?: true;
   jobRemoved?: true;
@@ -233,6 +303,7 @@ export function markCronJobActive(
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
     isMessageSourceAuthorityCurrent?: () => boolean;
+    prepareMessageUse?: CronActiveJobMarker["prepareMessageUse"];
   },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
@@ -252,6 +323,7 @@ export function markCronJobActive(
     ...(opts?.isMessageSourceAuthorityCurrent
       ? { isMessageSourceAuthorityCurrent: opts.isMessageSourceAuthorityCurrent }
       : {}),
+    ...(opts?.prepareMessageUse ? { prepareMessageUse: opts.prepareMessageUse } : {}),
     generation: state.generation,
     token,
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),

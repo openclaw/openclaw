@@ -135,13 +135,13 @@ describe("pending Stop producer binding", () => {
       if (!request.ok) {
         throw new Error(request.error);
       }
-      const session = prepareChatSendSession({ request: request.value, client, context });
+      const session = await prepareChatSendSession({ request: request.value, client, context });
       if (!session.ok) {
         throw new Error("chat session preparation failed");
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const hold = runExclusiveSessionLifecycleMutation({
+      const hold = runExclusiveSessionLifecycleMutation("drain", {
         scope: session.value.storePath,
         identities: [key, "original"],
         run: async () => {

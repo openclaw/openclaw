@@ -26,8 +26,12 @@ const manifestNormalizationSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
     {
       id: "model-selection-test-normalizers",
+      providers: ["nvidia", "fixture-route"],
       modelIdNormalization: {
-        providers: { nvidia: { aliases: { "llama-fast": "nvidia/canonical-fast" } } },
+        providers: {
+          nvidia: { aliases: { "llama-fast": "nvidia/canonical-fast" } },
+          "fixture-route": { aliases: { raw: "canonical" } },
+        },
       },
     },
   ],
@@ -75,7 +79,7 @@ function createSubagentSelectionConfig(params: {
   defaultPrimary?: string;
   modelEntries?: Record<string, unknown>;
   defaultSubagentModel?: string;
-  agents?: Array<Record<string, unknown>>;
+  agents?: NonNullable<OpenClawConfig["agents"]>["entries"];
 }) {
   return {
     agents: {
@@ -86,7 +90,7 @@ function createSubagentSelectionConfig(params: {
           ? { subagents: { model: params.defaultSubagentModel } }
           : {}),
       },
-      ...(params.agents ? { list: params.agents } : {}),
+      ...(params.agents ? { entries: params.agents } : {}),
     },
   } as unknown as OpenClawConfig;
 }
@@ -645,31 +649,19 @@ it.each([
   expect(resolveAllowedModelRef(params)).toEqual(expected);
 });
 
-it("resolves provider-qualified aliases without cross-provider collisions", () => {
-  const index = buildModelAliasIndex({
+it.each([false, true])("preserves provider identity with manifest normalization %s", (enabled) => {
+  const params = {
     cfg: createConfiguredModelRefConfig({
-      modelEntries: {
-        "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
-        "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
-      },
+      modelEntries: { "openai/gpt-4o-mini": { alias: "fixture-route/raw" } },
     }),
     defaultProvider: "openai",
+    allowManifestNormalization: enabled,
+    allowPluginNormalization: false,
+  };
+  const aliasIndex = buildModelAliasIndex(params);
+  expect(resolveModelRefFromString({ ...params, raw: "fixture-route/raw", aliasIndex })).toEqual({
+    ref: { provider: "fixture-route", model: enabled ? "canonical" : "raw" },
   });
-
-  expect(
-    resolveModelRefFromString({
-      raw: "lmstudio-moe/Local",
-      defaultProvider: "openai",
-      aliasIndex: index,
-    }),
-  ).toEqual({ ref: { provider: "lmstudio-moe", model: "qwen3.6-35b-a3b" }, alias: "Local" });
-  expect(
-    resolveModelRefFromString({
-      raw: "lmstudio-dense/LOCAL",
-      defaultProvider: "openai",
-      aliasIndex: index,
-    }),
-  ).toEqual({ ref: { provider: "lmstudio-dense", model: "qwen3.6-27b" }, alias: "Local" });
 });
 
 it("strips profile suffix before alias resolution", () => {
@@ -785,22 +777,28 @@ it.each([
     expected: { provider: "anthropic", model: "claude-opus-4-6" },
   },
   {
+    name: "keeps a literal primary before a same-provider alias backed by a bare key",
+    primary: "openai/friendly",
+    modelEntries: { base: { alias: "openai/friendly" } },
+    expected: { provider: "openai", model: "friendly" },
+  },
+  {
     name: "prefers slash-form aliases for configured default models",
     primary: "xiaomi/mimo-v2-pro-mit",
     modelEntries: { "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" } },
     expected: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
   },
   {
-    name: "prefers exact auth-profile aliases before configured-provider stripping",
+    name: "keeps a configured provider ahead of an exact auth-profile alias collision",
     primary: "nemotron-bolt/nemotron-3-super-120b@prod",
     modelEntries: {
       "openai/gpt-5.5": { alias: "nemotron-bolt/nemotron-3-super-120b@prod" },
     },
     providers: nemotronProvider,
-    expected: { provider: "openai", model: "gpt-5.5" },
+    expected: { provider: "nemotron-bolt", model: "nemotron-3-super-120b" },
   },
   {
-    name: "prefers stripped auth-profile aliases before configured-provider stripping",
+    name: "keeps a configured provider ahead of a stripped auth-profile alias collision",
     primary: "nemotron-bolt/nemotron-3-super-120b@prod",
     modelEntries: {
       "openai/nemotron-bolt/nemotron-3-super-120b": {
@@ -808,7 +806,7 @@ it.each([
       },
     },
     providers: nemotronProvider,
-    expected: { provider: "openai", model: "nemotron-bolt/nemotron-3-super-120b" },
+    expected: { provider: "nemotron-bolt", model: "nemotron-3-super-120b" },
   },
 ])("$name", ({ primary, modelEntries, providers, expected }) => {
   const cfg = createConfiguredModelRefConfig({ primary, modelEntries, providers });
@@ -969,13 +967,12 @@ it("uses agent model metadata to resolve an inherited bare default", () => {
 it("prefers the agent subagent model over default subagent and primary models", () => {
   const cfg = createSubagentSelectionConfig({
     defaultSubagentModel: "openai/gpt-5.4",
-    agents: [
-      {
-        id: "research",
+    agents: {
+      research: {
         model: { primary: "anthropic/claude-opus-4-6" },
         subagents: { model: "google/gemini-2.5-pro" },
       },
-    ],
+    },
   });
   expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
     "google/gemini-2.5-pro",
@@ -989,7 +986,7 @@ it("keeps runtime policy attached to the configured default subagent model", () 
         subagents: { model: "anthropic/claude-sonnet-4-6" },
         models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } } },
       },
-      list: [{ id: "research", model: "anthropic/claude-opus-4-7" }],
+      entries: { research: { model: "anthropic/claude-opus-4-7" } },
     },
   } as OpenClawConfig;
 
@@ -1011,7 +1008,7 @@ it.each([
     config: {
       defaultPrimary: "openai/gpt-5.4",
       modelEntries: { "claude-opus-4-6": { alias: "opus" } },
-      agents: [{ id: "research", model: "anthropic/claude-sonnet-4-6" }],
+      agents: { research: { model: "anthropic/claude-sonnet-4-6" } },
     },
     agentId: "research",
     modelOverride: "OPUS",
@@ -1038,12 +1035,11 @@ it.each([
     name: "resolves an alias configured only on the target agent",
     config: {
       modelEntries: { "openai/gpt-5.4": { alias: "global-gpt" } },
-      agents: [
-        {
-          id: "research",
+      agents: {
+        research: {
           models: { "anthropic/claude-opus-4-6": { alias: "research-opus" } },
         },
-      ],
+      },
     },
     agentId: "research",
     modelOverride: "research-opus",

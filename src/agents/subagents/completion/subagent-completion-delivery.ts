@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { withSessionDeliveryEnqueueAdmission } from "../../../infra/session-delivery-queue-storage.js";
 import {
@@ -10,30 +9,27 @@ import {
   type SessionDeliverySettledOutcome,
 } from "../../../infra/session-delivery-queue.records.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
+import {
+  RUNTIME_EVENT_USER_PROMPT,
+  type RuntimeContextFragment,
+} from "../../internal-runtime-context.js";
 import {
   ensureDeliveryState,
   loadPendingFinalDeliveryPayload,
 } from "../registry/subagent-delivery-state.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../registry/subagent-registry-helpers.js";
-import {
-  getSubagentRunsForChildSession,
-  subagentRuns,
-} from "../registry/subagent-registry-memory.js";
-import {
-  assertSubagentRegistryWriteSourceCurrent,
-  withSubagentRegistryWriteAuthority,
-} from "../registry/subagent-registry-persistence.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "../registry/subagent-registry-persistence.js";
 import {
   assertSubagentReadContext,
   readFullSubagentRuns,
 } from "../registry/subagent-registry-read-cache.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import {
   admitSubagentCompletionDelivery,
   blockSubagentCompletionDelivery,
-  publishCommittedRecords,
   settleSubagentCompletionDelivery,
+  SubagentCompletionSourceChangedError,
 } from "./subagent-completion-admission.store.js";
 import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-instructions.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
@@ -50,33 +46,22 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
   const payload = structuredClone(params.payload);
   const runId = params.runId;
   const context = params.queueContext;
+  const expected = subagentRuns.get(runId);
   return withSessionDeliveryEnqueueAdmission(payload, context, async (assertCurrent) => {
-    assertCurrent();
-    const current = subagentRuns.get(runId);
-    if (!current) {
-      throw new Error(`subagent completion owner not found: ${runId}`);
-    }
-    const expected = structuredClone(current);
-    const sourceIsCurrent = () =>
-      subagentRuns.get(runId) === current &&
-      isDeepStrictEqual(current, expected) &&
-      ![...getSubagentRunsForChildSession(expected.childSessionKey)].some(
-        (candidate) => compareSubagentRunGeneration(candidate, expected) > 0,
-      );
-    return withSubagentRegistryWriteAuthority(
-      [runId],
-      {
-        context,
-        assertCurrent: () => {
-          assertCurrent();
-          if (!sourceIsCurrent()) {
-            throw new Error("Subagent completion source changed during admission");
-          }
-        },
+    return admitSubagentCompletionDelivery({
+      runId,
+      context,
+      assertCurrent() {
+        assertCurrent();
+        if (!isSameSubagentRunOwner(subagentRuns.get(runId), expected)) {
+          throw new SubagentCompletionSourceChangedError(
+            "Subagent completion owner changed during enqueue admission",
+          );
+        }
       },
-      async (authority) => {
+      plan(current) {
         const now = Date.now();
-        const subagent = structuredClone(expected);
+        const subagent = structuredClone(current);
         const delivery = ensureDeliveryState(subagent);
         const generation = delivery.generation ?? 1;
         const windowStartedAt = delivery.windowStartedAt ?? subagent.execution.endedAt ?? now;
@@ -112,28 +97,9 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
           enqueuedAt: now,
         });
         delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
-        const admission = await admitSubagentCompletionDelivery({
-          queueEntry,
-          expected,
-          subagent,
-          context,
-          assertCurrent: authority.assertCurrent,
-        });
-        const result = { id: queueEntry.id, claimed: admission.claimed, status: admission.status };
-        try {
-          authority.assertDatabase();
-        } catch {
-          // A settled receipt stays authoritative, but cannot publish into a successor database.
-          return result;
-        }
-        if (authority.currentRunIds().includes(runId) && sourceIsCurrent()) {
-          // Row decoding clears the restart-only cleanup lock; the active attempt still owns it.
-          admission.subagent.cleanupHandled = current.cleanupHandled;
-          publishCommittedRecords(admission.subagent, context.admission.databasePath);
-        }
-        return result;
+        return { queueEntry, subagent };
       },
-    );
+    });
   });
 }
 
@@ -160,7 +126,7 @@ export function resolveCorrelatedSubagentDelivery(
   const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
   return {
     ...queued,
-    message: `${CANONICAL_RESULT_PROMPT}\n\n${result}`,
+    message: RUNTIME_EVENT_USER_PROMPT,
     runtimeContextFragments: [
       { kind: "runtime-instruction", text: CANONICAL_RESULT_PROMPT },
       { kind: "conversation-data", text: result },
@@ -201,34 +167,20 @@ export async function settleCorrelatedSubagentDelivery(
   ) {
     return;
   }
-  const now = Date.now();
-  const subagent = structuredClone(current);
-  const source = Object.freeze({
-    runId: current.runId,
-    createdAt: current.createdAt,
-    generation: current.generation,
-    childSessionKey: current.childSessionKey,
-    requesterSessionKey: current.requesterSessionKey,
-    requesterStorePath: current.requesterStorePath,
-  });
   const readMatchingDeliveryOwner = () => {
-    const latest = subagentRuns.get(source.runId);
+    const latest = subagentRuns.get(current.runId);
     if (!latest) {
       // A later recovery's canonical read distinguishes retirement from a cold map.
       throw new Error("Subagent completion recovery is waiting for registry restoration");
     }
     if (
-      compareSubagentRunGeneration(latest, source) !== 0 ||
-      latest.childSessionKey !== source.childSessionKey ||
-      latest.requesterSessionKey !== source.requesterSessionKey ||
-      latest.requesterStorePath !== source.requesterStorePath ||
+      !isSameSubagentRunOwner(latest, current) ||
       latest.delivery?.generation !== queueOwner.generation
     ) {
       return undefined;
     }
     return latest;
   };
-  const delivery = ensureDeliveryState(subagent);
   if (outcome !== "recovered") {
     await blockSubagentCompletionDelivery({
       context: queueContext,
@@ -238,40 +190,27 @@ export async function settleCorrelatedSubagentDelivery(
     });
     return;
   }
-  if (!alreadyDelivered) {
-    Object.assign(delivery, {
-      status: "delivered" as const,
-      disposition: "delivered" as const,
-      deliveredAt: now,
-      announcedAt: now,
-      lastError: undefined,
-      nextAttemptAt: undefined,
-      queueId: undefined,
-    });
-    delivery.payload = undefined;
-  }
-  await settleSubagentCompletionDelivery({ subagent, queueId: queued.id, context: queueContext });
+  await settleSubagentCompletionDelivery({
+    subagent: current,
+    queueId: queued.id,
+    context: queueContext,
+  });
   assertSubagentRegistryWriteSourceCurrent(queueContext);
   const published = readMatchingDeliveryOwner();
   if (!published) {
     return;
   }
-  if (
-    published !== current ||
-    published.delivery?.status !== "delivered" ||
-    published.delivery.queueId !== undefined
-  ) {
+  if (published.delivery?.status !== "delivered" || published.delivery.queueId !== undefined) {
     throw new Error("Subagent completion recovery is waiting for committed publication");
   }
-  const committed = structuredClone(published);
   const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
   assertSubagentRegistryWriteSourceCurrent(queueContext);
   const latest = readMatchingDeliveryOwner();
   if (!latest) {
     return;
   }
-  if (latest !== published || !isDeepStrictEqual(latest, committed)) {
+  if (latest.delivery?.status !== "delivered" || latest.delivery.queueId !== undefined) {
     throw new Error("Subagent completion recovery owner changed before cleanup resumed");
   }
-  resumeSubagentRun(subagent.runId);
+  resumeSubagentRun(current.runId);
 }

@@ -157,7 +157,7 @@ describe("cron dynamic cadence", () => {
     applyOutcomeToAuthoritativeJob(
       state,
       job,
-      authorCronRunCompletion(state, admittedJob, {
+      authorCronRunCompletion(admittedJob, {
         jobId: job.id,
         job: admittedJob,
         status: "ok",
@@ -220,5 +220,25 @@ describe("cron dynamic cadence", () => {
     maintain(job);
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
+  });
+
+  it("preserves a pending paced slot without repairing a missing every anchor", () => {
+    const state = makeState();
+    const pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
+    const job = makeCronJob({
+      agentId: "main",
+      createdAtMs: STARTED_AT,
+      updatedAtMs: STARTED_AT,
+      pacing: { min: "15m" },
+      schedule: { kind: "every", everyMs: 60 * 60_000 },
+      state: { nextRunAtMs: pacedNextRunAtMs, pacedNextRunAtMs },
+    });
+    state.store = { version: 1, jobs: [job] };
+
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], nowMs: ENDED_AT + 1_000 });
+
+    expect(job.schedule).toEqual({ kind: "every", everyMs: 60 * 60_000 });
+    expect(job.state.nextRunAtMs).toBe(pacedNextRunAtMs);
+    expect(job.state.pacedNextRunAtMs).toBe(pacedNextRunAtMs);
   });
 });

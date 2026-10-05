@@ -825,9 +825,16 @@ jobs:
           if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/openclaw-npm-release.yml" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$PREFLIGHT_WORKFLOW_BRANCH" == "$expected_extended_stable_branch" && "$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA" ]]; then
             extended_stable_preflight=true
           fi
-          if [[ "$extended_stable_preflight" != "true" ]] && ! git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"; then
-            echo "OpenClaw npm preflight tooling is not on the trusted publish workflow lineage." >&2
-            exit 1
+          if [[ "$extended_stable_preflight" != "true" ]]; then
+            lineage_args=(--verify-publication-lineage)
+            if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
+              lineage_args+=(--full-release-manifest "${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json")
+            fi
+            node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs" \
+              "${lineage_args[@]}" \
+              --repository "$GITHUB_REPOSITORY" --source-sha "$EXPECTED_SHA" \
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --publisher-sha "$WORKFLOW_SHA" \
+              --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
           fi
           node "$PLUGIN_SDK_API_VALIDATOR" \
             --manifest "$manifest" \
@@ -2222,6 +2229,8 @@ jobs:
       prepared_run_attempt: ${{ needs.resolve_release_target.outputs.prepared_docker_run_attempt }}
       prepared_artifact_name: ${{ needs.resolve_release_target.outputs.prepared_docker_artifact_name }}
       prepared_manifest_sha256: ${{ needs.resolve_release_target.outputs.prepared_docker_manifest_sha256 }}
+      full_release_validation_run_id: ${{ inputs.full_release_validation_run_id }}
+      full_release_validation_run_attempt: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
       focused_release_evidence_run_id: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}
       focused_release_evidence_run_attempt: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
       focused_release_evidence_workflow_full_ref: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}

@@ -69,19 +69,17 @@ export function completeDoctorPluginMetadataSnapshot(params: {
 
 /** Reuses one exact immutable plugin metadata generation per Doctor workspace. */
 export function createDoctorPluginMetadataSnapshotScope(params: {
-  baseSnapshot?: PluginMetadataSnapshot;
   getBaseSnapshot?: () => PluginMetadataSnapshot | undefined;
   env?: NodeJS.ProcessEnv;
   getDeferredPluginIds?: () => readonly string[];
 }): DoctorPluginMetadataSnapshotScope {
   const env = params.env ?? process.env;
   const snapshotsByWorkspace = new Map<string | undefined, PluginMetadataSnapshot>();
-  const readBaseSnapshot = () => params.getBaseSnapshot?.() ?? params.baseSnapshot;
   let currentBaseSnapshot: PluginMetadataSnapshot | undefined;
   let cache = createPluginCache();
 
   const refreshBaseSnapshot = () => {
-    const nextBaseSnapshot = readBaseSnapshot();
+    const nextBaseSnapshot = params.getBaseSnapshot?.();
     if (nextBaseSnapshot === currentBaseSnapshot) {
       return;
     }

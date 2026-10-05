@@ -24,6 +24,7 @@ import {
   hasPluginLifecycleLeaseDemand,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
+  withPluginArtifactCleanupLease,
   type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
@@ -157,61 +158,64 @@ function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
-  it("clears process demand after a waiter aborts or acquires and its holder releases", async ({
-    signal,
-  }) => {
-    await withOpenClawTestState({ label: "plugin-lifecycle-demand" }, async (state) => {
-      vi.useFakeTimers();
-      const clock = createPluginLifecycleLeaseTestClock();
-      const entered = createDeferred();
-      const release = createDeferred();
-      const cancelled = new AbortController();
-      const operations: Promise<unknown>[] = [];
-      try {
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-        const holder = withPluginLifecycleLease({ env: state.env, signal }, async () => {
-          await withPluginLifecycleLease({}, async () => {
+  it.for(["runtime", "cleanup"] as const)(
+    "clears process demand after a %s waiter aborts or acquires and its holder releases",
+    async (kind, { signal }) => {
+      await withOpenClawTestState({ label: "plugin-lifecycle-demand" }, async (state) => {
+        vi.useFakeTimers();
+        const clock = createPluginLifecycleLeaseTestClock();
+        const withWaiterLease =
+          kind === "runtime" ? withPluginLifecycleLease : withPluginArtifactCleanupLease;
+        const entered = createDeferred();
+        const release = createDeferred();
+        const cancelled = new AbortController();
+        const operations: Promise<unknown>[] = [];
+        try {
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+          const holder = withPluginLifecycleLease({ env: state.env, signal }, async () => {
+            await withPluginLifecycleLease({}, async () => {
+              expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+            });
+            entered.resolve();
+            await release.promise;
+          });
+          operations.push(holder);
+          await Promise.race([entered.promise, holder]);
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+
+          const aborted = withWaiterLease(
+            { env: state.env, signal: cancelled.signal },
+            async () => {
+              throw new Error("aborted waiter acquired");
+            },
+          );
+          operations.push(aborted);
+          expect(hasPluginLifecycleLeaseDemand()).toBe(true);
+          cancelled.abort(new Error("test cancellation"));
+          await expect(aborted).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+
+          const acquired = vi.fn(async () => {
             expect(hasPluginLifecycleLeaseDemand()).toBe(false);
           });
-          entered.resolve();
-          await release.promise;
-        });
-        operations.push(holder);
-        await Promise.race([entered.promise, holder]);
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-
-        const aborted = withPluginLifecycleLease(
-          { env: state.env, signal: cancelled.signal },
-          async () => {
-            throw new Error("aborted waiter acquired");
-          },
-        );
-        operations.push(aborted);
-        expect(hasPluginLifecycleLeaseDemand()).toBe(true);
-        cancelled.abort(new Error("test cancellation"));
-        await expect(aborted).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-
-        const acquired = vi.fn(async () => {
+          const waiter = withWaiterLease({ env: state.env, signal }, acquired);
+          operations.push(waiter);
+          expect(hasPluginLifecycleLeaseDemand()).toBe(true);
+          release.resolve();
+          await holder;
           expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-        });
-        const waiter = withPluginLifecycleLease({ env: state.env, signal }, acquired);
-        operations.push(waiter);
-        expect(hasPluginLifecycleLeaseDemand()).toBe(true);
-        release.resolve();
-        await holder;
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-        await clock.waitFor(waiter);
-        expect(acquired).toHaveBeenCalledOnce();
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-      } finally {
-        cancelled.abort();
-        release.resolve();
-        await clock.waitFor(Promise.allSettled(operations));
-        vi.useRealTimers();
-      }
-    });
-  });
+          await clock.waitFor(waiter);
+          expect(acquired).toHaveBeenCalledOnce();
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+        } finally {
+          cancelled.abort();
+          release.resolve();
+          await clock.waitFor(Promise.allSettled(operations));
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
 
   it.each([
     [false, false],
@@ -535,9 +539,21 @@ describe("plugin lifecycle lease", () => {
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
         // Both processes and their SQLite workers share the lease clock for this cache handoff.
+        // Bun's explicit worker env skips inherited preloads in these non-Vitest children.
         const clockPreload = await state.writeText(
           "lease-clock.cjs",
-          `Date.now = () => ${Date.now()};\n`,
+          `Date.now = () => ${Date.now()};
+if (process.versions.bun) {
+  const threads = require("node:worker_threads");
+  const Worker = threads.Worker;
+  threads.Worker = class extends Worker {
+    constructor(url, options) {
+      super(url, { ...options, execArgv: [...(options?.execArgv ?? process.execArgv), "--preload", __filename] });
+    }
+  };
+  require("node:module").syncBuiltinESMExports();
+}
+`,
         );
         const childEnv = { ...process.env };
         for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(clockPreload))) {

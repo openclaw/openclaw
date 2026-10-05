@@ -17,7 +17,17 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
-const mocks = vi.hoisted(() => ({ metadata: vi.fn(), officialCatalog: vi.fn(), mcpAuth: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  metadata: vi.fn(),
+  officialCatalog: vi.fn(),
+  mcpAuth: vi.fn(),
+  remoteDetail: vi.fn(),
+}));
+
+vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
+  fetchClawHubPluginDetail: (...args: unknown[]) => mocks.remoteDetail(...args),
+}));
 
 vi.mock("../agents/mcp-oauth.js", () => ({
   readMcpOAuthCredentialsStatuses: (...args: unknown[]) => mocks.mcpAuth(...args),
@@ -47,7 +57,133 @@ describe("managed plugin inspection", () => {
     mocks.officialCatalog.mockReset();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
     mocks.mcpAuth.mockReset();
+    mocks.remoteDetail.mockReset();
   });
+
+  it.each([true, false])(
+    "inspects an arbitrary selected ClawHub release with manifest available: %s",
+    async (manifestAvailable) => {
+      // A runtime ID collision is not a canonical ClawHub package match.
+      mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true, id: "community-plugin" }));
+      mocks.remoteDetail.mockResolvedValue({
+        packageName: "community/plugin",
+        displayName: "Community Plugin",
+        family: "code-plugin",
+        runtimeId: "community-plugin",
+        isOfficial: false,
+        categories: [],
+        topics: [],
+        configFields: [],
+        mcpServers: manifestAvailable ? ["docs"] : [],
+        skills: manifestAvailable ? [{ name: "research" }] : [],
+        ...(manifestAvailable
+          ? { contracts: { tools: ["research_lookup"] }, providers: ["search"] }
+          : {}),
+        versions: [],
+        selectedRelease: { version: "1.2.3" },
+        tags: { latest: "2.0.0" },
+        downloadability: { status: "downloadable" },
+        metadata: {
+          manifest: manifestAvailable ? "available" : "missing",
+          readme: "available",
+          security: "missing",
+        },
+        readme: "# Community Plugin",
+        trust: { disposition: "review-required", reasons: ["Unverified publisher"] },
+      });
+      const inspection = await inspectManagedPlugin({
+        config: {
+          plugins: {
+            entries: { "community-plugin": { hooks: { allowConversationAccess: true } } },
+          },
+        },
+        env: {},
+        clawhub: { packageName: "community/plugin", version: "1.2.3" },
+      });
+
+      expect(inspection).toMatchObject({
+        plugin: { name: "Community Plugin", version: "1.2.3", installed: false, enabled: false },
+        source: { kind: "clawhub", packageName: "community/plugin" },
+        declaredSurfaceStatus: manifestAvailable ? "partial" : "unavailable",
+        declared: {
+          tools: manifestAvailable ? ["research_lookup"] : [],
+          mcpServers: manifestAvailable ? ["docs"] : [],
+          skills: manifestAvailable ? ["research"] : [],
+        },
+        grants: { hooks: { allowConversationAccess: { effective: false } } },
+        trust: { disposition: "review-required" },
+        catalog: {
+          detail: {
+            packageName: "community/plugin",
+            readme: "# Community Plugin",
+            selectedRelease: { version: "1.2.3" },
+          },
+        },
+      });
+      expect(inspection.reviewToken).toBeUndefined();
+      expect(inspection.overview?.capabilities === undefined).toBe(!manifestAvailable);
+    },
+  );
+
+  it.each(["community-plugin", undefined, "another-plugin"])(
+    "joins installed grants only for the selected runtime identity: %s",
+    async (runtimeId) => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: false,
+          id: "community-plugin",
+          origin: "global",
+          installRecord: {
+            source: "clawhub",
+            clawhubPackage: "community/plugin",
+            clawhubUrl: "https://clawhub.ai",
+            installPath: "/tmp/community-plugin",
+          },
+        }),
+      );
+      mocks.remoteDetail.mockResolvedValue({
+        packageName: "community/plugin",
+        runtimeId,
+        displayName: "Community Plugin",
+        family: "code-plugin",
+        isOfficial: false,
+        categories: [],
+        topics: [],
+        configFields: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+        selectedRelease: { version: "2.0.0" },
+        tags: {},
+        downloadability: { status: "downloadable" },
+        metadata: { manifest: "available", readme: "missing", security: "missing" },
+        contracts: { tools: ["new_tool"] },
+      });
+      const inspection = await inspectManagedPlugin({
+        config: {
+          plugins: {
+            entries: { "community-plugin": { hooks: { allowConversationAccess: true } } },
+          },
+        },
+        env: {},
+        clawhub: { packageName: "community/plugin", version: "2.0.0" },
+      });
+
+      expect(inspection).toMatchObject({
+        plugin: { id: "community-plugin", installed: true, version: "2.0.0" },
+        declared: { tools: ["new_tool"] },
+        grants: {
+          hooks: {
+            allowConversationAccess:
+              runtimeId === "community-plugin"
+                ? { effective: true, configured: true }
+                : { effective: false },
+          },
+        },
+      });
+      expect(inspection.reviewToken).toBeUndefined();
+    },
+  );
 
   it("projects only eligible operator MCP connections without credential details", async () => {
     const snapshot = metadataSnapshot({ enabled: true });

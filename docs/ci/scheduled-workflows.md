@@ -6,6 +6,32 @@ read_when:
   - You are triaging a nightly, scheduled, or maintenance workflow
 ---
 
+## PR vs hourly vs release
+
+Ordinary pull requests, including fork contributions, no longer select these
+expensive jobs in `ci.yml`:
+
+- Real-Gateway Control UI E2E (mocked/bundled `checks-ui-e2e` remains owner-selected).
+- Windows Node tests, macOS Node tests, macOS Swift jobs, and iOS build/simulator smoke.
+- The published-npm-driver × candidate update cell, including on update-owner PRs.
+- Dependency/dead-export scanning (Knip) and runtime topology/architecture checks.
+- Android screenshot capture.
+
+The first four groups retain their existing hourly main-tier and full release
+inventories. Android screenshots were already excluded from hourly main and
+continue in full manual/release validation. Ordinary manual dispatch and
+exact-head `release_gate` fallback behavior are unchanged. SwiftLint and
+SwiftFormat are part of the moved Apple jobs; they are not split into new PR
+jobs. Other source tests, static correctness gates, Android unit/lint work,
+and independent native localization checks keep their existing PR selection.
+
+This moves frequent PR critical paths to their existing later tiers without
+changing what the jobs execute. Failures unique to those jobs can therefore
+appear after merge. `openclaw/ci-gate` requires only the jobs the manifest
+selected; its required-check identity and repository protection are unchanged.
+See [scope selection](/ci/scope-and-routing/selection#pr-vs-hourly-vs-release)
+for the tier table and owner boundaries.
+
 ## Hourly main CI
 
 The complete `main` validation tier runs directly from `ci.yml` at minute 23 of each hour.
@@ -184,8 +210,9 @@ every 3 hours at minute 7 UTC (`7 */3 * * *`) so release readiness stays current
 as commits land, with the `stable` profile, soak and blocking performance,
 `reuse_evidence=true`, `rerun_group=all`, and `main-qualification` purpose.
 It checks out the scheduler's exact main SHA and runs the SHA-pinned helper
-(`pnpm ci:full-release --sha <sha> --workflow-sha <sha>`), which uses that SHA as
-both Validation and Tooling SHA and dispatches from an immutable
+(`pnpm ci:full-release --sha <sha> --workflow-sha <sha> --trusted-workflow-ref main`),
+explicitly retaining the scheduled, non-publishing main-qualification route. It
+uses that SHA as both Validation and Tooling SHA and dispatches from an immutable
 `release-ci/<sha12>-<id>` transport ref. A raw dispatch from `main` fails once
 `main` moves, because the parent refuses to dispatch children from a moved
 workflow ref. A still-active parent for the same SHA shares the SHA-specific
@@ -432,7 +459,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 ### Platform-specific security shards
 
 - `CodeQL Android Critical Security` — scheduled Android security shard. Builds the Android app manually for CodeQL on the smallest Blacksmith Linux runner accepted by workflow sanity. Uploads under `/codeql-critical-security/android`.
-- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Prepares the generated Mermaid resources on GitHub-hosted Linux, then builds the ARM64 macOS app manually for CodeQL on a GitHub-hosted Intel runner without unused index-store or debug-info artifacts; filters dependency build results out of uploaded SARIF; and uploads under `/codeql-critical-security/macos`. Its macOS job has a 90-minute ceiling because the complete traced build and analysis exceed the previous 45-minute budget. Kept outside daily defaults because macOS build dominates runtime even when clean.
+- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Prepares the generated Mermaid resources on GitHub-hosted Linux, then builds the ARM64 macOS app manually for CodeQL on a GitHub-hosted Intel runner without unused index-store or debug-info artifacts; filters dependency build results out of uploaded SARIF while retaining first-party generated protocol models; and uploads under `/codeql-critical-security/macos`. Its macOS job has a 90-minute ceiling because the complete traced build and analysis exceed the previous 45-minute budget. Kept outside daily defaults because macOS build dominates runtime even when clean.
 
 ### Critical Quality categories
 

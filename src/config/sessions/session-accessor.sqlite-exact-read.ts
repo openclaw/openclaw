@@ -58,6 +58,17 @@ type ResolvedSqliteSessionEntry = {
   normalizedKey: string;
 };
 
+/** Private prepared reads must reject a different physical owner at the captured path. */
+export function loadSessionEntryReadOnlyInScope(
+  scope: SessionEntryReadScope & { databaseAgentId: string },
+): SessionEntry | undefined {
+  return resolveSessionEntry(scope, {
+    readOnly: true,
+    databaseAgentId: scope.databaseAgentId,
+    projection: scope.projection,
+  }).existing;
+}
+
 /** Resolves one exact canonical entry without materializing the store. */
 export function resolveSessionEntry(
   scope: SessionAccessScope,
@@ -247,36 +258,6 @@ export function assertCapturedSessionEntryReadSource(
   }
 }
 
-/** Retain the recorded physical owner without selecting a replacement database. */
-function retainCapturedSessionEntryReadSource(
-  source: CapturedSessionEntryReadSource,
-  env?: NodeJS.ProcessEnv,
-) {
-  const retained = retainOpenClawAgentDatabaseReadOnly({
-    agentId: source.agentId,
-    path: source.path,
-    env,
-  });
-  if (!retained.found) {
-    throw new Error("Captured session database is unavailable");
-  }
-  const assertCurrent = () => {
-    retained.claim.assertCurrent();
-    assertCapturedSessionEntryReadSource(source, retained.database);
-  };
-  try {
-    assertCurrent();
-    return {
-      database: retained.database,
-      assertCurrent,
-      release: retained.claim.release,
-    };
-  } catch (error) {
-    retained.claim.release();
-    throw error;
-  }
-}
-
 /** Retained windows occupy a key even when they have no current readable entry. */
 export function retainSessionEntryKeyAbsence(params: {
   source: CapturedSessionEntryReadSource;
@@ -284,9 +265,21 @@ export function retainSessionEntryKeyAbsence(params: {
   canonicalKey: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  const source = retainCapturedSessionEntryReadSource(params.source, params.env);
+  const capturedSource = params.source;
+  const source = retainOpenClawAgentDatabaseReadOnly({
+    agentId: capturedSource.agentId,
+    path: capturedSource.path,
+    env: params.env,
+  });
+  if (!source.found) {
+    throw new Error("Captured session database is unavailable");
+  }
+  const assertSourceCurrent = () => {
+    source.claim.assertCurrent();
+    assertCapturedSessionEntryReadSource(capturedSource, source.database);
+  };
   const assertCurrent = () => {
-    source.assertCurrent();
+    assertSourceCurrent();
     if (!params.sessionKeys.length) {
       return;
     }
@@ -298,7 +291,7 @@ export function retainSessionEntryKeyAbsence(params: {
         .where("session_key", "in", sqliteStringSet(params.sessionKeys))
         .limit(1),
     );
-    source.assertCurrent();
+    assertSourceCurrent();
     if (occupied) {
       throw new Error(
         `Session "${params.canonicalKey}" has ambiguous stored identity. Select an unambiguous session; stored rows and history were not changed.`,
@@ -307,9 +300,9 @@ export function retainSessionEntryKeyAbsence(params: {
   };
   try {
     assertCurrent();
-    return { assertCurrent, release: source.release };
+    return { assertCurrent, release: source.claim.release };
   } catch (error) {
-    source.release();
+    source.claim.release();
     throw error;
   }
 }
@@ -330,13 +323,7 @@ export function loadExactSessionEntryCandidates(
     | (PhysicalSessionEntryReadScope & { readOnly: true })
   ) & {
     sessionKeys: readonly string[];
-    onReadSource?: (
-      source: SessionEntryReadSource,
-      physical?: Pick<
-        ReturnType<typeof readOpenClawAgentDatabaseIdentity>,
-        "identity" | "birthtime"
-      >,
-    ) => void;
+    onReadSource?: (source: CapturedSessionEntryReadSource) => void;
     expectedSource?: CapturedSessionEntryReadSource;
   },
 ): ExactSessionEntry[] {
@@ -362,10 +349,12 @@ export function loadExactSessionEntryCandidates(
       const entry = readExactSessionEntryRow(database, key, scope.projection, "canonical")?.entry;
       return entry ? [{ sessionKey: key, entry }] : [];
     });
-    scope.onReadSource?.(
-      { agentId: database.agentId, path: database.path },
-      { identity: physical.identity, birthtime: physical.birthtime },
-    );
+    scope.onReadSource?.({
+      agentId: database.agentId,
+      path: database.path,
+      databaseIdentity: physical.identity,
+      databaseBirthtime: physical.birthtime,
+    });
     return entries;
   };
   if (!scope.readOnly) {
@@ -421,7 +410,9 @@ export type ExactSessionEntryBatchScope = Omit<
   onReadSource?: (source: SessionEntryReadSource) => void;
 };
 
-function groupExactSessionEntryReadRequests(scopes: readonly ExactSessionEntryBatchScope[]) {
+export function loadExactSessionEntryCandidatesReadOnlyBatch(
+  scopes: readonly ExactSessionEntryBatchScope[],
+): Array<Result<ExactSessionEntry[], unknown>> {
   const results: Array<Result<ExactSessionEntry[], unknown> | undefined> = [];
   const targetCache: SessionSqliteTargetResolutionCache = new Map();
   const groups = new Map<
@@ -460,13 +451,6 @@ function groupExactSessionEntryReadRequests(scopes: readonly ExactSessionEntryBa
       results[index] = err(error);
     }
   }
-  return { groups, results };
-}
-
-export function loadExactSessionEntryCandidatesReadOnlyBatch(
-  scopes: readonly ExactSessionEntryBatchScope[],
-): Array<Result<ExactSessionEntry[], unknown>> {
-  const { groups, results } = groupExactSessionEntryReadRequests(scopes);
   for (const group of groups.values()) {
     try {
       const read = withOpenClawAgentDatabaseReadOnly(

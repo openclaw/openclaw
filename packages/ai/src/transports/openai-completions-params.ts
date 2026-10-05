@@ -117,13 +117,13 @@ function estimateJsonChars(value: unknown, fallback: number): number {
 // Estimate the final shaped payload, not the raw context, so compat transforms and dropped
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
-  messages?: unknown;
-  tools?: unknown;
+  messages: unknown[];
+  tools?: CompletionsRequest["tools"];
   response_format?: unknown;
 }): number {
   let adjustedChars = 0;
   adjustedChars += estimateOpenAICompletionsMessagesChars(payload.messages);
-  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+  if (payload.tools?.length) {
     adjustedChars += estimateJsonChars(payload.tools, 1024);
   }
   if (payload.response_format !== undefined) {
@@ -134,10 +134,7 @@ function estimateOpenAICompletionsInputTokens(payload: {
   );
 }
 
-function estimateOpenAICompletionsMessagesChars(messages: unknown): number {
-  if (!Array.isArray(messages)) {
-    return 0;
-  }
+function estimateOpenAICompletionsMessagesChars(messages: unknown[]): number {
   let adjustedChars = 0;
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -194,40 +191,6 @@ function resolveOpenAICompletionsEffectiveContextTokens(
     model.contextWindow > 0
     ? model.contextWindow
     : undefined;
-}
-
-function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
-  const existing = params.chat_template_kwargs;
-  params.chat_template_kwargs =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? { ...(existing as Record<string, unknown>), enable_thinking: enabled }
-      : { enable_thinking: enabled };
-}
-
-/** Return whether the binary control replaces scalar reasoning effort. */
-function applyBinaryCompletionsThinkingParams(params: {
-  compatThinkingFormat: string;
-  modelReasoning: boolean;
-  payload: Record<string, unknown>;
-  thinkingEnabled: boolean;
-}): boolean {
-  if (!params.modelReasoning) {
-    return false;
-  }
-  const enabled = params.thinkingEnabled;
-  switch (params.compatThinkingFormat) {
-    case "qwen-chat-template":
-      setQwenChatTemplateThinking(params.payload, enabled);
-      return true;
-    case "qwen":
-      params.payload.enable_thinking = enabled;
-      return true;
-    case "together":
-      params.payload.reasoning = { enabled };
-      return !enabled;
-    default:
-      return false;
-  }
 }
 
 function convertTools(
@@ -331,13 +294,14 @@ export function buildOpenAICompletionsRequest(
     !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
   const cacheOptOutIndexes = new Set<number>();
   // The converter needs intact boundaries for Runtime relocation or cache markers.
-  let messages: unknown[] = convertMessages(model as never, context, compat as never, {
+  const convertedMessages = convertMessages(model as never, context, compat as never, {
     cacheOptOutIndexes,
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined && !managedCompat?.requiresStringContent,
   });
+  let messages: unknown[] = convertedMessages;
   if (managedCompat) {
-    applyCompletionsReplay(messages, context, model, managedCompat);
+    applyCompletionsReplay(convertedMessages, context, model, managedCompat);
     if (managedCompat.strictMessageKeys) {
       messages = stripCompletionMessagesToRoleContent(messages);
     }
@@ -426,19 +390,14 @@ export function buildOpenAICompletionsRequest(
         }
       } else if (
         compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
-        Array.isArray(params.tools) &&
-        params.tools.length > 0
+        params.tools?.length
       ) {
         params.tool_choice = "auto";
       }
     } else if (hasToolCallHistory(context.messages)) {
       params.tools = [];
     }
-    if (
-      compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
-      Array.isArray(params.tools) &&
-      params.tools.length === 0
-    ) {
+    if (compatDetection?.capabilities.usesExplicitProxyLikeEndpoint && params.tools?.length === 0) {
       delete params.tools;
       delete params.tool_choice;
     }
@@ -556,12 +515,20 @@ export function buildOpenAICompletionsRequest(
   if (policy.mode === "direct") {
     applyDirectCompletionsReasoningAndRouting(params, model, reasoning, compat);
   } else {
-    const suppressScalarEffort = applyBinaryCompletionsThinkingParams({
-      compatThinkingFormat: compat.thinkingFormat,
-      modelReasoning: model.reasoning,
-      payload: params,
-      thinkingEnabled: thinkingEnabled ?? false,
-    });
+    let suppressScalarEffort = false;
+    if (model.reasoning) {
+      const enabled = thinkingEnabled ?? false;
+      if (compat.thinkingFormat === "qwen-chat-template") {
+        params.chat_template_kwargs = { enable_thinking: enabled };
+        suppressScalarEffort = true;
+      } else if (compat.thinkingFormat === "qwen") {
+        params.enable_thinking = enabled;
+        suppressScalarEffort = true;
+      } else if (compat.thinkingFormat === "together") {
+        params.reasoning = { enabled };
+        suppressScalarEffort = !enabled;
+      }
+    }
     if (
       !isOpenRouter &&
       effort &&

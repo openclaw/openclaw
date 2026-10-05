@@ -75,8 +75,8 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
 export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
-  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
-  onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
+  onToolResult: (payload: ReplyPayload) => Promise<void>;
+  onCompactionNoticePayload: (payload: ReplyPayload) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
@@ -90,7 +90,7 @@ export async function executeFollowupTurn(params: {
       cfg: turn.config,
     });
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
-  // Heartbeats can refresh a drain callback but never enter its queue.
+  // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
@@ -217,11 +217,17 @@ export async function executeFollowupTurn(params: {
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
     isHeartbeat,
-    // Queue callbacks are refreshed per session, but authority belongs to the
-    // queued turn. Never let a later callback widen or narrow an older item.
+    // Queue callbacks are refreshed per session, but authority, cancellation, and
+    // run observers belong to the queued turn. Never borrow them from another runner.
     operatorAuthority: turn.queued.operatorAuthority,
+    abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
+    onAgentRunTerminalOutcome: turn.queued.runObservers?.onAgentRunTerminalOutcome,
+    onModelSelected: turn.queued.runObservers?.onModelSelected,
+    prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,
+    resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
@@ -285,7 +291,7 @@ export async function executeFollowupTurn(params: {
           if (!forceToolResultProgress && !verboseToolResult) {
             return false;
           }
-          await params.onToolResult(payload, { runId: turn.runId });
+          await params.onToolResult(payload);
           return true;
         }
         const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
@@ -303,7 +309,7 @@ export async function executeFollowupTurn(params: {
         return transientToolResultProgress && !verboseToolResult
           ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
               .visible
-          : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
+          : await params.onToolResult(payload).then(() => true);
       });
     },
   };
@@ -392,7 +398,7 @@ export async function executeFollowupTurn(params: {
               if (!progressAllowed()) {
                 return false;
               }
-              await params.onCompactionNoticePayload(payload, { runId: turn.runId });
+              await params.onCompactionNoticePayload(payload);
               return true;
             });
           },

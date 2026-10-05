@@ -52,9 +52,12 @@ The table is not secret storage. See the
 Since [agent schema 24](/reference/database-schemas/agent-schema-history#session-hot-facts-and-snapshots),
 `session_nodes.entry_json` contains hot session facts. The separately keyed
 `session_entry_snapshots` rows own diff baselines, saved skills, and system-prompt
-reports. Metadata reads do not load these payloads; full-entry consumers acquire
-them in the same statement snapshot. The logical session node owns their
-retention and deletion.
+reports. Exact readers select only the snapshots their caller needs: metadata
+reads omit all three, usage context reads the system-prompt report, and session
+diff reads the diff baseline. Selected snapshots, entry metadata, and lifecycle
+facts remain in the same read transaction. Replacement and initialization reads
+retain complete entries so saved snapshots survive writeback. The logical
+session node owns their retention and deletion; no migration is required.
 
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the cache format. Revision 2 introduced the current prose (one to three concise sentences); revision 3 keeps that prose and certifies that the oversized-omission flag counts only skipped user or assistant messages, not oversized tool results such as screenshots. Missing or pre-revision-2 records retain their text and coverage while the existing queue refreshes the prose with a model call. Revision-2 records are rechecked once without a model call unless new messages arrived: the stale omission notice is removed when only tool results were skipped, and kept when an earlier user or assistant message was genuinely omitted. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
@@ -506,3 +509,30 @@ and remain with their original recovery owner. A successful retirement retains
 one bounded completion receipt after the directory and helper are gone. Only a
 new original-store-admitted operation can replace that slot. Status reads do
 not grant admission or perform cleanup.
+
+## Immutable installation preparation
+
+The immutable adapter uses that same installation-sibling control database path,
+with one `immutable_installation` row instead of a package operation. The accepted
+[immutable update design](/reference/team-immutable-update-design#detect-and-adopt-an-immutable-installation)
+binds explicit adoption to the physical installation and current generation,
+system service and account, state/config/profile, pinned external runtime, and
+official source. Its strict version-1 descriptor is canonical adoption state;
+the revision and optional prepared-generation receipt record verified preparation.
+No pointer publication, service change, migration, or recovery authority is implied.
+
+Adoption refuses any existing control rather than migrating or replacing package
+journals. Existing package descriptors and permissions stay unchanged. Immutable
+controls are root-owned directories with mode `0755` and a root-owned `0644`
+database: the service account may read these non-secret facts, but only the
+updater may write. Runtime observations use the existing read-only worker;
+CLI adoption and preparation use synchronous, revision-checked transactions with
+current executor checks at admission and commit. The existing rollback-journal
+durability and directory-sync owners publish the completed adoption record.
+
+Slice 1 retains all release generations. A prepared receipt can be replaced only
+at the observed revision; this does not delete its previously referenced tree.
+Future collection protects current, previous, and journal-referenced generations.
+Older runtimes do not understand this descriptor and cannot update the adopted
+installation; rollback of runtime bytes does not authorize pointer or state
+changes. Activation and independent recovery remain a later slice.

@@ -67,8 +67,6 @@ type SlashCommandContext = {
   isCurrent?: () => boolean;
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
-  sessionsResult?: SessionsListResult | null;
-  sessionsResultAgentId?: string | null;
   defaultAgentId?: string;
   agentId?: string;
   ownsModelOverride?: () => boolean;
@@ -433,8 +431,7 @@ async function executeUsage(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const sessions = await listSessions(context);
-    const session = resolveCurrentSession(sessions, sessionKey);
+    const { session } = await loadCurrentSessionState(context, sessionKey);
     if (!session) {
       return { content: t("chat.commandResults.usage.noActiveThread") };
     }
@@ -513,15 +510,6 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
   }
 }
 
-function selectedAgentListScope(
-  sessionKey: string,
-  context: SlashCommandContext,
-): { agentId?: string } {
-  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-  const agentId = parsedAgentId ?? normalizeOptionalLowercaseString(context.agentId);
-  return agentId ? { agentId } : {};
-}
-
 function resolveSelectedAgentId(
   sessionKey: string,
   context: SlashCommandContext,
@@ -536,42 +524,8 @@ function resolveSelectedAgentId(
   );
 }
 
-function resolveEquivalentSessionKeys(
-  currentSessionKey: string,
-  currentAgentId: string | undefined,
-): Set<string> {
-  const keys = new Set<string>([currentSessionKey]);
-  if (currentAgentId && currentAgentId !== DEFAULT_AGENT_ID) {
-    const agentMainKey = `agent:${currentAgentId}:${DEFAULT_MAIN_KEY}`;
-    const agentGlobalKey = `agent:${currentAgentId}:global`;
-    if (currentSessionKey === agentMainKey || currentSessionKey === agentGlobalKey) {
-      keys.add("global");
-    }
-  }
-  if (currentAgentId === DEFAULT_AGENT_ID) {
-    const canonicalDefaultMain = `agent:${DEFAULT_AGENT_ID}:main`;
-    if (currentSessionKey === DEFAULT_MAIN_KEY) {
-      keys.add(canonicalDefaultMain);
-    } else if (currentSessionKey === canonicalDefaultMain) {
-      keys.add(DEFAULT_MAIN_KEY);
-    }
-  }
-  return keys;
-}
-
 function formatDirectiveOptions(text: string, options: string): string {
   return `${text}\n${t("chat.commandResults.options", { options })}`;
-}
-
-async function listSessions(
-  context: SlashCommandContext,
-  options?: Parameters<SessionCapability["list"]>[0],
-): Promise<SessionsListResult> {
-  const result = await context.sessions.list(options);
-  if (!result) {
-    throw new Error(t("chat.commandResults.sessionUnavailable"));
-  }
-  return result;
 }
 
 async function loadCurrentSessionState(
@@ -581,49 +535,24 @@ async function loadCurrentSessionState(
   session: GatewaySessionRow | undefined;
   defaults: SessionsListResult["defaults"] | undefined;
 }> {
-  const sessions = await listSessions(context, selectedAgentListScope(sessionKey, context));
-  return resolveCommandSessionState(context, sessionKey, sessions);
-}
-
-function resolveCommandSessionState(
-  context: SlashCommandContext,
-  sessionKey: string,
-  sessions: SessionsListResult,
-): {
-  session: GatewaySessionRow | undefined;
-  defaults: SessionsListResult["defaults"] | undefined;
-} {
   const selectedAgentId = resolveSelectedAgentId(sessionKey, context);
+  const { session } = await context.sessions.describe({
+    key: sessionKey,
+    agentId: selectedAgentId,
+  });
+  assertCurrentSlashCommand(context);
   const defaultAgentId =
     normalizeOptionalLowercaseString(context.defaultAgentId) ?? DEFAULT_AGENT_ID;
-  const cachedAgentId = normalizeOptionalLowercaseString(context.sessionsResultAgentId);
-  const cachedSession =
-    context.sessionsResult && selectedAgentId && cachedAgentId === selectedAgentId
-      ? resolveCurrentSession(context.sessionsResult, sessionKey)
-      : undefined;
-  return {
-    session: resolveCurrentSession(sessions, sessionKey) ?? cachedSession,
-    // sessions.list scopes rows by agent, but its defaults remain global.
-    defaults:
-      !selectedAgentId || selectedAgentId === defaultAgentId ? sessions.defaults : undefined,
-  };
-}
-
-function resolveCurrentSession(
-  sessions: SessionsListResult | undefined,
-  sessionKey: string,
-): GatewaySessionRow | undefined {
-  const normalizedSessionKey = normalizeOptionalLowercaseString(sessionKey);
-  const currentAgentId =
-    parseAgentSessionKey(normalizedSessionKey ?? "")?.agentId ??
-    (normalizedSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
-  const aliases = normalizedSessionKey
-    ? resolveEquivalentSessionKeys(normalizedSessionKey, currentAgentId)
-    : new Set<string>();
-  return sessions?.sessions?.find((session) => {
-    const key = normalizeOptionalLowercaseString(session.key);
-    return key ? aliases.has(key) : false;
-  });
+  if (session || (selectedAgentId && selectedAgentId !== defaultAgentId)) {
+    return { session: session ?? undefined, defaults: undefined };
+  }
+  // Before the default agent's first session exists, commands still expose its defaults.
+  const listed = await context.sessions.list({ agentId: selectedAgentId, limit: 1 });
+  assertCurrentSlashCommand(context);
+  if (!listed) {
+    throw new Error(t("chat.commandResults.sessionUnavailable"));
+  }
+  return { session: undefined, defaults: listed.defaults };
 }
 
 async function loadModelCommandState(
@@ -633,14 +562,14 @@ async function loadModelCommandState(
 ) {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
-  const [sessions, models] = await Promise.all([
-    listSessions(context, selectedAgentListScope(sessionKey, context)),
+  const [state, models] = await Promise.all([
+    loadCurrentSessionState(context, sessionKey),
     modelCatalog
       ? Promise.resolve(modelCatalog)
       : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
   ]);
   return {
-    ...resolveCommandSessionState(context, sessionKey, sessions),
+    ...state,
     models,
   };
 }

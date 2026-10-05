@@ -205,7 +205,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         sessionId,
         sessionKey: target.sessionKey,
         agentId: "main",
-        begin: () => ({ ...placement, state: "draining" }) as never,
+        begin: async () => ({ ...placement, state: "draining" }) as never,
         reclaim: async () => {
           reclaimEffectStarted = true;
           expect(loadSessionEntry(target)).toMatchObject({

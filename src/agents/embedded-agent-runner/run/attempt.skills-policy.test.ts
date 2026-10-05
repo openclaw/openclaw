@@ -98,6 +98,7 @@ function toolDigest(
   session = { sessionId: "embedded-session", sessionKey: "agent:main:main" },
 ) {
   return beginPromptCacheObservation({
+    messages: [],
     ...session,
     provider: "openai",
     modelId: "gpt-test",
@@ -256,6 +257,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         },
         attemptOverrides: {
           disableTools: false,
+          disableToolSearch: true,
           disableMessageTool: false,
           reasoningLevel: "on",
           sessionId: session.sessionId,

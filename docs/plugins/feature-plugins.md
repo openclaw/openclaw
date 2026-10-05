@@ -146,11 +146,39 @@ Its id must match the plugin manifest. Register contributions through
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
+Set a navigation item's `parent` to another navigation ID in the same plugin to
+show it nested while the parent or a child destination is active; children only
+appear as top-level entries when pinned. Set `defaultVisible: false` to offer an
+item in **Customize**, and call `host.ui.pinNavigation(id)` after registering it
+to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
+already pinned ID; call it for a user action such as creation, not on every
+catalog refresh, so a later manual removal stays removed.
+
+Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
+`destructive` flag, and a `run` callback. The sidebar opens these actions on
+right-click, **Shift+F10**, or the context-menu key on the focused link, including
+nested and pinned entries. Selecting an action closes the menu; **Escape** or an
+outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
+pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+which actions to offer and own confirmation for destructive actions.
+
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget
 kinds for the current connection's scopes; a native view renders only when its
 matching backend descriptor is advertised.
+
+Use `host.ui.openPanel("editor", { sessionKey, agentId })` to open one of your
+registered panels beside a session. Omitting the session uses the currently
+selected session. The host owns navigation and sidebar presentation, including
+opening from a plugin page before the session pane has mounted. Only the same
+plugin's registered panels can be opened; retained handles expire with their
+view or activation.
+
+For a document link, use `host.navigation.pageHref(...)` to build a link to a
+registered plugin page. That page can resolve its document and call `openPanel`
+with the target session. This does not intercept ordinary file links or change
+the Files plugin's ownership.
 
 Use `host.ui.invalidate()` when plugin-owned state changes the presentation of
 an action or another contribution. Namespace custom elements and CSS with the
@@ -186,6 +214,38 @@ submission. Show rejected submissions rather than clearing the draft. Composer
 operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
+
+Session-header accessories also receive `props.session`, the pane's current
+session snapshot. It can be absent while loading and does not depend on the
+filtered sidebar roster. Changes arrive through the accessory's `update`.
+
+For a standard direct link, register an accessory using the shared browser
+helper. The plugin decides when and where the link appears:
+
+```typescript
+import { createSessionHeaderLink, defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
+
+export default defineControlUiPlugin({
+  id: "example-chat",
+  activate(host) {
+    return host.ui.registerAccessory({
+      id: "conversation-origin",
+      placement: "session-header",
+      mount: createSessionHeaderLink(({ conversationLink }) =>
+        conversationLink && URL.parse(conversationLink.url)?.hostname === "chat.example.com"
+          ? conversationLink
+          : undefined,
+      ),
+    });
+  },
+});
+```
+
+The helper is bundled into the plugin's browser code. It creates an HTTP(S)
+anchor with the shared header style, opens directly in a new tab, and removes
+the link when the resolver returns `undefined` or the view is hidden/disposed.
+Without a registered accessory, saved conversation-link metadata creates no
+button. Custom accessory mounts can still render arbitrary HTML, CSS, and JavaScript.
 
 ### Host capabilities
 

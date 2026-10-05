@@ -10,6 +10,7 @@ import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   workerWorkspaceResultRef,
   readStagedWorkerWorkspaceResult,
@@ -47,11 +48,7 @@ async function stageLocalWorkspaceArchive(params: {
   );
   const directories = new Set<string>();
   for (const entry of entries) {
-    for (
-      let parent = path.posix.dirname(entry.path);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
+    for (const parent of workspacePathAncestors(entry.path)) {
       directories.add(parent);
     }
   }

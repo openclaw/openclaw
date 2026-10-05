@@ -72,6 +72,8 @@ const beginDoctorMaintenance = vi.hoisted(() =>
     run: <T>(operation: () => T): T => operation(),
     releaseState: vi.fn(async () => {}),
     repairSqliteNoCow: vi.fn(async () => {}),
+    enableSqliteReclamation: vi.fn(async () => {}),
+    cleanupRetainedRuntimes: vi.fn(async () => {}),
     release: doctorMaintenanceRelease,
     finish: vi.fn(async () => {}),
   })),

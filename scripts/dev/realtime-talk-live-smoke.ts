@@ -8,6 +8,7 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
+import { CliArgumentError } from "../lib/error-format.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
 
 const OPENAI_REALTIME_MODEL =
@@ -67,10 +68,6 @@ type OpenAIRealtimeBrowserResponseReader = (
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
   openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
 };
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function usage(): string {
   return [

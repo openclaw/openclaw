@@ -110,13 +110,11 @@ describe("Hermes migration secret items", () => {
         defaults: {
           workspace: workspaceDir,
         },
-        list: [
-          {
-            id: "custom",
-            default: true,
+        entries: {
+          custom: {
             agentDir: customAgentDir,
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const plan = await provider.plan(

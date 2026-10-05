@@ -249,35 +249,17 @@ describe("slack socket mode dispatcher", () => {
     restoreProxyEnv();
   });
 
-  it("keeps Socket Mode's default connection when no proxy env is set", async () => {
-    const dispatchers = resolveSlackMonitorDispatchers("socket");
-    expect(dispatchers.socketMode).toBeUndefined();
-    await dispatchers.close();
-  });
-
-  it("builds the dispatcher from the undici copy Socket Mode uses", async () => {
-    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
-    const dispatchers = resolveSlackMonitorDispatchers("socket");
-    try {
-      expect(dispatchers.socketMode).toBeInstanceOf(loadSocketModeUndici().EnvHttpProxyAgent);
-      // A shared undici copy can reuse the runtime's custom proxy routing; a
-      // separate copy needs its own dispatcher for the WebSocket handshake.
-      if (dispatchers.webApi instanceof loadSocketModeUndici().EnvHttpProxyAgent) {
-        expect(dispatchers.socketMode).toBe(dispatchers.webApi);
-      } else {
-        expect(dispatchers.socketMode).not.toBe(dispatchers.webApi);
+  it.each([undefined, "://invalid-proxy"])(
+    "preserves direct connections for proxy %s",
+    async (proxy) => {
+      if (proxy !== undefined) {
+        process.env.HTTPS_PROXY = proxy;
       }
-    } finally {
+      const dispatchers = resolveSlackMonitorDispatchers("socket");
+      expect(dispatchers.socketMode).toBeUndefined();
       await dispatchers.close();
-    }
-  });
-
-  it("preserves the direct fallback for a malformed proxy URL", async () => {
-    process.env.HTTPS_PROXY = "://invalid-proxy";
-    const dispatchers = resolveSlackMonitorDispatchers("socket");
-    expect(dispatchers.socketMode).toBeUndefined();
-    await dispatchers.close();
-  });
+    },
+  );
 
   it("opens a trusted wss target through HTTPS_PROXY", async () => {
     const proxy = await startConnectProxy();
@@ -335,6 +317,12 @@ describe("slack socket mode dispatcher", () => {
 
     const dispatchers = resolveSlackMonitorDispatchers("socket");
     try {
+      expect(dispatchers.socketMode).toBeInstanceOf(loadSocketModeUndici().EnvHttpProxyAgent);
+      if (dispatchers.webApi instanceof loadSocketModeUndici().EnvHttpProxyAgent) {
+        expect(dispatchers.socketMode).toBe(dispatchers.webApi);
+      } else {
+        expect(dispatchers.socketMode).not.toBe(dispatchers.webApi);
+      }
       await expect(echoThroughSocketModeWebSocket(target, dispatchers.socketMode)).resolves.toEqual(
         {
           ok: true,

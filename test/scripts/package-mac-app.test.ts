@@ -16,6 +16,7 @@ import { createInterface } from "node:readline";
 import { minimatch } from "minimatch";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
@@ -120,7 +121,7 @@ describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
     test.for(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
       "joins architecture workers and preserves assembly safety: %s",
       { timeout: 15_000 },
-      async (mode, { mac, onTestFinished }) => {
+      async (mode, { mac, onTestFinished, signal }) => {
         const root = mac.createTempDir("openclaw-swift-parallel-");
         const stage = path.join(root, "stage");
         const scripts = path.join(root, "scripts/lib");
@@ -171,13 +172,9 @@ const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { s
 fs.writeFileSync(path.join(root, 'pid-' + arch), String(child.pid));
 const exited = new Promise(resolve => child.on('exit', resolve));
 process.on('SIGTERM', async () => { child.kill(); await exited; event('stopped:' + arch); process.exit(143); });
-fs.writeFileSync(path.join(root, 'ready-' + arch), 'ready');
-console.log('ready:' + arch);
-const deadline = Date.now() + 5000;
-while (!['arm64', 'x86_64'].every(a => fs.existsSync(path.join(root, 'ready-' + a)))) {
-  if (Date.now() > deadline) throw new Error('architecture barrier did not open');
-  await new Promise(resolve => setTimeout(resolve, 10));
-}
+const released = new Promise(resolve => process.once('SIGUSR2', resolve));
+console.log('ready:' + arch + ':' + process.pid);
+await released;
 event('barrier:' + arch);
 if (mode === 'cancel' || (mode === 'failure' && arch === 'arm64')) await new Promise(() => {});
 child.kill(); await exited;
@@ -229,12 +226,14 @@ touch "$ROOT_DIR/assembled"
           }),
         );
         const output = createInterface({ input: child.stdout });
-        const ready = new Set<string>();
+        const workers = new Map<string, number>();
+        const ready = createDeferred();
         output.on("line", (line) => {
-          if (line === "ready:arm64" || line === "ready:x86_64") {
-            ready.add(line);
-            if (mode === "cancel" && ready.size === 2) {
-              child.kill("SIGTERM");
+          const match = /^ready:(arm64|x86_64):(\d+)$/.exec(line);
+          if (match) {
+            workers.set(match[1]!, Number(match[2]));
+            if (workers.size === 2) {
+              ready.resolve();
             }
           }
         });
@@ -248,7 +247,18 @@ touch "$ROOT_DIR/assembled"
             output.close();
           }
         });
-        const code = await closed;
+        await withinTest(
+          awaitGateBeforeSettlement(ready.promise, closed, "architecture barrier did not open"),
+          signal,
+        );
+        // Each worker installs its release handler before publishing its PID.
+        for (const pid of workers.values()) {
+          process.kill(pid, "SIGUSR2");
+        }
+        if (mode === "cancel") {
+          child.kill("SIGTERM");
+        }
+        const code = await withinTest(closed, signal);
         expect(code, stderr).toBe(
           mode === "success" ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
         );

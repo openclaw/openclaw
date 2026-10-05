@@ -13,13 +13,29 @@ const config: VisitorAccessConfig = {
 };
 const collectionUrl =
   "https://api.cloudflare.com/client/v4/accounts/account-id/access/apps/app-id/policies";
+const githubProvider = {
+  issuer: "https://example.cloudflareaccess.com",
+  providerId: "github-provider",
+  githubAccountIdClaim: "github_account_id",
+};
+const githubRule = {
+  oidc: {
+    identity_provider_id: githubProvider.providerId,
+    claim_name: githubProvider.githubAccountIdClaim,
+    claim_value: "42",
+  },
+};
 
-function namedPolicy(emails = ["first@example.com"]) {
+function namedPolicy(targets: (string | number)[] = ["first@example.com"]) {
   return {
     id: "visitor-policy",
     name: config.policyName,
     decision: "allow",
-    include: emails.map((email) => ({ email: { email } })),
+    include: targets.map((target) =>
+      typeof target === "string"
+        ? { email: { email: target } }
+        : { oidc: { ...githubRule.oidc, claim_value: String(target) } },
+    ),
   };
 }
 
@@ -44,6 +60,53 @@ function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
 }
 
 describe("VisitorPolicyClient", () => {
+  it.each([
+    { field: "githubAccountIdClaim", afterResponse: false },
+    { field: "issuer", afterResponse: false },
+    { field: "issuer", afterResponse: true },
+  ] as const)(
+    "pins the current $field mapping through renewal (after response: $afterResponse)",
+    async ({ field, afterResponse }) => {
+      let provider: typeof githubProvider | undefined;
+      const policy = namedPolicy([42]);
+      const fetcher = fetchSequence(
+        cloudflareResponse([]),
+        cloudflareResponse(policy),
+        cloudflareResponse([policy]),
+        cloudflareResponse(policy),
+      );
+      const client = new VisitorPolicyClient(config, fetcher, undefined, () => provider);
+      const changeMapping = () => {
+        provider = {
+          ...githubProvider,
+          [field]: field === "issuer" ? "https://changed.cloudflareaccess.com" : "changed_claim",
+        };
+      };
+      fetcher.mockImplementationOnce(async () => {
+        changeMapping();
+        return cloudflareResponse(namedPolicy([42, 43]));
+      });
+      provider = { ...githubProvider };
+      await expect(client.update(() => [42])).resolves.toEqual([42]);
+      expect(requestBody(fetcher, 1)).toMatchObject({ include: [githubRule] });
+      await expect(
+        client.update(() => {
+          if (!afterResponse) {
+            changeMapping();
+          }
+          return afterResponse ? [42, 43] : [42];
+        }),
+      ).rejects.toThrow("mapping changed");
+      expect(fetcher.mock.calls.map(([, request]) => request?.method)).toEqual([
+        "GET",
+        "POST",
+        "GET",
+        "GET",
+        ...(afterResponse ? ["PUT"] : []),
+      ]);
+    },
+  );
+
   it("creates only the named app policy when absent, leaving other policies untouched", async () => {
     const maintainers = { id: "maintainers", name: "GitHub organization", decision: "allow" };
     const fetcher = fetchSequence(
@@ -67,10 +130,10 @@ describe("VisitorPolicyClient", () => {
     });
   });
 
-  it("rereads the named policy and preserves dashboard grants and restrictions on update", async () => {
-    const original = namedPolicy(["FIRST@example.com"]);
+  it("rereads the named policy and preserves mixed dashboard targets and restrictions on update", async () => {
+    const original = namedPolicy(["FIRST@example.com", 42]);
     const updated = {
-      ...namedPolicy(["first@example.com", "manual@example.com"]),
+      ...namedPolicy(["first@example.com", "manual@example.com", 42]),
       precedence: 9,
       session_duration: "12h",
       approval_required: true,
@@ -85,24 +148,32 @@ describe("VisitorPolicyClient", () => {
       cloudflareResponse(updated),
       cloudflareResponse(updated),
     );
-    const client = new VisitorPolicyClient(config, fetcher);
+    const client = new VisitorPolicyClient(config, fetcher, undefined, () => githubProvider);
     await expect(client.read()).resolves.toEqual({
       id: original.id,
-      emails: ["first@example.com"],
+      targets: ["first@example.com", 42],
     });
 
-    await expect(client.update((emails) => [...emails, "next@example.com"])).resolves.toEqual([
-      "first@example.com",
-      "manual@example.com",
-      "next@example.com",
-    ]);
+    await expect(client.update((targets) => [...targets, "next@example.com", 84])).resolves.toEqual(
+      ["first@example.com", "manual@example.com", 42, "next@example.com", 84],
+    );
 
     expect(requestBody(fetcher, 4)).toEqual({
       name: config.policyName,
       decision: "allow",
-      include: ["first@example.com", "manual@example.com", "next@example.com"].map((email) => ({
-        email: { email },
-      })),
+      include: [
+        { email: { email: "first@example.com" } },
+        { email: { email: "manual@example.com" } },
+        githubRule,
+        { email: { email: "next@example.com" } },
+        {
+          oidc: {
+            identity_provider_id: "github-provider",
+            claim_name: "github_account_id",
+            claim_value: "84",
+          },
+        },
+      ],
       precedence: 9,
       session_duration: "12h",
       approval_required: true,
@@ -113,27 +184,50 @@ describe("VisitorPolicyClient", () => {
     expect(fetcher.mock.calls[4]?.[1]?.method).toBe("PUT");
   });
 
-  it.each([
+  it.each<
+    [name: string, override: Record<string, unknown>, provider?: typeof githubProvider | null]
+  >([
     ["deny decision", { decision: "deny" }],
-    ["non-email includes", { include: [{ everyone: {} }] }],
+    ["unsupported includes", { include: [{ everyone: {} }] }],
     ["mixed email rules", { include: [{ email: { email: "first@example.com" }, everyone: {} }] }],
+    ["unconfigured GitHub mapping", { include: [githubRule] }, null],
+    [
+      "another OIDC provider",
+      {
+        include: [{ oidc: { ...githubRule.oidc, identity_provider_id: "other-provider" } }],
+      },
+    ],
+    ["another OIDC claim", { include: [{ oidc: { ...githubRule.oidc, claim_name: "login" } }] }],
+    ["mixed OIDC rules", { include: [{ ...githubRule, everyone: {} }] }],
+    ["extra OIDC fields", { include: [{ oidc: { ...githubRule.oidc, login: "visitor" } }] }],
+    ...["0", "-1", "042", "42.0", "4.2e1", " 42", "42 ", "9007199254740992", 42].map(
+      (claimValue): [string, Record<string, unknown>] => [
+        `noncanonical account ID ${JSON.stringify(claimValue)}`,
+        { include: [{ oidc: { ...githubRule.oidc, claim_value: claimValue } }] },
+      ],
+    ),
     ["required restrictions", { require: [{ email_domain: { domain: "example.com" } }] }],
     ["excluded identities", { exclude: [{ email: { email: "excluded@example.com" } }] }],
     ["renamed policy", { name: "GitHub organization" }],
     ["replaced policy", { id: "other-policy" }],
-  ])("refuses %s before running a change or writing Cloudflare", async (_name, override) => {
-    const policy = namedPolicy();
-    const fetcher = fetchSequence(
-      cloudflareResponse([policy]),
-      cloudflareResponse({ ...policy, ...override }),
-    );
-    const change = vi.fn(() => ["next@example.com"]);
-    await expect(new VisitorPolicyClient(config, fetcher).update(change)).rejects.toBeInstanceOf(
-      VisitorAccessError,
-    );
-    expect(change).not.toHaveBeenCalled();
-    expect(fetcher.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
-  });
+  ])(
+    "refuses %s before running a change or writing Cloudflare",
+    async (_name, override, provider = githubProvider) => {
+      const policy = namedPolicy();
+      const fetcher = fetchSequence(
+        cloudflareResponse([policy]),
+        cloudflareResponse({ ...policy, ...override }),
+      );
+      const change = vi.fn(() => ["next@example.com"]);
+      await expect(
+        new VisitorPolicyClient(config, fetcher, undefined, () => provider ?? undefined).update(
+          change,
+        ),
+      ).rejects.toBeInstanceOf(VisitorAccessError);
+      expect(change).not.toHaveBeenCalled();
+      expect(fetcher.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
+    },
+  );
 
   it("finds a policy on later pages and refuses duplicate configured names across pages", async () => {
     const other = { id: "other", name: "Maintainers" };
@@ -145,7 +239,7 @@ describe("VisitorPolicyClient", () => {
     );
     await expect(new VisitorPolicyClient(config, fetcher).read()).resolves.toEqual({
       id: policy.id,
-      emails: ["first@example.com"],
+      targets: ["first@example.com"],
     });
     expect(fetcher.mock.calls[1]?.[0]).toBe(`${collectionUrl}?page=2&per_page=100`);
 

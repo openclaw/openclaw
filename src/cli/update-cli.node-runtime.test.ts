@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -71,6 +71,8 @@ describe("update-cli", () => {
     tempDirs,
   } = createUpdateCliFixture();
 
+  beforeEach(() => runtimeRecovery.stubNodeRuntime());
+
   it("keeps the CLI and service reachable after nvm runtime recovery", async () => {
     resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
     const { root, serviceNode, entrypoint } = await setupServicePackageAtPrefix({
@@ -81,7 +83,7 @@ describe("update-cli", () => {
     primeServiceCommand([serviceNode, entrypoint, "gateway"]);
     primeNpmChannelTag("latest", "2026.5.20");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "latest", version: "2026.5.20" }),
+      packageTargetStatus({ version: "2026.5.20" }),
     );
     vi.mocked(runCommandWithTimeout).mockImplementation(
       runtimeRecovery.runtimeRecoveryCommandFixture(serviceNode),
@@ -447,7 +449,6 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.7.1");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({
-        target: "latest",
         version: "2026.7.1",
         nodeEngine: ">=24.15.0 <25",
       }),

@@ -66,6 +66,7 @@ Load `$release-openclaw-ci` and `$openclaw-testing`. This is validation only, ne
      -f validation_purpose=main-qualification \
      --sha "$MAIN_SHA" \
      --workflow-sha "$MAIN_SHA" \
+     --trusted-workflow-ref main \
      -f provider=openai \
      -f mode=both \
      -f release_profile=full \

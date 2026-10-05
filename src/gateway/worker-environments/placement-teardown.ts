@@ -34,13 +34,13 @@ export function completeRecoveredWorkspaceTeardown(params: {
 }
 
 /** Close the workspace-result fence, then advance the exact drained owner into reconciliation. */
-function startDrainedWorkspaceReconciliation(params: {
+async function startDrainedWorkspaceReconciliation(params: {
   placements: PlacementTeardownStore;
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;
   ownerEpoch: number;
-}): ReconcilingPlacement {
-  const drained = params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+}): Promise<ReconcilingPlacement> {
+  const drained = await params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
   if (
     drained.state !== "draining" ||
     drained.environmentId !== params.environmentId ||
@@ -48,7 +48,7 @@ function startDrainedWorkspaceReconciliation(params: {
   ) {
     throw new Error(`Session ${params.turnClaim.sessionId} lost its drained placement owner`);
   }
-  const reconciling = params.placements.startReconcile({
+  const reconciling = await params.placements.startReconcile({
     sessionId: drained.sessionId,
     environmentId: params.environmentId,
     ownerEpoch: params.ownerEpoch,
@@ -60,14 +60,14 @@ function startDrainedWorkspaceReconciliation(params: {
   return reconciling;
 }
 
-export function completeMovedWorkspaceTeardown(params: {
+export async function completeMovedWorkspaceTeardown(params: {
   placements: PlacementTeardownStore;
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;
   ownerEpoch: number;
   operationId: string;
-}): Extract<WorkerSessionPlacementRecord, { state: "local" }> {
-  const reconciling = startDrainedWorkspaceReconciliation(params);
+}): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" }>> {
+  const reconciling = await startDrainedWorkspaceReconciliation(params);
   const completed = params.placements.completePlacementMoveSourceToLocal({
     operationId: params.operationId,
     sessionId: reconciling.sessionId,
@@ -79,14 +79,14 @@ export function completeMovedWorkspaceTeardown(params: {
   return completed;
 }
 
-export function completeReclaimedWorkspaceTeardown(params: {
+export async function completeReclaimedWorkspaceTeardown(params: {
   placements: PlacementTeardownStore;
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;
   ownerEpoch: number;
-}): Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }> {
-  const reconciling = startDrainedWorkspaceReconciliation(params);
-  const completed = params.placements.transition({
+}): Promise<Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>> {
+  const reconciling = await startDrainedWorkspaceReconciliation(params);
+  const completed = await params.placements.transition({
     sessionId: reconciling.sessionId,
     from: "reconciling",
     to: "reclaimed",

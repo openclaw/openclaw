@@ -14,17 +14,15 @@ afterEach(async () => {
   }
 });
 
-/** Adapter tests use real board persistence and classification with an empty session roster. */
+/** Adapter tests use real board persistence with an empty session roster. */
 export async function startEmptySessionsBoardService(store: WorkboardStore) {
   const service = createWorkboardSessionsBoardService({
     store,
     gateway: {
-      isAvailable: async () => true,
       request: vi.fn().mockResolvedValue({ sessions: [] }),
       readSessionFacts: vi.fn().mockResolvedValue({ sessions: [] }),
+      subscribeSessionChanges: () => () => {},
     },
-    getConfig: () => ({}),
-    complete: async () => '{"placements":[]}',
   });
   services.push(service);
   await service.start({

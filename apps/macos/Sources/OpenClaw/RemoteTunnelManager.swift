@@ -193,13 +193,9 @@ actor RemoteTunnelManager {
                   self.createInFlight == nil, currentConfiguration == configuration
             else { continue }
 
-            let desiredPort = configuration.preferredLocalPort ?? 18789
             let token = UUID()
             let task = Task {
-                try await RemotePortTunnel.create(
-                    configuration: configuration,
-                    preferredLocalPort: desiredPort,
-                    allowRandomLocalPort: true)
+                try await RemotePortTunnel.create(configuration: configuration)
             }
             self.createInFlight = (
                 token: token,

@@ -70,7 +70,7 @@ internal class WearProxyException(
   override val message: String,
 ) : IllegalStateException(message)
 
-internal class WearProxyClient private constructor(
+internal class WearProxyClient(
   private val nodeResolver: WearNodeResolver,
   private val transport: WearMessageTransport,
 ) : WearRpcRequester {
@@ -359,11 +359,6 @@ internal class WearProxyClient private constructor(
           },
       )
     }
-
-    internal fun createForTests(
-      nodeResolver: WearNodeResolver,
-      transport: WearMessageTransport,
-    ): WearProxyClient = WearProxyClient(nodeResolver, transport)
   }
 }
 

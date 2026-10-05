@@ -1,4 +1,5 @@
-// Memory Wiki tests cover doctor migration of legacy source sync state.
+// Memory Wiki Doctor preserves retired files and supported SQLite state.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -29,7 +30,7 @@ import {
 import {
   createMemoryWikiSourceSyncStateStore,
   readMemoryWikiSourceSyncState,
-  resolveMemoryWikiSourceSyncStatePath,
+  writeMemoryWikiSourceSyncState,
 } from "./src/source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
@@ -50,7 +51,9 @@ function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds
   const env = { ...process.env, HOME: params.stateDir, OPENCLAW_STATE_DIR: params.stateDir };
   return {
     config: {
-      ...(params.agentIds ? { agents: { list: params.agentIds.map((id) => ({ id })) } } : {}),
+      ...(params.agentIds
+        ? { agents: { entries: Object.fromEntries(params.agentIds.map((id) => [id, {}])) } }
+        : {}),
       plugins: {
         entries: {
           "memory-wiki": {
@@ -74,7 +77,92 @@ function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds
   };
 }
 
-describe("memory-wiki doctor source sync migration", () => {
+// Row keys and values are the v2026.7.1-beta.1 writer's format, independent of current codecs.
+function julyVaultRootKey(vaultRoot: string): string {
+  return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
+}
+
+async function seedJulySourceSyncRow(
+  params: Pick<ReturnType<typeof migrationParams>, "context">,
+  vaultRoot: string,
+  syncKey = "alpha",
+) {
+  const vaultRootKey = julyVaultRootKey(vaultRoot);
+  const entry = {
+    group: "bridge" as const,
+    pagePath: `sources/${syncKey}.md`,
+    sourcePath: `/tmp/${syncKey}.md`,
+    sourceUpdatedAtMs: 100,
+    sourceSize: 200,
+    renderFingerprint: syncKey,
+  };
+  const store = params.context.openPluginStateKeyedStore({
+    namespace: "source-sync",
+    maxEntries: 20_000,
+  });
+  await store.register(
+    createHash("sha256").update(`${vaultRootKey}\0${syncKey}`, "utf8").digest("hex"),
+    { ...entry, vaultRootKey, syncKey },
+  );
+  // July's namespace options belong to the old process; current readers choose theirs on reopen.
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  return entry;
+}
+
+async function seedJulyImportRun(
+  params: Pick<ReturnType<typeof migrationParams>, "context">,
+  vaultRoot: string,
+  runId: string,
+  paths: { created?: string; updated?: string } = {},
+): Promise<void> {
+  const vaultRootKey = julyVaultRootKey(vaultRoot);
+  const store = params.context.openPluginStateKeyedStore({
+    namespace: "import-runs",
+    maxEntries: 20_000,
+  });
+  const metadata = {
+    version: 1,
+    kind: "meta",
+    vaultRootKey,
+    runId,
+    importType: "chatgpt",
+    exportPath: "/tmp/chatgpt",
+    sourcePath: "/tmp/chatgpt/conversations.json",
+    appliedAt: "2026-07-01T12:00:00.000Z",
+    conversationCount: 2,
+    createdCount: paths.created ? 1 : 0,
+    updatedCount: paths.updated ? 1 : 0,
+    skippedCount: 0,
+  };
+  await store.register(
+    createHash("sha256").update(`${vaultRootKey}\0meta\0${runId}`, "utf8").digest("hex"),
+    metadata,
+  );
+  for (const [kind, pagePath] of [
+    ["created-path", paths.created],
+    ["updated-path", paths.updated],
+  ] as const) {
+    if (!pagePath) {
+      continue;
+    }
+    await store.register(
+      createHash("sha256")
+        .update([vaultRootKey, runId, kind, 0, pagePath].join("\0"), "utf8")
+        .digest("hex"),
+      {
+        kind,
+        vaultRootKey,
+        runId,
+        index: 0,
+        path: pagePath,
+        ...(kind === "updated-path" ? { snapshotPath: "snapshots/alpha.md" } : {}),
+      },
+    );
+  }
+}
+
+describe("memory-wiki Doctor state compatibility", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
   });
@@ -85,6 +173,24 @@ describe("memory-wiki doctor source sync migration", () => {
     configureMemoryWikiImportRunStateStore(undefined);
     resetPluginBlobStoreForTests();
     resetPluginStateStoreForTests();
+  });
+
+  it("declares active cache files without reviving retired JSON inventory", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-capture-");
+    const vaultRoot = path.join(stateDir, "selected-vault");
+    const params = migrationParams({ stateDir, vaultRoot });
+    const resources = stateMigrations.map((migration) =>
+      migration.collectBackupResources?.(params),
+    );
+    expect(resources).toEqual([
+      [
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/agent-digest.json"), kind: "file" },
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/claims.jsonl"), kind: "file" },
+      ],
+      [],
+      [],
+    ]);
+    await expect(fs.stat(vaultRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("deletes rebuildable compiled cache files without importing them", async () => {
@@ -181,76 +287,133 @@ describe("memory-wiki doctor source sync migration", () => {
     await expect(fs.readFile(externalCachePath, "utf8")).resolves.toBe("private\n");
   });
 
-  it("detects and migrates legacy source-sync.json into plugin state", async () => {
-    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
+  it.each(["source-sync", "import-runs"] as const)(
+    "refuses retired %s JSON without reading, importing, or archiving it",
+    async (source) => {
+      const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
+      const vaultRoot = path.join(stateDir, "vault");
+      const otherVault = path.join(stateDir, "other-vault");
+      const legacyPath =
+        source === "source-sync"
+          ? path.join(vaultRoot, ".openclaw-wiki", "source-sync.json")
+          : resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-alpha");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      const params = migrationParams({ stateDir, vaultRoot });
+      const legacyValue =
+        source === "source-sync"
+          ? {
+              version: 1,
+              entries: { alpha: await seedJulySourceSyncRow(params, otherVault) },
+            }
+          : {
+              version: 1,
+              runId: "chatgpt-alpha",
+              importType: "chatgpt",
+              exportPath: "/tmp/chatgpt",
+              sourcePath: "/tmp/chatgpt/conversations.json",
+              appliedAt: "2026-06-01T12:00:00.000Z",
+              conversationCount: 1,
+              createdCount: 1,
+              updatedCount: 0,
+              skippedCount: 0,
+              createdPaths: ["sources/legacy.md"],
+              updatedPaths: [],
+            };
+      if (source === "import-runs") {
+        await seedJulyImportRun(params, otherVault, "chatgpt-alpha");
+      }
+      const migration = requireStateMigration(`memory-wiki-${source}-json-to-plugin-state`);
+      for (const bytes of [
+        JSON.stringify(legacyValue),
+        "retired malformed JSON must survive unchanged\n",
+      ]) {
+        await fs.writeFile(legacyPath, bytes);
+        await expect(migration.detectLegacyState(params)).resolves.toEqual({
+          preview: [expect.stringContaining("upgrades from pre-July-2026 JSON state")],
+        });
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+            changes: [],
+            warnings: [expect.stringContaining(legacyPath)],
+          });
+        }
+        await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe(bytes);
+        await expect(fs.stat(`${legacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(
+          createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore).read(
+            vaultRoot,
+          ),
+        ).resolves.toEqual({ version: 1, entries: {} });
+        await expect(
+          createMemoryWikiImportRunStateStore(params.context.openPluginStateKeyedStore).list(
+            vaultRoot,
+          ),
+        ).resolves.toEqual([]);
+      }
+    },
+  );
+
+  it("preserves July source rows and explains an empty canonical store without reviving JSON", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-state-");
     const homeDir = await tempDirs.createTempDir("memory-wiki-doctor-home-");
     const vaultRoot = path.join(stateDir, "wiki", "main");
-    const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-    const homeLegacyPath = resolveMemoryWikiSourceSyncStatePath(
-      path.join(homeDir, ".openclaw", "wiki", "main"),
+    const legacyPath = path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
+    const homeLegacyPath = path.join(
+      homeDir,
+      ".openclaw",
+      "wiki",
+      "main",
+      ".openclaw-wiki",
+      "source-sync.json",
     );
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.mkdir(path.dirname(homeLegacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      `${JSON.stringify({
-        version: 1,
-        entries: {
-          alpha: {
-            group: "bridge",
-            pagePath: "sources/alpha.md",
-            sourcePath: "/tmp/alpha.md",
-            sourceUpdatedAtMs: 100,
-            sourceSize: 200,
-            renderFingerprint: "alpha",
-          },
-        },
-      })}\n`,
-    );
-    const homeSourceSync = await fs.readFile(legacyPath, "utf8");
-    await fs.writeFile(homeLegacyPath, homeSourceSync, "utf8");
+    for (const filePath of [legacyPath, homeLegacyPath]) {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "stale source JSON\n");
+    }
     const params = {
       ...migrationParams({ stateDir, vaultRoot }),
       config: { plugins: { entries: { "memory-wiki": { config: {} } } } },
       env: { ...process.env, HOME: homeDir, OPENCLAW_STATE_DIR: stateDir },
     };
+    const entry = await seedJulySourceSyncRow(params, vaultRoot);
+    const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
     const migration = requireStateMigration("memory-wiki-source-sync-json-to-plugin-state");
 
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: [expect.stringContaining("Memory Wiki source sync:")],
-    });
-
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
-      changes: [
-        "Migrated Memory Wiki source sync -> plugin state (1 imported, 0 existing)",
-        expect.stringContaining("Archived Memory Wiki source-sync legacy source ->"),
-      ],
+      changes: [],
       warnings: [],
     });
-    const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
-    await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual({
-      version: 1,
-      entries: {
-        alpha: {
-          group: "bridge",
-          pagePath: "sources/alpha.md",
-          sourcePath: "/tmp/alpha.md",
-          sourceUpdatedAtMs: 100,
-          sourceSize: 200,
-          renderFingerprint: "alpha",
-        },
-      },
+    const state = await readMemoryWikiSourceSyncState(vaultRoot, store);
+    expect(state).toEqual({ version: 1, entries: { alpha: entry } });
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      { version: 1, entries: { alpha: { ...entry, sourceSize: 201 } } },
+      store,
+    );
+    await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toMatchObject({
+      entries: { alpha: { sourceSize: 201 } },
     });
-    await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(`${legacyPath}.migrated`)).resolves.toBeDefined();
-    await expect(fs.readFile(homeLegacyPath, "utf8")).resolves.toBe(homeSourceSync);
-    await expect(fs.stat(`${homeLegacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    await writeMemoryWikiSourceSyncState(vaultRoot, { version: 1, entries: {} }, store);
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("an empty store cannot be distinguished")],
+    });
+    for (const filePath of [legacyPath, homeLegacyPath]) {
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("stale source JSON\n");
+      await expect(fs.stat(`${filePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 
-  it("detects and migrates legacy import-run records into plugin state", async () => {
+  it("accepts an empty July import run and preserves snapshot rollback", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vault");
-    const legacyPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-alpha");
+    const params = migrationParams({ stateDir, vaultRoot });
+    await seedJulyImportRun(params, vaultRoot, "chatgpt-empty");
+    await seedJulyImportRun(params, vaultRoot, "chatgpt-alpha", {
+      created: "sources/legacy.md",
+      updated: "sources/existing.md",
+    });
     const snapshotPath = path.join(
       vaultRoot,
       ".openclaw-wiki",
@@ -259,217 +422,94 @@ describe("memory-wiki doctor source sync migration", () => {
       "snapshots",
       "alpha.md",
     );
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
     const legacyPagePath = path.join(vaultRoot, "sources", "legacy.md");
-    const legacyPageContent = "# Edited legacy import page\n";
+    const existingPagePath = path.join(vaultRoot, "sources", "existing.md");
+    const legacyPageContent = "# Edited July import page\n";
+    await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
     await fs.mkdir(path.dirname(legacyPagePath), { recursive: true });
-    await fs.writeFile(legacyPagePath, legacyPageContent, "utf8");
-    await fs.writeFile(snapshotPath, "previous page\n", "utf8");
-    await fs.writeFile(
-      legacyPath,
-      `${JSON.stringify({
-        version: 1,
-        runId: "chatgpt-alpha",
-        importType: "chatgpt",
-        exportPath: "/tmp/chatgpt",
-        sourcePath: "/tmp/chatgpt/conversations.json",
-        appliedAt: "2026-04-10T10:00:00.000Z",
-        conversationCount: 3,
-        createdCount: 2,
-        updatedCount: 1,
-        skippedCount: 0,
-        createdPaths: [
-          "sources/legacy.md",
-          { path: "sources/new.md", contentHash: "new-content-hash" },
-        ],
-        updatedPaths: [{ path: "sources/existing.md", snapshotPath: "snapshots/alpha.md" }],
-      })}\n`,
+    await fs.writeFile(snapshotPath, "previous page\n");
+    await fs.writeFile(legacyPagePath, legacyPageContent);
+    await fs.writeFile(existingPagePath, "imported replacement\n");
+    const retiredPaths = ["chatgpt-empty", "chatgpt-alpha"].map((runId) =>
+      resolveLegacyImportRunRecordPath(vaultRoot, runId),
     );
-    const params = migrationParams({ stateDir, vaultRoot });
-    const migration = stateMigrations.find(
-      (entry) => entry.id === "memory-wiki-import-runs-json-to-plugin-state",
-    );
-    if (!migration) {
-      throw new Error("Expected import-run migration");
+    for (const filePath of retiredPaths) {
+      await fs.writeFile(filePath, "stale import JSON\n");
     }
-
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: [expect.stringContaining("Memory Wiki import runs:")],
-    });
+    const migration = requireStateMigration("memory-wiki-import-runs-json-to-plugin-state");
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
-      changes: [
-        "Migrated Memory Wiki import runs -> plugin state (1 imported, 0 existing)",
-        expect.stringContaining("Archived Memory Wiki import-run legacy source ->"),
-      ],
+      changes: [],
       warnings: [],
     });
     const store = createMemoryWikiImportRunStateStore(params.context.openPluginStateKeyedStore);
-    await expect(readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-alpha", store)).resolves.toEqual(
-      {
-        version: 1,
-        runId: "chatgpt-alpha",
-        importType: "chatgpt",
-        exportPath: "/tmp/chatgpt",
-        sourcePath: "/tmp/chatgpt/conversations.json",
-        appliedAt: "2026-04-10T10:00:00.000Z",
-        conversationCount: 3,
-        createdCount: 2,
-        updatedCount: 1,
-        skippedCount: 0,
-        createdPaths: [
-          { path: "sources/legacy.md" },
-          { path: "sources/new.md", contentHash: "new-content-hash" },
-        ],
-        updatedPaths: [{ path: "sources/existing.md", snapshotPath: "snapshots/alpha.md" }],
-      },
-    );
-    await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(`${legacyPath}.migrated`)).resolves.toBeDefined();
-    await expect(fs.readFile(snapshotPath, "utf8")).resolves.toBe("previous page\n");
-
+    await expect(
+      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-empty", store),
+    ).resolves.toMatchObject({
+      createdPaths: [],
+      updatedPaths: [],
+    });
+    await expect(
+      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-alpha", store),
+    ).resolves.toMatchObject({
+      createdPaths: [{ path: "sources/legacy.md" }],
+      updatedPaths: [{ path: "sources/existing.md", snapshotPath: "snapshots/alpha.md" }],
+    });
     configureMemoryWikiImportRunStateStore(store);
-    const blobStoreEnv = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
     configureMemoryWikiCompiledCacheStore(
       createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) =>
-        createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv),
+        createPluginBlobStoreForTests<T>("memory-wiki", options, params.env),
       ),
     );
     const rollback = await rollbackChatGptImportRun({
       config: resolveMemoryWikiConfig({ vault: { path: vaultRoot } }),
       runId: "chatgpt-alpha",
     });
-    const preservedLegacy = rollback.preservedPaths.find(
-      (entry) => entry.path === "sources/legacy.md",
+    const preservedLegacy = expectDefined(
+      rollback.preservedPaths.find((entry) => entry.path === "sources/legacy.md"),
+      "preserved July import page",
     );
-    expect(preservedLegacy).toBeDefined();
     await expect(
-      fs.readFile(path.join(vaultRoot, preservedLegacy?.recoveryPath ?? ""), "utf8"),
+      fs.readFile(path.join(vaultRoot, preservedLegacy.recoveryPath), "utf8"),
     ).resolves.toBe(legacyPageContent);
-  });
-
-  it("merges legacy entries with existing plugin state before archiving", async () => {
-    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
-    const vaultRoot = path.join(stateDir, "vault");
-    const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      `${JSON.stringify({
-        version: 1,
-        entries: {
-          stale: {
-            group: "bridge",
-            pagePath: "sources/stale.md",
-            sourcePath: "/tmp/stale.md",
-            sourceUpdatedAtMs: 10,
-            sourceSize: 20,
-            renderFingerprint: "stale",
-          },
-          current: {
-            group: "bridge",
-            pagePath: "sources/current-old.md",
-            sourcePath: "/tmp/current-old.md",
-            sourceUpdatedAtMs: 30,
-            sourceSize: 40,
-            renderFingerprint: "old",
-          },
-        },
-      })}\n`,
-    );
-    const params = migrationParams({ stateDir, vaultRoot });
-    const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
-    await store.write(vaultRoot, {
-      version: 1,
-      entries: {
-        current: {
-          group: "bridge",
-          pagePath: "sources/current.md",
-          sourcePath: "/tmp/current.md",
-          sourceUpdatedAtMs: 50,
-          sourceSize: 60,
-          renderFingerprint: "current",
-        },
-      },
-    });
-
+    await expect(fs.readFile(existingPagePath, "utf8")).resolves.toBe("previous page\n");
+    await expect(fs.readFile(snapshotPath, "utf8")).resolves.toBe("previous page\n");
     await expect(
-      requireStateMigration("memory-wiki-source-sync-json-to-plugin-state").migrateLegacyState(
-        params,
-      ),
-    ).resolves.toEqual({
-      changes: [
-        "Migrated Memory Wiki source sync -> plugin state (1 imported, 1 existing)",
-        expect.stringContaining("Archived Memory Wiki source-sync legacy source ->"),
-      ],
-      warnings: [],
+      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-alpha", store),
+    ).resolves.toMatchObject({
+      rollbackStartedAt: expect.any(String),
+      rollbackTargetsFinalizedAt: expect.any(String),
+      rolledBackAt: expect.any(String),
     });
-    await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual({
-      version: 1,
-      entries: {
-        stale: {
-          group: "bridge",
-          pagePath: "sources/stale.md",
-          sourcePath: "/tmp/stale.md",
-          sourceUpdatedAtMs: 10,
-          sourceSize: 20,
-          renderFingerprint: "stale",
-        },
-        current: {
-          group: "bridge",
-          pagePath: "sources/current.md",
-          sourcePath: "/tmp/current.md",
-          sourceUpdatedAtMs: 50,
-          sourceSize: 60,
-          renderFingerprint: "current",
-        },
-      },
-    });
-    await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    for (const filePath of retiredPaths) {
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("stale import JSON\n");
+      await expect(fs.stat(`${filePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 
-  it("migrates legacy state from every configured agent vault", async () => {
+  it("checks every configured agent vault without borrowing canonical state", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vaults");
     const agentIds = ["support", "marketing"];
-    for (const agentId of agentIds) {
-      const legacyPath = resolveMemoryWikiSourceSyncStatePath(path.join(vaultRoot, agentId));
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({
-          version: 1,
-          entries: {
-            [agentId]: {
-              group: "bridge",
-              pagePath: `sources/${agentId}.md`,
-              sourcePath: `/tmp/${agentId}.md`,
-              sourceUpdatedAtMs: 100,
-              sourceSize: 200,
-              renderFingerprint: agentId,
-            },
-          },
-        })}\n`,
-      );
-    }
-
     const params = migrationParams({ stateDir, vaultRoot, agentIds });
+    for (const agentId of agentIds) {
+      const legacyPath = path.join(vaultRoot, agentId, ".openclaw-wiki", "source-sync.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, "retained source JSON\n");
+    }
+    await seedJulySourceSyncRow(params, path.join(vaultRoot, "support"));
     const migration = requireStateMigration("memory-wiki-source-sync-json-to-plugin-state");
     await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: [
-        expect.stringContaining(path.join(vaultRoot, "support")),
-        expect.stringContaining(path.join(vaultRoot, "marketing")),
-      ],
+      preview: [expect.stringContaining(path.join(vaultRoot, "marketing"))],
     });
-    await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({
-      warnings: [],
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [expect.stringContaining(path.join(vaultRoot, "marketing"))],
     });
-
-    const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
     for (const agentId of agentIds) {
       await expect(
-        readMemoryWikiSourceSyncState(path.join(vaultRoot, agentId), store),
-      ).resolves.toMatchObject({ entries: { [agentId]: { renderFingerprint: agentId } } });
+        fs.readFile(path.join(vaultRoot, agentId, ".openclaw-wiki", "source-sync.json"), "utf8"),
+      ).resolves.toBe("retained source JSON\n");
     }
   });
 });

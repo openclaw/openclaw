@@ -52,12 +52,7 @@ type ResolvedEnvelopeTimezone =
 function sanitizeEnvelopeHeaderPart(value: string): string {
   // Header parts are metadata and must not be able to break the bracketed prefix.
   // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
-  return value
-    .replace(/\r\n|\r|\n/g, " ")
-    .replaceAll("[", "(")
-    .replaceAll("]", ")")
-    .replace(/\s+/g, " ")
-    .trim();
+  return value.replaceAll("[", "(").replaceAll("]", ")").replace(/\s+/g, " ").trim();
 }
 
 /** Resolves envelope formatting defaults from agent config. */

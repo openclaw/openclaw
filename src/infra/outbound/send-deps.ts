@@ -14,12 +14,9 @@ function resolveLegacyOutboundSendDepKeys(channelId: string): string[] {
     return [];
   }
   const pascal = compact.charAt(0).toUpperCase() + compact.slice(1);
-  const keys = new Set<string>();
-  keys.add(`send${pascal}`);
-  if (pascal.startsWith("Ms") && pascal.length > 2) {
-    keys.add(`sendMS${pascal.slice(2)}`);
-  }
-  return [...keys];
+  return pascal.startsWith("Ms") && pascal.length > 2
+    ? [`send${pascal}`, `sendMS${pascal.slice(2)}`]
+    : [`send${pascal}`];
 }
 
 /**

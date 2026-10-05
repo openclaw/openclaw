@@ -1,8 +1,5 @@
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
-import {
-  asFiniteNumber,
-  finiteSecondsToTimerSafeMilliseconds,
-} from "@openclaw/normalization-core/number-coercion";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -103,42 +100,6 @@ function canonicalizeLegacyResolvedModel(params: { provider: string; model: Mode
   };
 }
 
-function applyResolvedTransportFallback(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  runtimeHooks: ProviderRuntimeHooks;
-  model: Model;
-}): Model | undefined {
-  const normalized = params.runtimeHooks.normalizeProviderTransportWithPlugin({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelId: params.model.id,
-    context: {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: params.model.id,
-      api: params.model.api,
-      baseUrl: params.model.baseUrl,
-    },
-  }) as { api?: Api | null; baseUrl?: string } | undefined;
-  if (!normalized) {
-    return undefined;
-  }
-  const nextApi = normalizeResolvedTransportApi(normalized.api) ?? params.model.api;
-  const nextBaseUrl = normalized.baseUrl ?? params.model.baseUrl;
-  if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    api: nextApi,
-    baseUrl: nextBaseUrl,
-  };
-}
-
 export function normalizeResolvedModel(params: {
   provider: string;
   model: Model;
@@ -178,44 +139,50 @@ export function normalizeResolvedModel(params: {
     cost: normalizeModelCost(params.model.cost),
   } as Model & ProviderRuntimeModel;
   const runtimeHooks = params.runtimeHooks ?? resolveRuntimeHooks();
+  const hookParams = {
+    provider: params.provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  };
+  const modelContext = {
+    ...hookParams,
+    agentDir: params.agentDir,
+    modelId: normalizedInputModel.id,
+    model: normalizedInputModel,
+  };
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
+    ...hookParams,
+    context: { ...modelContext },
+  }) as Model | undefined;
+  const pluginModel = pluginNormalized ?? normalizedInputModel;
+  let transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
+    ...hookParams,
     context: {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
+      ...modelContext,
+      // Provider normalizers can update the model in place.
       modelId: normalizedInputModel.id,
-      model: normalizedInputModel,
+      model: pluginModel as never,
     },
   }) as Model | undefined;
-  const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    context: {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: normalizedInputModel.id,
-      model: (pluginNormalized ?? normalizedInputModel) as never,
-    },
-  }) as Model | undefined;
-  const fallbackTransportNormalized =
-    transportNormalized ??
-    applyResolvedTransportFallback({
-      provider: params.provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      runtimeHooks,
-      model: pluginNormalized ?? normalizedInputModel,
-    });
-  const normalizedModel = normalizeModelCompat(
-    fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
-  ) as Model & ProviderRuntimeModel;
+  if (transportNormalized == null) {
+    const normalized = runtimeHooks.normalizeProviderTransportWithPlugin({
+      ...hookParams,
+      modelId: pluginModel.id,
+      context: {
+        ...hookParams,
+        modelId: pluginModel.id,
+        api: pluginModel.api,
+        baseUrl: pluginModel.baseUrl,
+      },
+    }) as { api?: Api | null; baseUrl?: string } | undefined;
+    const api = normalizeResolvedTransportApi(normalized?.api) ?? pluginModel.api;
+    const baseUrl = normalized?.baseUrl ?? pluginModel.baseUrl;
+    if (api !== pluginModel.api || baseUrl !== pluginModel.baseUrl) {
+      transportNormalized = { ...pluginModel, api, baseUrl };
+    }
+  }
+  const normalizedModel = normalizeModelCompat(transportNormalized ?? pluginModel) as Model &
+    ProviderRuntimeModel;
   // Rebuilding provider hooks may drop the host-prepared timeout. Restore it
   // only when the final model does not declare a provider-owned override.
   const modelWithProviderTimeout =
@@ -250,8 +217,4 @@ export function normalizeResolvedModel(params: {
       model: modelWithToolSearch,
     }),
   );
-}
-
-export function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
-  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
 }

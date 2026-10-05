@@ -1,3 +1,4 @@
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -6,13 +7,14 @@ import { Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, inject, it, vi } from "vitest";
+import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import type {
   TranscriptsGetResult,
   TranscriptsListResult,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
+import { createTestPluginServiceScheduler } from "../../src/plugin-sdk/plugin-test-api.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../src/test-utils/env.js";
@@ -53,6 +55,7 @@ type DiscordCaptureTestApi = {
       this: void,
       params: {
         cfg: OpenClawConfig;
+        scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
         test: { expect: typeof expect; vi: typeof vi };
       },
     ): DiscordCaptureFixture;
@@ -84,6 +87,12 @@ function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
 }
 
 describe("Gateway admitted Discord transcript capture", () => {
+  afterEach(async () => {
+    // Minimal Gateway startup omits cleanup for watchers created by real agent turns.
+    const { closeSkillsWatchers } = await import("../../src/skills/runtime/refresh.js");
+    await closeSkillsWatchers(true);
+  });
+
   it("fences late STT and preserves the admitted owner's history after a room route changes", async () => {
     const proofStartedAt = Date.now();
     const phase = (name: string) => {
@@ -132,6 +141,7 @@ describe("Gateway admitted Discord transcript capture", () => {
         >
       | undefined;
     let fixture: DiscordCaptureFixture | undefined;
+    let fixtureScheduler: ReturnType<typeof createTestPluginServiceScheduler> | undefined;
     let releaseFixtureRegistry: (() => Promise<void>) | undefined;
     let routedService:
       | ReturnType<
@@ -473,14 +483,18 @@ describe("Gateway admitted Discord transcript capture", () => {
       resetConfigOverrides();
       const token = "synthetic-gateway-capture-token";
       const cfg: OpenClawConfig = {
+        skills: { load: { watch: false } },
         agents: {
-          list: [
-            { id: "main", default: true, workspace },
-            { id: "agent-b", workspace },
-          ],
+          ownership: "explicit",
+          entries: {
+            main: { workspace },
+            "agent-b": { workspace },
+          },
           defaults: {
             workspace,
             skipBootstrap: true,
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "main" },
             heartbeat: { every: "0m" },
             model: { primary: provider.modelRef, fallbacks: [] },
             models: {
@@ -491,6 +505,7 @@ describe("Gateway admitted Discord transcript capture", () => {
             },
           },
         },
+        talk: { agentId: "main" },
         bindings: [
           {
             agentId: "main",
@@ -500,6 +515,7 @@ describe("Gateway admitted Discord transcript capture", () => {
               peer: { kind: "channel", id: captureTarget.channelId },
             },
           },
+          { agentId: "main", match: { channel: "discord", accountId: "*" } },
         ],
         channels: {
           discord: {
@@ -572,8 +588,10 @@ describe("Gateway admitted Discord transcript capture", () => {
       const pluginInstance = getPluginInstance(record)!;
       expect(pluginInstance).toBeDefined();
       phase("fixture:create");
+      const scheduler = pluginInstance.run(() => createTestPluginServiceScheduler());
+      fixtureScheduler = scheduler;
       fixture = pluginInstance.run(() =>
-        createDiscordGatewayCaptureFixture({ cfg, test: { expect, vi } }),
+        createDiscordGatewayCaptureFixture({ cfg, scheduler, test: { expect, vi } }),
       );
       // Match loader registration: runtime slots belong to the invoking plugin instance.
       pluginInstance.run(() => fixture!.register(api));
@@ -900,7 +918,12 @@ describe("Gateway admitted Discord transcript capture", () => {
         try {
           await routedService?.stop();
         } finally {
-          await fixture?.close();
+          fixtureScheduler?.beginClose();
+          try {
+            await fixture?.close();
+          } finally {
+            await fixtureScheduler?.stop();
+          }
         }
       } finally {
         try {

@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StorageProvider } from "../storage/types.js";
+import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -67,6 +68,7 @@ export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
   agentHarnesses: AgentHarness[];
+  agentExecutorControllers: AgentExecutorController[];
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   textTransforms: PluginTextTransformRegistration[];
@@ -124,6 +126,7 @@ export function createCapturedPluginRegistration(params?: {
   const captured: Omit<CapturedPluginRegistration, "api"> = {
     providers: [],
     agentHarnesses: [],
+    agentExecutorControllers: [],
     cliRegistrars: [],
     cliBackends: [],
     textTransforms: [],
@@ -219,6 +222,7 @@ export function createCapturedPluginRegistration(params?: {
         registerModelCatalogProvider: captureInto(captured.modelCatalogProviders),
         registerSessionCatalog: captureInto(captured.sessionCatalogs),
         registerAgentHarness: captureInto(captured.agentHarnesses),
+        registerAgentExecutorController: captureInto(captured.agentExecutorControllers),
         registerCodexAppServerExtensionFactory: captureInto(
           captured.codexAppServerExtensionFactories,
         ),

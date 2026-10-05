@@ -41,7 +41,6 @@ type ApprovalRouteSkipReason = "ambiguous-owner" | "ineligible" | "owner-unavail
 
 type ApprovalRouteReport = {
   runtimeId: string;
-  request: ApprovalRequest;
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
@@ -281,10 +280,6 @@ function didReportDeliverToOrigin(report: ApprovalRouteReport, originAccountId?:
   );
 }
 
-function hasPlannedNativeTargets(report: ApprovalRouteReport): boolean {
-  return report.deliveryPlan.targets.length > 0;
-}
-
 function readAllowedDecisionStrings(request: ApprovalRequest): string[] | undefined {
   const allowedDecisions =
     "allowedDecisions" in request.request ? request.request.allowedDecisions : undefined;
@@ -331,7 +326,7 @@ function resolveApprovalRouteNotice(params: {
     ambiguousOwner || params.reports.some((report) => report.skipReason === "owner-unavailable");
   if (
     !deliveredAnyTarget &&
-    (params.reports.some(hasPlannedNativeTargets) ||
+    (params.reports.some((report) => report.deliveryPlan.targets.length > 0) ||
       requiresManualFallback ||
       params.missingSelectedRuntime)
   ) {
@@ -537,7 +532,6 @@ function createApprovalNativeRouteReporterForState(
       });
     entry.reports.set(runtimeId, {
       runtimeId,
-      request: payload.request,
       channel: params.channel,
       channelLabel: params.channelLabel,
       accountId: params.accountId,

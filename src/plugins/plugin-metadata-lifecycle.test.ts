@@ -34,6 +34,7 @@ registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
 
 it("retains running metadata readers through the final Gateway close after package replacement", async () => {
   const readers = { ...snapshotReaderSlot };
+  const cache = getPluginCache();
   const first = retainGatewayPluginMetadata(createTestGatewayScheduler());
   const second = retainGatewayPluginMetadata(createTestGatewayScheduler());
   const snapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
@@ -48,6 +49,16 @@ it("retains running metadata readers through the final Gateway close after packa
     first.publish(snapshot);
     second.publish(snapshot);
     setGatewayPluginMetadataSnapshot(snapshot);
+    setCurrentPluginMetadataSnapshotState(
+      snapshot,
+      "boot",
+      undefined,
+      undefined,
+      undefined,
+      "gateway",
+    );
+    clearMemo.mockClear();
+    clearPluginMetadataLifecycleCaches();
     // Released modules register by assigning the shared slot directly.
     Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
@@ -57,6 +68,10 @@ it("retains running metadata readers through the final Gateway close after packa
       ),
     ).toBe(scoped);
     await first.close();
+    await first.close();
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
+    expect(clearMemo).not.toHaveBeenCalled();
+    expect(getPluginCache()).toBe(cache);
     finalClose = second.close(async () => {
       closing.resolve();
       await releaseClose.promise;
@@ -66,6 +81,11 @@ it("retains running metadata readers through the final Gateway close after packa
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
     releaseClose.resolve();
     await finalClose;
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
+    expect(clearMemo).toHaveBeenCalledOnce();
+    expect(getPluginCache()).not.toBe(cache);
+    await second.close();
+    expect(clearMemo).toHaveBeenCalledOnce();
     Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
     expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
       "replacement installation cannot read the running scope state",
@@ -124,69 +144,32 @@ it("joins owned cleanup and final shared teardown before admitting another Gatew
   }
 });
 
-it("keeps boot metadata and process memos until the final Gateway releases them", async () => {
-  const firstAccessCache = getPluginCache();
-  const first = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  const second = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  try {
-    const snapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
-    first.publish(snapshot);
-    second.publish(snapshot);
-    setCurrentPluginMetadataSnapshotState(
-      snapshot,
-      "boot",
-      undefined,
-      undefined,
-      undefined,
-      "gateway",
-    );
-    clearMemo.mockClear();
-
-    clearPluginMetadataLifecycleCaches();
-    await second.close();
-    await second.close();
-
-    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
-    expect(clearMemo).not.toHaveBeenCalled();
-    expect(getPluginCache()).toBe(firstAccessCache);
-
-    await first.close();
-    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
-    expect(clearMemo).toHaveBeenCalledOnce();
-    expect(getPluginCache()).not.toBe(firstAccessCache);
-    await first.close();
-    expect(clearMemo).toHaveBeenCalledOnce();
-  } finally {
-    await Promise.all([second.close(), first.close()]);
-  }
-});
-
-it("allows startup planning metadata to refresh before a Gateway inventory is published", async () => {
-  const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  try {
-    setCurrentPluginMetadataSnapshotState(createPluginMetadataSnapshotFixture(), "planning");
-    clearPluginMetadataLifecycleCaches();
-    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
-  } finally {
-    await owner.close();
-  }
-});
-
-it("keeps bootstrap facts usable when no replacement metadata snapshot is published", async () => {
-  const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  const cache = owner.runBootstrap(getPluginCache);
-  try {
-    owner.publish(undefined);
-    await owner.waitForRetirement();
-    clearPluginMetadataLifecycleCaches();
-    expect(getPluginCache()).toBe(cache);
-    const releaseFacts = retainPluginCache(cache);
-    releaseFacts();
-  } finally {
-    await owner.close();
-  }
-  expect(getPluginCache()).not.toBe(cache);
-});
+it.each([false, true])(
+  "refreshes bootstrap facts only before publication (%s)",
+  async (published) => {
+    const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
+    const cache = owner.runBootstrap(getPluginCache);
+    try {
+      if (published) {
+        owner.publish(undefined);
+        await owner.waitForRetirement();
+      } else {
+        setCurrentPluginMetadataSnapshotState(createPluginMetadataSnapshotFixture(), "planning");
+      }
+      clearPluginMetadataLifecycleCaches();
+      if (published) {
+        expect(getPluginCache()).toBe(cache);
+        const releaseFacts = retainPluginCache(cache);
+        releaseFacts();
+      } else {
+        expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
+      }
+    } finally {
+      await owner.close();
+    }
+    expect(getPluginCache()).not.toBe(cache);
+  },
+);
 
 it.each([true, false])(
   "observes deferred turn cleanup and joins it on shutdown (borrowed: %s)",

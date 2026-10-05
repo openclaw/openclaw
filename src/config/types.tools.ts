@@ -62,10 +62,6 @@ export type ToolSearchConfig = NonNullable<SchemaToolsConfig["toolSearch"]>;
 
 export type CodeModeConfig = NonNullable<SchemaToolsConfig["codeMode"]>;
 
-export type SwarmConfig = NonNullable<SchemaToolsConfig["swarm"]>;
-
-export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
-
 export type ToolAllowDenyPolicyConfig = NonNullable<z.input<typeof ToolPolicySchema>>;
 
 export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
@@ -117,10 +113,6 @@ export type ExecToolConfig = Omit<NonNullable<SchemaToolsConfig["exec"]>, "safeB
   /** Preserve readonly authoring fixtures accepted by the safe-bin policy owner. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
 };
-
-export type FsToolsConfig = NonNullable<SchemaToolsConfig["fs"]>;
-
-export type SessionsSpawnToolsConfig = NonNullable<SchemaToolsConfig["sessions_spawn"]>;
 
 export type GitHubToolIdentityConfig = NonNullable<SchemaToolsConfig["github"]>;
 

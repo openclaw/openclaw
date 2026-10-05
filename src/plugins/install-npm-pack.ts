@@ -164,7 +164,6 @@ export async function installPluginFromNpmPackArchive(
         source: { kind: "archive", authority: "user", mutable: true, network: false },
       },
       policyPreflightSourcePath: metadataResult.archivePath,
-      policyPreflightSourcePathKind: "file",
       extensionsDir: params.extensionsDir,
       npmDir: npmBaseDir,
       timeoutMs,

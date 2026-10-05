@@ -1446,7 +1446,8 @@ openclaw-settings-save-indicator:empty {
   cursor: not-allowed;
 }
 
-.sidebar-session-toolbar__button svg {
+.sidebar-session-toolbar__button svg,
+.sidebar-session-group-actions svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -1657,7 +1658,10 @@ openclaw-settings-save-indicator:empty {
   opacity: 0.75;
 }
 
-.sidebar-session-group-toggle__icon svg {
+.sidebar-session-group-toggle__icon svg,
+.sidebar-session-catalog-host__count--error svg,
+.sidebar-session__archive-glyph svg,
+.sidebar-child-session-toggle__icon svg {
   width: 11px;
   height: 11px;
   stroke: currentColor;
@@ -1832,10 +1836,6 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-person-filter {
-  position: relative;
-}
-
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
@@ -1848,16 +1848,6 @@ openclaw-settings-save-indicator:empty {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
-}
-
-.sidebar-session-group-actions svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -1994,14 +1984,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--warn);
 }
 
-.sidebar-session-catalog-host__count--error svg {
-  width: 11px;
-  height: 11px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-}
-
 .sidebar-session-catalog-project__head {
   display: flex;
   align-items: center;
@@ -2101,6 +2083,12 @@ openclaw-settings-save-indicator:empty {
   font-size: var(--control-ui-text-xs);
 }
 
+.sidebar-session-empty-hint--startup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-session--archived {
   opacity: 0.62;
 }
@@ -2115,14 +2103,6 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
   margin-right: 5px;
   vertical-align: -2px;
-}
-
-.sidebar-session__archive-glyph svg {
-  width: 11px;
-  height: 11px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session--dragging {
@@ -2259,14 +2239,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-child-session-toggle__icon {
   display: inline-flex;
-}
-
-.sidebar-child-session-toggle__icon svg {
-  width: 11px;
-  height: 11px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
 }
 
 .sidebar-child-session-toggle__count {
@@ -2521,6 +2493,23 @@ openclaw-settings-save-indicator:empty {
   border-radius: 0;
 }
 
+.sidebar-online__filter-toggle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-online:where(:hover, :has(:focus-visible)) .sidebar-online__filter-toggle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-online__filter-toggle {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .sidebar-online__list {
   display: flex;
   flex-direction: column;
@@ -2639,6 +2628,10 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person:hover .sidebar-online__counts,
 .sidebar-online__person:focus-visible .sidebar-online__counts {
   background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.sidebar-online__count {
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-online__open,
@@ -2818,9 +2811,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
   text-decoration: none;
 }
 
-/* The agent switcher marks its selection in the trailing details rail
-   (.session-menu__check), so the native leading checkmark is layout-only: it
-   reserved a column that pushed avatar rows out of the command rows' gutter. */
+/* Agent tiles use an avatar ring; command rows have no checked state. */
 .sidebar-agent-menu .sidebar-customize-menu__item::part(checkmark) {
   display: none;
 }
@@ -3282,6 +3273,16 @@ a:is(
     transform var(--duration-fast) ease;
 }
 
+.nav-item__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-item--child {
+  padding-inline-start: calc(var(--space-2) + var(--space-4));
+}
+
 .nav-item__icon {
   width: 20px;
   height: 16px;
@@ -3430,7 +3431,7 @@ a:is(
   gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 6px;
+  padding: 5px 0;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -3460,9 +3461,16 @@ a:is(
 }
 
 .sidebar-workspace-header__mark {
+  display: grid;
+  place-items: center;
   width: var(--sidebar-agent-avatar-size);
   height: var(--sidebar-agent-avatar-size);
   flex: none;
+}
+
+.sidebar-workspace-header__mark > svg {
+  width: 24px;
+  height: 24px;
 }
 
 .sidebar-agent-card__avatar {
@@ -3516,7 +3524,7 @@ a:is(
 .sidebar-agent-card__name-text {
   min-width: 0;
   overflow: hidden;
-  padding-inline-end: 8px;
+  padding-inline-end: 4px;
   white-space: nowrap;
 }
 
@@ -4062,7 +4070,6 @@ button.gateway-status:focus-visible {
   min-width: 0;
   width: auto;
   justify-content: center;
-  /* Web Awesome's checkbox-adjacent host padding survives the hidden checkmark. */
   padding: 0 !important;
   color: var(--muted) !important;
   text-align: center;
@@ -4104,7 +4111,10 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   width: var(--agent-avatar-size);
   height: var(--agent-avatar-size);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text-strong) 9%, var(--card));
+  background: var(
+    --agent-avatar-background,
+    color-mix(in srgb, var(--text-strong) 9%, var(--card))
+  );
   color: var(--secondary-foreground);
   box-shadow:
     0 0 0 2px transparent,
@@ -4116,6 +4126,58 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
     box-shadow 120ms ease,
     opacity 120ms ease,
     filter 120ms ease;
+}
+
+.sidebar-agent-menu__avatar-group {
+  --agent-avatar-background: transparent;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+}
+
+.sidebar-agent-menu__group-item {
+  --agent-avatar-size: 100%;
+  --agent-avatar-glyph-size: 13px;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-strong) 9%, var(--card));
+}
+
+.sidebar-agent-menu__avatar-group--pair {
+  display: block;
+  position: relative;
+  padding: 0;
+}
+
+.sidebar-agent-menu__avatar-group--pair .sidebar-agent-menu__group-item {
+  --agent-avatar-glyph-size: 20px;
+  position: absolute;
+  width: 65%;
+  height: 65%;
+  box-shadow: 0 0 0 2px var(--bg-elevated);
+}
+
+.sidebar-agent-menu__avatar-group--pair .sidebar-agent-menu__group-item:first-child {
+  inset-block-start: 0;
+  inset-inline-start: 0;
+}
+
+.sidebar-agent-menu__avatar-group--pair .sidebar-agent-menu__group-item:last-child {
+  inset-block-end: 0;
+  inset-inline-end: 0;
+}
+
+.sidebar-agent-menu__group-count {
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar {
@@ -4135,7 +4197,10 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
 }
 
 .sidebar-agent-menu__agent-switch--active:hover .sidebar-agent-menu__agent-avatar {
-  background: color-mix(in srgb, var(--text-strong) 12%, var(--card));
+  background: var(
+    --agent-avatar-background,
+    color-mix(in srgb, var(--text-strong) 12%, var(--card))
+  );
   box-shadow:
     0 0 0 2px var(--bg-elevated),
     0 0 0 4px color-mix(in srgb, var(--accent) 65%, transparent);
@@ -4192,9 +4257,7 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   gap: 3px;
 }
 
-/* The help flyout must escape the menu box, so the root stays
-   overflow-visible; the viewport bound moves to a flex column where only
-   the switcher list shrinks and scrolls (the action rows always fit). */
+/* Only the switcher list shrinks and scrolls; the action rows stay visible. */
 .sidebar-agent-menu {
   --agent-avatar-size: 48px;
   --agent-avatar-glyph-size: 25px;
@@ -4846,35 +4909,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.content--chat .content-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 44px;
-  padding: 4px 8px;
-  overflow: visible;
-  max-height: 44px;
-}
-
-.content--chat .content-header > div:first-child {
-  display: grid;
-  align-items: center;
-  position: relative;
-  text-align: left;
-  min-width: 0;
-}
-
-.content--chat .page-meta {
-  align-self: center;
-  justify-content: flex-end;
-  height: 36px;
-  align-items: center;
-  min-width: max-content;
-  overflow: visible;
 }
 
 .grid {

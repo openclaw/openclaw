@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -311,7 +311,16 @@ try {
               path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
             }),
           });
-          await approveNodePairingForProof(operator, nodeIdentity.deviceId);
+          const pairing = await operator.request<{
+            pending: Array<{ nodeId: string }>;
+            paired: Array<{ nodeId: string; commands?: string[] }>;
+          }>("node.pair.list", {});
+          expect(
+            pairing.pending.find((entry) => entry.nodeId === nodeIdentity.deviceId),
+          ).toBeUndefined();
+          expect(
+            pairing.paired.find((entry) => entry.nodeId === nodeIdentity.deviceId)?.commands,
+          ).toEqual(["system.notify"]);
           await waitForNodeStatus(instance, nodeIdentity.deviceId);
           const startedAt = performance.now();
           const result = await operator.request<{ payload?: { captured?: boolean } }>(
@@ -374,19 +383,4 @@ async function waitForFile(filePath: string): Promise<void> {
       () => {},
     );
   });
-}
-
-async function approveNodePairingForProof(operator: GatewayClient, nodeId: string): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const pairing = await operator.request<{
-        pending?: Array<{ nodeId?: string; requestId?: string; commands?: string[] }>;
-      }>("node.pair.list", {});
-      const pending = pairing.pending?.find((entry) => entry.nodeId === nodeId);
-      expect(pending?.commands).toEqual(["system.notify"]);
-      expect(pending?.requestId).toEqual(expect.any(String));
-      await operator.request("node.pair.approve", { requestId: pending?.requestId });
-    },
-    { timeout: 15_000, interval: 100 },
-  );
 }

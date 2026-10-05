@@ -8,6 +8,11 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
+import {
+  runWithOwnedSessionTranscriptWrite,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import {
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
@@ -126,6 +131,62 @@ describe("cron service ops regressions", () => {
       requestRoot?.release();
       enterRunner.resolve();
       clearCommandLane(childLane);
+      clearCommandLane(CommandLane.Cron);
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("runs a manual run queued from an agent turn outside that turn's transcript lifecycle", async () => {
+    vi.useRealTimers();
+    resetGatewayWorkAdmission();
+    clearCommandLane(CommandLane.Cron);
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "manual-from-agent-turn",
+      nowMs: now,
+      nextRunAtMs: now,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const callerSessionKey = "agent:main:main";
+    const callerTurnEnded = createDeferred();
+    const finished = createDeferred<CronEvent>();
+    const reportWrites: string[] = [];
+    const state = createCronRegressionState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      runIsolatedAgentJob: vi.fn(async () => {
+        await callerTurnEnded.promise;
+        // A current-session report lands in the session that started the run.
+        await runWithOwnedSessionTranscriptWrite({ sessionKey: callerSessionKey }, () => {
+          reportWrites.push("report");
+        });
+        return { status: "ok" as const };
+      }),
+      onEvent: (event) => {
+        if (event.jobId === job.id && event.action === "finished") {
+          finished.resolve(event);
+        }
+      },
+    });
+    const callerTurn = createEmbeddedAttemptTranscriptLifecycle({ runId: "caller-turn" });
+
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionKey: callerSessionKey,
+          withTranscriptWrite: (write) => callerTurn.withTranscriptWrite(write),
+        },
+        async () => expectQueuedRunAck(await enqueueRun(state, job.id, "force")),
+      );
+      await callerTurn.dispose();
+      callerTurnEnded.resolve();
+
+      expect(await finished.promise).toMatchObject({ status: "ok" });
+      expect(reportWrites).toEqual(["report"]);
+    } finally {
+      callerTurnEnded.resolve();
       clearCommandLane(CommandLane.Cron);
       resetGatewayWorkAdmission();
     }
@@ -263,6 +324,44 @@ describe("cron service ops regressions", () => {
       }),
     ]);
     clearCommandLane(CommandLane.Cron);
+  });
+
+  it("manual due runs honor retry backoff while force can run the preserved occurrence", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.parse("2026-09-30T09:00:00.000Z");
+    const dueAt = nowMs - 2_000;
+    const job = createDueIsolatedJob({
+      id: "manual-backoff",
+      nowMs,
+      nextRunAtMs: dueAt,
+    });
+    job.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
+    job.state = {
+      nextRunAtMs: dueAt,
+      forcePreservedNextRunAtMs: dueAt,
+      lastRunAtMs: nowMs - 3_000,
+      lastDurationMs: 2_500,
+      lastRunStatus: "error",
+      consecutiveErrors: 1,
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+    const state = createCronRegressionState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      nowMs: () => nowMs,
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "due")).resolves.toEqual({
+      ok: true,
+      ran: false,
+      reason: "not-due",
+    });
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(dueAt);
   });
 
   it("manual cron.run preserves unrelated due jobs but advances already-executed stale slots", async () => {

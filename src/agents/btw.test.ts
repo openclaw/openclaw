@@ -358,7 +358,7 @@ describe("runBtwSideQuestion", () => {
   );
 
   it("keeps model, runtime auth, and stream selection on prepared A after current advances to B", async () => {
-    const cfg = { agents: { entries: { main: { default: true } } } } as never;
+    const cfg = { agents: { entries: { main: {} } } };
     const generationA = createModelGenerationFixture({
       agentDir: state.agentDir(),
       workspaceDir: state.workspaceDir,

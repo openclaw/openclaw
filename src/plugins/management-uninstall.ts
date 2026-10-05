@@ -13,6 +13,7 @@ import { transformConfigFileWithRetry } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { pathMayExistSync } from "../infra/path-existence.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -60,7 +61,6 @@ import {
   applyPluginUninstallDirectoryRemoval,
   formatUninstallActionLabels,
   planPluginUninstall,
-  pluginUninstallTargetExists,
 } from "./uninstall.js";
 
 type UninstallRequest = { pluginId: string; env?: NodeJS.ProcessEnv; keepFiles?: boolean };
@@ -240,7 +240,7 @@ export async function uninstallPluginWithPolicy(
     signal?: AbortSignal;
     applyRuntime?: PluginLifecycleRuntimeApply;
     deferRuntime?: PluginInstallRuntimeDeferral;
-    onPreview?: (preview: PreparedPluginUninstall) => void;
+    onPreview?: (preview: PreparedPluginUninstall) => void | Promise<void>;
     onWarning?: (warning: string) => void;
     onComplete?: (result: PluginUninstallOutcome) => void;
   },
@@ -268,7 +268,7 @@ export async function uninstallPluginWithPolicy(
         return preparation;
       }
       const prepared = preparation.value;
-      params.onPreview?.(prepared);
+      await params.onPreview?.(prepared);
       const uninstall = async (): Promise<Result<PluginUninstallOutcome, string>> => {
         const {
           pluginId,
@@ -342,7 +342,7 @@ export async function uninstallPluginWithPolicy(
           }
           if (
             initialPlan.directoryRemoval &&
-            pluginUninstallTargetExists(initialPlan.directoryRemoval.target)
+            pathMayExistSync(initialPlan.directoryRemoval.target)
           ) {
             const message = `Failed to remove plugin directory ${cli ? shortenHomePath(initialPlan.directoryRemoval.target) : initialPlan.directoryRemoval.target}; the plugin remains disabled and tracked so uninstall can be retried.`;
             throw cli
@@ -432,7 +432,7 @@ export async function uninstallPluginWithPolicy(
         params.deferRuntime?.record({ operation: "uninstall", pluginId, write: committed });
         const warnings = [
           ...(!cli
-            ? collectClawPluginUninstallWarnings({
+            ? await collectClawPluginUninstallWarnings({
                 pluginId,
                 installRecord: installRecords[pluginId],
                 env,
@@ -497,7 +497,7 @@ export async function uninstallPluginWithPolicy(
       return await withClawPackageLifecycleLease(
         { kind: "plugin", source: "clawhub", ref: packageName },
         uninstall,
-        { ...(cli ? {} : { env }), required: true },
+        cli ? undefined : { env },
       );
     },
   );

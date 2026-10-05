@@ -22,7 +22,10 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
-import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import {
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+  CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
+} from "./chat-history-events.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -43,6 +46,7 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   openSessionWorkspacePreview,
+  getSessionWorkspace,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
@@ -204,8 +208,6 @@ export function createPageState(
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
     settings,
-    password: "",
-    onboarding: false,
     assistantName: appConfig.assistantIdentity.name,
     assistantAvatar: null,
     assistantAvatarStatus: null,
@@ -336,13 +338,16 @@ export function createPageState(
       page.dispatchEvent(
         new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
       ),
+    historyRecoveryChanged: () =>
+      page.dispatchEvent(
+        new Event(CHAT_HISTORY_RECOVERY_CHANGED_EVENT, { bubbles: true, composed: true }),
+      ),
     sessionWorkspaceState: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
-  state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
     resetChatScroll(state);
     scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
@@ -587,7 +592,14 @@ export function createPageState(
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
     if (fileTab && content) {
-      openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+      }
     } else {
       state.sidebarContent = content;
     }

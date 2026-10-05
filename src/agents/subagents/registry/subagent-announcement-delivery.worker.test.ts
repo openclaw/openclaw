@@ -13,6 +13,7 @@ import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.j
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worker-operation-admission.js";
 import * as hookRuntime from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore as createDeferred } from "../../../shared/deferred.js";
@@ -22,8 +23,10 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { setTestEnvValue, withEnvAsync } from "../../../test-utils/env.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import * as registryPersistence from "./subagent-registry-persistence.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import * as registryReads from "./subagent-registry-read-cache.js";
 import * as registryRead from "./subagent-registry-read.js";
 import * as registryState from "./subagent-registry-state.js";
@@ -33,6 +36,7 @@ import {
   resumeSubagentRun,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -52,7 +56,6 @@ vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
 }));
 
 const fixture = useSubagentControlFixture();
-const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
 const nativeAnnounce = await vi.importActual<typeof import("../announce/subagent-announce.js")>(
   "../announce/subagent-announce.js",
 );
@@ -135,9 +138,6 @@ async function registerCompletion(
     expectsCompletionMessage: options.expectsCompletionMessage ?? true,
     gatewayContextResolver: () => context,
   });
-  vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-    nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-  );
   return { runId, childSessionKey };
 }
 
@@ -169,7 +169,7 @@ it.each(["announce receipt delete", "announce receipt keep"] as const)(
       createDeferred<Awaited<ReturnType<typeof nativeAnnounce.runSubagentAnnounceFlow>>>();
     let deliveryAllowed: (() => boolean) | undefined;
     const publicationAdmission: boolean[] = [];
-    const stopObserving = nativeState.onSubagentRegistryPersisted(() => {
+    const stopObserving = subscribeSubagentRunChanges("persistence", () => {
       const current = subagentRuns.get(runId);
       if (
         deliveryAllowed &&
@@ -383,11 +383,10 @@ it("defers registered parent delivery until its descendant settles without host 
   });
 });
 
-it("keeps a delivered announcement fenced when its native receipt acknowledgement is lost", async () => {
+it("keeps a delivered announcement fenced when its committed native receipt is unreadable", async () => {
   const run = await registerCompletion("uncertain-announcement-receipt", {
     cleanup: "delete",
   });
-  const entry = subagentRuns.get(run.runId)!;
   const completed = createDeferred<
     { kind: "failed"; error: unknown } | { kind: "returned"; value: string }
   >();
@@ -407,25 +406,47 @@ it("keeps a delivered announcement fenced when its native receipt acknowledgemen
   const worker = vi
     .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
     .mockImplementation((stateContext, operation, options) => {
-      const receiptWrite =
-        !lost && entry.delivery?.status === "delivered" && entry.cleanupCompletedAt === undefined;
+      let admission: SqliteWorkerOperationAdmission | undefined;
+      const createAdmission = options?.createAdmission;
       return nativeWorker.runOpenClawStateWorkerOperation(
         stateContext,
         (scope) =>
           operation({
             async execute(command, executeOptions) {
+              const receiptWrite =
+                !lost &&
+                isSubagentRegistryWriteCommand(command) &&
+                command.input.values.some(
+                  (row) =>
+                    row.run_id === run.runId &&
+                    rowToSubagentRunRecord(row)?.delivery?.status === "delivered",
+                );
               const result = await scope.execute(command, executeOptions);
-              if (receiptWrite && command.type === "subagents.persistChanges") {
+              if (receiptWrite) {
                 lost = true;
+                admission?.service();
+                if (!admission?.committed) {
+                  throw new Error("Delivery receipt has no native commit facts");
+                }
+                Object.defineProperty(admission, "committed", { value: { facts: undefined } });
                 throw new SqliteWorkerError(
-                  "Synthetic lost delivery receipt acknowledgement",
+                  "Synthetic unreadable delivery receipt acknowledgement",
                   "outcome-unknown",
                 );
               }
               return result;
             },
           }),
-        options,
+        {
+          ...options,
+          createAdmission: createAdmission
+            ? (operationAdmission) => {
+                const created = createAdmission(operationAdmission);
+                admission = created.admission;
+                return created;
+              }
+            : undefined,
+        },
       );
     });
   try {
@@ -435,15 +456,19 @@ it("keeps a delivered announcement fenced when its native receipt acknowledgemen
     if (result.kind !== "failed") {
       throw new Error(`Expected uncertain persistence, received ${result.value}`);
     }
-    expect(result.error).toMatchObject({ outcome: "unknown" });
+    expect(result.error).toMatchObject({ outcome: "committed" });
     if (!(result.error instanceof Error)) {
       throw new Error("Expected the retained registry write failure");
     }
-    await fixture.settle();
+    await expect(fixture.settle()).rejects.toMatchObject({
+      name: "AggregateError",
+      message: "Failed to settle subagent cleanup roots",
+      errors: [result.error],
+    });
     expect(lost).toBe(true);
     expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery?.status).toBe("delivered");
-    expect(entry.delivery?.status).toBe("pending");
-    expect(entry.cleanupHandled).toBe(true);
+    expect(subagentRuns.get(run.runId)?.delivery?.status).toBe("pending");
+    expect(subagentRuns.get(run.runId)?.cleanupHandled).toBe(true);
     expect(deliveryAllowed).toBeTypeOf("function");
     expect(() => deliveryAllowed?.()).toThrow(result.error);
     resumeSubagentRun(run.runId);
@@ -458,7 +483,7 @@ it("keeps a delivered announcement fenced when its native receipt acknowledgemen
     worker.mockRestore();
     await fixture.settle();
     await closeOpenClawStateDatabaseAsync();
-    await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
   }
 });
 
@@ -490,7 +515,7 @@ it("refuses an old registered wake after its descendant read outlives a successo
       .spyOn(registryReads, "readCompactSubagentRuns")
       .mockImplementation(async (context) => {
         const result = await nativeReads.readCompactSubagentRuns(context);
-        if (!held && original.cleanupCompletedAt !== undefined) {
+        if (!held && subagentRuns.get(run.runId)?.cleanupCompletedAt !== undefined) {
           held = true;
           // The actual read has released its broker slot before successor registration.
           ready.resolve();
@@ -523,7 +548,13 @@ it("refuses an old registered wake after its descendant read outlives a successo
 
       completeRegistered(run);
       await fixture.settle();
-      expect(mutations).toEqual([{ entry: successor, kind: "complete" }]);
+      expect(
+        mutations.map(({ entry, kind }) => ({
+          runId: entry.runId,
+          generation: entry.generation,
+          kind,
+        })),
+      ).toEqual([{ runId: successor.runId, generation: successor.generation, kind: "complete" }]);
       const completed = loadSubagentRegistryFromSqlite().get(run.runId);
       expect(completed).toMatchObject({
         task: "legitimate successor after the held wake",
@@ -546,7 +577,6 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
   async (change, { signal }) => {
     const run = await registerCompletion("hook-wake-ack");
     const original = subagentRuns.get(run.runId)!;
-    const revoke = await prepareSubagentSessionCleanupRevocation(run.childSessionKey);
     const source = captureOpenClawStateWorkerContext();
     const originalDatabase = openOpenClawStateDatabase({ path: source.admission.databasePath });
     const replacementDir = path.join(fixture.stateDir, "replacement-state");
@@ -558,7 +588,7 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
     fixture.announce.mockImplementation(nativeAnnounce.runSubagentAnnounceFlow);
     const pluginEntered = createDeferred();
     const mutationReady = createDeferred();
-    const stampWaiting = createDeferred();
+    const releaseHook = createDeferred();
     const release = createDeferred();
     fixture.wake.mockImplementation(async (params) => {
       await pluginEntered.promise;
@@ -566,13 +596,13 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
     });
     const ended = vi.fn(async () => {
       pluginEntered.resolve();
-      await mutationReady.promise;
+      await releaseHook.promise;
     });
     const releaseCancelledTest = () => {
       pluginEntered.resolve();
       mutationReady.resolve();
       release.resolve();
-      stampWaiting.reject(signal.reason);
+      releaseHook.resolve();
     };
     signal.addEventListener("abort", releaseCancelledTest, { once: true });
     const { registry, runner } = createHookRunnerWithRegistry([
@@ -580,20 +610,6 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
     ]);
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
     vi.spyOn(hookRuntime, "getGlobalHookRunner").mockReturnValue(runner);
-    const waitForPending = registryPersistence.waitForPendingSubagentRegistryWrites;
-    const waiting = vi
-      .spyOn(registryPersistence, "waitForPendingSubagentRegistryWrites")
-      .mockImplementation((...args) => {
-        const pending = waitForPending(...args);
-        if (ended.mock.calls.length > 0 && args[0].includes(run.runId)) {
-          if (pending) {
-            stampWaiting.resolve();
-          } else {
-            stampWaiting.reject(new Error("Stamp found no pending wake at held acknowledgement"));
-          }
-        }
-        return pending;
-      });
     let held = false;
     const worker = vi
       .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
@@ -607,10 +623,10 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
                 if (
                   !held &&
                   command.type === "sessionDelivery.mutateSubagentCompletion" &&
-                  original.cleanupCompletedAt !== undefined
+                  subagentRuns.get(run.runId)?.cleanupCompletedAt !== undefined
                 ) {
                   held = true;
-                  // The actual wake has committed; its pending-write owner retains the ACK.
+                  // The actual wake has committed; row admission retains its ACK until publication.
                   mutationReady.resolve();
                   await release.promise;
                 }
@@ -622,15 +638,16 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
       );
     try {
       completeRegistered(run);
-      await stampWaiting.promise;
+      await mutationReady.promise;
       expect(ended).toHaveBeenCalledOnce();
-      expect(original.endedHookEmittedAt).toBeUndefined();
+      expect(subagentRuns.get(run.runId)?.endedHookEmittedAt).toBeUndefined();
       const committed = loadSubagentRegistryFromSqlite(originalDatabase).get(run.runId);
       expect(committed?.cleanupCompletedAt).toBeTypeOf("number");
       expect(committed?.requesterSettleWake).toBeUndefined();
       let successor: SubagentRunRecord | undefined;
+      let authorityChange: Promise<unknown> | undefined;
       if (change === "successor") {
-        await registerSubagentRun({
+        authorityChange = registerSubagentRun({
           ...run,
           requesterSessionKey: "agent:main:main",
           requesterAgentId: "main",
@@ -639,15 +656,22 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
           cleanup: "keep",
           expectsCompletionMessage: false,
         });
-        successor = subagentRuns.get(run.runId)!;
-        expect(successor).not.toBe(original);
       } else if (change === "revoked") {
-        revoke();
-        expect(original.execution.suppressSessionEffects).toBe(true);
+        authorityChange = prepareSubagentSessionCleanupRevocation(run.childSessionKey).then(
+          (guard) => guard(),
+        );
       } else if (change === "source switched") {
         setTestEnvValue("OPENCLAW_STATE_DIR", replacementDir);
       }
       release.resolve();
+      await authorityChange;
+      if (change === "successor") {
+        successor = subagentRuns.get(run.runId)!;
+        expect(successor.generation).toBeGreaterThan(original.generation!);
+      } else if (change === "revoked") {
+        expect(subagentRuns.get(run.runId)?.execution.suppressSessionEffects).toBe(true);
+      }
+      releaseHook.resolve();
       await fixture.settle();
       const stored = loadSubagentRegistryFromSqlite(originalDatabase).get(run.runId);
       expect(ended).toHaveBeenCalledOnce();
@@ -660,7 +684,7 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
         await fixture.settle();
         expect(ended).toHaveBeenCalledOnce();
       } else {
-        expect(original.endedHookEmittedAt).toBeUndefined();
+        expect(subagentRuns.get(run.runId)?.endedHookEmittedAt).toBeUndefined();
         expect(stored?.endedHookEmittedAt).toBeUndefined();
         if (successor) {
           expect(subagentRuns.get(run.runId)).toBe(successor);
@@ -673,10 +697,10 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
       }
     } finally {
       release.resolve();
+      releaseHook.resolve();
       await fixture.settle();
       setTestEnvValue("OPENCLAW_STATE_DIR", fixture.stateDir);
       worker.mockRestore();
-      waiting.mockRestore();
       signal.removeEventListener("abort", releaseCancelledTest);
     }
   },

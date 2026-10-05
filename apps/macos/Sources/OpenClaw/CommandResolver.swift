@@ -173,8 +173,8 @@ enum CommandResolver {
         guard FileManager().fileExists(atPath: base.path) else { return [] }
         guard let entries = try? FileManager().contentsOfDirectory(atPath: base.path) else { return [] }
 
-        let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
-            guard let version = RuntimeVersion.from(string: entry),
+        let sorted = entries.compactMap { entry -> (name: String, version: Semver)? in
+            guard let version = RuntimeLocator.parseVersion(entry),
                   RuntimeLocator.isSupportedNodeVersion(version)
             else { return nil }
             return (entry, version)
@@ -182,15 +182,11 @@ enum CommandResolver {
             first.version == second.version ? first.name > second.name : first.version > second.version
         }
 
-        var paths: [String] = []
-        for (entry, _) in sorted {
+        return sorted.compactMap { entry, _ in
             let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
             let node = binDir.appendingPathComponent("node")
-            if FileManager().isExecutableFile(atPath: node.path) {
-                paths.append(binDir.path)
-            }
+            return FileManager().isExecutableFile(atPath: node.path) ? binDir.path : nil
         }
-        return paths
     }
 
     static func findExecutable(named name: String, searchPaths: [String]? = nil) -> String? {
@@ -241,16 +237,12 @@ enum CommandResolver {
         guard FileManager().isReadableFile(atPath: sourceRunner.path) else {
             throw MacNodeHostWorker.WorkerError.unavailable(reason: "Development worker source runner is missing")
         }
-        switch await self.runtimeResolution(searchPaths: searchPaths) {
-        case let .success(runtime):
-            return MacNodeHostWorkerLaunch(
-                command: self.nodeHostWorkerCommand(
-                    prefix: [runtime.path, sourceRunner.path],
-                    desktopSharingEnabled: desktopSharingEnabled),
-                currentDirectoryURL: root)
-        case let .failure(error):
-            throw error
-        }
+        let runtime = try await self.runtimeResolution(searchPaths: searchPaths).get()
+        return MacNodeHostWorkerLaunch(
+            command: self.nodeHostWorkerCommand(
+                prefix: [runtime.path, sourceRunner.path],
+                desktopSharingEnabled: desktopSharingEnabled),
+            currentDirectoryURL: root)
         #else
         throw MacNodeHostWorker.WorkerError.unavailable(reason: "The node worker requires a packaged OpenClaw.app")
         #endif

@@ -19,7 +19,7 @@ const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks()
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function explicitMainRoster() {
-  return { agents: { list: [{ id: "main", default: true }] } };
+  return { agents: { entries: { main: {} } } };
 }
 
 const CODEX_APP_SERVER_TOKEN_REF = {
@@ -393,7 +393,7 @@ describe("secrets runtime snapshot", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: {
             sandbox: {
               mode: "all",
@@ -442,10 +442,8 @@ describe("secrets runtime snapshot", () => {
               ssh: { target: "peter@example.com:22" },
             },
           },
-          list: [
-            {
-              id: "worker",
-              default: true,
+          entries: {
+            worker: {
               enabled: false,
               sandbox: {
                 ssh: {
@@ -457,7 +455,7 @@ describe("secrets runtime snapshot", () => {
                 },
               },
             },
-          ],
+          },
         },
       }),
       env: { DISABLED_WORKER_SSH_IDENTITY: "DISABLED WORKER PRIVATE KEY" },
@@ -465,7 +463,7 @@ describe("secrets runtime snapshot", () => {
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+    expect(snapshot.config.agents?.entries?.worker?.sandbox?.ssh?.identityData).toBe(
       "DISABLED WORKER PRIVATE KEY",
     );
   });
@@ -490,7 +488,6 @@ describe("secrets runtime snapshot", () => {
           },
           entries: {
             worker: {
-              default: true,
               sandbox: {
                 ssh: {
                   identityData: {
@@ -540,7 +537,7 @@ describe("secrets runtime snapshot", () => {
             },
           },
           entries: {
-            cold: { default: true },
+            cold: {},
             healthy: {
               sandbox: {
                 ssh: {
@@ -583,7 +580,7 @@ describe("secrets runtime snapshot", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: {
             sandbox: {
               mode: "all",

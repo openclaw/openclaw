@@ -1,8 +1,8 @@
 AndroidX Wear
 Artifacts:
 - androidx.core:core-splashscreen:1.2.0
-- androidx.wear.compose:compose-foundation:1.6.2
-- androidx.wear.compose:compose-material3:1.6.2
+- androidx.wear.compose:compose-foundation:1.7.0
+- androidx.wear.compose:compose-material3:1.7.0
 - androidx.wear:wear-input:1.2.0
 - androidx.wear.tiles:tiles:1.6.2
 - androidx.wear.protolayout:protolayout:1.4.2

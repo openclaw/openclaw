@@ -103,11 +103,10 @@ function replaceOnboardingAgentEntry(
   } else {
     nextEntries.push(replacement);
   }
-  const { list: _list, entries: _entries, ...agents } = config.agents ?? {};
   return {
     ...updated,
     agents: {
-      ...agents,
+      ...config.agents,
       entries: toAgentEntriesRecord(nextEntries),
     },
   };

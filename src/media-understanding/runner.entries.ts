@@ -110,16 +110,12 @@ function trimOutput(text: string, maxChars?: number): string {
   return truncateUtf16Safe(trimmed, maxChars).trim();
 }
 
-function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } {
-  const noMatch = { matched: false, text: "" };
-  const tryParse = (value: string): { matched: boolean; text: string } => {
+function extractSherpaOnnxText(raw: string): string | undefined {
+  const tryParse = (value: string): string | undefined => {
     const trimmed = value.trim();
-    if (!trimmed) {
-      return noMatch;
-    }
     const head = trimmed[0];
     if (head !== "{" && head !== '"') {
-      return noMatch;
+      return undefined;
     }
     try {
       const parsed = JSON.parse(trimmed) as unknown;
@@ -129,26 +125,26 @@ function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } 
       if (parsed && typeof parsed === "object") {
         const text = (parsed as { text?: unknown }).text;
         if (typeof text === "string") {
-          return { matched: true, text: text.trim() };
+          return text.trim();
         }
       }
     } catch {}
-    return noMatch;
+    return undefined;
   };
 
   const direct = tryParse(raw);
-  if (direct.matched) {
+  if (direct !== undefined) {
     return direct;
   }
 
   const lines = normalizeStringEntries(raw.split("\n"));
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const parsed = tryParse(lines[i] ?? "");
-    if (parsed.matched) {
+    if (parsed !== undefined) {
       return parsed;
     }
   }
-  return noMatch;
+  return undefined;
 }
 
 function commandBase(command: string): string {
@@ -266,8 +262,8 @@ async function resolveCliOutput(params: {
 
   if (commandId === "sherpa-onnx-offline") {
     const response = extractSherpaOnnxText(params.stdout);
-    if (response.matched) {
-      return response.text;
+    if (response !== undefined) {
+      return response;
     }
   }
 
@@ -448,20 +444,6 @@ async function resolveProviderExecutionAuth(params: {
   if (literalApiKey) {
     return apiKeyAuth(literalApiKey, `models.providers.${params.providerId}.apiKey`);
   }
-  const resolveMediaProviderAuth = (): ProviderExecutionAuth | undefined => {
-    const context = {
-      config: params.cfg,
-      provider: params.providerId,
-      providerConfig,
-    };
-    const providerAuth = params.provider?.resolveAuth?.(context);
-    if (providerAuth?.kind === "none") {
-      return providerAuth;
-    }
-    const keyAuth = providerAuth ?? params.provider?.resolveSyntheticAuth?.(context);
-    const apiKey = keyAuth?.apiKey.trim();
-    return apiKey ? apiKeyAuth(apiKey, keyAuth?.source) : undefined;
-  };
   const { isProviderAuthError, requireApiKey, resolveApiKeyForProviderCore } =
     await loadModelAuth();
   try {
@@ -485,9 +467,19 @@ async function resolveProviderExecutionAuth(params: {
     ) {
       throw err;
     }
-    const mediaAuth = resolveMediaProviderAuth();
-    if (mediaAuth) {
-      return mediaAuth;
+    const context = {
+      config: params.cfg,
+      provider: params.providerId,
+      providerConfig,
+    };
+    const providerAuth = params.provider?.resolveAuth?.(context);
+    if (providerAuth?.kind === "none") {
+      return providerAuth;
+    }
+    const keyAuth = providerAuth ?? params.provider?.resolveSyntheticAuth?.(context);
+    const apiKey = keyAuth?.apiKey.trim();
+    if (apiKey) {
+      return apiKeyAuth(apiKey, keyAuth?.source);
     }
     throw err;
   }
@@ -619,7 +611,6 @@ export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
-  ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
   agentId?: string;
@@ -641,12 +632,8 @@ export async function runProviderEntry(params: {
   if (params.secretOwnerId) {
     assertSecretOwnerAvailable("capability", params.secretOwnerId);
   }
-  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
-    capability,
-    entry,
-    cfg,
-    config: params.config,
-  });
+  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } =
+    resolveEntryRunOptions(params);
 
   if (capability === "image") {
     if (!params.agentDir) {
@@ -740,15 +727,12 @@ export async function runProviderEntry(params: {
     // STT prompts are spelling/context hints; injected instructions can be echoed on silence.
     const audioPrompt = params.request?.prompt ?? (hasConfiguredPrompt ? prompt : undefined);
     const transport = resolveProviderRequestContext({
+      ...params,
       providerId,
-      cfg,
-      entry,
-      config: params.config,
     });
     const providerQuery = resolveProviderQuery({
+      ...params,
       providerId,
-      config: params.config,
-      entry,
     });
     const model =
       entry.model?.trim() ||
@@ -791,13 +775,9 @@ export async function runProviderEntry(params: {
         "audio transcription callback",
       );
       const auth = await resolveProviderExecutionAuth({
-        capability,
+        ...params,
         providerId,
         provider,
-        cfg,
-        entry,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
       });
       result = await executeProviderRequest(providerId, auth, (requestAuth) =>
         transcribeAudio({ ...input, ...requestAuth }),
@@ -833,19 +813,13 @@ export async function runProviderEntry(params: {
     );
   }
   const auth = await resolveProviderExecutionAuth({
-    capability,
+    ...params,
     providerId,
     provider,
-    cfg,
-    entry,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
   });
   const { baseUrl, headers, request } = resolveProviderRequestContext({
+    ...params,
     providerId,
-    cfg,
-    entry,
-    config: params.config,
   });
   const model =
     entry.model?.trim() ||
@@ -891,7 +865,7 @@ export async function runCliEntry(params: {
   config?: MediaUnderstandingConfig;
   request?: MediaRequestOverrides;
 }): Promise<MediaUnderstandingOutput | null> {
-  const { entry, capability, cfg, ctx } = params;
+  const { entry, capability, ctx } = params;
   const attachmentIndex = params.attachment.index;
   const cli = resolveCliModelEntry(entry);
   if (!cli.ok) {
@@ -899,12 +873,7 @@ export async function runCliEntry(params: {
   }
   const { command, args } = cli.value;
   const language = params.request?.language ?? entry.language ?? params.config?.language;
-  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
-    capability,
-    entry,
-    cfg,
-    config: params.config,
-  });
+  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions(params);
   const attachmentPath = await params.cache.getPath({
     attachmentIndex,
     maxBytes,

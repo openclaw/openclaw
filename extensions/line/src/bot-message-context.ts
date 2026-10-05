@@ -98,13 +98,9 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
     return { userId: undefined, groupId: undefined, roomId: undefined, isGroup: false };
   }
   const userId =
-    source.type === "user"
+    source.type === "user" || source.type === "group" || source.type === "room"
       ? source.userId
-      : source.type === "group"
-        ? source.userId
-        : source.type === "room"
-          ? source.userId
-          : undefined;
+      : undefined;
   const groupId = source.type === "group" ? source.groupId : undefined;
   const roomId = source.type === "room" ? source.roomId : undefined;
   const isGroup = source.type === "group" || source.type === "room";

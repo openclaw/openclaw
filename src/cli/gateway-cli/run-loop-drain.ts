@@ -5,6 +5,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { beginGatewayShutdownCleanup } from "../../process/gateway-work-admission.js";
 import type { GatewayRunSignalAction, GatewayRunSignalRequest } from "./run-loop-request.js";
 import { formatDrainCounts, formatShutdownReason } from "./run-loop-shutdown-format.js";
 
@@ -109,6 +110,7 @@ export async function drainGatewayActiveWork({
     }
     logger.info("active-work drain settled; beginning server close");
   }
+  beginGatewayShutdownCleanup();
 }
 
 function createGatewayDrainReporter(

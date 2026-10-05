@@ -9,9 +9,11 @@ import {
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
+import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  prepareGatewayToolCallerAssertion,
 } from "./gateway-caller-context.js";
 import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
@@ -47,7 +49,6 @@ export async function startSessionsSendFollowup(
         targetAgentId: request.targetAgentId,
         requesterAgentId: request.requesterAgentId,
         requesterSessionKey: request.requesterSessionKey,
-        maxPingPongTurns: 0,
         replyMode: "one-way",
         notifyRequesterOnWaitFailure: true,
       });
@@ -73,28 +74,33 @@ export async function startSessionsSendFollowup(
   return { start, completion };
 }
 
-/** Dispatch and acceptance share one owner for watched completion and state-watch installation. */
+/** Accepted child followups belong to the same completion owner as spawned work. */
 export async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
   replyContext: Parameters<typeof startSessionsSendFollowup>[2],
   options: {
+    message: string;
     ownChild: boolean;
     nativeChild: boolean;
     watch: boolean;
     requesterSessionKey: string;
     requesterAgentId: string;
     requesterTurnRunId?: string;
+    targetSession?: AgentStepSession;
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
 ) {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const completionChild = options.watch
-    ? getLatestLiveSubagentRunByChildSessionKey(params.sessionStoreTarget.canonicalKey)
+    ? getLatestLiveSubagentRunByChildSessionKey(
+        params.sessionStoreTarget.canonicalKey,
+        undefined,
+        params.sessionStoreTarget.agentId,
+      )
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
-  const watchedTurn =
-    options.watch &&
+  const requesterTurn =
     params.allowActiveRunQueueDelivery &&
     !params.expectedSessionId &&
     options.nativeChild &&
@@ -106,10 +112,15 @@ export async function dispatchSessionsSendFollowup(
         completionChild.expectsCompletionMessage === true))
       ? options.requesterTurnRunId
       : undefined;
+  if (requesterTurn && !replyContext.requesterSession) {
+    throw new Error("Child followup completion requires its original requester session.");
+  }
   const active = await trySessionsSendActiveRunDelivery(params, options.ownChild);
+  const completionTurn =
+    options.watch || (options.ownChild && !("ok" in active)) ? requesterTurn : undefined;
   const request =
     !("ok" in active) &&
-    (watchedTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
+    (completionTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
     sameRequester
       ? await prepareSessionsSendFollowup({
           runId: params.runId,
@@ -130,18 +141,19 @@ export async function dispatchSessionsSendFollowup(
     "ok" in active
       ? { start: active, completion: undefined }
       : await startSessionsSendFollowup(
-          watchedTurn ? undefined : request,
+          completionTurn ? undefined : request,
           {
             ...params,
             ...active,
-            ...(watchedTurn
+            ...(completionTurn
               ? {
                   retainAcceptance: true,
                   assertDispatchCurrent: () => {
                     if (!admissionOpen) {
-                      throw new Error("Watched followup admission was closed.");
+                      throw new Error("Child followup admission was closed.");
                     }
                     assertCurrent();
+                    params.assertDispatchCurrent?.();
                   },
                 }
               : {}),
@@ -149,7 +161,7 @@ export async function dispatchSessionsSendFollowup(
           replyContext,
         );
   try {
-    if (start.ok && watchedTurn) {
+    if (start.ok && completionTurn) {
       const { registerSubagentRun, adoptSubagentRunForRequesterTurn } =
         await import("../subagents/registry/subagent-registry.js");
       // Acceptance already owns the input; retained custody owns recording its result obligation.
@@ -164,6 +176,7 @@ export async function dispatchSessionsSendFollowup(
             ? getLatestLiveSubagentRunByChildSessionKey(
                 childSessionKey,
                 (entry) => entry.runId === start.steeredRunId,
+                params.sessionStoreTarget.agentId,
               )
             : undefined;
           if (expected) {
@@ -171,7 +184,7 @@ export async function dispatchSessionsSendFollowup(
               expected,
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: watchedTurn,
+              requesterTurnRunId: completionTurn,
               assertCurrent: assertCompletionCurrent,
             });
           }
@@ -185,21 +198,26 @@ export async function dispatchSessionsSendFollowup(
             {
               runId: start.runId,
               childSessionKey,
+              sessionEntry: options.targetSession,
               childAgentId: params.sessionStoreTarget.agentId,
               requesterSessionKey: options.requesterSessionKey,
               requesterDisplayKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: watchedTurn,
+              requesterTurnRunId: completionTurn,
               requesterOrigin: replyContext.requesterOrigin,
-              task: replyContext.message,
+              task: options.message,
               cleanup: "keep",
               spawnMode: "session",
               expectsCompletionMessage: true,
+              completionTarget: "parent",
+              completionRequesterSessionId: replyContext.requesterSession?.sessionId,
+              completionRequesterLifecycleRevision:
+                replyContext.requesterSession?.lifecycleRevision,
             },
             {
               assertCurrent: assertCompletionCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
-              persistence: "worker",
+              acceptedRunReplay: true,
             },
           );
           accepted = { runId: start.runId, childSessionKey, expectsCompletionMessage: true };
@@ -214,7 +232,7 @@ export async function dispatchSessionsSendFollowup(
     }
   } catch (error) {
     let failure = error;
-    if (start.ok && watchedTurn) {
+    if (start.ok && completionTurn) {
       const runId = start.targetDisposition === "steered" ? start.steeredRunId : start.runId;
       if (runId && instance) {
         try {
@@ -253,30 +271,35 @@ export async function dispatchSessionsSendFollowup(
     };
   } finally {
     admissionOpen = false;
-    if (watchedTurn) {
+    if (completionTurn) {
       request?.custody.release();
     }
   }
   const targetSessionKey = start.ok
     ? (start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey)
     : undefined;
-  const watched =
+  let watched = false;
+  if (
     start.ok &&
     options.watch &&
     !params.expectedSessionId &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey
-      ? registerSessionStateWatch({
-          watcherSessionKey: replyContext.requesterSessionKey,
-          targetSessionKey,
-          targetAgentId: params.sendParams.agentId,
-        })
-      : false;
+  ) {
+    watched = await registerSessionStateWatch(
+      {
+        watcherSessionKey: replyContext.requesterSessionKey,
+        targetSessionKey,
+        targetAgentId: params.sendParams.agentId,
+      },
+      { prepareCurrent: prepareGatewayToolCallerAssertion },
+    );
+  }
   return {
     start,
     completion,
-    registryCompletion: Boolean(start.ok && watchedTurn),
+    registryCompletion: Boolean(start.ok && completionTurn),
     watchField: options.watch ? { watched } : {},
   };
 }

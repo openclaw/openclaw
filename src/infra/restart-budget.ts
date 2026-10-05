@@ -21,6 +21,5 @@ export function resolveGatewayRestartDrainTimeoutMs(intent?: GatewayRestartInten
   const waitMs =
     intent?.waitMs ??
     (intent?.force ? GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS - reserveMs : undefined);
-  const exhausted = intent?.drainBudgetExhausted || (intent?.force && waitMs === 0);
-  return exhausted ? 0 : resolveGatewayRestartDeferralTimeoutMs(waitMs);
+  return intent?.force && waitMs === 0 ? 0 : resolveGatewayRestartDeferralTimeoutMs(waitMs);
 }

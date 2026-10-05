@@ -26,6 +26,7 @@ type DevicePairingMutationContext = {
 
 export function devicePairingMutation<Input, Result>(
   operation: (input: Input, context: DevicePairingMutationContext) => Result,
+  { publishPairing = true }: { publishPairing?: boolean } = {},
 ) {
   return (input: Input, { open }: WorkerOperationContext): Result => {
     const database = open();
@@ -33,7 +34,9 @@ export function devicePairingMutation<Input, Result>(
       () =>
         withDevicePairingStoreDatabase(database, () =>
           withDevicePairingMutationAdmission(() => {
-            const before = readPairedDevicePairingRecordsFromDatabase(database.db);
+            const before = publishPairing
+              ? readPairedDevicePairingRecordsFromDatabase(database.db)
+              : undefined;
             let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
             let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
             const result = operation(input, {
@@ -45,6 +48,9 @@ export function devicePairingMutation<Input, Result>(
                 workerEnvironment = facts;
               },
             });
+            if (!before) {
+              return result;
+            }
             const after = readPairedDevicePairingRecordsFromDatabase(database.db);
             const changed: DevicePairingCommitReceipt["changed"] = [];
             for (const deviceId of new Set([...Object.keys(before), ...Object.keys(after)])) {

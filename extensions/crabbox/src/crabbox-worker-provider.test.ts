@@ -302,7 +302,7 @@ describe("Crabbox worker provider", () => {
         ]);
         expect(warmup).not.toContain("--windows-mode");
       } else {
-        expect(warmup).not.toContain("--target");
+        expect(warmup.join(" ")).toContain("--target linux");
         expect(warmup).not.toContain("--windows-mode");
       }
     },
@@ -746,7 +746,7 @@ describe("Crabbox worker provider", () => {
     {
       name: "cannot start",
       result: undefined,
-      message: "Crabbox profile setup could not start",
+      message: "Crabbox profile setup execution failed",
     },
   ])(
     "stops the lease and removes its private env profile when setup $name",
@@ -937,8 +937,8 @@ describe("Crabbox worker provider", () => {
         return commandResult({
           stdout: [
             "node-runtime=installed-source-artifact node-pid=alive node.log tail:",
-            `gateway rejected websocket upgrade (HTTP 403): proxy_attribution_required token=${pairingSecret}`,
             "😀".repeat(800),
+            `gateway rejected websocket upgrade (HTTP 403): proxy_attribution_required token=${pairingSecret}`,
           ].join(" "),
         });
       }
@@ -972,7 +972,7 @@ describe("Crabbox worker provider", () => {
     expect(calls.slice(-2).map(({ argv }) => argv[1])).toEqual(["run", "stop"]);
   });
 
-  it("preserves enrollment failure when diagnostic collection cannot start", async () => {
+  it("preserves enrollment failure when diagnostic collection fails", async () => {
     const calls: string[] = [];
     const provider = providerWithRunner(async (argv, options) => {
       calls.push(argv[1]!);
@@ -986,9 +986,9 @@ describe("Crabbox worker provider", () => {
       provider.provision(PROFILE, OPERATION_ID, failedNodeEnrollment(cause)),
     ).rejects.toMatchObject({
       provisionError: { cause },
-      message:
-        cause.message +
-        "; box evidence unavailable: Crabbox enrollment diagnostics could not start",
+      message: expect.stringContaining(
+        `${cause.message}; box evidence unavailable: Crabbox enrollment diagnostics execution failed: spawn failed token=`,
+      ),
     });
     expect(calls.slice(-2)).toEqual(["run", "stop"]);
   });
@@ -1528,7 +1528,7 @@ describe("Crabbox worker provider", () => {
       fail: () => {
         throw new Error("transport unavailable");
       },
-      warning: "Crabbox heartbeat could not start",
+      warning: "Crabbox heartbeat execution failed: transport unavailable",
     },
     {
       name: "claim conflict",
@@ -1645,7 +1645,7 @@ describe("Crabbox worker provider", () => {
     await expect(ambiguousVisibility.inspect(lease)).rejects.toThrow(
       "inspect failed with exit code 4",
     );
-    await expect(cliMissing.inspect(lease)).rejects.toThrow("inspect could not start");
+    await expect(cliMissing.inspect(lease)).rejects.toThrow("execution failed: spawn ENOENT");
   });
 
   it.each([

@@ -22,7 +22,7 @@ function preparePluginRuntime(generation: number, execute = () => jsonResult({ g
   registry.plugins.push(record);
   registries.push(registry);
   const instance = new PluginInstance("probe", { record, registry });
-  const createTools = instance.wrap(() => [
+  const createTools = instance.wrap(async () => [
     {
       name: "probe",
       label: "Probe",
@@ -84,7 +84,7 @@ describe("automation plugin reload recovery", () => {
       const { prepared, instance } = preparePluginRuntime(++generation);
       return {
         ...prepared,
-        createTools: (...args: Parameters<PreparedRuntime["createTools"]>) => {
+        createTools: async (...args: Parameters<PreparedRuntime["createTools"]>) => {
           if (repeat || generation === 1) {
             instance.quiesce();
           }

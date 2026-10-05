@@ -7,26 +7,27 @@ import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { decodeXml } from "../src/shared/xml.ts";
-import { collectToolDisplaySources, selectDeterministicTranslation } from "./android-app-i18n.ts";
+import {
+  collectToolDisplaySources,
+  findClosingDelimiter,
+  lineNumber,
+  selectDeterministicTranslation,
+} from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
+import {
+  type NativeI18nInventoryEntry,
+  type NativeI18nSite,
+  type NativeI18nSurface,
+  serializeNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
-
-type NativeI18nSurface = "android" | "apple";
 
 export { NATIVE_I18N_LOCALES };
 
-export type NativeI18nEntry = {
-  id: string;
-  source: string;
-  surface: NativeI18nSurface;
-  sites: NativeI18nSite[];
+export type NativeI18nEntry = NativeI18nInventoryEntry & {
   /** Request-only owner excerpt; never persisted in the source inventory. */
   sourceContext?: string;
-};
-
-export type NativeI18nSite = {
-  kind: string;
-  path: string;
 };
 
 type NativeInterpolation = {
@@ -394,52 +395,6 @@ function extractKotlinInterpolations(source: string): NativeInterpolation[] | nu
     }
   }
   return values;
-}
-
-function compareCodePoints(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function lineNumber(source: string, offset: number): number {
-  return source.slice(0, offset).split("\n").length;
-}
-
-function findClosingDelimiter(
-  source: string,
-  openingIndex: number,
-  opening: string,
-  closing: string,
-): number | null {
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = openingIndex; index < source.length; index += 1) {
-    const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
-      continue;
-    }
-    if (character === opening) {
-      depth += 1;
-    } else if (character === closing) {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return null;
 }
 
 function readMultilineStringLiteral(
@@ -1133,23 +1088,22 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">)
 }
 
 export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
-  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
-  const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
+  const entriesByIdentity = new Map<
+    string,
+    { source: string; surface: NativeI18nSurface; sites: Map<string, Candidate> }
+  >();
   for (const candidate of entries) {
     const identity = nativeEntryIdentity(candidate);
-    entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
-    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
-    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
-    sitesByIdentity.set(identity, sites);
+    let entry = entriesByIdentity.get(identity);
+    if (!entry) {
+      entry = { source: candidate.source, surface: candidate.surface, sites: new Map() };
+      entriesByIdentity.set(identity, entry);
+    }
+    entry.sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
   }
-  return [...entryByIdentity]
+  return [...entriesByIdentity]
     .map(([identity, entry]) => {
-      const sites = [
-        ...expectDefined(
-          sitesByIdentity.get(identity),
-          `native i18n sites for ${identity}`,
-        ).values(),
-      ].toSorted(
+      const sites = [...entry.sites.values()].toSorted(
         (left, right) =>
           compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
       );
@@ -1169,27 +1123,15 @@ export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEn
     );
 }
 
-async function readNativeI18nInventory(): Promise<{
-  raw: string;
-}> {
-  let raw: string;
+async function readNativeI18nInventory(): Promise<string> {
   try {
-    raw = await readFile(OUTPUT_PATH, "utf8");
+    return await readFile(OUTPUT_PATH, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { raw: "" };
+      return "";
     }
     throw error;
   }
-
-  const parsed: unknown = JSON.parse(raw);
-  if (!isRecord(parsed)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.entries)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  return { raw };
 }
 
 export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
@@ -1266,31 +1208,15 @@ export function collectNativeI18nEntriesFromSources(
   return assignNativeI18nIds(entries);
 }
 
-export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]): string {
-  return [
-    "{",
-    '  "version": 2,',
-    '  "entries": [',
-    ...entries.map(
-      ({ id, source, surface, sites }, index) =>
-        `    ${JSON.stringify({ id, source, surface, sites })}${index === entries.length - 1 ? "" : ","}`,
-    ),
-    "  ]",
-    "}",
-    "",
-  ].join("\n");
-}
-
 async function syncNativeI18n(options: {
   checkInventory: boolean;
   checkLocales: boolean;
   reportObsolete?: (message: string) => void;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
-  const currentInventory = await readNativeI18nInventory();
+  const current = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries();
   const expected = serializeNativeI18nInventory(entries);
-  const current = currentInventory.raw;
   if (options.checkInventory && current !== expected) {
     throw new Error(
       "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",

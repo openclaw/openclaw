@@ -68,7 +68,7 @@ import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/wo
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 const root = path.resolve("/synthetic-project-state");
 const project: ProjectRegistryRecord = {

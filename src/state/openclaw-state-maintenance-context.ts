@@ -36,7 +36,7 @@ export type OpenClawDatabaseMaintenanceScope = {
     phase: MaintenanceResource["phase"],
     close: MaintenanceResource["close"],
   ): void;
-  close(): Promise<void>;
+  close(beforeResources?: () => void | Promise<void>): Promise<void>;
 };
 
 const liveAuthorityReads = resolveGlobalSingleton(

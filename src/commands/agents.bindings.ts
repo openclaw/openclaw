@@ -34,20 +34,6 @@ function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   ]);
 }
 
-function canUpgradeBindingAccountScope(params: {
-  existing: AgentRouteBinding;
-  incoming: AgentRouteBinding;
-  normalizedIncomingAgentId: string;
-}): boolean {
-  return (
-    Boolean(normalizeOptionalString(params.incoming.match.accountId)) &&
-    !normalizeOptionalString(params.existing.match.accountId) &&
-    normalizeAgentId(params.existing.agentId) === params.normalizedIncomingAgentId &&
-    bindingMatchIdentityKey(params.existing.match) ===
-      bindingMatchIdentityKey(params.incoming.match)
-  );
-}
-
 export function applyAgentBindings(
   cfg: OpenClawConfig,
   bindings: AgentRouteBinding[],
@@ -86,13 +72,14 @@ export function applyAgentBindings(
       continue;
     }
 
-    const upgradeIndex = existingRoutes.findIndex((candidate) =>
-      canUpgradeBindingAccountScope({
-        existing: candidate,
-        incoming: binding,
-        normalizedIncomingAgentId: agentId,
-      }),
-    );
+    const upgradeIndex = normalizeOptionalString(binding.match.accountId)
+      ? existingRoutes.findIndex(
+          (candidate) =>
+            !normalizeOptionalString(candidate.match.accountId) &&
+            normalizeAgentId(candidate.agentId) === agentId &&
+            bindingMatchIdentityKey(candidate.match) === bindingMatchIdentityKey(binding.match),
+        )
+      : -1;
     if (upgradeIndex >= 0) {
       const current = existingRoutes[upgradeIndex];
       if (!current) {
@@ -155,12 +142,11 @@ export function removeAgentBindings(
     const key = bindingMatchKey(binding.match);
     let matchedIndex = -1;
     let conflictingAgentId: string | null = null;
-    for (let i = 0; i < existingRoutes.length; i += 1) {
+    for (const [i, current] of existingRoutes.entries()) {
       if (removeIndexes.has(i)) {
         continue;
       }
-      const current = existingRoutes[i];
-      if (!current || bindingMatchKey(current.match) !== key) {
+      if (bindingMatchKey(current.match) !== key) {
         continue;
       }
       const currentAgentId = normalizeAgentId(current.agentId);
@@ -202,14 +188,6 @@ export function removeAgentBindings(
   };
 }
 
-function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
-  const plugin = getBindingChannelPlugin(provider);
-  if (!plugin) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return resolveChannelDefaultAccountId({ plugin, cfg });
-}
-
 function getBindingChannelPlugin(channel: ChannelId) {
   return getLoadedChannelPlugin(channel) ?? getBundledChannelSetupPlugin(channel);
 }
@@ -241,7 +219,7 @@ function resolveBindingAccountId(params: {
   }
 
   if (plugin?.meta.forceAccountBinding) {
-    return resolveDefaultAccountId(params.config, params.channel);
+    return resolveChannelDefaultAccountId({ plugin, cfg: params.config });
   }
 
   return undefined;

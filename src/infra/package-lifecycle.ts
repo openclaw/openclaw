@@ -10,6 +10,7 @@ import {
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { asFsSafeFileLockRoot, createFileLockManager } from "./file-lock-manager.js";
 import { root } from "./fs-safe.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 
 const PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH = ".openclaw-lifecycle-lock";
 const DEFAULT_PACKAGE_LIFECYCLE_SCRIPT_TIMEOUT_MS = 20 * 60_000;
@@ -70,10 +71,6 @@ const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
     relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
   },
 ];
-function resolveLifecycleBudgetMs(scriptTimeoutMs: number): number {
-  return scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length;
-}
-
 function hasErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
 }
@@ -162,7 +159,7 @@ async function acquireLifecycleLock(
 ) {
   // Preserve the shipped admission envelope without timing or expiring healthy script work.
   const waitBudgetMs =
-    resolveLifecycleBudgetMs(scriptTimeoutMs) + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
+    scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
   if (!Number.isFinite(scriptTimeoutMs) || scriptTimeoutMs < 0 || !Number.isFinite(waitBudgetMs)) {
     throw new RangeError("Package lifecycle script timeout must be finite and non-negative");
   }
@@ -265,7 +262,7 @@ function runPackageLifecycleScript(
   timeoutMs: number,
 ): void {
   const scriptPath = path.join(packageRoot, script.relativePath);
-  const result = spawnSync(process.execPath, [scriptPath], {
+  const result = spawnSync(process.execPath, [...resolveRuntimeArgs(), scriptPath], {
     cwd: packageRoot,
     env: process.env,
     stdio: "inherit",

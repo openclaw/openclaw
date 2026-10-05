@@ -10,6 +10,7 @@ import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
@@ -54,15 +55,10 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { TypingController } from "./typing.js";
 
-type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
-type SkillToolDispatchDependencies = Parameters<
-  SkillToolDispatchRuntime["resolveSkillDispatchTools"]
->[1];
-
 const skillCommandsRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-const skillToolDispatchRuntimeLoader = createLazyImportLoader<SkillToolDispatchRuntime>(
+const skillToolDispatchRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
@@ -174,7 +170,6 @@ export async function handleInlineActions(params: {
   directiveAck?: ReplyPayload;
   abortedLastRun: boolean;
   skillFilter?: string[];
-  skillToolDispatchDependencies?: SkillToolDispatchDependencies;
 }): Promise<InlineActionResult> {
   const {
     ctx,
@@ -246,19 +241,18 @@ export async function handleInlineActions(params: {
   let skillSelections: ExplicitSkillSelection[] | undefined;
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && targetSessionEntry) {
+  if (targetSessionEntry && !isAbortRequestText(command.rawBodyNormalized)) {
     const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
-    const shouldSkip = cutoff
-      ? shouldSkipMessageByAbortCutoff({
-          cutoffMessageSid: cutoff.messageSid,
-          cutoffTimestamp: cutoff.timestamp,
-          messageSid: incoming?.messageSid,
-          timestamp: incoming?.timestamp,
-        })
-      : false;
-    if (shouldSkip) {
+    if (
+      cutoff &&
+      shouldSkipMessageByAbortCutoff({
+        cutoffMessageSid: cutoff.messageSid,
+        cutoffTimestamp: cutoff.timestamp,
+        messageSid: incoming?.messageSid,
+        timestamp: incoming?.timestamp,
+      })
+    ) {
       const runState = resolveReplyOperationRunState(opts);
       if (runState) {
         // The stop owner cancelled this queued input; no answer remains due.
@@ -281,13 +275,12 @@ export async function handleInlineActions(params: {
     }
   }
 
-  const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.channelId
     ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&
-    isEmptyConfig &&
+    Object.keys(cfg).length === 0 &&
     command.from &&
     command.to &&
     command.from !== command.to
@@ -338,7 +331,7 @@ export async function handleInlineActions(params: {
       : skillCommands;
 
   const skillInvocation =
-    allowTextCommands && skillCommands.length > 0
+    skillCommands.length > 0
       ? resolveSkillCommandInvocation({
           commandBodyNormalized: command.commandBodyNormalized,
           skillCommands,
@@ -356,9 +349,14 @@ export async function handleInlineActions(params: {
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies =
-        params.skillToolDispatchDependencies ?? (await import("../../agents/openclaw-tools.js"));
-      const authorizedTools = resolveSkillDispatchTools(
+      const dependencies = await import("../../agents/openclaw-tools.js");
+      const { hasAnyAuthProfileStoreSourceAsync } =
+        await import("../../agents/auth-profiles/source-check.js");
+      const authSourceAgentDir = agentDir?.trim();
+      const authProfileStoreSource = authSourceAgentDir
+        ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
+        : false;
+      const authorizedTools = await resolveSkillDispatchTools(
         {
           message: {
             surface: ctx.Surface,
@@ -377,6 +375,7 @@ export async function handleInlineActions(params: {
           cfg,
           agentId,
           agentDir,
+          authProfileStoreSource,
           sessionEntry: targetSessionEntry,
           sessionKey,
           workspaceDir,
@@ -415,11 +414,32 @@ export async function handleInlineActions(params: {
         };
         opts?.abortSignal?.throwIfAborted();
         if (opts?.runId) {
+          const transcriptStart =
+            opts.onAgentRunStart && params.sessionEntry?.sessionId
+              ? await (
+                  await import("../../config/sessions/session-transcript-watermark.js")
+                ).readSessionTranscriptStartAsync({
+                  agentId: params.agentId,
+                  sessionId: params.sessionEntry.sessionId,
+                  sessionKey: params.sessionKey,
+                  storePath:
+                    params.storePath ??
+                    resolveSessionStorePathCore(params.cfg.session?.store, {
+                      agentId: params.agentId,
+                    }),
+                })
+              : null;
+          opts.abortSignal?.throwIfAborted();
           // Tool commands leave transcript persistence with ordinary reply dispatch.
-          opts.onAgentRunStart?.(opts.runId, undefined, {
-            completionSource: "reply-dispatch",
-            getResult: () => ({}),
-          });
+          opts.onAgentRunStart?.(
+            opts.runId,
+            undefined,
+            {
+              completionSource: "reply-dispatch",
+              getResult: () => ({}),
+            },
+            transcriptStart,
+          );
         }
         // The execution owner can observe revocation while arming cancellation.
         opts?.abortSignal?.throwIfAborted();

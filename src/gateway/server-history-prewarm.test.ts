@@ -32,38 +32,45 @@ beforeEach(() => {
   }));
 });
 
-it("warms existing configured stores and skips absent databases", async () => {
-  mocks.stat.mockRejectedValueOnce(Object.assign(new Error("absent"), { code: "ENOENT" }));
-  await prewarmGatewaySessionHistory(config);
-  expect(mocks.prepare.mock.calls.map(([storePath]) => storePath)).toEqual([
-    "/synthetic/main/sessions.json",
-    "/synthetic/research/sessions.json",
-  ]);
-  expect(mocks.prewarm).toHaveBeenCalledExactlyOnceWith({
-    agentId: "research",
-    path: "/synthetic/research/openclaw-agent.sqlite",
-  });
-});
-
-it("does no store discovery for warm connections or cancelled work", async () => {
-  mocks.cold.mockReturnValue(false);
-  await prewarmGatewaySessionHistory(config, { onlyIfCold: true });
-  await prewarmGatewaySessionHistory(config, { isCancelled: () => true });
-  expect(mocks.prepare).not.toHaveBeenCalled();
-  expect(mocks.stat).not.toHaveBeenCalled();
-  expect(mocks.prewarm).not.toHaveBeenCalled();
-});
-
-it("continues after discovery failure and rechecks cancellation after discovery", async () => {
-  mocks.prepare.mockRejectedValueOnce(new Error("store unavailable"));
-  await expect(prewarmGatewaySessionHistory(config)).resolves.toBeUndefined();
-  expect(mocks.prewarm).toHaveBeenCalledOnce();
-  mocks.prewarm.mockClear();
-  let cancelled = false;
-  mocks.stat.mockImplementationOnce(async () => {
-    cancelled = true;
-    return { isFile: () => true };
-  });
-  await prewarmGatewaySessionHistory(config, { isCancelled: () => cancelled });
-  expect(mocks.prewarm).not.toHaveBeenCalled();
-});
+it.each(["absent", "unavailable", "warm", "cancelled", "cancelled after discovery"])(
+  "prewarms only eligible stores when the first store is %s",
+  async (scenario) => {
+    let cancelled = scenario === "cancelled";
+    if (scenario === "absent") {
+      mocks.stat.mockRejectedValueOnce(Object.assign(new Error("absent"), { code: "ENOENT" }));
+    } else if (scenario === "unavailable") {
+      mocks.prepare.mockRejectedValueOnce(new Error("store unavailable"));
+    } else if (scenario === "warm") {
+      mocks.cold.mockReturnValue(false);
+    } else if (scenario === "cancelled after discovery") {
+      mocks.stat.mockImplementationOnce(async () => {
+        cancelled = true;
+        return { isFile: () => true };
+      });
+    }
+    await expect(
+      prewarmGatewaySessionHistory(config, {
+        onlyIfCold: scenario === "warm",
+        isCancelled: () => cancelled,
+      }),
+    ).resolves.toBeUndefined();
+    const skipped = scenario === "warm" || scenario === "cancelled";
+    const discovered = skipped
+      ? []
+      : scenario === "cancelled after discovery"
+        ? ["/synthetic/main/sessions.json"]
+        : ["/synthetic/main/sessions.json", "/synthetic/research/sessions.json"];
+    expect(mocks.prepare.mock.calls.map(([storePath]) => storePath)).toEqual(discovered);
+    if (scenario === "absent" || scenario === "unavailable") {
+      expect(mocks.prewarm).toHaveBeenCalledExactlyOnceWith({
+        agentId: "research",
+        path: "/synthetic/research/openclaw-agent.sqlite",
+      });
+    } else {
+      expect(mocks.prewarm).not.toHaveBeenCalled();
+    }
+    if (skipped) {
+      expect(mocks.stat).not.toHaveBeenCalled();
+    }
+  },
+);

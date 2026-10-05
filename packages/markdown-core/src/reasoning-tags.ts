@@ -255,7 +255,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     output: ReasoningTagTextDelta[],
     parsedCodeSpans?: Array<[number, number]>,
     parsedRetainStart?: number,
-  ): boolean => {
+  ): void => {
     const previousBlockStart = blockStart;
     let blockCodeSpans = parsedCodeSpans;
     let blockRetainStart = parsedRetainStart;
@@ -274,26 +274,26 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     };
     if (end <= blockStart) {
       finalizePending();
-      return true;
+      return;
     }
     if (end <= emitted) {
       finalizePending();
       blockStart = end;
       fastPathCheckedThrough = Math.max(fastPathCheckedThrough, end);
-      return true;
+      return;
     }
     emitSafePrefix(end, output);
     if (holdStart !== undefined && holdStart < end) {
       const held = source.slice(holdStart, end);
       if (!final) {
         if (pendingTagProbe && !pendingTagProbe.resolved) {
-          return false;
+          return;
         }
         pendingTagProbe = undefined;
         const pendingStart = scanReasoningTags(held, false).pendingStart;
         if (pendingStart !== undefined) {
           startPendingTagProbe(holdStart + pendingStart, end);
-          return false;
+          return;
         }
       }
       const block = source.slice(0, end);
@@ -354,7 +354,6 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
       // Drop it so block-incremental parsing stays bounded; containers retain their prefix.
       compactCommittedSource(blockRetainStart ?? 0);
     }
-    return true;
   };
 
   const consume = (appended: string, strict: boolean, final: boolean) => {
@@ -510,7 +509,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         const codeSpans = ownership.codeSpans;
         nonFinalRetainStart = ownership.retainStart;
         nonFinalOpenEndedCode = codeSpans.some(([, spanEnd]) => spanEnd === source.length);
-        if (!codeSpans.some(([, spanEnd]) => spanEnd === source.length)) {
+        if (!nonFinalOpenEndedCode) {
           compactCommittedSource(ownership.retainStart);
         }
       }

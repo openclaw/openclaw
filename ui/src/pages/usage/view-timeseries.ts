@@ -68,12 +68,12 @@ export function renderTimeSeriesCompact(
     `;
   }
 
-  let points = timeSeries.points;
-  if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
+  let rangePoints = timeSeries.points;
+  if (startDate || endDate || selectedDays.length > 0) {
     const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
     const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
-    const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
-    points = timeSeries.points.filter((p) => {
+    const selectedDaySet = selectedDays.length ? new Set(selectedDays) : undefined;
+    rangePoints = timeSeries.points.filter((p) => {
       if (p.timestamp < startTs || p.timestamp >= endTs) {
         return false;
       }
@@ -83,7 +83,7 @@ export function renderTimeSeriesCompact(
       return true;
     });
   }
-  if (points.length < 2) {
+  if (rangePoints.length < 2) {
     return html`
       <div class="session-timeseries-compact">
         ${refreshStatus}
@@ -93,10 +93,24 @@ export function renderTimeSeriesCompact(
   }
   let cumTokens = 0,
     cumCost = 0;
-  points = points.map((p) => {
+  const isCumulative = mode === "cumulative";
+  const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
+  const points = rangePoints.map((p) => {
     cumTokens += p.totalTokens;
     cumCost += p.cost;
-    return { ...p, cumulativeTokens: cumTokens, cumulativeCost: cumCost };
+    return {
+      timestamp: p.timestamp,
+      input: p.input,
+      output: p.output,
+      cacheRead: p.cacheRead,
+      cacheWrite: p.cacheWrite,
+      cost: p.cost,
+      value: isCumulative
+        ? cumTokens
+        : breakdownByType
+          ? p.input + p.output + p.cacheRead + p.cacheWrite
+          : p.totalTokens,
+    };
   });
 
   const hasSelection = cursorStart != null && cursorEnd != null;
@@ -127,8 +141,6 @@ export function renderTimeSeriesCompact(
   const padding = { top: 8, right: 4, bottom: 14, left: 30 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  const isCumulative = mode === "cumulative";
-  const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
   const timeZoneOptions: Intl.DateTimeFormatOptions = timeZone === "utc" ? { timeZone: "UTC" } : {};
   const formatTooltipTimestamp = createMsFormatter(
     { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
@@ -139,14 +151,7 @@ export function renderTimeSeriesCompact(
     (total, tokens) => total + tokens,
     0,
   );
-  const barTotals = points.map((p) =>
-    isCumulative
-      ? p.cumulativeTokens
-      : breakdownByType
-        ? p.input + p.output + p.cacheRead + p.cacheWrite
-        : p.totalTokens,
-  );
-  const maxValue = Math.max(...barTotals, 1);
+  const maxValue = Math.max(...points.map((p) => p.value), 1);
   const slotWidth = chartWidth / points.length; // space per bar including gap
   const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
   const barGap = slotWidth - barWidth;
@@ -159,7 +164,7 @@ export function renderTimeSeriesCompact(
   const cursorLeft = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeStartTs));
   const cursorRight = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeEndTs));
   const moveCursor = (side: "left" | "right", timestamp: number) => {
-    callbacks.onTimeSeriesCursorRangeChange?.(
+    callbacks.onTimeSeriesCursorRangeChange(
       side === "left" ? Math.max(firstTimestamp, Math.min(timestamp, cursorRight)) : cursorLeft,
       side === "right" ? Math.min(lastTimestamp, Math.max(timestamp, cursorLeft)) : cursorRight,
     );
@@ -202,7 +207,7 @@ export function renderTimeSeriesCompact(
                   <div class="settings-segmented settings-segmented--accent small">
                     <button
                       class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
-                      @click=${() => callbacks.onTimeSeriesCursorRangeChange?.(null, null)}
+                      @click=${() => callbacks.onTimeSeriesCursorRangeChange(null, null)}
                     >
                       ${t("usage.details.reset")}
                     </button>
@@ -267,7 +272,7 @@ export function renderTimeSeriesCompact(
             <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(lastTimestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
           `}
           ${points.map((p, i) => {
-            const val = expectDefined(barTotals[i], "time series bar total");
+            const val = p.value;
             const x = padding.left + i * (barWidth + barGap);
             const bh = (val / maxValue) * chartHeight;
             const y = padding.top + chartHeight - bh;
@@ -328,10 +333,7 @@ export function renderTimeSeriesCompact(
         <!-- Handle drag zones (only on handles, not full chart) -->
         ${(() => {
           const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-            if (
-              !callbacks.onTimeSeriesCursorRangeChange ||
-              !(e.currentTarget instanceof HTMLElement)
-            ) {
+            if (!(e.currentTarget instanceof HTMLElement)) {
               return;
             }
             e.preventDefault();

@@ -47,7 +47,10 @@ export async function readDoctorGatewayOwnerLease(
   }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
-    ? { ...reply.lease, state: readStateLeaseProcessOwnerStatus(reply.lease) }
+    ? {
+        ...reply.lease,
+        state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
+      }
     : undefined;
 }
 
@@ -100,8 +103,10 @@ export async function assertDoctorMaintenanceReady(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   log: (message: string) => void,
+  databaseTargets?: readonly { path: string; realPath?: string }[],
 ): Promise<{ schemaPublicationDeferred: boolean }> {
   let schemaPublicationDeferred = false;
+  let refusedDatabasePaths: string[] = [];
   const { assertSessionStoreMigrationComplete } =
     await import("../config/sessions/startup-migration.js");
   assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" });
@@ -115,6 +120,9 @@ export async function assertDoctorMaintenanceReady(
       schemaPublicationDeferred = true;
       log(publication.message);
     },
+    onVerified: (schemas) => {
+      refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
+    },
     configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
   });
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
@@ -122,6 +130,25 @@ export async function assertDoctorMaintenanceReady(
   const { assertNoPendingLegacyExecApprovals } =
     await import("../infra/exec-approvals-migration-gate.js");
   assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
+  if (!schemaPublicationDeferred && databaseTargets) {
+    const { completeDoctorMigrationBackups } =
+      await import("./doctor-migration-backup-artifacts.js");
+    try {
+      completeDoctorMigrationBackups(
+        env,
+        databaseTargets
+          .filter(
+            (target) =>
+              !refusedDatabasePaths.some(
+                (refused) => refused === target.path || refused === target.realPath,
+              ),
+          )
+          .map((target) => target.path),
+      );
+    } catch (error) {
+      log(`Migration backups remain protected; completion registration failed: ${String(error)}`);
+    }
+  }
   return { schemaPublicationDeferred };
 }
 

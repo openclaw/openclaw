@@ -5,8 +5,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
@@ -19,7 +20,6 @@ import {
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -27,6 +27,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveBootstrapContextForDiagnostics } from "./bootstrap-files-diagnostics.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -204,9 +205,8 @@ async function writeCompletedWorkspaceState(workspaceDir: string): Promise<void>
 }
 
 async function writeLegacyCompletedWorkspaceState(workspaceDir: string): Promise<void> {
-  await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
   await fs.writeFile(
-    path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+    path.join(workspaceDir, "openclaw-workspace-state.json"),
     `${JSON.stringify({
       version: 1,
       bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
@@ -725,7 +725,7 @@ describe("resolveBootstrapContextForRun", () => {
       config: {
         agents: {
           defaults: { heartbeat: {} },
-          list: [{ id: "main" }],
+          entries: { main: {} },
         },
       },
     });
@@ -825,12 +825,13 @@ describe("resolveBootstrapContextForDiagnostics", () => {
 });
 
 describe("hasCompletedBootstrapTurn", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-bootstrap-turn-");
   let tmpDir: string;
   let sessionTarget: SessionTranscriptRuntimeTarget;
   let sessionManager: SessionManager;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "openclaw-bootstrap-turn-"));
+    tmpDir = sessionDirs.make();
     sessionTarget = {
       agentId: "main",
       sessionId: randomUUID(),
@@ -842,11 +843,6 @@ describe("hasCompletedBootstrapTurn", () => {
       updatedAt: Date.now(),
     });
     sessionManager = SessionManager.open(sessionTarget, tmpDir);
-  });
-
-  afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("returns false without a complete SQLite transcript identity", async () => {
@@ -879,7 +875,13 @@ describe("hasCompletedBootstrapTurn", () => {
     sessionManager.appendCompaction("trimmed", firstEntryId, 10);
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
 
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+    const hostExec = vi.spyOn(DatabaseSync.prototype, "exec");
+    try {
+      expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+      expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
+    } finally {
+      hostExec.mockRestore();
+    }
   });
 
   it("invalidates a completion marker after a session reset", async () => {
@@ -995,7 +997,7 @@ describe("resolveContextInjectionMode", () => {
         {
           agents: {
             defaults: { contextInjection: "continuation-skip" },
-            list: [{ id: "strict", contextInjection: "always" }],
+            entries: { strict: { contextInjection: "always" } },
           },
         } as never,
         "strict",
@@ -1009,7 +1011,7 @@ describe("resolveContextInjectionMode", () => {
         {
           agents: {
             defaults: { contextInjection: "never" },
-            list: [{ id: "worker" }],
+            entries: { worker: {} },
           },
         } as never,
         "worker",

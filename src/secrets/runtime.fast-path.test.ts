@@ -33,7 +33,7 @@ const { collectConfigAssignmentsMock, resolveRuntimeWebToolsMock, runtimePrepare
   }));
 
 function explicitMainRoster() {
-  return { agents: { list: [{ id: "main" }] } };
+  return { agents: { entries: { main: {} } } };
 }
 
 vi.mock("./runtime-prepare.runtime.js", () => {
@@ -312,7 +312,7 @@ describe("secrets runtime fast path", () => {
       const snapshot = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "main", agentDir }],
+            entries: { main: { agentDir } },
           },
         }),
         env,
@@ -365,7 +365,7 @@ describe("secrets runtime fast path", () => {
       const fastPath = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "main", agentDir }],
+            entries: { main: { agentDir } },
           },
         }),
         env,
@@ -411,7 +411,7 @@ describe("secrets runtime fast path", () => {
     };
     const config = (port: number) =>
       asConfig({
-        agents: { list: [{ id: "main", agentDir }] },
+        agents: { entries: { main: { agentDir } } },
         gateway: { port },
       });
     const initialSnapshot = await prepareSecretsRuntimeSnapshot({
@@ -459,7 +459,7 @@ describe("secrets runtime fast path", () => {
     };
     const initial = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: { list: [{ id: "main", agentDir }] },
+        agents: { entries: { main: { agentDir } } },
       }),
       agentDirs: [agentDir],
       loadAuthStore,
@@ -494,7 +494,7 @@ describe("secrets runtime fast path", () => {
       });
     const config = (port: number) =>
       asConfig({
-        agents: { list: [{ id: "main", agentDir }] },
+        agents: { entries: { main: { agentDir } } },
         gateway: { port },
       });
     const initial = await prepareSecretsRuntimeSnapshot({
@@ -544,7 +544,7 @@ describe("secrets runtime fast path", () => {
       const fastPath = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "main", agentDir }],
+            entries: { main: { agentDir } },
           },
         }),
         env,

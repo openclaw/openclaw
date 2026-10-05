@@ -112,21 +112,21 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
     sessionKey: RUNNER_SESSION_KEY,
     agentId: "main",
   });
-  placement = placements.transition({
+  placement = await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId: RUNNER_ENVIRONMENT_ID },
   });
-  placement = placements.transition({
+  placement = await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { environmentId: RUNNER_ENVIRONMENT_ID, workerBundleHash: RUNNER_BUNDLE_HASH },
   });
-  placement = placements.transition({
+  placement = await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "syncing",
     to: "starting",
@@ -138,7 +138,7 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
       remoteWorkspaceDir: "/workspace/runner-socket-close",
     },
   });
-  placements.transition({
+  await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "starting",
     to: "active",

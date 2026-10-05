@@ -25,15 +25,6 @@ function installedReadFile() {
 }
 
 describe("plugin paths", () => {
-  it("uses the Homebrew capture helper", async () => {
-    await expect(
-      ensureCaptureBinary({
-        access: installedAccess() as never,
-        readFile: installedReadFile() as never,
-      }),
-    ).resolves.toBe(`${homebrewDir}/facetime-audio-capture`);
-  });
-
   it("inspects native package readiness without staging runtime artifacts", async () => {
     await expect(
       inspectFaceTimeNativePackage({
@@ -49,22 +40,15 @@ describe("plugin paths", () => {
     ).resolves.toBe(false);
   });
 
-  it("fails with the install command when no compatible package exists", async () => {
-    await expect(
-      ensureCaptureBinary({
-        access: vi.fn().mockRejectedValue(new Error("missing")) as never,
-        readFile: installedReadFile() as never,
-      }),
-    ).rejects.toThrow("brew install openclaw/tap/openclaw-facetime");
-  });
-
   it("rejects an incompatible native protocol", async () => {
     const readFile = vi.fn(async (path: string) =>
       path.endsWith("native-protocol.env") ? "NATIVE_PROTOCOL_VERSION=2\n" : `${"b".repeat(64)}\n`,
     );
     await expect(
       ensureCaptureBinary({ access: installedAccess() as never, readFile: readFile as never }),
-    ).rejects.toThrow("Compatible FaceTime native helpers are not installed");
+    ).rejects.toThrow(
+      "Compatible FaceTime native helpers are not installed. Run: brew install openclaw/tap/openclaw-facetime",
+    );
   });
 
   it("stages and validates the installed injected helper", async () => {

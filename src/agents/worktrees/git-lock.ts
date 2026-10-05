@@ -93,8 +93,11 @@ export async function lockWorktreeForProcess(record: ManagedWorktreeRecord): Pro
   }
 }
 
-export async function unlockWorktree(record: ManagedWorktreeRecord): Promise<void> {
-  const result = await runGit(record.repoRoot, ["worktree", "unlock", record.path]);
+export async function unlockWorktree(
+  record: ManagedWorktreeRecord,
+  options?: Pick<NonNullable<Parameters<typeof runGit>[2]>, "signal" | "beforeRun">,
+): Promise<void> {
+  const result = await runGit(record.repoRoot, ["worktree", "unlock", record.path], options);
   if (result.code !== 0) {
     throw commandError("git worktree unlock", result);
   }

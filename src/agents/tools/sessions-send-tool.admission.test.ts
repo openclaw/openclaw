@@ -33,12 +33,17 @@ import {
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
+import {
+  readFollowupRequest,
+  SessionFollowupCompletion,
+} from "../subagents/completion/session-followup-completion.js";
 import "../test-helpers/fast-openclaw-tools-sessions.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import * as sessionsSendFollowup from "./sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import * as sessionsSendDelivery from "./sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 vi.mock("./sessions-send-tool.a2a.js", () => ({
@@ -78,7 +83,7 @@ describe("sessions_send dispatch admission", () => {
     setRuntimeConfigSnapshot(config);
     setActivePluginRegistry(createSessionConversationTestRegistry());
     resetGatewayWorkAdmission();
-    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    vi.mocked(runSessionsSendA2AFlow).mockReset();
     registerWatch = vi.spyOn(sessionStateEvents, "registerSessionStateWatch");
     for (const [sessionKey, sessionId] of [
       [requesterSessionKey, "requester-session"],
@@ -118,16 +123,17 @@ describe("sessions_send dispatch admission", () => {
       () => true,
     );
     const finish = createDeferredCore();
+    let completion: SessionFollowupCompletion | undefined;
     const capturing = createDeferredCore();
     const allowCapture = createDeferredCore();
-    let targetAccepted = false;
+    let invocationStarted = false;
     let returned = false;
     const capture = operatorCapture.captureGatewayOperatorRunAuthority;
     const heldCapture = vi
       .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
       .mockImplementation(async (...args) => {
         const captured = await capture(...args);
-        if (targetAccepted) {
+        if (invocationStarted) {
           capturing.resolve();
           await allowCapture.promise;
         }
@@ -144,7 +150,14 @@ describe("sessions_send dispatch admission", () => {
           return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
         }
         if (request.method === "agent") {
-          targetAccepted = true;
+          const followup = readFollowupRequest(runId, targetSessionKey);
+          if (followup) {
+            completion = SessionFollowupCompletion.bind(followup);
+            followup.completion = completion;
+            completion.markAccepted(runId);
+            await completion.settle(runId, { status: "ok", replyText: "Task complete" });
+            completion.finishExecution(runId);
+          }
           return { runId, status: "accepted" };
         }
         throw new Error(`Unexpected Gateway method: ${request.method}`);
@@ -178,8 +191,9 @@ describe("sessions_send dispatch admission", () => {
                     gatewayContextResolver: () => context,
                     receiptAuthority: () => true,
                   },
-                  () =>
-                    createSessionsSendTool({
+                  () => {
+                    invocationStarted = true;
+                    return createSessionsSendTool({
                       agentSessionKey: sourceKey,
                       config,
                       callGateway,
@@ -189,7 +203,8 @@ describe("sessions_send dispatch admission", () => {
                       message: "Continue the task",
                       mode: "followup",
                       timeoutSeconds: 0,
-                    }),
+                    });
+                  },
                 );
               } finally {
                 returned = true;
@@ -212,7 +227,7 @@ describe("sessions_send dispatch admission", () => {
       });
       expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce();
       expect(runSessionsSendA2AFlow).toHaveBeenCalledWith(
-        expect.objectContaining({ requesterSessionKey, targetSessionKey }),
+        expect.objectContaining({ requesterSessionKey: sourceKey, targetSessionKey }),
       );
       source.release();
       expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(true);
@@ -220,6 +235,7 @@ describe("sessions_send dispatch admission", () => {
       vi.useRealTimers();
       allowCapture.resolve();
       finish.resolve();
+      completion?.close();
       heldCapture.mockRestore();
       source.release();
     }
@@ -300,6 +316,9 @@ describe("sessions_send dispatch admission", () => {
       const gateway = vi
         .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
         .mockImplementation(callGateway);
+      const mutation = vi
+        .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+        .mockImplementation(callGateway);
       // This routing fixture supplies a run-scoped Gateway, not a native task
       // receipt. Keep its real A2A/route assertions at that explicit boundary;
       // retained core authority and custody have separate owner/integration proof.
@@ -354,6 +373,7 @@ describe("sessions_send dispatch admission", () => {
       } finally {
         prepareFollowup.mockRestore();
         gateway.mockRestore();
+        mutation.mockRestore();
       }
     },
   );
@@ -407,6 +427,9 @@ describe("sessions_send dispatch admission", () => {
     const gateway = vi
       .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
       .mockImplementation(callGateway);
+    const mutation = vi
+      .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+      .mockImplementation(callGateway);
     try {
       const tool = createOpenClawTools({
         agentSessionKey: sessionKey,
@@ -459,6 +482,7 @@ describe("sessions_send dispatch admission", () => {
       expect(sendParams).not.toHaveProperty("sessionGeneration");
     } finally {
       gateway.mockRestore();
+      mutation.mockRestore();
     }
   });
 

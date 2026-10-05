@@ -60,24 +60,24 @@ async function settle<T>(run: () => Promise<T>): Promise<T> {
     return outcome.value;
   });
 }
-function navigationPage(initialUrl = localPageUrl, mainFrame?: object) {
+function navigationPage(initialUrl = localPageUrl, mainFrame: object = {}) {
   let url = initialUrl;
-  const listeners = new Set<(frame?: object) => void>();
+  const listeners = new Set<(frame: object) => void>();
   const page = {
-    ...(mainFrame ? { mainFrame: vi.fn(() => mainFrame) } : {}),
-    on: vi.fn((event: string, listener: (frame?: object) => void) => {
+    mainFrame: vi.fn(() => mainFrame),
+    on: vi.fn((event: string, listener: (frame: object) => void) => {
       if (event === "framenavigated") {
         listeners.add(listener);
       }
     }),
-    off: vi.fn((event: string, listener: (frame?: object) => void) => {
+    off: vi.fn((event: string, listener: (frame: object) => void) => {
       if (event === "framenavigated") {
         listeners.delete(listener);
       }
     }),
     url: vi.fn(() => url),
   };
-  const emit = (frame?: object) => {
+  const emit = (frame: object = mainFrame) => {
     for (const listener of listeners) {
       listener(frame);
     }

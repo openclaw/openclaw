@@ -1,4 +1,3 @@
-/** Coverage tests for secrets runtime collector breadth and target surfaces. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,6 +10,8 @@ import type {
 } from "../plugins/types.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
+/** Coverage tests for secrets runtime collector breadth and target surfaces. */
+import { resolveSecretRefValues } from "./resolve.js";
 
 const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
   search: [
@@ -240,7 +241,6 @@ const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
 let collectConfigAssignments: typeof import("./runtime-config-collectors.js").collectConfigAssignments;
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
-let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
@@ -484,7 +484,7 @@ function applyConfigForOpenClawTarget(
     }
   }
   if (entry.id === "memory.search.remote.apiKey") {
-    setPathCreateStrict(config, ["agents", "list", 0, "id"], "sample-agent");
+    setPathCreateStrict(config, ["agents", "entries", "sample-agent"], {});
   }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
@@ -717,14 +717,12 @@ describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
     const [
       sharedRuntime,
-      resolver,
       configCollectors,
       runtimeWebTools,
       channelContracts,
       officialExternalChannelContract,
     ] = await Promise.all([
       import("./runtime-shared.js"),
-      import("./resolve.js"),
       import("./runtime-config-collectors.js"),
       import("./runtime-web-tools.js"),
       Promise.all(
@@ -751,7 +749,6 @@ describe("secrets runtime target coverage", () => {
     }
     COVERAGE_CHANNEL_CONTRACTS.set("qqbot", qqbotContract);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
-    ({ resolveSecretRefValues } = resolver);
     ({ collectConfigAssignments } = configCollectors);
     ({ resolveRuntimeWebTools } = runtimeWebTools);
   });

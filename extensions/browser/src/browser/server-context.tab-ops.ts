@@ -1,6 +1,3 @@
-/**
- * Browser tab listing, opening, labeling, and alias management for one profile.
- */
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import {
@@ -86,7 +83,6 @@ type ExtensionCdpTarget = CdpTarget & {
   tabId?: unknown;
 };
 
-/** Normalize a reported CDP WebSocket URL against the configured endpoint. */
 function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
   if (!raw) {
     return undefined;
@@ -98,7 +94,6 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
   }
 }
 
-/** Builds list/open/label tab operations for one resolved browser profile. */
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);

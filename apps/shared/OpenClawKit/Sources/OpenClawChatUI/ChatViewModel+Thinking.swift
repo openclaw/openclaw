@@ -58,9 +58,9 @@ extension OpenClawChatViewModel {
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let patchResult = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    OpenClawChatSessionSettingsPatch(
                         thinkingLevel: .some(clearsOverride ? nil : next)))
                 let acceptedLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) ?? next
                 let acceptedResult = self.mergedThinkingPatchSuccess(
@@ -342,8 +342,7 @@ extension OpenClawChatViewModel {
 
     private func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
         guard let modelID = ChatPayloadDecoding.trimmedNonEmptyString(modelID) else { return nil }
-        let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let provider, !provider.isEmpty {
+        if let provider = ChatPayloadDecoding.trimmedNonEmptyString(provider) {
             let selectionID = Self.providerQualifiedModelSelectionID(modelID: modelID, provider: provider)
             return modelChoices.first(where: {
                 $0.selectionID == selectionID ||

@@ -75,17 +75,16 @@ function parseLoopbackProxyPort(proxy: string, forAdoption: boolean): number | n
     return Number.parseInt(trimmed, 10);
   }
   const normalized = trimmed.includes("://") ? trimmed : `http://${trimmed}`;
-  try {
-    const parsed = new URL(normalized);
-    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    if (!(host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host))) {
-      return null;
-    }
-    const port = Number.parseInt(parsed.port, 10);
-    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
-  } catch {
+  const parsed = URL.parse(normalized);
+  if (!parsed) {
     return null;
   }
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!(host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host))) {
+    return null;
+  }
+  const port = Number.parseInt(parsed.port, 10);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
 }
 
 export function extractTailscaleServeGatewayUrls(
@@ -112,16 +111,15 @@ export function extractTailscaleServeGatewayUrls(
     ) {
       continue;
     }
-    try {
-      const endpoint = new URL(`https://${hostPort}`);
-      const exclusive =
-        !forAdoption ||
-        web.filter(([other]) => URL.parse(`https://${other}`)?.port === endpoint.port).length === 1;
-      if (config.TCP?.[endpoint.port || "443"]?.HTTPS === true && exclusive) {
-        urls.add(`wss://${endpoint.host}`);
-      }
-    } catch {
+    const endpoint = URL.parse(`https://${hostPort}`);
+    if (!endpoint) {
       continue;
+    }
+    const exclusive =
+      !forAdoption ||
+      web.filter(([other]) => URL.parse(`https://${other}`)?.port === endpoint.port).length === 1;
+    if (config.TCP?.[endpoint.port || "443"]?.HTTPS === true && exclusive) {
+      urls.add(`wss://${endpoint.host}`);
     }
   }
   return [...urls].toSorted();

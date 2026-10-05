@@ -10,6 +10,10 @@ internal fun JsonElement?.asJsonStringOrNull(): String? =
     ?.takeIf(JsonPrimitive::isString)
     ?.content
 
+internal fun JsonElement?.asLongOrNull(): Long? = (this as? JsonPrimitive)?.content?.toLongOrNull()
+
+internal fun JsonElement?.asBooleanOrNull(): Boolean? = (this as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
+
 internal fun JsonObject?.nonBlankString(key: String): String? =
   this
     ?.get(key)

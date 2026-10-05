@@ -751,8 +751,10 @@ it.each([
     };
     const claimYield = vi.fn(
       createRequesterYieldCallback({
-        requesterSessionKey: "agent:diagnostic:subagent:child",
         requesterAgentId: "diagnostic",
+        // This loop fixture owns a runtime completion; native child admission
+        // is covered at the requester boundary, not inferred from a fake key.
+        claimYieldCompletion: () => true,
       }),
     );
     const onYield = vi.fn(() => {

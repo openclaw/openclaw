@@ -31,13 +31,14 @@ import { createUpdatePreflightFailure } from "../../infra/update-preflight-detai
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
-import { runStep } from "../../infra/update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "../../infra/update-runner-command.js";
 import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -88,7 +89,9 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   dryRun?: boolean;
   channel?: string;
   tag?: string;
+  sha?: string;
   timeout?: string;
+  drainTimeout?: string;
   yes?: boolean;
 };
 
@@ -152,16 +155,17 @@ export class UpdatePreMutationError<Reason extends string = string> extends Erro
   }
 }
 
-const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
-
 /** Parse the shared timeout contract without exiting an owning operation. */
-export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
+export function parseUpdateTimeoutMs(
+  timeout?: string,
+  option: "--timeout" | "--drain-timeout" = "--timeout",
+): number | undefined {
   if (timeout === undefined) {
     return undefined;
   }
   const milliseconds = positiveSecondsToSafeMilliseconds(timeout.trim());
   if (milliseconds === undefined) {
-    throw new Error(INVALID_TIMEOUT_ERROR);
+    throw new Error(`${option} must be a positive integer (seconds)`);
   }
   return milliseconds;
 }
@@ -208,12 +212,7 @@ export async function resolveTargetVersion(
 }
 
 export async function isGitCheckout(root: string): Promise<boolean> {
-  try {
-    await fs.stat(path.join(root, ".git"));
-    return true;
-  } catch {
-    return false;
-  }
+  return pathExists(path.join(root, ".git"));
 }
 
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
@@ -340,7 +339,7 @@ async function cloneGitCheckoutTransactionally(
     }
   }
 
-  try {
+  const runOperation = async (): Promise<GitCheckoutResult> => {
     result = await runUpdateStep({
       name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
@@ -425,11 +424,22 @@ async function cloneGitCheckoutTransactionally(
       await publish();
     }
     return { checkoutDir: targetDir, step: result };
-  } finally {
-    // The container does not confer ownership of a replaced repository child.
-    // Only completed publication permits that child to be absent at cleanup.
-    if (cleanupStaging) {
-      // Cleanup must not replace a completed publication or the callback's original error.
+  };
+  let outcome: { result: GitCheckoutResult } | { error: unknown };
+  try {
+    outcome = { result: await runOperation() };
+  } catch (error) {
+    outcome = { error };
+    if (hasCommandProcessCleanupError(error)) {
+      cleanupStaging = false;
+    }
+  }
+  let cleanupOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  // The container does not confer ownership of a replaced repository child.
+  // Only completed publication permits that child to be absent at cleanup.
+  if (cleanupStaging) {
+    // Ordinary diagnostic failures do not replace publication or the operation error.
+    try {
       await cleanupUpdateTemporaryDirectory({
         directory: storageRoot,
         root: targetDir,
@@ -437,19 +447,42 @@ async function cloneGitCheckoutTransactionally(
         canRemove: async () =>
           (await ownsDirectory(storageRoot, storageIdentity)) &&
           (await ownsDirectory(stagingDir, stagingIdentity, published)),
-        onWarning: (warning) => {
+        onWarning: async (warning) => {
           if (result && warning.advisory) {
             result.warnings = [...(result.warnings ?? []), warning.advisory.message];
           }
           try {
-            params.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
-          } catch {
-            // Ledger callbacks can throw; cleanup diagnostics cannot replace the operation outcome.
+            await reportUpdateStepCompletion(params.progress, { ...warning, index: 0, total: 0 });
+          } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
+            // Settled diagnostic failures leave the operation outcome unchanged.
           }
         },
       });
+    } catch (error) {
+      cleanupOutcome = { ok: false, error };
     }
   }
+  if (!cleanupOutcome.ok) {
+    if (
+      "error" in outcome &&
+      outcome.error !== cleanupOutcome.error &&
+      hasCommandProcessCleanupError(cleanupOutcome.error)
+    ) {
+      throw new AggregateError(
+        [outcome.error, cleanupOutcome.error],
+        "Git clone and cleanup progress both failed",
+        { cause: outcome.error },
+      );
+    }
+    throw cleanupOutcome.error;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.result;
 }
 
 export async function ensureGitCheckout(params: {

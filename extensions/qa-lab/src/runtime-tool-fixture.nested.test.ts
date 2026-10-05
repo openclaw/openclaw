@@ -1,6 +1,5 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   nestedToolActivityFixture,
   nestedToolHistoryFixture,
@@ -14,13 +13,10 @@ import {
 } from "../test/runtime-tool-fixture-helpers.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 
-afterEach(async () => {
-  // The session store keeps the state database open under the temporary root, so
-  // Windows fails the removal with EBUSY unless the cached handle is released first.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await cleanupRuntimeToolFixtureTempRoots();
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("nested runtime tool fixture", () => {
   it.each([

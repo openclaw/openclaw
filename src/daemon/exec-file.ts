@@ -28,7 +28,6 @@ export async function execFileUtf8(
     env?: NodeJS.ProcessEnv;
     timeout?: number;
     killSignal?: NodeJS.Signals | number;
-    windowsHide?: boolean;
   } = {},
 ): Promise<ExecResult> {
   const scopedNative = getGatewayServiceUpdateNativeCommand();

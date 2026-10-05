@@ -369,14 +369,13 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
         fs: { workspaceOnly: true },
       },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               fs: { workspaceOnly: false },
             },
           },
-        ],
+        },
       },
     };
 
@@ -759,6 +758,90 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallA.id).toBe("edit:22");
     expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
+
+  it.each([true, false])(
+    "keeps repeated provider ids unique across compacted responses (prior history: %s)",
+    async (hasPriorHistory) => {
+      const makeToolCall = () => ({ type: "toolCall", name: "exec", id: "exec_0", arguments: {} });
+      const makeMessage = (call = makeToolCall()) => ({ role: "assistant", content: [call] });
+      const baseFn = vi.fn(() => {
+        const partialCall = makeToolCall();
+        const partial = makeMessage(partialCall);
+        const message = makeMessage();
+        const result = makeMessage();
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "toolcall_delta", partial };
+            // Later transport deltas can restore the provider id on the same block.
+            partialCall.id = "exec_0";
+            yield { type: "toolcall_delta", partial };
+            yield { type: "done", message };
+          },
+          async result() {
+            return result;
+          },
+        };
+      });
+      const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
+      const history = hasPriorHistory ? [makeMessage()] : [];
+      const responseIds: string[] = [];
+      for (let responseIndex = 0; responseIndex < 3; responseIndex += 1) {
+        const stream = await wrappedFn(
+          {} as never,
+          { messages: responseIndex === 0 ? history : [] } as never,
+          {} as never,
+        );
+        const projectedIds: string[] = [];
+        for await (const event of stream) {
+          const message =
+            "partial" in event ? event.partial : "message" in event ? event.message : undefined;
+          const call = message?.content[0];
+          if (call?.type === "toolCall") {
+            projectedIds.push(call.id);
+          }
+        }
+        const result = await stream.result();
+        const call = result.content[0];
+        if (call?.type !== "toolCall") {
+          throw new Error("missing final tool call");
+        }
+        expect(projectedIds).toEqual([call.id, call.id, call.id]);
+        if (hasPriorHistory || responseIndex > 0) {
+          expect(call.id).toMatch(/^call_[0-9a-f]{24}$/);
+        } else {
+          expect(call.id).toBe("exec_0");
+        }
+        responseIds.push(call.id);
+      }
+      expect(new Set(responseIds).size).toBe(3);
+      expect(history).toEqual(hasPriorHistory ? [makeMessage()] : []);
+    },
+  );
+
+  it("preserves non-colliding provider ids byte-for-byte", async () => {
+    const ids = ["toolu_01NativeAnthropic", "call_NativeOpenAI"];
+    const finalMessage = {
+      role: "assistant",
+      content: ids.map((id) => ({ type: "toolCall", name: "exec", id, arguments: {} })),
+    };
+    const baseFn = fakeBaseStream(finalMessage, [
+      { type: "toolcall_delta", partial: structuredClone(finalMessage) },
+      { type: "done", message: structuredClone(finalMessage) },
+    ]);
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
+    const stream = await wrappedFn(
+      {} as never,
+      { messages: [{ role: "assistant", content: [{ type: "toolCall", id: "exec_0" }] }] } as never,
+      {} as never,
+    );
+    for await (const event of stream) {
+      const message =
+        "partial" in event ? event.partial : "message" in event ? event.message : undefined;
+      expect(message?.content).toEqual(finalMessage.content);
+    }
+    expect((await stream.result()).content).toEqual(finalMessage.content);
+    expect(finalMessage.content.map((call) => call.id)).toEqual(ids);
+  });
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
@@ -899,7 +982,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(repairedToolResult.content).toEqual([
       {
         type: "text",
-        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text: "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.",
       },
     ]);
     expect(repairedToolResult.isError).toBe(true);

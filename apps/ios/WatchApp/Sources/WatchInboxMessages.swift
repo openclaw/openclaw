@@ -653,35 +653,23 @@ extension WatchAppSnapshotMessage: Codable {
         let talkStatusText = try legacy.decodeIfPresent(String.self, forKey: .talkStatusText)
         let chatStatusCode = try legacy.decodeIfPresent(String.self, forKey: .chatStatusCode)
         let chatStatusText = try legacy.decodeIfPresent(String.self, forKey: .chatStatusText)
-        if let gatewayStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus)
+        if let gatewayStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .gatewayStatus,
+            fallbackText: gatewayStatusText)
         {
             self.gatewayStatus = gatewayStatus
-        } else if container.contains(.gatewayStatus),
-                  let gatewayStatusText,
-                  !gatewayStatusText.isEmpty
-        {
-            self.gatewayStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: gatewayStatusText)
         } else {
             self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
                 text: gatewayStatusText,
                 connected: self.gatewayConnected)
         }
-        if let talkStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .talkStatus)
+        if let talkStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .talkStatus,
+            fallbackText: talkStatusText)
         {
             self.talkStatus = talkStatus
-        } else if container.contains(.talkStatus),
-                  let talkStatusText,
-                  !talkStatusText.isEmpty
-        {
-            self.talkStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: talkStatusText)
         } else {
             self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
                 text: talkStatusText,

@@ -24,6 +24,7 @@ import type {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import type { CurrentUserProfileDisplay } from "./current-user-profile-display.js";
@@ -85,7 +86,13 @@ export type SessionListRowContext = {
   thinkingFactsByModelRef: Map<string, GatewayModelThinkingFacts>;
   findModelCatalogEntry: typeof findModelCatalogEntry;
   selectModelCatalogRuntimeEntry: typeof selectModelCatalogRuntimeEntry;
-  displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
+  displayModelIdentityByKey: Map<
+    string,
+    {
+      metadataSnapshot?: PluginMetadataSnapshot | null;
+      identity: { provider?: string; model?: string };
+    }
+  >;
   modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>;
 };

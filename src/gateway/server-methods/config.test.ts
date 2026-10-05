@@ -12,12 +12,21 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  invokeConfigOpenFile,
+  invokeConfigPatch,
+  invokeConfigSchema,
+  startConfigWrite,
+} from "./config-invocations.test-support.js";
 import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
+}));
+const pluginValidationMocks = vi.hoisted(() => ({
+  currentPluginMetadataSnapshot: undefined as PluginMetadataSnapshot | undefined,
 }));
 
 vi.mock("../../config/io.js", async () => {
@@ -34,18 +43,35 @@ vi.mock("../../config/validation.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/validation.js")>(
     "../../config/validation.js",
   );
+  const resolveValidationParams = (
+    params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+  ) =>
+    params?.pluginMetadataSnapshot || !pluginValidationMocks.currentPluginMetadataSnapshot
+      ? params
+      : {
+          ...params,
+          pluginMetadataSnapshot: pluginValidationMocks.currentPluginMetadataSnapshot,
+        };
   return {
     ...actual,
-    validateConfigObjectRawWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
-    validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
+    validateConfigObjectRawWithPlugins: vi.fn(
+      (
+        config: OpenClawConfig,
+        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+      ) =>
+        pluginValidationMocks.currentPluginMetadataSnapshot
+          ? actual.validateConfigObjectRawWithPlugins(config, resolveValidationParams(params))
+          : { ok: true, config, warnings: [] },
+    ),
+    validateConfigObjectWithPlugins: vi.fn(
+      (
+        config: OpenClawConfig,
+        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+      ) =>
+        pluginValidationMocks.currentPluginMetadataSnapshot
+          ? actual.validateConfigObjectWithPlugins(config, resolveValidationParams(params))
+          : { ok: true, config, warnings: [] },
+    ),
   };
 });
 
@@ -110,58 +136,12 @@ function currentWriteSnapshot() {
   return result;
 }
 
-async function invokeConfigPatch(args: {
-  raw: unknown;
-  baseHash?: string;
-  replacePaths?: string[];
-}) {
-  const harness = createConfigHandlerHarness({
-    method: "config.patch",
-    params: {
-      raw: JSON.stringify(args.raw),
-      ...(args.baseHash ? { baseHash: args.baseHash } : {}),
-      ...(args.replacePaths ? { replacePaths: args.replacePaths } : {}),
-    },
-  });
-  await expectDefined(
-    configHandlers["config.patch"],
-    'configHandlers["config.patch"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
-function startConfigWrite(
-  method: "config.patch" | "config.apply",
-  args: { raw: unknown; baseHash?: string },
-) {
-  const harness = createConfigHandlerHarness({
-    method,
-    params: {
-      raw: JSON.stringify(args.raw),
-      ...(args.baseHash ? { baseHash: args.baseHash } : {}),
-    },
-  });
-  const handler = expectDefined(
-    configHandlers[method],
-    `configHandlers["${method}"] test invariant`,
-  );
-  return { harness, operation: handler(harness.options) };
-}
-
-async function invokeConfigSchema() {
-  const harness = createConfigHandlerHarness({ method: "config.schema" });
-  await expectDefined(
-    configHandlers["config.schema"],
-    'configHandlers["config.schema"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
 beforeEach(() => {
   storedConfig = {};
   storedHash = "base-hash";
   nextHash = 1;
   modelNormalizationPluginMetadata = undefined;
+  pluginValidationMocks.currentPluginMetadataSnapshot = undefined;
   configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () =>
     currentWriteSnapshot(),
   );
@@ -189,15 +169,6 @@ beforeEach(() => {
   );
 });
 
-async function invokeConfigOpenFile() {
-  const harness = createConfigHandlerHarness({ method: "config.openFile" });
-  await expectDefined(
-    configHandlers["config.openFile"],
-    'configHandlers["config.openFile"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
 afterEach(() => {
   vi.useRealTimers();
   clearConfigSchemaResponseCacheForTests();
@@ -206,6 +177,46 @@ afterEach(() => {
 });
 
 describe("config.patch effective change receipt", () => {
+  it("does not report plugin defaults discovered after the write snapshot", async () => {
+    const pluginId = "defaulted-plugin";
+    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture();
+    pluginValidationMocks.currentPluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: pluginId,
+          configSchema: {
+            type: "object",
+            properties: { mode: { type: "string", default: "auto" } },
+          },
+        },
+      ],
+    });
+    storedConfig = {
+      plugins: { entries: { [pluginId]: { enabled: true } } },
+      ui: { prefs: { sidebarEntries: ["route:usage"] } },
+    };
+
+    const harness = await invokeConfigPatch({
+      raw: { ui: { prefs: { sidebarEntries: ["route:tasks"] } } },
+      replacePaths: ["ui.prefs.sidebarEntries"],
+    });
+
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        changedPaths: expect.arrayContaining(["ui.prefs.sidebarEntries"]),
+      }),
+      undefined,
+    );
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.not.objectContaining({
+        changedPaths: expect.arrayContaining([`plugins.entries.${pluginId}.config`]),
+      }),
+      undefined,
+    );
+  });
+
   it.each([
     { nextToken: "synthetic-old-token", expectedPaths: [] },
     {

@@ -1,5 +1,6 @@
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -35,11 +36,7 @@ import {
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
-import {
-  mergeModelCompat,
-  mergeModelMediaInput,
-  resolveMergedConfiguredModelReasoning,
-} from "./model.compat.js";
+import { mergeModelMediaInput, resolveMergedConfiguredModelReasoning } from "./model.compat.js";
 import {
   buildInlineProviderModels,
   type InlineModelEntry,
@@ -49,7 +46,6 @@ import {
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
-import { resolveProviderRequestTimeoutMs } from "./model.provider-hooks.js";
 import { resolveProviderTransport } from "./model.provider-transport.js";
 import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
@@ -335,11 +331,7 @@ export function mergeConfiguredRuntimeModelParams(params: {
   return mergeModelParams(
     readModelParams(params.discoveredParams),
     readModelParams(params.providerParams),
-    findConfiguredAgentModelParams({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-    }),
+    findConfiguredAgentModelParams(params),
     readModelParams(params.configuredParams),
   );
 }
@@ -385,15 +377,11 @@ export function applyConfiguredProviderOverrides(params: {
     params.providerMetadataOwners,
   );
   const manifestAliasTransport = params.manifestAlias.transport;
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
-  const defaultModelParams = findConfiguredAgentModelParams({
-    cfg: params.cfg,
-    provider: params.provider,
-    modelId,
+  const requestTimeoutMs = finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds, {
+    floorSeconds: true,
   });
-  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const defaultModelParams = findConfiguredAgentModelParams(params);
+  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers);
   const requestParams = {
     provider: params.provider,
     ...(params.providerMetadataOwners
@@ -465,13 +453,9 @@ export function applyConfiguredProviderOverrides(params: {
     params.preferDiscoveredModelMetadata && configuredModel?.metadataSource === "models-add"
       ? undefined
       : configuredModel;
-  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers);
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
-  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers);
   const providerParams = readModelParams(providerConfig.params);
   const configuredRequestParams = {
     ...requestParams,
@@ -523,11 +507,8 @@ export function applyConfiguredProviderOverrides(params: {
     fallbackInput: discoveredModel.input,
   });
   const providerDefaultApi = resolveConfiguredProviderDefaultApi({
-    provider: params.provider,
+    ...params,
     providerConfig,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
   });
   const metadataOverrideBaseUrl = normalizeOptionalString(metadataOverrideModel?.baseUrl);
   const providerConfiguredBaseUrl = normalizeOptionalString(providerConfig.baseUrl);
@@ -605,13 +586,15 @@ export function applyConfiguredProviderOverrides(params: {
     api: catalogModel.api ?? configuredStaticCatalogModel?.api,
     baseUrl: catalogModel.baseUrl ?? configuredStaticCatalogModel?.baseUrl,
   };
-  const catalogCompat = mergeModelCompat(
+  const configuredCatalogCompat =
     configuredStaticCatalogModel &&
-      modelTransportRoutesMatch(configuredStaticCatalogModel, catalogRoute)
+    modelTransportRoutesMatch(configuredStaticCatalogModel, catalogRoute)
       ? configuredStaticCatalogModel.compat
-      : undefined,
-    catalogModel.compat,
-  );
+      : undefined;
+  const catalogCompat =
+    configuredCatalogCompat && catalogModel.compat
+      ? { ...configuredCatalogCompat, ...catalogModel.compat }
+      : (catalogModel.compat ?? configuredCatalogCompat);
   const resolvedCompat = resolveCatalogOwnedModelCompat({
     ...(hasCatalogOwnedModel
       ? {
@@ -619,10 +602,7 @@ export function applyConfiguredProviderOverrides(params: {
         }
       : {}),
     catalogCompat,
-    configuredRoute: {
-      api: resolvedTransport.api,
-      baseUrl: resolvedTransport.baseUrl,
-    },
+    configuredRoute: resolvedTransport,
     configuredCompat: metadataOverrideModel?.compat,
   });
   const resolvedReasoning = resolveMergedConfiguredModelReasoning({
@@ -653,11 +633,9 @@ export function applyConfiguredProviderOverrides(params: {
           reasoning: resolvedReasoning,
           input: normalizedInput,
           cost: mergeConfiguredModelCost({
-            provider: params.provider,
-            cfg: params.cfg,
+            ...params,
             configuredModel: metadataOverrideModel,
             catalogCost: discoveredModel.cost,
-            providerMetadataOwners: params.providerMetadataOwners,
           }),
           contextWindow,
           contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,

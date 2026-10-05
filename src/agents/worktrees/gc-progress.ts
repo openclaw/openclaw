@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
 import { classifyWorktreeRemovalError, WorktreeBranchMovedError } from "./removal-errors.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
@@ -63,15 +64,25 @@ export class WorktreeGcProgress {
     this.record(stage, "deferred", detail, id);
   }
 
-  recordLimitState(satisfied: boolean, inventoryComplete = true): void {
-    this.result.limitsSatisfied = satisfied ? (inventoryComplete ? true : null) : false;
-  }
-
   error(
     stage: ManagedWorktreeGcResult["issues"][number]["stage"],
     error: unknown,
     id?: string,
   ): void {
+    if (
+      stage === "limits" &&
+      id &&
+      error instanceof WorktreeRemovalContentionError &&
+      error.blockedByRun
+    ) {
+      this.protect(
+        stage,
+        id,
+        "live-refused",
+        `Worktree ${error.blockedByRun.worktreeId} has an active run in pid ${error.blockedByRun.pid}`,
+      );
+      return;
+    }
     if (
       error instanceof WorktreeBranchMovedError &&
       id &&

@@ -14,6 +14,7 @@ import {
   readConfigPreflightSnapshot,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
+import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
 import {
   rethrowStartupConfigFailure,
@@ -69,6 +70,7 @@ async function prepareStartupConfig(
     if (options.beforeStatePreparation && !(await options.beforeStatePreparation(snapshot))) {
       throwStartupMigrationGuardRejected();
     }
+    return true;
   };
   if (!options.gateway) {
     const read = await readSnapshot();
@@ -84,15 +86,12 @@ async function prepareStartupConfig(
       env,
       readSnapshot,
       validateConfig: options.validateStartupConfig,
-      beforeStatePreparation: options.beforeStatePreparation,
+      beforeStatePreparation,
     });
   let read = await readAdmitted();
   env = cloneEnvWithPlatformSemantics(process.env);
   if (!read.snapshot.valid) {
     return result(read);
-  }
-  if (options.observe !== false) {
-    await cleanupStartupPluginSourceCaptures(env);
   }
   let lease: StartupMigrationLease | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -104,13 +103,15 @@ async function prepareStartupConfig(
   };
   const assertLeaseCurrent = () => {
     assertHeartbeatCurrent();
-    lease?.heartbeat();
+    lease?.assertOwned();
   };
   try {
     if (read.recovery || needsRefreshedPluginIndexPersistence(read)) {
       const { acquireStartupMigrationLeaseWithWait } =
         await import("../infra/startup-migration-checkpoint.js");
-      lease = await acquireStartupMigrationLeaseWithWait({ env });
+      lease = await measureDoctorConfigPreflightStep("migration-lease", () =>
+        acquireStartupMigrationLeaseWithWait({ env }),
+      );
       heartbeat = setInterval(() => {
         try {
           lease?.heartbeat();
@@ -135,15 +136,52 @@ async function prepareStartupConfig(
         assertPreflightConfigUnchanged(recovered, read.snapshot);
       }
       if (needsRefreshedPluginIndexPersistence(read)) {
-        const persisted = await persistRefreshedPluginIndex({
-          env,
-          lease,
-          measure,
-          readPersistedSnapshot: readSnapshot,
-          snapshotRead: read,
-          assertCurrent: assertHeartbeatCurrent,
-        });
+        const persisted = await measureDoctorConfigPreflightStep("plugin-index.refresh", () =>
+          persistRefreshedPluginIndex({
+            env,
+            lease,
+            measure,
+            readPersistedSnapshot: readSnapshot,
+            snapshotRead: read,
+            assertCurrent: assertHeartbeatCurrent,
+          }),
+        );
         read = persisted.snapshotRead;
+      }
+    }
+    const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
+      await import("./doctor/shared/legacy-webhook-pins.js");
+    const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
+    if (
+      webhookCompletion !== true &&
+      !HISTORICAL_WEBHOOK_CHANNELS.every((id) => Object.hasOwn(webhookCompletion ?? {}, id))
+    ) {
+      const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
+        const { applyPluginDoctorCompatibilityMigrations } =
+          await import("../plugins/doctor-contract-registry.js");
+        return applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
+          config: read.snapshot.sourceConfig,
+          env,
+          pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
+          historicalWebhookListeners: true,
+          startup: true,
+        });
+      });
+      if (migration.warnings?.length) {
+        throw new Error(migration.warnings.join("\n"));
+      }
+      if (migration.changes.length) {
+        await beforeStatePreparation(read.snapshot);
+        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
+        assertLeaseCurrent();
+        if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
+          const { StartupMaintenanceRequiredError } =
+            await import("../infra/startup-maintenance-required.js");
+          throw new StartupMaintenanceRequiredError(
+            "state-migrations",
+            `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
+          );
+        }
       }
     }
     const verification = await refreshStartupPluginQuarantine({
@@ -163,7 +201,12 @@ async function prepareStartupConfig(
     return result(read);
   } finally {
     clearInterval(heartbeat);
-    lease?.release();
+    const acquiredLease = lease;
+    if (acquiredLease) {
+      await measureDoctorConfigPreflightStep("migration-lease-release", () =>
+        acquiredLease.release(),
+      );
+    }
   }
 }
 

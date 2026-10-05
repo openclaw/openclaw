@@ -12,6 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -79,6 +80,7 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
+    useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
     vi.spyOn(fsSync, "statfsSync").mockReturnValue({
       type: disk.type,

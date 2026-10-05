@@ -15,6 +15,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -39,7 +40,6 @@ type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: strin
 
 type ReindexHarness = {
   sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
-  runInPlaceReindex: (params: { reason?: string; force?: boolean }) => Promise<void>;
   syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
   cache: { enabled: boolean; maxEntries?: number };
@@ -150,7 +150,7 @@ describe("memory manager reindex recovery", () => {
         defaults: {
           workspace: workspaceDir,
         },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     });
   }
@@ -465,7 +465,7 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it.each(["purge", "replace"] as const)(
+  it.each(["purge", "revoke"] as const)(
     "revalidates generated cache writes after published writer admission (%s)",
     async (scenario) => {
       const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
@@ -484,7 +484,7 @@ describe("memory manager reindex recovery", () => {
         throw new Error("fixture provider missing");
       }
       await fs.writeFile(path.join(memoryDir, "alpha.md"), "New reusable alpha memory.");
-      let replacementDb: DatabaseSync | undefined;
+      let reopenedDb: DatabaseSync | undefined;
       vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
         reservation = await reservePublishedWriter(() => {
           if (scenario === "purge") {
@@ -492,9 +492,8 @@ describe("memory manager reindex recovery", () => {
               agentId: "main",
               sessionIds: ["forgotten-during-embedding"],
             });
-          } else if (scenario === "replace") {
+          } else if (scenario === "revoke") {
             closeOpenClawAgentDatabasesForTest();
-            replacementDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
           }
         });
         return inputs.map(() => [0, 1, 0]);
@@ -507,12 +506,17 @@ describe("memory manager reindex recovery", () => {
         reservation?.release();
         await reservation?.done;
         await expect(sync).rejects.toThrow(
-          scenario === "replace"
+          scenario === "revoke"
             ? /^Agent database execution admission is closed$/
             : /Memory index changed/,
         );
+        if (scenario === "revoke") {
+          // Readmission waits until the revoked write and its native owner settle.
+          await closeOpenClawAgentDatabasesAsync();
+          reopenedDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+        }
         expect(
-          (replacementDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
+          (reopenedDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
         ).toEqual([]);
       } finally {
         reservation?.release();
@@ -1011,7 +1015,6 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const reindexCalls: Array<{ reason?: string; force?: boolean }> = [];
 
     harness.db
       .prepare(
@@ -1040,13 +1043,12 @@ describe("memory manager reindex recovery", () => {
     });
     harness.sessionsDirty = true;
     harness.sessionsFullRetryDirty = true;
-    harness.runInPlaceReindex = async (params) => {
-      reindexCalls.push(params);
-    };
 
     await harness.sync({ reason: "test" });
 
-    expect(reindexCalls).toHaveLength(1);
-    expect(reindexCalls[0]).toMatchObject({ reason: "test" });
+    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([]);
+    expect(memoryManager.status().custom?.indexIdentity).toMatchObject({ status: "valid" });
+    expect(harness.sessionsDirty).toBe(false);
+    expect(harness.sessionsFullRetryDirty).toBe(false);
   });
 });

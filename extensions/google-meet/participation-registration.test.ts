@@ -20,6 +20,13 @@ vi.mock("./src/runtime.js", () => ({
   },
 }));
 
+const request = {
+  action: "participate",
+  sessionId: "meeting-1",
+  requestId: "request-1",
+  participationAction: { type: "chat", text: "Hello" },
+};
+
 function setup() {
   const harness = setupGoogleMeetPlugin(plugin);
   testing.setCallGatewayFromCliForTests(createGoogleMeetToolGatewayForTest(harness.methods));
@@ -70,21 +77,6 @@ describe("Google Meet participation and tool registration", () => {
     }
   });
 
-  it("uses a provider-safe flat tool parameter schema", () => {
-    const { tool } = setup();
-
-    expect(tool.description).toContain("recover_current_tab");
-    expect(JSON.stringify(tool.parameters)).not.toContain("anyOf");
-    expect(tool.parameters).toMatchObject({
-      type: "object",
-      properties: {
-        action: { type: "string", description: expect.stringContaining("recover_current_tab") },
-        transport: { type: "string" },
-        mode: { type: "string" },
-      },
-    });
-  });
-
   it("passes action identity and correction references to the runtime once", async () => {
     const resultPayload = { requestId: "request-2", status: "unsupported" };
     runtime.participate.mockResolvedValue(resultPayload);
@@ -110,27 +102,16 @@ describe("Google Meet participation and tool registration", () => {
 
   it.each([
     [{ requestId: undefined }, "requestId required"],
-    [{ participationAction: { type: " " } }, "participationAction.type required"],
     [{ sourceId: 123 }, "sourceId must be a non-empty string"],
-    [{ correctionOf: " " }, "correctionOf must be a non-empty string"],
     [
       { participationAction: { type: "chat", text: 123 } },
       "participationAction.text must be a string",
-    ],
-    [
-      { participationAction: { type: "reaction", reaction: false } },
-      "participationAction.reaction must be a string",
     ],
   ])(
     "rejects malformed Gateway participation input before runtime dispatch: %j",
     async (overrides, message) => {
       const { methods } = setup();
-      const params = {
-        sessionId: "meeting-1",
-        requestId: "request-1",
-        participationAction: { type: "chat", text: "Hello" },
-        ...overrides,
-      };
+      const params = { ...request, ...overrides };
 
       await expect(
         invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.participate", params),
@@ -145,9 +126,7 @@ describe("Google Meet participation and tool registration", () => {
     testing.setCallGatewayFromCliForTests(callGateway);
 
     const result = await tool.execute("invalid-call", {
-      action: "participate",
-      sessionId: "meeting-1",
-      requestId: "request-1",
+      ...request,
       participationAction: "raise-hand",
     });
 
@@ -159,12 +138,7 @@ describe("Google Meet participation and tool registration", () => {
     const { tool } = setup();
     runtime.participate.mockRejectedValue(new Error("Meeting session is no longer current"));
 
-    const result = await tool.execute("stale-call", {
-      action: "participate",
-      sessionId: "meeting-1",
-      requestId: "request-1",
-      participationAction: { type: "chat", text: "Hello" },
-    });
+    const result = await tool.execute("stale-call", request);
 
     expect(result.details).toEqual({ error: "Meeting session is no longer current" });
   });

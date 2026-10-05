@@ -57,7 +57,7 @@ export type SessionArchivePruningResult = {
 export async function reclaimSqliteFreePages(
   databaseOptions: OpenClawAgentDatabaseOptions,
   diagnostics?: SqliteSessionArchivePruningDiagnostics,
-  limits?: PageReclamation & { maxPasses?: number; maxPages?: number },
+  limits?: PageReclamation & { maxPages?: number },
 ): Promise<boolean> {
   const reclaimPages = limits?.reclaimPages;
   if (!reclaimPages) {
@@ -76,8 +76,7 @@ export async function reclaimSqliteFreePages(
   }
   let remaining = limits?.maxPages;
   const gate = limits?.checkpointGate ?? { afterNs: process.hrtime.bigint(), completedAtNs: 0n };
-  const maxPasses = limits?.maxPasses ?? Infinity;
-  for (let pass = 0; pass < maxPasses && (remaining === undefined || remaining > 0); pass++) {
+  for (let pass = 0; remaining === undefined || remaining > 0; pass++) {
     if (pass > 0) {
       await setImmediate();
     }

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSnapshot } from "../config/mutate.test-support.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
@@ -60,13 +59,16 @@ const assertCurrent = () => {
 };
 
 beforeEach(async () => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mocks.preserving = false;
   stateDir = temp.make("startup-capture-cleanup-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   await fs.mkdir(path.join(stateDir, "tmp", "plugin-captures"), { recursive: true });
   mocks.read.mockResolvedValue({
-    snapshot: createSnapshot({ hash: "fixture", sourceConfig: {} }),
+    snapshot: createSnapshot({
+      hash: "fixture",
+      sourceConfig: { meta: { migrations: { webhookListeners: true } } },
+    }),
   });
   mocks.verify.mockResolvedValue({ quarantinedPlugins: [] });
   mocks.prune.mockResolvedValue({ removed: [], warnings: [] });
@@ -86,34 +88,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("settles capture reclamation under custody before Gateway plugin verification", async () => {
-  const started = createDeferred();
-  const finish = createDeferred();
-  mocks.prune.mockImplementationOnce(async (_state, assertAdmission) => {
-    assertAdmission();
-    started.resolve();
-    await finish.promise;
-    assertAdmission();
-    return { removed: [], warnings: [] };
-  });
-  mocks.verify.mockImplementationOnce(async () => {
-    expect(authorityLive).toBe(false);
-    return { quarantinedPlugins: [] };
-  });
-  const startup = runStartupConfigPreflight({ gateway: true });
-  expect(
-    await Promise.race([
-      started.promise.then(() => "cleanup"),
-      startup.then(() => "startup complete"),
-    ]),
-  ).toBe("cleanup");
-  expect(mocks.verify).not.toHaveBeenCalled();
-  finish.resolve();
-  await expect(startup).resolves.toHaveProperty("snapshot.valid", true);
+it("leaves capture reclamation to the Gateway post-ready owner", async () => {
+  await expect(runStartupConfigPreflight({ gateway: true })).resolves.toHaveProperty(
+    "snapshot.valid",
+    true,
+  );
   expect(mocks.verify).toHaveBeenCalledOnce();
-  expect(mocks.prune).toHaveBeenCalledWith(stateDir, expect.any(Function), expect.any(Object), {
-    startup: true,
-  });
+  expect(mocks.maintenance).not.toHaveBeenCalled();
+  expect(mocks.prune).not.toHaveBeenCalled();
 });
 
 it("cleans up for CLI startup only after its state-preparation guard accepts", async () => {
@@ -139,32 +121,21 @@ it.each(["observe", "artifact-preserving"])(
   },
 );
 
-it("silently skips CLI startup cleanup when another process owns Gateway state", async () => {
-  mocks.maintenance.mockRejectedValueOnce(
-    new DoctorSqliteMaintenanceLockUnavailableError(
-      "plugin source cleanup",
-      new GatewayLockError(
-        "failed to acquire gateway state ownership",
-        new GatewayStateOwnerContentionError(path.join(stateDir, "state", "openclaw.sqlite")),
-      ),
-    ),
-  );
-
-  await expect(runStartupConfigPreflight({ gateway: false })).resolves.toHaveProperty(
-    "snapshot.valid",
-    true,
-  );
-
-  expect(mocks.maintenance).toHaveBeenCalledOnce();
-  expect(mocks.prune).not.toHaveBeenCalled();
-  expect(mocks.warning).not.toHaveBeenCalled();
-});
-
-it.each(["maintenance", "permission", "cleanup"])(
-  "continues startup with one warning after %s refusal",
+it.each(["maintenance", "permission", "cleanup", "contention"])(
+  "continues CLI startup after %s refusal, warning unless another process owns state",
   async (kind) => {
     const reason = "fixture capture cleanup unavailable";
-    if (kind === "maintenance") {
+    if (kind === "contention") {
+      mocks.maintenance.mockRejectedValueOnce(
+        new DoctorSqliteMaintenanceLockUnavailableError(
+          "plugin source cleanup",
+          new GatewayLockError(
+            "failed to acquire gateway state ownership",
+            new GatewayStateOwnerContentionError(path.join(stateDir, "state", "openclaw.sqlite")),
+          ),
+        ),
+      );
+    } else if (kind === "maintenance") {
       mocks.maintenance.mockRejectedValueOnce(new Error(reason));
     } else if (kind === "permission") {
       mocks.maintenance.mockRejectedValueOnce(
@@ -176,23 +147,22 @@ it.each(["maintenance", "permission", "cleanup"])(
     } else {
       mocks.prune.mockResolvedValueOnce({ removed: [], warnings: [reason] });
     }
-    await expect(runStartupConfigPreflight({ gateway: true })).resolves.toHaveProperty(
+    await expect(runStartupConfigPreflight({ gateway: false })).resolves.toHaveProperty(
       "snapshot.valid",
       true,
     );
-    expect(mocks.warning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(reason));
-    expect(mocks.verify).toHaveBeenCalledOnce();
+    expect(mocks.maintenance).toHaveBeenCalledOnce();
+    expect(mocks.prune).toHaveBeenCalledTimes(kind === "cleanup" ? 1 : 0);
+    if (kind === "contention") {
+      expect(mocks.warning).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.warning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(reason));
+    }
+    expect(mocks.verify).not.toHaveBeenCalled();
   },
 );
 
-it("does not acquire maintenance or create state for a profile without captures", async () => {
-  const absent = path.join(stateDir, "absent");
-  await cleanupStartupPluginSourceCaptures({ OPENCLAW_STATE_DIR: absent });
-  expect(mocks.maintenance).not.toHaveBeenCalled();
-  await expect(fs.stat(absent)).rejects.toMatchObject({ code: "ENOENT" });
-});
-
-it.each(["selected", "other"])(
+it.each(["selected", "other", "absent"])(
   "checks %s-profile fallback captures when the managed capture directory is absent",
   async (profile) => {
     await fs.rm(path.join(stateDir, "tmp"), { recursive: true });
@@ -200,12 +170,17 @@ it.each(["selected", "other"])(
     for (const key of ["TMPDIR", "TMP", "TEMP"]) {
       vi.stubEnv(key, systemTmp);
     }
-    const owner = profile === "selected" ? stateDir : path.join(stateDir, "other-profile");
-    await fs.mkdir(
-      path.join(systemTmp, `${resolvePluginSourceCaptureFallbackPrefix(owner)}fixture`),
-    );
-
-    await cleanupStartupPluginSourceCaptures({ OPENCLAW_STATE_DIR: stateDir });
+    const selected = profile === "absent" ? path.join(stateDir, "absent") : stateDir;
+    if (profile !== "absent") {
+      const owner = profile === "selected" ? stateDir : path.join(stateDir, "other-profile");
+      await fs.mkdir(
+        path.join(systemTmp, `${resolvePluginSourceCaptureFallbackPrefix(owner)}fixture`),
+      );
+    }
+    await cleanupStartupPluginSourceCaptures({ OPENCLAW_STATE_DIR: selected });
+    if (profile === "absent") {
+      await expect(fs.stat(selected)).rejects.toMatchObject({ code: "ENOENT" });
+    }
 
     expect(mocks.maintenance).toHaveBeenCalledTimes(profile === "selected" ? 1 : 0);
     expect(mocks.prune).toHaveBeenCalledTimes(profile === "selected" ? 1 : 0);

@@ -98,19 +98,6 @@ const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";
 const HEIC_INPUT_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
 
-function rejectOversizedBase64Payload(params: {
-  data: string;
-  maxBytes: number;
-  label: "Image" | "File";
-}): void {
-  const estimated = estimateBase64DecodedBytes(params.data);
-  if (estimated > params.maxBytes) {
-    throw new Error(
-      `${params.label} too large: ${estimated} bytes (limit: ${params.maxBytes} bytes)`,
-    );
-  }
-}
-
 function parseContentType(value: string | undefined): {
   mimeType?: string;
   charset?: string;
@@ -149,17 +136,36 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
   };
 }
 
-async function fetchWithGuard(
-  url: string,
+async function readInputSource(
+  source: InputImageSource,
   limits: InputSourceLimits,
   kind: "input_image" | "input_file",
   signal?: AbortSignal,
-): Promise<InputFetchResult> {
+): Promise<InputFetchResult & { canonicalData?: string }> {
+  if (source.type === "base64") {
+    const estimated = estimateBase64DecodedBytes(source.data);
+    if (estimated > limits.maxBytes) {
+      const label = kind === "input_image" ? "Image" : "File";
+      throw new Error(`${label} too large: ${estimated} bytes (limit: ${limits.maxBytes} bytes)`);
+    }
+    const canonicalData = canonicalizeBase64(source.data);
+    if (!canonicalData) {
+      throw new Error(`${kind} base64 source has invalid 'data' field`);
+    }
+    return {
+      buffer: Buffer.from(canonicalData, "base64"),
+      contentType: source.mediaType,
+      canonicalData,
+    };
+  }
+  if (kind === "input_image" && source.type !== "url") {
+    throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
+  }
   if (!limits.allowUrl) {
     throw new Error(`${kind} URL sources are disabled by config`);
   }
   const { response, release } = await fetchWithSsrFGuard({
-    url,
+    url: source.url,
     maxRedirects: limits.maxRedirects,
     timeoutMs: limits.timeoutMs,
     signal,
@@ -304,24 +310,16 @@ export async function extractImageContentFromSource(
   signal?: AbortSignal,
 ): Promise<PdfExtractedImage> {
   signal?.throwIfAborted();
-  let buffer: Buffer;
-  let mimeType: string | undefined;
-  let canonicalData: string | undefined;
-  if (source.type === "base64") {
-    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
-    canonicalData = canonicalizeBase64(source.data);
-    if (!canonicalData) {
-      throw new Error("input_image base64 source has invalid 'data' field");
-    }
-    buffer = Buffer.from(canonicalData, "base64");
-    mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
-  } else if (source.type === "url") {
-    const result = await fetchWithGuard(source.url, limits, "input_image", signal);
-    buffer = result.buffer;
-    mimeType = parseContentType(result.contentType).mimeType;
-  } else {
-    throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
-  }
+  const { buffer, contentType, canonicalData } = await readInputSource(
+    source,
+    limits,
+    "input_image",
+    signal,
+  );
+  const mimeType =
+    source.type === "base64"
+      ? (normalizeMimeType(contentType) ?? "image/png")
+      : parseContentType(contentType).mimeType;
   const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
   signal?.throwIfAborted();
   // Conversions replace the buffer; unchanged bytes already have validated base64.
@@ -340,27 +338,8 @@ export async function extractFileContentFromSource(params: {
   signal?.throwIfAborted();
   const filename = source.filename || "file";
 
-  let buffer: Buffer;
-  let mimeType: string | undefined;
-  let charset: string | undefined;
-
-  if (source.type === "base64") {
-    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "File" });
-    const canonicalData = canonicalizeBase64(source.data);
-    if (!canonicalData) {
-      throw new Error("input_file base64 source has invalid 'data' field");
-    }
-    const parsed = parseContentType(source.mediaType);
-    mimeType = parsed.mimeType;
-    charset = parsed.charset;
-    buffer = Buffer.from(canonicalData, "base64");
-  } else {
-    const result = await fetchWithGuard(source.url, limits, "input_file", signal);
-    const parsed = parseContentType(result.contentType);
-    mimeType = parsed.mimeType;
-    charset = parsed.charset;
-    buffer = result.buffer;
-  }
+  const { buffer, contentType } = await readInputSource(source, limits, "input_file", signal);
+  const { mimeType, charset } = parseContentType(contentType);
 
   const extracted = await extractFileContentFromBuffer({
     buffer,

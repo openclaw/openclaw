@@ -1,5 +1,4 @@
 import { sleepWithAbort } from "@openclaw/retry";
-import { appendAttachmentUrlSearchParam } from "./chat-message-local-media.ts";
 
 export type ChatMediaPlaybackMode = "native" | "transcode";
 
@@ -18,7 +17,18 @@ function playbackAbortError(signal: AbortSignal): Error {
 }
 
 export function appendChatMediaPlaybackParam(source: string): string {
-  return appendAttachmentUrlSearchParam(source, "playback", "1");
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const hashIndex = trimmed.indexOf("#");
+  const hash = hashIndex === -1 ? "" : trimmed.slice(hashIndex);
+  const withoutHash = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
+  const queryIndex = withoutHash.indexOf("?");
+  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
+  params.set("playback", "1");
+  return `${path}?${params.toString()}${hash}`;
 }
 
 export function buildChatMediaFetchHeaders(authToken: string | null | undefined): Headers {

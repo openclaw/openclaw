@@ -65,7 +65,6 @@ const PRIMARY_PACKAGE_NAME = "openclaw";
 const GLOBAL_RENAME_PREFIX = ".";
 /** npm-compatible spec used when the user asks to install the moving main branch. */
 const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
-const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
 const BUN_OPENCLAW_TRUST_FLAG = "--trust";
@@ -151,10 +150,6 @@ function isExplicitPackageInstallSpec(value: string): boolean {
   );
 }
 
-function isRelativePackageInstallPath(value: string): boolean {
-  return /^(?:\.{1,2})(?:[\\/]|$)/u.test(value);
-}
-
 function resolveNpmInstallScriptsAllowFlag(
   spec: string,
   installCwd: string | null | undefined,
@@ -165,7 +160,7 @@ function resolveNpmInstallScriptsAllowFlag(
   let identity =
     isExplicitPackageInstallSpec(normalized) ||
     isExplicitPackageInstallSpec(unaliased) ||
-    isRelativePackageInstallPath(unaliased) ||
+    /^(?:\.{1,2})(?:[\\/]|$)/u.test(unaliased) ||
     path.isAbsolute(normalized) ||
     path.isAbsolute(unaliased)
       ? unaliased
@@ -518,22 +513,6 @@ async function resolvePortableGitPathPrepend(): Promise<string[]> {
   return existing;
 }
 
-function applyWindowsPackageInstallEnv(env: Record<string, string>) {
-  if (process.platform !== "win32") {
-    return;
-  }
-  env.NPM_CONFIG_UPDATE_NOTIFIER = "false";
-  env.NPM_CONFIG_FUND = "false";
-  env.NPM_CONFIG_AUDIT = "false";
-}
-
-function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
-  const current = env.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim();
-  if (!current) {
-    env.COREPACK_ENABLE_DOWNLOAD_PROMPT = COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT;
-  }
-}
-
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
@@ -572,13 +551,20 @@ export async function createGlobalInstallEnv(
       .map(([key, value]) => [key, String(value)]),
   ) as Record<string, string>;
   applyPathPrepend(merged, pathPrepend);
-  applyWindowsPackageInstallEnv(merged);
-  applyCorepackDownloadPromptEnv(merged);
+  if (process.platform === "win32") {
+    merged.NPM_CONFIG_UPDATE_NOTIFIER = "false";
+    merged.NPM_CONFIG_FUND = "false";
+    merged.NPM_CONFIG_AUDIT = "false";
+  }
+  if (!merged.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim()) {
+    merged.COREPACK_ENABLE_DOWNLOAD_PROMPT = "0";
+  }
   // Npm freshness policy probes npm itself; Bun installs neither need nor may spawn it.
   if (options.manager !== "bun") {
     applyNpmFreshnessBypassEnv(merged);
   }
   applyPosixNpmScriptShellEnv(merged);
+  // Candidate lifecycle uses this pin for Bun-only global launchers, including private staging.
   if (process.versions.bun) {
     merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
   }
@@ -607,14 +593,6 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   );
 }
 
-function splitNormalizedPathParts(value: string): string[] {
-  return path
-    .resolve(value)
-    .split(path.sep)
-    .filter(Boolean)
-    .map((part) => normalizeLowercaseStringOrEmpty(part));
-}
-
 function isNodeVersionPathPart(value: string | undefined): boolean {
   return value !== undefined && /^v?\d+(?:\.\d+){0,3}(?:[-+][0-9a-z.-]+)?$/u.test(value);
 }
@@ -630,7 +608,11 @@ function hasPathSequence(parts: readonly string[], sequence: readonly string[]):
 }
 
 function isEphemeralNodeManagedNpmPrefix(prefix: string): boolean {
-  const parts = splitNormalizedPathParts(prefix);
+  const parts = path
+    .resolve(prefix)
+    .split(path.sep)
+    .filter(Boolean)
+    .map(normalizeLowercaseStringOrEmpty);
   const basename = parts.at(-1);
   const parent = parts.at(-2);
   const grandparent = parts.at(-3);
@@ -1032,18 +1014,15 @@ export async function resolveGlobalInstallTarget(params: {
   const pkgOwnership = params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs);
   await pkgOwnership.assertUnowned(params.pkgRoot);
   const requestedCommand = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
-  const requestedPnpmGlobalRoot =
-    requestedCommand.manager === "pnpm"
-      ? await resolveGlobalRoot(
-          requestedCommand,
-          params.runCommand,
-          params.timeoutMs,
-          params.pkgRoot,
-        )
-      : null;
+  let requestedPnpmGlobalRoot: Promise<string | null> | undefined;
+  const resolveRequestedPnpmGlobalRoot = () =>
+    (requestedPnpmGlobalRoot ??=
+      requestedCommand.manager === "pnpm"
+        ? resolveGlobalRoot(requestedCommand, params.runCommand, params.timeoutMs, params.pkgRoot)
+        : Promise.resolve(null));
   const inferredPnpmIsolatedGlobalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(params.pkgRoot);
   const pnpmIsolatedPackage = await resolvePnpmIsolatedGlobalPackage({
-    globalRoot: inferredPnpmIsolatedGlobalRoot || requestedPnpmGlobalRoot,
+    globalRoot: inferredPnpmIsolatedGlobalRoot || (await resolveRequestedPnpmGlobalRoot()),
     packageName: params.packageName,
     pkgRoot: params.pkgRoot,
   });
@@ -1091,7 +1070,7 @@ export async function resolveGlobalInstallTarget(params: {
     (requestedCommand.manager === "pnpm" &&
     command.manager === requestedCommand.manager &&
     command.command === requestedCommand.command
-      ? requestedPnpmGlobalRoot
+      ? await resolveRequestedPnpmGlobalRoot()
       : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot));
   const pnpmIsolatedLayoutVersion =
     pnpmIsolatedPackage?.layoutVersion ??

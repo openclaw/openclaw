@@ -2,6 +2,10 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  PRESENTATION_CHANGED_EVENT,
+  type PresentationBinding,
+} from "../lit/presentation-binding.ts";
 import { installTestLinkReader, TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
 import { linkReaderPrefetch } from "./link-reader-prefetch.ts";
@@ -40,10 +44,11 @@ let container: HTMLDivElement;
 let provider: HTMLElement;
 let idleCallbacks: Map<number, IdleRequestCallback>;
 let nextIdleHandle: number;
+let presentation: PresentationBinding | undefined;
 
 function renderLinks(links = [href(1)], session = "first", active = true, connected = true) {
   render(
-    html`<div ${linkReaderPrefetch(session, active, connected)}>
+    html`<div ${linkReaderPrefetch(session, active ? (presentation ?? true) : false, connected)}>
       ${links.map((url) => html`<a class="markdown-github-link" href=${url}>Item</a>`)}
     </div>`,
     container,
@@ -84,6 +89,7 @@ describe("GitHub preview warming", () => {
     });
     vi.stubGlobal("cancelIdleCallback", (handle: number) => idleCallbacks.delete(handle));
     VisibilityObserver.instances = [];
+    presentation = undefined;
     prefetch.mockReset().mockResolvedValue(undefined);
     container = document.createElement("div");
     provider = installTestLinkReader(
@@ -93,7 +99,7 @@ describe("GitHub preview warming", () => {
     document.body.append(provider);
   });
 
-  it("leaves the transcript unscanned until the browser has idle time", async () => {
+  it("discovers links only on idle and avoids rescanning unchanged parent renders", async () => {
     renderLinks();
     await vi.advanceTimersByTimeAsync(0);
     expect(VisibilityObserver.instances).toHaveLength(0);
@@ -105,35 +111,12 @@ describe("GitHub preview warming", () => {
     observer().intersect(links);
     await vi.advanceTimersByTimeAsync(200);
     expect(prefetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not rescan unchanged links on unrelated parent renders", async () => {
-    await show();
     // Bind the external provider after Lit connects the template's root.
     await show();
     const scan = vi.spyOn(container.firstElementChild!, "querySelectorAll");
     await show();
     expect(scan).not.toHaveBeenCalled();
   });
-
-  it.each(["pane", "document", "disconnect"])(
-    "cancels unstarted discovery when hidden by %s",
-    async (hiddenBy) => {
-      renderLinks();
-      expect(idleCallbacks.size).toBe(1);
-      if (hiddenBy === "pane") {
-        renderLinks([href(1)], "first", false);
-      } else if (hiddenBy === "document") {
-        vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-        document.dispatchEvent(new Event("visibilitychange"));
-      } else {
-        render(nothing, container);
-      }
-      expect(idleCallbacks.size).toBe(0);
-      flushIdleScans();
-      expect(VisibilityObserver.instances).toHaveLength(0);
-    },
-  );
 
   it.each(["session", "capabilities"])(
     "replaces unstarted discovery when the %s changes",
@@ -333,45 +316,38 @@ describe("GitHub preview warming", () => {
     expect(prefetch).toHaveBeenCalledTimes(2);
   });
 
-  it("runs one background request at a time with an eight-item transcript budget", async () => {
-    const first = createDeferred();
-    prefetch.mockImplementationOnce(() => first.promise);
-    const links = await show([
-      `${href(1)}#issuecomment-2`,
-      ...Array.from({ length: 12 }, (_, index) => href(index + 1)),
-    ]);
-    observer().intersect(links);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(prefetch).toHaveBeenCalledTimes(1);
-    first.resolve();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(prefetch).toHaveBeenCalledTimes(8);
-    expect(observer().targets.size).toBe(0);
-    await show([href(50)]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).toHaveBeenCalledTimes(8);
+  it.each(["session", "reconnect"])(
+    "bounds background requests and resets the budget after %s",
+    async (reset) => {
+      const first = createDeferred();
+      prefetch.mockImplementationOnce(() => first.promise);
+      const hrefs = [
+        `${href(1)}#issuecomment-2`,
+        ...Array.from({ length: 12 }, (_, index) => href(index + 1)),
+      ];
+      const links = await show(hrefs);
+      observer().intersect(links);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prefetch).toHaveBeenCalledTimes(1);
+      first.resolve();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prefetch).toHaveBeenCalledTimes(8);
+      expect(observer().targets.size).toBe(0);
+      await show([href(50)]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(prefetch).toHaveBeenCalledTimes(8);
 
-    const next = await show([href(50)], "second");
-    observer().intersect(next);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(prefetch).toHaveBeenCalledTimes(9);
-  });
-
-  it("warms an exhausted conversation again after the Gateway reconnects", async () => {
-    const hrefs = Array.from({ length: 8 }, (_, index) => href(index + 1));
-    const links = await show(hrefs);
-    observer().intersect(links);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(prefetch).toHaveBeenCalledTimes(8);
-
-    await show(hrefs, "first", true, false);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).toHaveBeenCalledTimes(8);
-    const resumed = await show(hrefs);
-    observer().intersect(resumed);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(prefetch).toHaveBeenCalledTimes(16);
-  });
+      if (reset === "reconnect") {
+        await show(hrefs, "first", true, false);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(prefetch).toHaveBeenCalledTimes(8);
+      }
+      const resumed = reset === "session" ? await show([href(50)], "second") : await show(hrefs);
+      observer().intersect(resumed);
+      await vi.advanceTimersByTimeAsync(reset === "session" ? 200 : 2_000);
+      expect(prefetch).toHaveBeenCalledTimes(reset === "session" ? 9 : 16);
+    },
+  );
 
   it("drops links that leave the viewport or are removed before queued work starts", async () => {
     const links = await show([href(1), href(2)]);
@@ -401,24 +377,48 @@ describe("GitHub preview warming", () => {
     expect(prefetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["pane", "document", "disconnect"])(
-    "releases pending work when hidden by %s",
-    async (hiddenBy) => {
+  it.each(
+    ["pane", "presentation", "document", "disconnect"].flatMap((hiddenBy) =>
+      [false, true].map((started) => ({ hiddenBy, started })),
+    ),
+  )(
+    "releases work when hidden by $hiddenBy (request started: $started)",
+    async ({ hiddenBy, started }) => {
+      let presented = true;
+      const owner = new EventTarget();
+      if (hiddenBy === "presentation") {
+        presentation = { owner, isPresented: () => presented };
+      }
       const pending = createDeferred();
       prefetch.mockImplementationOnce(() => pending.promise);
-      const links = await show([href(1), href(2)]);
+      renderLinks([href(1), href(2)]);
+      expect(idleCallbacks.size).toBe(1);
+      const links = [...container.querySelectorAll("a")];
+      if (started) {
+        await vi.advanceTimersByTimeAsync(0);
+        flushIdleScans();
+        observer().intersect(links);
+        await vi.advanceTimersByTimeAsync(200);
+      }
       const oldObserver = observer();
-      oldObserver.intersect(links);
-      await vi.advanceTimersByTimeAsync(200);
-      const signal = prefetch.mock.calls[0]![1];
       if (hiddenBy === "pane") {
-        await show([href(1), href(2)], "first", false);
+        renderLinks([href(1), href(2)], "first", false);
+      } else if (hiddenBy === "presentation") {
+        presented = false;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
       } else if (hiddenBy === "document") {
         vi.spyOn(document, "hidden", "get").mockReturnValue(true);
         document.dispatchEvent(new Event("visibilitychange"));
       } else {
         render(nothing, container);
       }
+      if (!started) {
+        expect(idleCallbacks.size).toBe(0);
+        flushIdleScans();
+        expect(VisibilityObserver.instances).toHaveLength(0);
+        return;
+      }
+      const signal = prefetch.mock.calls[0]![1];
       expect(signal.aborted).toBe(true);
       expect(oldObserver.targets.size).toBe(0);
       oldObserver.intersect(links);
@@ -427,6 +427,11 @@ describe("GitHub preview warming", () => {
       expect(prefetch).toHaveBeenCalledTimes(1);
 
       vi.restoreAllMocks();
+      if (hiddenBy === "presentation") {
+        presented = true;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+        expect(idleCallbacks.size).toBe(0);
+      }
       const resumed = await show([href(1)]);
       observer().intersect(resumed);
       await vi.advanceTimersByTimeAsync(200);

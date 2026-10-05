@@ -117,14 +117,10 @@ export async function stageLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
   const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
-  writeFormattedLines(
-    args.stdout,
-    [
-      { label: "Staged LaunchAgent", value: plistPath },
-      { label: "Logs", value: stdoutPath },
-    ],
-    { leadingBlankLine: true },
-  );
+  writeFormattedLines(args.stdout, [
+    { label: "Staged LaunchAgent", value: plistPath },
+    { label: "Logs", value: stdoutPath },
+  ]);
   return { plistPath };
 }
 
@@ -265,13 +261,9 @@ export async function installLaunchAgent(
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.
-  writeFormattedLines(
-    args.stdout,
-    [
-      { label: "Installed LaunchAgent", value: plistPath },
-      { label: "Logs", value: stdoutPath },
-    ],
-    { leadingBlankLine: true },
-  );
+  writeFormattedLines(args.stdout, [
+    { label: "Installed LaunchAgent", value: plistPath },
+    { label: "Logs", value: stdoutPath },
+  ]);
   return { plistPath };
 }

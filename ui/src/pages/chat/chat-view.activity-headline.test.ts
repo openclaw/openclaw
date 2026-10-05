@@ -145,34 +145,27 @@ it("limits live copy to the newest activity group in the active run, not history
   expect(labels().filter((label) => label === "2 reads")).toHaveLength(3);
 });
 
-it("ends the run immediately while a title is pending and never publishes the stale callback", () => {
-  draw([user, tool("first", "Inspect the first file")]);
-  vi.advanceTimersByTime(100);
-  draw([user, tool("first", "Inspect the first file", "completed")]);
-  const messages = [
-    user,
-    tool("first", "Inspect the first file", "completed"),
-    tool("next", "Pending next file", "running", runId, 3),
-  ];
-  draw(messages);
-  expect(labels()).toEqual(["Inspect the first file"]);
-  draw(messages, { runActive: false, runId: null });
-  expect(container.querySelector(".chat-activity-group__label--live")).toBeNull();
-  expect(labels()).toEqual(["4 reads"]);
-  vi.advanceTimersByTime(3_000);
-  expect(labels()).toEqual(["4 reads"]);
-  expect(container.textContent).not.toContain("Pending next file…");
-});
-
-it.each(["session", "run", "connection"] as const)(
+it.each(["end", "session", "run", "connection"] as const)(
   "does not carry a pending title across a %s scope change",
   (scope) => {
     draw([user, tool("first", "Inspect the first file")]);
-    draw([
+    vi.advanceTimersByTime(100);
+    const messages = [
       user,
       tool("first", "Inspect the first file", "completed"),
       tool("next", "Stale pending file", "running", runId, 3),
-    ]);
+    ];
+    draw(messages);
+    expect(labels()).toEqual(["Inspect the first file"]);
+    if (scope === "end") {
+      draw(messages, { runActive: false, runId: null });
+      expect(container.querySelector(".chat-activity-group__label--live")).toBeNull();
+      expect(labels()).toEqual(["4 reads"]);
+      vi.advanceTimersByTime(3_000);
+      expect(labels()).toEqual(["4 reads"]);
+      expect(container.textContent).not.toContain("Stale pending file…");
+      return;
+    }
     const owner = scope === "run" ? "replacement-run" : runId;
     draw(
       [

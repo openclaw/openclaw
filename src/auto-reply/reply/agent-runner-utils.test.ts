@@ -569,38 +569,44 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
-  it("carries a prepared direct-message reply mode into generic message tools", async () => {
-    const run = makeRun();
-    const replyRoute = {
-      originatingChannel: "reef",
-      originatingTo: "reef:remote-agent",
-      originatingReplyToMode: "all",
-    } satisfies Pick<
-      FollowupRun,
-      "originatingChannel" | "originatingTo" | "originatingReplyToMode"
-    >;
+  it.each([
+    { provider: "reef", currentMessageId: "message-1" },
+    { provider: "webchat", currentMessageId: undefined },
+  ])(
+    "carries prepared reply routing without leaking $provider identity",
+    async ({ provider, currentMessageId }) => {
+      const run = makeRun();
+      const replyRoute = {
+        originatingChannel: "reef",
+        originatingTo: "reef:remote-agent",
+        originatingReplyToMode: "all",
+      } satisfies Pick<
+        FollowupRun,
+        "originatingChannel" | "originatingTo" | "originatingReplyToMode"
+      >;
 
-    const resolved = await buildEmbeddedRunExecutionParams({
-      run,
-      replyRoute,
-      sessionCtx: {
-        Provider: "reef",
-        To: "reef:local-agent",
-        MessageSid: "message-1",
-      },
-      hasRepliedRef: undefined,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
-    });
+      const resolved = await buildEmbeddedRunExecutionParams({
+        run,
+        replyRoute,
+        sessionCtx: {
+          Provider: provider,
+          To: "reef:local-agent",
+          MessageSid: "message-1",
+        },
+        hasRepliedRef: undefined,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        runId: "run-1",
+      });
 
-    expect(resolved.embeddedContext).toMatchObject({
-      currentChannelId: "reef:remote-agent",
-      currentChannelProvider: "reef",
-      currentMessageId: "message-1",
-      replyToMode: "all",
-    });
-  });
+      expect(resolved.embeddedContext).toMatchObject({
+        currentChannelId: "reef:remote-agent",
+        currentChannelProvider: "reef",
+        currentMessageId,
+        replyToMode: "all",
+      });
+    },
+  );
 
   it("carries inbound audio context into embedded message tools", async () => {
     const run = makeRun();

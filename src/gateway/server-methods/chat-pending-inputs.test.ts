@@ -5,6 +5,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
+  listSessionPendingInputs,
   stageSessionPendingInput,
   upsertSessionEntryCore,
   loadTranscriptEvents,
@@ -145,6 +146,7 @@ describe("pending input read boundary", () => {
       } finally {
         for (const receipt of receipts) {
           receipt.finish("interrupted");
+          await receipt.settled?.();
         }
       }
     });
@@ -152,7 +154,6 @@ describe("pending input read boundary", () => {
 
   it("projects pending input acceptance times with fresh page-scoped sender displays", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
       const profile = ensureProfileForEmail("pending-sender@example.test");
       const scope = {
         agentId: "main",
@@ -164,7 +165,6 @@ describe("pending input read boundary", () => {
       const readDisplay = vi.spyOn(userProfileList, "getUserProfileDisplay");
       try {
         for (let index = 0; index < 20; index += 1) {
-          now.mockReturnValue(2_000 + index);
           receipts.push(
             expectDefined(
               await stageSessionPendingInput(scope, {
@@ -185,6 +185,11 @@ describe("pending input read boundary", () => {
             ),
           );
         }
+        // Acceptance belongs to the writer worker, independently of the display projection.
+        const storedInputs = await listSessionPendingInputs(scope);
+        const acceptanceTimes = new Map(
+          storedInputs.items.map((input) => [input.id, input.acceptedAt]),
+        );
         const context = await createHistoryReadContext();
         for (const [index, overrides] of [
           {},
@@ -241,21 +246,26 @@ describe("pending input read boundary", () => {
           "pending-display-run-0",
         ]);
         expect(initial).toEqual(
-          receipts.map((receipt, index) =>
-            expect.objectContaining({
+          receipts.map((receipt, index) => {
+            const acceptedAt = expectDefined(
+              acceptanceTimes.get(receipt.inputId),
+              "stored acceptance time",
+            );
+            expect(acceptedAt).not.toBe(1_000 + index);
+            return expect.objectContaining({
               id: receipt.inputId,
-              acceptedAt: 2_000 + index,
+              acceptedAt,
               message: expect.objectContaining({
                 content: `Pending input ${index}`,
-                timestamp: 2_000 + index,
+                timestamp: acceptedAt,
                 __openclaw: expect.objectContaining({
                   senderIdentity: { type: "profile", id: profile.id },
                   senderName: "Historical sender",
                   senderProfileAvatarUrl: expect.stringContaining(profile.id),
                 }),
               }),
-            }),
-          ),
+            });
+          }),
         );
         const initialBytes = JSON.stringify(initial);
         expect(initialBytes).not.toContain("idempotencyKey");
@@ -290,8 +300,8 @@ describe("pending input read boundary", () => {
         readDisplay.mockRestore();
         for (const receipt of receipts) {
           receipt.finish("interrupted");
+          await receipt.settled?.();
         }
-        now.mockRestore();
       }
     });
   });
@@ -328,6 +338,7 @@ describe("pending input read boundary", () => {
       );
       try {
         receipt.finish("cancelled");
+        await receipt.settled?.();
         const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
         const displayId = `pending:${receipt.inputId}`;
         expect(page).toMatchObject({
@@ -369,6 +380,7 @@ describe("pending input read boundary", () => {
         });
       } finally {
         receipt.finish("interrupted");
+        await receipt.settled?.();
       }
     });
   });
@@ -414,6 +426,7 @@ describe("pending input read boundary", () => {
         expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_visible" });
       } finally {
         receipt.finish("interrupted");
+        await receipt.settled?.();
       }
     });
   });
@@ -537,6 +550,7 @@ describe("pending input consumption receipts", () => {
             }).aborted,
           ).toBe(true);
           retained[0]?.finish("cancelled");
+          await retained[0]?.settled?.();
           const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
           expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });
           expect(cancelledPage.inputReceipts).toEqual([
@@ -551,12 +565,9 @@ describe("pending input consumption receipts", () => {
           await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
           expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
         } finally {
-          aggregate.finish("interrupted");
-          for (const source of sources) {
-            source.finish("interrupted");
-          }
-          for (const receipt of retained) {
+          for (const receipt of [aggregate, ...sources, ...retained]) {
             receipt.finish("interrupted");
+            await receipt.settled?.();
           }
         }
       });

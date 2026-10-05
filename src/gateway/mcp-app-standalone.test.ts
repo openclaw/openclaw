@@ -15,7 +15,6 @@ import {
   request,
   resetStandaloneMcpAppTestState,
   runtime,
-  secret,
   view,
   verifyMcpAppStandaloneTicket,
 } from "./mcp-app-standalone.http.test-support.js";
@@ -23,21 +22,50 @@ import {
 describe("MCP App standalone host", () => {
   beforeEach(resetStandaloneMcpAppTestState);
 
+  it("negotiates fullscreen and publishes display-mode changes through the serialized host", async () => {
+    const host = await createSerializedHost();
+    host.emit({
+      jsonrpc: "2.0",
+      id: "fullscreen",
+      method: "ui/request-display-mode",
+      params: { mode: "fullscreen" },
+    });
+    expect(host.frame.style.height).toBe("900px");
+    expect(host.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "ui/notifications/host-context-changed",
+        params: { displayMode: "fullscreen" },
+      }),
+      "http://127.0.0.1:18790",
+    );
+    expect(host.postMessage).toHaveBeenCalledWith(
+      { jsonrpc: "2.0", id: "fullscreen", result: { mode: "fullscreen" } },
+      "http://127.0.0.1:18790",
+    );
+    host.emit({
+      jsonrpc: "2.0",
+      id: "pip",
+      method: "ui/request-display-mode",
+      params: { mode: "pip" },
+    });
+    expect(host.postMessage).toHaveBeenCalledWith(
+      { jsonrpc: "2.0", id: "pip", result: { mode: "fullscreen" } },
+      "http://127.0.0.1:18790",
+    );
+  });
+
   it("mints an opaque ticket bound to the session, runtime, view, and lease", () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u);
     expect(issued.ticket).not.toContain("agent:main:main");
     expect(issued.expiresAtMs).toBe(nowMs + 2 * 60_000);
-    expect(issueTicket({ sessionKey: "agent:main:main", view, nowMs: nowMs + 1, secret })).toEqual(
-      issued,
-    );
+    expect(issueTicket({ sessionKey: "agent:main:main", view, nowMs: nowMs + 1 })).toEqual(issued);
     expect(
       verifyMcpAppStandaloneTicket(issued.ticket, {
         sessionKey: "agent:main:main",
         sessionId: runtime.sessionId,
         viewId: view.viewId,
         nowMs,
-        secret,
       }),
     ).toBeDefined();
     for (const expected of [
@@ -45,21 +73,30 @@ describe("MCP App standalone host", () => {
       { sessionId: "other-runtime" },
       { viewId: "mcp-app-other" },
     ]) {
-      expect(
-        verifyMcpAppStandaloneTicket(issued.ticket, { ...expected, nowMs, secret }),
-      ).toBeUndefined();
+      expect(verifyMcpAppStandaloneTicket(issued.ticket, { ...expected, nowMs })).toBeUndefined();
     }
     expect(
-      verifyMcpAppStandaloneTicket(`${issued.ticket.slice(0, -1)}x`, { nowMs, secret }),
+      verifyMcpAppStandaloneTicket(`${issued.ticket.slice(0, -1)}x`, { nowMs }),
     ).toBeUndefined();
     expect(
-      verifyMcpAppStandaloneTicket(issued.ticket, { nowMs: issued.expiresAtMs + 1, secret }),
+      verifyMcpAppStandaloneTicket(issued.ticket, { nowMs: issued.expiresAtMs + 1 }),
+    ).toBeUndefined();
+  });
+
+  it("does not downgrade requester-bound views into bearer-only standalone authority", () => {
+    expect(
+      createMcpAppStandaloneTicket({
+        sessionKey: "agent:main:main",
+        view: { ...view, requesterId: "alice" },
+        toolOperationsAuthorized: true,
+        nowMs,
+      }),
     ).toBeUndefined();
   });
 
   it("bounds ticket lifetime and omits issuance at capacity", () => {
     const shortView = { ...view, expiresAtMs: nowMs + 1_000 };
-    expect(issueTicket({ sessionKey: "short", view: shortView, nowMs, secret }).expiresAtMs).toBe(
+    expect(issueTicket({ sessionKey: "short", view: shortView, nowMs }).expiresAtMs).toBe(
       nowMs + 1_000,
     );
     mcpAppStandaloneTesting.clearTickets();
@@ -70,7 +107,6 @@ describe("MCP App standalone host", () => {
           view: { ...view, viewId: `mcp-app-${index}` },
           toolOperationsAuthorized: true,
           nowMs,
-          secret,
         }),
       ).toBeDefined();
     }
@@ -80,19 +116,17 @@ describe("MCP App standalone host", () => {
         view: { ...view, viewId: "mcp-app-overflow" },
         toolOperationsAuthorized: true,
         nowMs,
-        secret,
       }),
     ).toBeUndefined();
   });
 
   it("binds tool authority and never reuses a stronger ticket for a read-only issuer", async () => {
-    const stronger = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const stronger = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const readOnly = issueTicket({
       sessionKey: "agent:main:main",
       view,
       toolOperationsAuthorized: false,
       nowMs: nowMs + 1,
-      secret,
     });
 
     expect(readOnly.ticket).not.toBe(stronger.ticket);
@@ -168,14 +202,13 @@ describe("MCP App standalone host", () => {
       const originalHtml = view.html;
       view.html = "<!doctype html><p>caf\u00e9 \ud83e\udd9e</p>";
       const ticket = authorized
-        ? issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket
+        ? issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket
         : undefined;
       view.activeRequests = saturated ? 4 : 0;
       const server = createServer((req, res) => {
         void handleMcpAppStandaloneHttpRequest(req, res, {
           sandboxPort: 18_790,
           nowMs,
-          ticketSecret: secret,
         }).catch((error: unknown) => {
           res.statusCode = 500;
           res.end(String(error));
@@ -268,7 +301,7 @@ describe("MCP App standalone host", () => {
   );
 
   it("returns capabilities only for handlers installed on the live view", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const route = "/__openclaw__/mcp-app/view";
     expect((await request({ url: route })).res.statusCode).toBe(401);
     expect((await request({ url: `${route}?ticket=${issued.ticket}` })).res.statusCode).toBe(401);
@@ -650,7 +683,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const invoke = (body: unknown) =>
       request({
         url: "/__openclaw__/mcp-app/view",
@@ -688,7 +721,7 @@ describe("MCP App standalone host", () => {
     });
     let grantActive = true;
     view.authorizeAppInteraction = vi.fn(async () => grantActive);
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
 
     const pending = request({
       url: "/__openclaw__/mcp-app/view",
@@ -711,7 +744,7 @@ describe("MCP App standalone host", () => {
 
   it("denies resource reads from reconstructed read-only views", async () => {
     Object.assign(view, { readOnly: true });
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const payload = await request({
       url: "/__openclaw__/mcp-app/view",
       authorization: `MCP-App ${issued.ticket}`,
@@ -739,7 +772,7 @@ describe("MCP App standalone host", () => {
 
   it("does not accept standalone server operations without explicit run authority", async () => {
     Object.assign(view, { allowedAppToolNames: undefined });
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const invoke = (body: unknown) =>
       request({
         url: "/__openclaw__/mcp-app/view",
@@ -761,7 +794,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const invoke = (now: number) =>
       request({
         url: "/__openclaw__/mcp-app/view",
@@ -803,7 +836,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("is path-scoped and rejects malformed operations", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     expect((await request({ url: "/__openclaw__/mcp-app", method: "POST" })).res.statusCode).toBe(
       404,
     );

@@ -40,13 +40,9 @@ import kotlinx.serialization.json.put
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-private data class WearRealtimeOutputMessage(
-  val type: WearRealtimeAudioFrameType,
-  val payload: ByteArray,
-)
-
 private class WearRealtimeOutputQueue(
-  val messages: Channel<WearRealtimeOutputMessage>,
+  // A null entry clears output; every other entry is PCM owned by this queue.
+  val messages: Channel<ByteArray?>,
   var retainedAudioBytes: Int = 0,
 )
 
@@ -442,7 +438,7 @@ internal class WearRealtimeTalkController(
           fail("Invalid Watch audio frame", expectedOwner = owner, expectedSessionId = currentSessionId)
           return
         }
-        if (!enqueueOutput(owner, currentSessionId, WearRealtimeAudioFrameType.OUTPUT_PCM, bytes)) {
+        if (!enqueueOutput(owner, currentSessionId, bytes)) {
           return
         }
         updateActiveStateIfCurrent(
@@ -454,7 +450,7 @@ internal class WearRealtimeTalkController(
       }
 
       "clear" -> {
-        enqueueOutput(owner, currentSessionId, WearRealtimeAudioFrameType.CLEAR_OUTPUT, byteArrayOf())
+        enqueueOutput(owner, currentSessionId, null)
       }
 
       "mark" -> {
@@ -571,7 +567,7 @@ internal class WearRealtimeTalkController(
     owner: WearRealtimeAttemptOwner,
     activeSessionId: String,
   ) {
-    val messages = Channel<WearRealtimeOutputMessage>(capacity = OUTPUT_QUEUE_CAPACITY)
+    val messages = Channel<ByteArray?>(capacity = OUTPUT_QUEUE_CAPACITY)
     val queue = WearRealtimeOutputQueue(messages)
     synchronized(outputQueueLock) { outputQueue.also { outputQueue = queue } }
       ?.messages
@@ -579,42 +575,34 @@ internal class WearRealtimeTalkController(
     outputJob?.cancel()
     outputJob =
       scope.launch {
-        for (message in messages) {
+        for (audio in messages) {
           var delivered = false
           try {
             if (!isCurrent(owner, activeSessionId)) continue
-            when (message.type) {
-              WearRealtimeAudioFrameType.OUTPUT_PCM -> {
-                delivered = true
-                for (chunk in chunkWearRealtimeOutput(message.payload)) {
-                  if (!isCurrentOutput(owner, activeSessionId)) {
-                    delivered = false
-                    break
-                  }
-                  sendWatchFrame(owner, message.type, chunk)
-                  if (!isCurrentOutput(owner, activeSessionId)) {
-                    delivered = false
-                    break
-                  }
-                  playbackEndsAtMillis =
-                    advanceWearRealtimePlaybackDeadline(
-                      currentEndsAtMillis = playbackEndsAtMillis,
-                      deliveredAtMillis = SystemClock.elapsedRealtime(),
-                      audioByteCount = chunk.size,
-                    )
-                }
+            if (audio == null) {
+              sendWatchFrame(owner, WearRealtimeAudioFrameType.CLEAR_OUTPUT, byteArrayOf())
+              delivered = isCurrentOutput(owner, activeSessionId)
+            } else {
+              delivered = true
+              for (chunk in chunkWearRealtimeOutput(audio)) {
                 if (!isCurrentOutput(owner, activeSessionId)) {
                   delivered = false
+                  break
                 }
+                sendWatchFrame(owner, WearRealtimeAudioFrameType.OUTPUT_PCM, chunk)
+                if (!isCurrentOutput(owner, activeSessionId)) {
+                  delivered = false
+                  break
+                }
+                playbackEndsAtMillis =
+                  advanceWearRealtimePlaybackDeadline(
+                    currentEndsAtMillis = playbackEndsAtMillis,
+                    deliveredAtMillis = SystemClock.elapsedRealtime(),
+                    audioByteCount = chunk.size,
+                  )
               }
-
-              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
-                sendWatchFrame(owner, message.type, message.payload)
-                delivered = isCurrentOutput(owner, activeSessionId)
-              }
-
-              WearRealtimeAudioFrameType.INPUT_PCM -> {
-                error("Phone cannot emit Watch input audio")
+              if (!isCurrentOutput(owner, activeSessionId)) {
+                delivered = false
               }
             }
           } catch (err: Throwable) {
@@ -626,33 +614,25 @@ internal class WearRealtimeTalkController(
             )
             break
           } finally {
-            if (message.type == WearRealtimeAudioFrameType.OUTPUT_PCM) {
+            if (audio != null) {
               synchronized(outputQueueLock) {
                 queue.retainedAudioBytes =
-                  (queue.retainedAudioBytes - message.payload.size).coerceAtLeast(0)
+                  (queue.retainedAudioBytes - audio.size).coerceAtLeast(0)
               }
             }
           }
           if (!delivered) continue
-          when (message.type) {
-            WearRealtimeAudioFrameType.OUTPUT_PCM -> {
-              schedulePlaybackIdle(owner, activeSessionId)
-            }
-
-            WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
-              playbackEndsAtMillis = 0L
-              playbackIdleJob?.cancel()
-              updateActiveStateIfCurrent(
-                owner = owner,
-                sessionId = activeSessionId,
-                status = WearRealtimeTalkStatus.LISTENING,
-                statusText = "Listening",
-              )
-            }
-
-            WearRealtimeAudioFrameType.INPUT_PCM -> {
-              error("Phone cannot emit Watch input audio")
-            }
+          if (audio != null) {
+            schedulePlaybackIdle(owner, activeSessionId)
+          } else {
+            playbackEndsAtMillis = 0L
+            playbackIdleJob?.cancel()
+            updateActiveStateIfCurrent(
+              owner = owner,
+              sessionId = activeSessionId,
+              status = WearRealtimeTalkStatus.LISTENING,
+              statusText = "Listening",
+            )
           }
         }
       }
@@ -669,19 +649,18 @@ internal class WearRealtimeTalkController(
   private fun enqueueOutput(
     owner: WearRealtimeAttemptOwner,
     activeSessionId: String,
-    type: WearRealtimeAudioFrameType,
-    payload: ByteArray,
+    audio: ByteArray?,
   ): Boolean {
     val accepted =
       synchronized(outputQueueLock) {
         if (!isCurrent(owner, activeSessionId)) return@synchronized false
         val queue = outputQueue ?: return@synchronized false
-        val audioBytes = payload.size.takeIf { type == WearRealtimeAudioFrameType.OUTPUT_PCM } ?: 0
+        val audioBytes = audio?.size ?: 0
         if (audioBytes > OUTPUT_QUEUE_BYTE_CAPACITY - queue.retainedAudioBytes) {
           return@synchronized false
         }
         queue.retainedAudioBytes += audioBytes
-        queue.messages.trySend(WearRealtimeOutputMessage(type, payload)).isSuccess.also { sent ->
+        queue.messages.trySend(audio).isSuccess.also { sent ->
           if (!sent) queue.retainedAudioBytes -= audioBytes
         }
       }

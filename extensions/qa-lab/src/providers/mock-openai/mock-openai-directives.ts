@@ -310,21 +310,17 @@ export function extractSessionStatusSessionKey(
   toolOutput: string,
 ) {
   const details = toolJson?.details;
-  if (details && typeof details === "object") {
-    const sessionKey = (details as { sessionKey?: unknown }).sessionKey;
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
-      return sessionKey.trim();
-    }
-  }
-  const topLevelSessionKey = toolJson?.sessionKey;
-  if (typeof topLevelSessionKey === "string" && topLevelSessionKey.trim()) {
-    return topLevelSessionKey.trim();
-  }
-  const statusLineSessionKey = /(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1];
-  if (statusLineSessionKey?.trim()) {
-    return statusLineSessionKey.trim();
-  }
-  return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
+  return (
+    normalizeOptionalString(
+      details && typeof details === "object"
+        ? (details as { sessionKey?: unknown }).sessionKey
+        : undefined,
+    ) ??
+    normalizeOptionalString(toolJson?.sessionKey) ??
+    normalizeOptionalString(/(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1]) ??
+    /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ??
+    ""
+  );
 }
 
 export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {

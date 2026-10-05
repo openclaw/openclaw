@@ -16,7 +16,6 @@ export type { ReadonlyFooterDataProvider } from "./footer-data-provider.js";
 export { convertToLlm } from "./messages.js";
 export * from "./model-registry.js";
 export * from "./model-resolver.js";
-export * from "./package-manager.js";
 export type { PromptTemplate } from "./prompt-templates.js";
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 export * from "./session-manager.js";

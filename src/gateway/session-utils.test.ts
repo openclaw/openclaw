@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
@@ -47,8 +47,8 @@ import {
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
   prepareGatewaySessionStoreTargetsReadOnly,
@@ -76,7 +76,7 @@ const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
   await import("./session-utils-provider.test-support.js");
 const providerArtifactMocks = getSessionProviderArtifactMocks();
 
-test("resolves fixed-store and auth compatibility owners", () => {
+test("resolves fixed-store and auth owners independently of retained Doctor ownership", () => {
   const cfg = retainLegacyDefaultAgentId(
     {
       agents: {
@@ -88,7 +88,7 @@ test("resolves fixed-store and auth compatibility owners", () => {
         entries: { ops: {}, research: {} },
       },
       session: { mainKey: "work", store: "/tmp/openclaw-fixed-sessions.json" },
-    },
+    } satisfies OpenClawConfig,
     "ops",
   );
   expect(resolveSessionStoreKey({ cfg, sessionKey: "incident-42" })).toBe("agent:ops:incident-42");
@@ -106,7 +106,7 @@ test("resolves fixed-store and auth compatibility owners", () => {
     }),
   ).toBe("saved");
   expect(resolveLegacyInheritedAuthAgentId(explicit)).toBe("main");
-  expect(resolveLegacyInheritedAuthAgentId(retainLegacyDefaultAgentId(explicit, "a"))).toBe("a");
+  expect(resolveLegacyInheritedAuthAgentId(retainLegacyDefaultAgentId(explicit, "a"))).toBe("main");
   expect(resolveLegacyInheritedAuthAgentId({ agents: { entries: { solo: {} } } })).toBe("solo");
 });
 
@@ -229,7 +229,7 @@ describe("gateway session utils", () => {
   test("projects configured agent identity while tolerating legacy session-key actor ids", () => {
     const cfg = {
       agents: {
-        list: [{ id: "roboclaw", identity: { name: "Roboclaw", avatar: "avatar.png" } }],
+        entries: { roboclaw: { identity: { name: "Roboclaw", avatar: "avatar.png" } } },
       },
       gateway: { controlUi: { basePath: "/control" } },
     } as OpenClawConfig;
@@ -890,6 +890,7 @@ describe("gateway session utils", () => {
       },
     } as unknown as InternalSessionEntry;
     const result = projectSessionPatchResult({
+      preparedAcpMeta: null,
       canonicalKey: "agent:main:main",
       cfg: {
         agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
@@ -1076,7 +1077,7 @@ describe("gateway session utils", () => {
 
       const row = buildGatewaySessionRow({
         cfg: {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
         } as OpenClawConfig,
         key: "global",
         agentId: "work",
@@ -1195,7 +1196,7 @@ describe("gateway session utils", () => {
   });
 
   test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const entry: SessionEntry = {
       sessionId: "direct-42",
       updatedAt: 1,
@@ -1215,7 +1216,7 @@ describe("gateway session utils", () => {
   });
 
   test("buildGatewaySessionRow does not promote direct route identities as display names", () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const entry: SessionEntry = {
       sessionId: "direct-phone",
       updatedAt: 1,
@@ -1239,7 +1240,7 @@ describe("gateway session utils", () => {
   });
 
   test("buildGatewaySessionRow keeps human contact aliases that match a route tail", () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const entry: SessionEntry = {
       sessionId: "direct-contact",
       updatedAt: 1,
@@ -1263,7 +1264,7 @@ describe("gateway session utils", () => {
   });
 
   test("buildGatewaySessionRow does not promote compact group route fallbacks as names", () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const entry: SessionEntry = {
       sessionId: "group-13",
       updatedAt: 1,
@@ -1296,7 +1297,7 @@ describe("gateway session utils", () => {
     ],
     ["empty automatic name", { displayName: undefined, autoLabel: "" }, ""],
   ])("buildGatewaySessionRow preserves title precedence for %s", (_name, overrides, expected) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const key = "agent:main:node-1234567890ab";
     const entry: SessionEntry = {
       sessionId: "node-1",
@@ -1422,7 +1423,7 @@ describe("gateway session utils", () => {
   });
 
   test("buildGatewaySessionRow group displayName prefers #channel and falls back to the token", () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const channelEntry: SessionEntry = {
       sessionId: "channel-C1",
       updatedAt: 1,
@@ -1463,7 +1464,7 @@ describe("gateway session utils", () => {
   });
 
   test("buildGatewaySessionRow projects the session root only for an explicit permission mode", () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const ordinaryEntry: SessionEntry = {
       sessionId: "ordinary",
       sessionRoot: "/workspace/private",
@@ -1497,7 +1498,7 @@ describe("gateway session utils", () => {
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {
     const cfg = {
       session: { mainKey: "work" },
-      agents: { list: [{ id: "ops", default: true }] },
+      agents: { entries: { ops: {} } },
     } as OpenClawConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
@@ -1511,7 +1512,7 @@ describe("gateway session utils", () => {
   test("resolveDeletedAgentIdFromSessionKey rejects non-alias main keys when main is absent", () => {
     const cfg = {
       session: { mainKey: "work" },
-      agents: { list: [{ id: "ops", default: true }] },
+      agents: { entries: { ops: {} } },
     } as OpenClawConfig;
     const legacyMainAlias = resolveSessionStoreKey({ cfg, sessionKey: "agent:main:main" });
 
@@ -1523,34 +1524,29 @@ describe("gateway session utils", () => {
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
   });
 
-  test("resolveDeletedAgentIdFromSessionKey ignores confirmed ACP runtime session keys", () => {
-    const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
-    } as OpenClawConfig;
-    const acpEntry = (agent: string, runtimeSessionName: string) =>
-      ({
-        acp: {
+  test("deleted-agent checks require canonical ACP metadata instead of embedded entries", async () => {
+    await withStateDirEnv("session-utils-acp-canonical-facts-", async () => {
+      const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
+      for (const agent of ["claude", "cursor"]) {
+        const key = `agent:${agent}:acp:11111111-1111-4111-8111-111111111111`;
+        const acpMeta: NonNullable<SessionEntry["acp"]> = {
           backend: "acpx",
           agent,
-          runtimeSessionName,
+          runtimeSessionName: key,
           mode: "oneshot",
           state: "idle",
           lastActivityAt: 1,
-        },
-      }) as SessionEntry;
-    const claudeKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
-    const cursorKey = "agent:cursor:acp:22222222-2222-4222-8222-222222222222";
-    expect(
-      resolveDeletedAgentIdFromSessionKey(cfg, claudeKey, acpEntry("claude", claudeKey)),
-    ).toBeNull();
-    expect(
-      resolveDeletedAgentIdFromSessionKey(cfg, cursorKey, acpEntry("cursor", cursorKey)),
-    ).toBeNull();
+        };
+        const entry: SessionEntry = { sessionId: `synthetic-${agent}`, updatedAt: 1, acp: acpMeta };
+        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, entry)).toBe(agent);
+        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, entry, { acpMeta })).toBeNull();
+      }
+    });
   });
 
   test("resolveDeletedAgentIdFromSessionKey rejects ACP-shaped bridge keys without ACP metadata", () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     } as OpenClawConfig;
 
     expect(
@@ -1570,7 +1566,7 @@ describe("gateway session utils", () => {
     ).toBe("deleted-agent");
   });
 
-  test("resolveDeletedAgentIdFromSessionKey repairs canonical ACP metadata aliases", async () => {
+  test("resolveDeletedAgentIdFromSessionKey recognizes canonical free ACP metadata", async () => {
     await withStateDirEnv("session-utils-acp-deleted-agent-repair-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
       const acpKey = "agent:claude:acp:55555555-5555-4555-8555-555555555555";
@@ -1582,7 +1578,7 @@ describe("gateway session utils", () => {
       seedSessionEntries(storePath, {
         [acpKey]: entry,
       });
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: legacyAcpKey,
         lifecycleRevision: undefined,
         meta: {
@@ -1598,7 +1594,7 @@ describe("gateway session utils", () => {
         session: {
           store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
         },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
 
       expect(
@@ -1611,7 +1607,7 @@ describe("gateway session utils", () => {
 
   test("resolveDeletedAgentIdFromSessionKey rejects deleted configured ACP binding owners", () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     } as OpenClawConfig;
 
     expect(
@@ -1625,24 +1621,19 @@ describe("gateway session utils", () => {
     ).toBeNull();
   });
 
-  test.each([false])(
-    "resolveSessionStoreKey canonicalizes bare keys (explicit sole: %s)",
-    (explicitOwnership) => {
-      const cfg: OpenClawConfig = {
-        session: { mainKey: "main" },
-        agents: explicitOwnership
-          ? { ownership: "explicit", entries: { ops: {} } }
-          : { list: [{ id: "ops", default: true }] },
-      };
-      expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
-        "agent:ops:discord:group:123",
-      );
-      expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
-        "agent:alpha:main",
-      );
-      expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
-    },
-  );
+  test("resolveSessionStoreKey canonicalizes bare keys", () => {
+    const cfg: OpenClawConfig = {
+      session: { mainKey: "main" },
+      agents: { entries: { ops: {} } },
+    };
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
+      "agent:alpha:main",
+    );
+    expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
+  });
 
   test("resolveSessionStoreKey uses configured fixed-store ownership for bare keys", () => {
     const cfg = {
@@ -1678,7 +1669,7 @@ describe("gateway session utils", () => {
   test("resolveSessionStoreKey honors global scope", () => {
     const cfg = {
       session: { scope: "global", mainKey: "work" },
-      agents: { list: [{ id: "ops", default: true }] },
+      agents: { entries: { ops: {} } },
     } as OpenClawConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("global");
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
@@ -1698,7 +1689,7 @@ describe("gateway session utils", () => {
       });
       const cfg = {
         session: { mainKey: "main", store: fixedStorePath },
-        agents: { list: [{ id: "ops", default: true }] },
+        agents: { entries: { ops: {} } },
       } as OpenClawConfig;
 
       const target = resolveGatewaySessionStoreTargetWithStore({
@@ -1739,7 +1730,7 @@ describe("gateway session utils", () => {
           mainKey: "main",
           store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
         },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
       const fallbackStore = {
         "agent:retired-agent:main": { sessionId: "sess-fallback", updatedAt: 99 },
@@ -1829,7 +1820,7 @@ describe("gateway session utils", () => {
             "sessions.json",
           ),
         },
-        agents: { list: [{ id: "ops", default: true }, { id: "work" }] },
+        agents: { entries: { ops: {}, work: {} } },
       } as OpenClawConfig;
 
       const target = resolveGatewaySessionStoreTargetWithStore({
@@ -1874,7 +1865,7 @@ describe("gateway session utils", () => {
           mainKey: "main",
           store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
         },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
 
       const target = resolveGatewaySessionStoreTargetWithStore({
@@ -1908,7 +1899,7 @@ describe("gateway session utils", () => {
           mainKey: "main",
           store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
         },
-        agents: { list: [{ id: "main", default: true }, { id: "missing" }] },
+        agents: { entries: { main: {}, missing: {} } },
       } as OpenClawConfig;
       setRuntimeConfigSnapshot(cfg, cfg);
 
@@ -1956,7 +1947,7 @@ describe("gateway session utils", () => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       const cfg = {
         session: { mainKey: "main", store: storePath },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
       const parentKey = "agent:main:main";
       const childKey = "agent:main:child";
@@ -2008,7 +1999,7 @@ describe("gateway session utils", () => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       const cfg = {
         session: { mainKey: "work", store: storePath },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
       const legacyParentKey = "agent:main:main";
       const childKey = "agent:main:child";
@@ -2048,7 +2039,7 @@ describe("gateway session utils", () => {
           mainKey: "main",
           store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
         },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
       const store: Record<string, SessionEntry> = {
         "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
@@ -2157,7 +2148,7 @@ describe("gateway session utils", () => {
           session: {
             store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
           },
-          agents: { list: [{ id: "ops", default: true }] },
+          agents: { entries: { ops: {} } },
         } as OpenClawConfig;
         for (const requestedKey of [key, "agent:main:dashboard:incognito-missing"]) {
           const target = resolveGatewaySessionStoreTargetWithStore({
@@ -2212,7 +2203,7 @@ describe("gateway session utils", () => {
       });
       const cfg = {
         session: { mainKey: "work", store: storeTemplate },
-        agents: { list: [{ id: "ops", default: true }] },
+        agents: { entries: { ops: {} } },
       } as OpenClawConfig;
       setRuntimeConfigSnapshot(cfg, cfg);
 
@@ -2247,7 +2238,7 @@ describe("gateway session utils", () => {
           mainKey: "main",
           store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
         },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
       setRuntimeConfigSnapshot(cfg, cfg);
 
@@ -2260,7 +2251,7 @@ describe("gateway session utils", () => {
   test("resolveCanonicalGatewaySessionStoreKey rejects legacy aliases", () => {
     const cfg = {
       session: { mainKey: "work" },
-      agents: { list: [{ id: "ops", default: true }] },
+      agents: { entries: { ops: {} } },
     } as OpenClawConfig;
     const store: Record<string, SessionEntry> = {
       "agent:ops:work": {
@@ -2325,9 +2316,9 @@ describe("gateway session utils", () => {
     fs.writeFileSync(path.join(workspace, "avatar-link.png"), "avatar");
     const cfg = createSingleAgentAvatarConfig(workspace);
     if (kind === "data") {
-      cfg.agents!.list![0]!.identity!.avatar = dataUrl;
+      cfg.agents!.entries!.main!.identity!.avatar = dataUrl;
     }
-    const browser = await listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
+    const browser = await listAgentsForGateway(cfg, { httpAvatarBasePath: "/control" });
     expect(browser.agents[0]?.identity?.avatarUrl).toMatch(
       /^\/control\/avatar\/main\?v=[a-f0-9]+$/,
     );
@@ -2336,14 +2327,14 @@ describe("gateway session utils", () => {
     expect((await listAgentsForGateway(cfg)).agents[0]?.identity?.avatarUrl).toBe(dataUrl);
   });
 
-  test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {
+  test("listAgentsForGateway keeps explicit agents.entries scope over disk-only agents (scope boundary)", async () => {
     await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
       fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
       fs.mkdirSync(path.join(stateDir, "agents", "codex"), { recursive: true });
 
       const cfg = {
         session: { mainKey: "main" },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } as OpenClawConfig;
 
       const { agents } = await listAgentsForGateway(cfg);
@@ -2356,7 +2347,7 @@ describe("gateway session utils", () => {
       fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
       fs.mkdirSync(path.join(stateDir, "agents", "research"), { recursive: true });
 
-      const result = await listAgentsForGateway({}, undefined, { includeSystem: true });
+      const result = await listAgentsForGateway({}, { includeSystem: true });
 
       expect(result.agents.map(({ id, kind }) => ({ id, kind }))).toEqual([
         { id: "main", kind: "agent" },
@@ -2495,16 +2486,15 @@ describe("gateway session utils", () => {
             fallbacks: ["openai/gpt-5.4"],
           },
         },
-        list: [
-          { id: "main", default: true },
-          {
-            id: "ops",
+        entries: {
+          main: {},
+          ops: {
             model: {
               primary: "anthropic/claude-opus-4-6",
               fallbacks: [],
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 
@@ -2520,7 +2510,7 @@ describe("gateway session utils", () => {
         defaults: {
           model: { primary: "local/custom-reasoner" },
         },
-        list: [{ id: "main", default: true }, { id: "work" }, { id: "missing" }],
+        entries: { main: {}, work: {}, missing: {} },
       },
     } as OpenClawConfig;
     const catalogEntry = {
@@ -2531,7 +2521,7 @@ describe("gateway session utils", () => {
     const disabledCatalog = [{ ...catalogEntry, reasoning: false }];
     const enabledCatalog = [{ ...catalogEntry, reasoning: true }];
 
-    const result = await listAgentsForGateway(cfg, disabledCatalog, {
+    const result = await listAgentsForGateway(cfg, {
       modelCatalogByAgentId: new Map([
         ["main", { entries: disabledCatalog }],
         ["work", { entries: enabledCatalog }],
@@ -2555,17 +2545,17 @@ describe("gateway session utils", () => {
         agents: {
           defaults: {
             model: {
-              primary: "clawrouter/openai/gpt-5.6",
+              primary: "sol-projection",
               fallbacks: ["openai/gpt-5.6-luna"],
             },
             models: {
               "openai/gpt-5.6-sol": {
-                alias: "clawrouter/openai/gpt-5.6",
+                alias: "sol-projection",
                 agentRuntime: { id: "codex" },
               },
             },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
         },
       } as OpenClawConfig;
       const catalog = [
@@ -2577,7 +2567,11 @@ describe("gateway session utils", () => {
         },
       ];
 
-      const agent = (await listAgentsForGateway(cfg, catalog)).agents[0];
+      const agent = (
+        await listAgentsForGateway(cfg, {
+          modelCatalogByAgentId: new Map([["main", { entries: catalog }]]),
+        })
+      ).agents[0];
 
       expect(agent).toMatchObject({
         model: {

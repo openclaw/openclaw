@@ -548,6 +548,25 @@ async function runStateLeaseOwnerInScope<T>(
           signal: operationSignal,
           renew: renewOperation,
           assertOwned: assertOperationOwned,
+          ...(workerHeartbeat
+            ? {
+                assertOwnedAsync: async () => {
+                  assertActive();
+                  const nativeHeartbeat = workerHeartbeat;
+                  if (!nativeHeartbeat) {
+                    abortLost();
+                    throw leaseLost.signal.reason;
+                  }
+                  const expiresAt = await nativeHeartbeat.verify();
+                  assertActive();
+                  nativeHeartbeat.assertRunning();
+                  if (expiresAt <= Date.now()) {
+                    abortLost();
+                    assertActive();
+                  }
+                },
+              }
+            : {}),
           assertOwnedInTransaction: assertOperationOwned,
         };
         workerOperations = createOpenClawStateLeaseWorkerOwner({
@@ -556,11 +575,17 @@ async function runStateLeaseOwnerInScope<T>(
           databasePath: resolveLeaseDatabasePath(validated.database),
           assertCurrent: () => {
             assertActive();
-            if (
-              validated.heartbeat === "worker" ||
-              validated.database.schemaPolicy === "existing"
-            ) {
+            if (validated.database.schemaPolicy === "existing") {
               throw new Error("This lease mode does not support worker writes");
+            }
+            if (validated.heartbeat === "worker") {
+              if (!workerHeartbeat) {
+                abortLost();
+                throw leaseLost.signal.reason;
+              }
+              // The worker transaction rechecks durable expiry; host grants only check liveness.
+              workerHeartbeat.assertRunning();
+              return;
             }
             // A delayed expiry timer must not admit another synchronous effect.
             if (confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {

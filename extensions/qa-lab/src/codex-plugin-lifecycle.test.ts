@@ -99,7 +99,7 @@ describe("codex plugin lifecycle: doctor migration safety matrix", () => {
     {
       name: "mixed profile with main-agent OpenClaw pin",
       profileShape: "mixed" as const,
-      config: { agents: { list: { main: { agentRuntime: { id: "openclaw" } } } } },
+      config: { agents: { entries: { main: { agentRuntime: { id: "openclaw" } } } } },
       expectedRemovedRuntimePins: ["agentRuntime.id=openclaw"],
     },
   ])(

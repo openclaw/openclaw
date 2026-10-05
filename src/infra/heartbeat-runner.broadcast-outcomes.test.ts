@@ -32,7 +32,7 @@ describe("heartbeat broadcast outcomes", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     } as OpenClawConfig;
     const runner = startHeartbeatRunner({ cfg, runOnce });

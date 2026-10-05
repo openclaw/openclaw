@@ -1,5 +1,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -81,8 +82,10 @@ export function withMaintenanceOpenClawStateDatabaseReadOnly<T>(
           admission.identity.key,
           admission.identity.birthtime,
         );
-        assertStateReadSchema(connection.database.db, pathname);
-        const value = readOperation(connection.database);
+        const value = runSqliteReadOperationSync(connection.database.db, () => {
+          assertStateReadSchema(connection.database.db, pathname);
+          return readOperation(connection.database);
+        });
         if (isPromiseLike(value)) {
           throw new SqliteCoordinatorError(
             "SQLite maintenance authority read must remain synchronous",

@@ -76,7 +76,12 @@ const tlonMessageAdapter = createChannelMessageAdapterFromOutbound({
   outbound: tlonChannelOutbound,
 });
 
-export const tlonPlugin = createChatChannelPlugin({
+export const tlonPlugin = createChatChannelPlugin<
+  ReturnType<typeof resolveTlonAccount>,
+  unknown,
+  unknown,
+  2
+>({
   base: {
     id: TLON_CHANNEL_ID,
     meta: {
@@ -179,6 +184,7 @@ export const tlonPlugin = createChatChannelPlugin({
       }),
     }),
     gateway: {
+      apiVersion: 2,
       startAccount: async (ctx) =>
         await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),
     },

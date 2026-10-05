@@ -15,7 +15,7 @@ const resolveSandboxRuntimeStatusMock =
   vi.fn<(params: { sessionKey?: string }) => { sandboxed: boolean }>();
 let config = createSubagentSpawnTestConfig("/tmp/workspace-main");
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-let resetSubagentRegistryForTests: () => unknown;
+let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 const context = {
   agentSessionKey: "agent:main:main",
   workspaceDir: "/tmp/requester-workspace",
@@ -41,8 +41,8 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     }));
   });
 
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     loadSessionStoreMock.mockReset().mockReturnValue({});
     registerSubagentRunMock.mockReset();
@@ -53,10 +53,10 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     config = createSubagentSpawnTestConfig("/tmp/workspace-main", {
       session: { threadBindings: { defaultSpawnContext: "isolated" } },
       agents: {
-        list: [
-          { id: "main", workspace: "/tmp/workspace-main", subagents: { allowAgents: ["ops"] } },
-          { id: "ops", workspace: "/tmp/workspace-ops" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/workspace-main", subagents: { allowAgents: ["ops"] } },
+          ops: { workspace: "/tmp/workspace-ops" },
+        },
       },
     });
   });

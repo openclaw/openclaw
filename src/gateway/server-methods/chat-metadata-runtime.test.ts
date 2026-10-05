@@ -78,10 +78,7 @@ describe("gateway chat metadata runtime", () => {
       );
     }
     expect(onChanged).toHaveBeenCalledTimes(1);
-    const recovered = createChatMetadataOwner(
-      { agents: { list: [{ id: "main", default: true }] } },
-      "recovered",
-    );
+    const recovered = createChatMetadataOwner({ agents: { entries: { main: {} } } }, "recovered");
     harness.setOwner(recovered);
     harness.getPreparedOwner.mockReturnValue(recovered);
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
@@ -245,33 +242,6 @@ describe("gateway chat metadata runtime", () => {
     const startup = await harness.runtime.readStartup({ agentId: "main" });
     expect(startup?.metadata?.models).toEqual(startup?.sessionModelCatalog);
     expect(harness.readProjection).toHaveBeenCalledOnce();
-  });
-
-  test("caches a session auth projection separately from the neutral projection", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.runtime.refresh();
-
-    const sessionEntry = {
-      authProfileOverride: "test:session",
-      authProfileOverrideSource: "user" as const,
-    };
-    const first = await harness.runtime.readStartup({
-      agentId: "main",
-      sessionEntry,
-    });
-    const second = await harness.runtime.readStartup({
-      agentId: "main",
-      sessionEntry,
-    });
-
-    expect(second).toEqual(first);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
-    expect(harness.buildProjection).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        preferredProfileId: "test:session",
-        pinnedProfileId: "test:session",
-      }),
-    );
   });
 
   test("ready reads never prepare or await a cold or pending exact profile", async () => {
@@ -460,53 +430,13 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test.each([
-    {
-      name: "legacy source-less user",
-      sessionEntry: { authProfileOverride: "test:legacy-user" },
-      locked: true,
-    },
-    {
-      name: "legacy source-less automatic",
-      sessionEntry: {
-        authProfileOverride: "test:legacy-auto",
-        authProfileOverrideCompactionCount: 0,
-      },
-      locked: false,
-    },
-  ])("projects $name provenance", async ({ sessionEntry, locked }) => {
-    const harness = createChatMetadataHarness();
-    await harness.runtime.refresh();
-
-    await harness.runtime.readStartup({
-      agentId: "main",
-      sessionEntry,
-    });
-
-    const projectionParams = harness.buildProjection.mock.calls.at(-1)?.[0];
-    expect(projectionParams).toEqual(
-      expect.objectContaining({
-        preferredProfileId: sessionEntry.authProfileOverride,
-      }),
-    );
-    if (locked) {
-      expect(projectionParams).toEqual(
-        expect.objectContaining({
-          pinnedProfileId: sessionEntry.authProfileOverride,
-        }),
-      );
-    } else {
-      expect(projectionParams).not.toHaveProperty("pinnedProfileId");
-    }
-  });
-
   test("reuses the prepared generation for an equivalent config replacement", async () => {
     const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     const first = await harness.runtime.read({ agentId: "main" });
 
     harness.setConfig({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     });
     await harness.runtime.refresh();
     const second = await harness.runtime.read({ agentId: "main" });
@@ -794,41 +724,6 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
   });
 
-  test("refreshes config, catalog-auth, skills, and plugin generations", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.runtime.refresh();
-    const first = await harness.runtime.read({ agentId: "main" });
-
-    harness.setSkillsVersion(2);
-    harness.runtime.invalidate();
-    await harness.runtime.refresh();
-    const skillsChanged = await harness.runtime.read({ agentId: "main" });
-
-    harness.setPluginRegistryVersion(2);
-    harness.runtime.invalidate();
-    await harness.runtime.refresh();
-    const pluginsChanged = await harness.runtime.read({ agentId: "main" });
-
-    const nextConfig = {
-      agents: { list: [{ id: "main", default: true }] },
-      tools: { swarm: { enabled: true } },
-    };
-    harness.setConfig(nextConfig);
-    harness.setOwner(createChatMetadataOwner(nextConfig, "second"));
-    harness.runtime.invalidate();
-    await harness.runtime.refresh();
-    const configAndOwnerChanged = await harness.runtime.read({ agentId: "main" });
-
-    expect(first.commands).toEqual([{ name: "command-1-1" }]);
-    expect(skillsChanged.commands).toEqual([{ name: "command-2-1" }]);
-    expect(pluginsChanged.commands).toEqual([{ name: "command-2-2" }]);
-    expect(configAndOwnerChanged.models).toEqual([
-      expect.objectContaining({ id: "second", provider: "test" }),
-    ]);
-    expect(harness.buildCommands).toHaveBeenCalledTimes(4);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(4);
-  });
-
   test("waits for replacement only for canonical metadata and session auth projections", async () => {
     const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
@@ -855,7 +750,7 @@ describe("gateway chat metadata runtime", () => {
     expect(overriddenSettled).not.toHaveBeenCalled();
 
     const nextConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       tools: { swarm: { enabled: true } },
     };
     harness.setConfig(nextConfig);
@@ -896,6 +791,9 @@ describe("gateway chat metadata runtime", () => {
       release.resolve();
     }
     expect(await reading).toEqual(draft.error);
+    await expect(harness.runtime.read({ ...draft.params, includeModels: false })).rejects.toBe(
+      draft.error,
+    );
     expect(await harness.runtime.read({ agentId: "main" })).toEqual(shared);
   });
 
@@ -933,7 +831,7 @@ describe("gateway chat metadata runtime", () => {
     await expect(failedRead).rejects.toThrow("replacement failed");
     await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("replacement failed");
 
-    const nextConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const nextConfig = { agents: { entries: { main: {} } } };
     harness.setConfig(nextConfig);
     harness.setOwner(createChatMetadataOwner(nextConfig, "recovered"));
     harness.runtime.invalidate();

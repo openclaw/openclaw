@@ -12,7 +12,10 @@ import {
   withProgress,
   withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  getRuntimeConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -23,9 +26,15 @@ import {
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  readSelectedMemoryProviderStatus,
+  resolveForeignMemorySlotOwner,
+  type SelectedMemoryProviderStatus,
+} from "./cli-memory-slot.js";
+import {
   formatAuditCounts,
   formatExtraPaths,
   formatMemoryIndexOutcome,
+  resolveMemoryAgentIds,
   resolveMemoryPluginConfig,
   scanMemoryManagerSources,
   withMemoryCommand,
@@ -48,6 +57,8 @@ import {
   type ShortTermAuditSummary,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
+const formatMemoryByteSize = (value: number) =>
+  formatByteSize(value, { style: "iec", maxUnit: "tera", separator: " ", fractionDigits: 1 });
 type LlamaCppRuntimeStatus = {
   state?: string;
   backend?: string;
@@ -139,11 +150,53 @@ function formatDreamingRepairSummary(repair: RepairDreamingArtifactsResult): str
   }
   return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
+// Another plugin owns the memory slot: report that provider, never the sidecar's own index.
+async function runSelectedMemoryProviderStatus(
+  opts: MemoryCommandOptions,
+  cfg: OpenClawConfig,
+  owner: string,
+) {
+  if (opts.deep || opts.index || opts.fix) {
+    defaultRuntime.error(
+      `memory status --deep, --index, and --fix inspect Memory Core's own index, but plugins.slots.memory selects "${owner}". Run "openclaw memory index" to maintain the Memory Core sidecar index.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const results: SelectedMemoryProviderStatus[] = [];
+  for (const agentId of resolveMemoryAgentIds(cfg, opts.agent)) {
+    results.push(await readSelectedMemoryProviderStatus({ cfg, agentId, owner }));
+  }
+  if (opts.json) {
+    defaultRuntime.writeJson(results);
+    return;
+  }
+  const label = (text: string) => muted(`${text}:`);
+  for (const { agentId, provider, health } of results) {
+    const healthColor = health.status === "ready" ? success : warn;
+    const lines = [
+      `${heading("Memory")} ${muted(`(${agentId})`)}`,
+      `${label("Provider")} ${info(provider)} ${muted("(selected memory slot)")}`,
+      `${label("Health")} ${healthColor(health.status)}${health.message ? ` ${muted(health.message)}` : ""}`,
+      `${label("Memory Core")} ${muted("consolidation sidecar only; its index is not this agent's memory")}`,
+      `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
+    ];
+    defaultRuntime.log(lines.join("\n"));
+    defaultRuntime.log("");
+  }
+}
+
 export async function runMemoryStatus(
   opts: MemoryCommandOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
   setVerbose(Boolean(opts.verbose));
+  const runtimeConfig = getRuntimeConfig({ skipPluginValidation: true });
+  const slotOwner = resolveForeignMemorySlotOwner(runtimeConfig);
+  if (slotOwner) {
+    await runSelectedMemoryProviderStatus(opts, runtimeConfig, slotOwner);
+    return;
+  }
   const deep = Boolean(opts.deep || opts.index);
   const allResults: Array<{
     agentId: string;
@@ -310,13 +363,11 @@ export async function runMemoryStatus(
     ].filter(Boolean) as string[];
     if (status.storage) {
       const storage = status.storage;
-      const bytes = (value: number) =>
-        formatByteSize(value, { style: "iec", maxUnit: "tera", separator: " ", fractionDigits: 1 });
       lines.push(
-        `${label("Agent database")} ${info(bytes(storage.databaseBytes))} · WAL ${bytes(storage.walBytes)} · reusable ${bytes(storage.reusableBytes)}`,
+        `${label("Agent database")} ${info(formatMemoryByteSize(storage.databaseBytes))} · WAL ${formatMemoryByteSize(storage.walBytes)} · reusable ${formatMemoryByteSize(storage.reusableBytes)}`,
       );
       lines.push(
-        `${label("Stored embedding cache")} ${info(bytes(storage.embeddingCacheBytes))} · ${storage.embeddingCacheEntries} entries`,
+        `${label("Stored embedding cache")} ${info(formatMemoryByteSize(storage.embeddingCacheBytes))} · ${storage.embeddingCacheEntries} entries`,
       );
       lines.push(
         muted(
@@ -337,9 +388,8 @@ export async function runMemoryStatus(
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
-    const llamaCppRuntime = deep ? readLlamaCppRuntimeStatus(status) : null;
-    if (llamaCppRuntime) {
-      const runtime = llamaCppRuntime;
+    const runtime = deep ? readLlamaCppRuntimeStatus(status) : null;
+    if (runtime) {
       const backend = runtime.backend ?? "unknown";
       const build = runtime.buildInfo ? ` (${runtime.buildInfo})` : "";
       lines.push(`${label("llama.cpp server")} ${info(backend)}${muted(build)}`);
@@ -390,12 +440,7 @@ export async function runMemoryStatus(
         const payload =
           entry.chunkBytes === undefined
             ? ""
-            : ` · ${formatByteSize(entry.chunkBytes, {
-                style: "iec",
-                maxUnit: "tera",
-                separator: " ",
-                fractionDigits: 1,
-              })} text + embeddings`;
+            : ` · ${formatMemoryByteSize(entry.chunkBytes)} text + embeddings`;
         lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts + payload)}`);
       }
     }

@@ -11,9 +11,9 @@ type OrphanRepairSessionManager = {
   getEntry: (entryId: string) => SessionManagerEntry | undefined;
   appendThinkingLevelChange: (thinkingLevel: string) => Promise<string>;
   appendModelChange: (provider: string, modelId: string) => Promise<string>;
-  appendCustomEntry: (customType: string, data?: unknown) => string;
-  appendSessionInfo: (name: string) => string;
-  appendLabelChange: (targetId: string, label?: string) => string;
+  appendCustomEntryAsync: (customType: string, data?: unknown) => Promise<string>;
+  appendSessionInfoAsync: (name: string) => Promise<string>;
+  appendLabelChangeAsync: (targetId: string, label?: string) => Promise<string>;
 };
 
 type OrphanRepairCandidate = {
@@ -60,11 +60,14 @@ async function appendTrailingEntryForOrphanRepair(
     return;
   }
   if (entry.type === "custom") {
-    replayedEntryIds.set(entry.id, sessionManager.appendCustomEntry(entry.customType, entry.data));
+    replayedEntryIds.set(
+      entry.id,
+      await sessionManager.appendCustomEntryAsync(entry.customType, entry.data),
+    );
     return;
   }
   if (entry.type === "session_info") {
-    replayedEntryIds.set(entry.id, sessionManager.appendSessionInfo(entry.name ?? ""));
+    replayedEntryIds.set(entry.id, await sessionManager.appendSessionInfoAsync(entry.name ?? ""));
     return;
   }
   if (entry.type === "label") {
@@ -73,7 +76,10 @@ async function appendTrailingEntryForOrphanRepair(
       return;
     }
     const targetId = replayedTargetId ?? entry.targetId;
-    replayedEntryIds.set(entry.id, sessionManager.appendLabelChange(targetId, entry.label));
+    replayedEntryIds.set(
+      entry.id,
+      await sessionManager.appendLabelChangeAsync(targetId, entry.label),
+    );
   }
 }
 

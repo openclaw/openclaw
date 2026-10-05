@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Message, Update } from "grammy/types";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -13,8 +14,7 @@ import {
   updateAmbientTranscriptWatermark,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
@@ -35,8 +35,12 @@ import {
 } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const createStorePath = () => path.join(tempDirs.make("telegram-watermark-"), "sessions.json");
+let storeId = 0;
+function createStorePath(): string {
+  const storeDir = harness.state.path(`telegram-watermark-${storeId++}`);
+  mkdirSync(storeDir);
+  return path.join(storeDir, "sessions.json");
+}
 const sender = { id: 1234, is_bot: false, first_name: "Pat" };
 const groupChat = { id: -1001234567890, type: "supergroup", title: "Room" } as const;
 const groupSession = "agent:main:telegram:group:-1001234567890";
@@ -222,7 +226,11 @@ describe("Telegram prompt composition", () => {
     };
     const { runtime, cfg } = createRuntime(telegramCfg);
     await runtime.recordMessageForReplyChain(message(10, "older DM"));
-    await runtime.recordMessageForReplyChain(message(11, "latest DM"));
+    const latestReply = {
+      ...message(11, "latest DM", { from: telegramBotInfoForTest }),
+      openclaw_prompt_context_timestamp_ms: 1_700_000_011_000,
+    };
+    await runtime.recordMessageForReplyChain(latestReply);
     const current = message(12, "continue");
     await runtime.recordMessageForReplyChain(current);
     const context = await runtime.buildPromptContextForMessage(
@@ -236,6 +244,7 @@ describe("Telegram prompt composition", () => {
       { payload: { messages: [{ message_id: "11", body: "latest DM" }] } },
     ]);
     expect(JSON.stringify(context)).not.toContain("older DM");
+    expect(context[0]).not.toHaveProperty("sessionTranscriptAssistantTextDedupeKeys");
   });
 
   it.each([

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -14,11 +15,17 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
 import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: vi.fn() }));
+vi.mock("./update-command-readiness.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-readiness.js")>()),
+  observeUpdateGatewayReadiness: vi.fn(),
+}));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const hostGuidance =
@@ -79,6 +86,82 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it.each([true, false])(
+    "publishes recovery observation consistently after validation fails (healthy=%s)",
+    async (healthy) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const run = createRun();
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const failedStep = {
+        name: "validating",
+        command: "validate runtime inventory",
+        cwd: "/fixture",
+        durationMs: 1,
+        exitCode: 1,
+        stderrTail: "Runtime inventory refused a retained backup link",
+      };
+      const result = failure({
+        reason: "update-failed",
+        before: { version: "2026.9.6" },
+        after: { version: "2026.9.6" },
+        failedStep,
+        steps: [failedStep],
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      });
+      vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
+        health: {
+          runtime: { status: "running", pid: 12345 },
+          portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
+          healthy,
+          staleGatewayPids: [],
+          expectedVersion: "2026.9.6",
+          gatewayVersion: "2026.9.6",
+          ...(healthy ? {} : { channelProbeErrors: [{ id: "discord", error: "not ready" }] }),
+        },
+        readyz: healthy,
+        http: undefined,
+        launchAgentRecovery: null,
+      });
+      await verifyUpdatedGateway({
+        result,
+        opts: { run },
+        serviceEnv: run.env,
+        gatewayPort: 19123,
+        requireRunningService: true,
+        purpose: "recovery",
+      });
+      await publishUpdateCommandTerminalResult(
+        { opts: { run }, coreAlreadyCurrent: false },
+        result,
+        { rolledBack: false },
+      );
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      expect(stored?.status).toBe("failed");
+      expect(stored?.reason).toBe("update-failed");
+      expect(stored?.verification.recovery).toEqual(result.recovery);
+      const terminal = log.mock.calls.flat().join("\n");
+      const reportPath = terminal.split("\n").find((line) => line.startsWith("Report: "));
+      expect(reportPath).toBeDefined();
+      const markdown = fs.readFileSync(reportPath!.slice("Report: ".length), "utf8");
+      for (const output of [terminal, markdown, stored?.origin.nextAction ?? ""]) {
+        if (healthy) {
+          expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
+          expect(output).toContain("Fix update-failed then run `openclaw update` again.");
+          expect(output).not.toContain("did not pass verification");
+        } else {
+          expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
+          expect(output).toContain("channel-errors");
+          expect(output).toContain(hostGuidance);
+          expect(output).not.toContain("nothing to restore");
+        }
+      }
+      if (healthy) {
+        expect(terminal).toContain("Gateway: verified serving after update failure.");
+        expect(markdown).toContain("restart remains unsafe (runtime-verification-failed)");
+      }
+    },
+  );
+
   it.each([false, true])(
     "records next action from the admitted row without a cold snapshot (terminal=%s)",
     async (terminal) => {

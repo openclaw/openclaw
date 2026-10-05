@@ -21,6 +21,7 @@ import {
 } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { compileModelAllowlist, type CompiledModelAllowlist } from "../model-allowlist.js";
+import { normalizePluginPolicyId } from "../plugin-policy-id.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import {
   createLlmCompleteError as completionError,
@@ -328,7 +329,7 @@ function resolvePluginLlmPolicy(
   if (!pluginId) {
     return undefined;
   }
-  const entry = normalizePluginsConfig(cfg.plugins).entries[pluginId]?.llm;
+  const entry = normalizePluginsConfig(cfg.plugins).entries[normalizePluginPolicyId(pluginId)]?.llm;
   return entry ? buildPolicyFromEntry(entry) : undefined;
 }
 

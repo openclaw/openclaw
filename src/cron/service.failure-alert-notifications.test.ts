@@ -67,7 +67,7 @@ describe("CronService failure notification delivery", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "0m" } },
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     };
     const deliveryContext: DeliveryContext = {

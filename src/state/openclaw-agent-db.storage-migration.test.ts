@@ -230,15 +230,6 @@ function legacySnapshot(db: DatabaseSync) {
   };
 }
 
-it("keeps independently sourced schema21 and deployed schema22 fixtures byte-exact", () => {
-  expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V21_SQL)).toBe(
-    "8deb7d7000eab7c43bbee427f2e7a9b603bc549562594088a14eecf7c8cc5926",
-  );
-  expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V22_SQL)).toBe(
-    "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
-  );
-});
-
 it.each(["missing mapping", "extra column", "dependent view", "draft layout"] as const)(
   "refuses an unsupported schema22 %s without changing storage",
   async (shape) => {
@@ -388,6 +379,13 @@ describe.each([21, 22])("agent schema %s storage cutover", (version) => {
   it.each(["UTF-8", "UTF-16le"] as const)(
     "atomically publishes all new formats from a genuine %s historical database",
     async (encoding) => {
+      expect(
+        sha256Hex(version === 21 ? OPENCLAW_AGENT_SCHEMA_V21_SQL : OPENCLAW_AGENT_SCHEMA_V22_SQL),
+      ).toBe(
+        version === 21
+          ? "8deb7d7000eab7c43bbee427f2e7a9b603bc549562594088a14eecf7c8cc5926"
+          : "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
+      );
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const pathname = state.path("legacy21.sqlite");
         let db = new DatabaseSync(pathname);

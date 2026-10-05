@@ -170,6 +170,7 @@ async function agentCommandInternal(
   let releaseForeground: (() => void) | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
+  let commandError: unknown;
   try {
     const operatorSession =
       opts.operatorAuthority && sessionKey
@@ -450,8 +451,7 @@ async function agentCommandInternal(
             sessionAgentId,
             lifecycleGeneration,
             runId,
-            executionWorkspaceDir:
-              sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
+            executionWorkspaceDir: cwd ?? workspaceDir,
             watchSkills,
             isNewSession,
             isSubagentLaneTurn,
@@ -577,6 +577,9 @@ async function agentCommandInternal(
       maintenanceRequest = finalized.maintenance;
       return finalized.deliveryResult;
     });
+  } catch (error) {
+    commandError = error;
+    throw error;
   } finally {
     await finishAgentCommandCleanup({
       prepared,
@@ -585,6 +588,10 @@ async function agentCommandInternal(
       sessionReboundDuringRun,
       trackedRestartRecoveryDeliveryClaim,
       terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
+      terminalEvent: {
+        data: { phase: commandError === undefined ? "end" : "error", error: commandError },
+      },
+      abortSignal: opts.abortSignal,
       lifecycleGeneration,
       beforeTerminalDelivery: opts.beforeTerminalDelivery,
       reportCommitted: compactionSessionIdReporter.reportCommitted,

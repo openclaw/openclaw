@@ -6,6 +6,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { resolveReplyRunDeliveryContext } from "../../auto-reply/reply/agent-runner-core.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
@@ -133,6 +137,7 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
+import { registerStartupSessionRepairCases } from "./main-session-startup-repair.test-harness.js";
 
 const transcriptMocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(),
@@ -618,22 +623,28 @@ describe("main-session-restart-recovery", () => {
     });
 
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     } as OpenClawConfig;
-    const storeTargets = await discoverRestartRecoveryStoreTargets({
-      cfg,
-      stateDir: tmpDir,
-      statuses: ["running"],
-    });
+    const observer = observeParentSqlite();
+    try {
+      const storeTargets = await discoverRestartRecoveryStoreTargets({
+        cfg,
+        stateDir: tmpDir,
+        statuses: ["running"],
+      });
 
-    expect(storeTargets).toContainEqual({
-      agentId: "main",
-      storePath: path.join(configuredSessionsDir, "sessions.json"),
-    });
-    expect(storeTargets).not.toContainEqual({
-      agentId: "amnesia-probe",
-      storePath: path.join(staleSessionsDir, "sessions.json"),
-    });
+      expect(storeTargets).toContainEqual({
+        agentId: "main",
+        storePath: path.join(configuredSessionsDir, "sessions.json"),
+      });
+      expect(storeTargets).not.toContainEqual({
+        agentId: "amnesia-probe",
+        storePath: path.join(staleSessionsDir, "sessions.json"),
+      });
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
   });
 
   it("marks an admitted custom-store turn after a deleted agent leaves its directory behind", async () => {
@@ -669,7 +680,7 @@ describe("main-session-restart-recovery", () => {
         await expect(
           markRestartAbortedMainSessions({
             resolveGatewayContext,
-            cfg: { agents: { list: [{ id: "main", default: true }] } },
+            cfg: { agents: { entries: { main: {} } } },
             stateDir: tmpDir,
             activeRuns: [],
           }),
@@ -737,7 +748,7 @@ describe("main-session-restart-recovery", () => {
     await writeMainSession({ sessionsDir, sessionKey: "agent:old:main" });
 
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { store: storePath },
     } as OpenClawConfig;
 
@@ -1281,43 +1292,43 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes a drain-marked turn that settles normally before the replacement starts", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const runId = "drain-overlap-run";
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    await writeStore(sessionsDir, {
-      [sessionKey]: runningSessionEntry("main-session"),
-    });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "finish the admitted work after the restart" },
-    ]);
-
-    const rootAdmission = tryBeginGatewayRootWorkAdmission();
-    expect(rootAdmission).not.toBeNull();
-    await rootAdmission?.run(async () => {
-      await expect(
-        markRestartAbortedMainSessions({
-          resolveGatewayContext,
-          stateDir: tmpDir,
-          activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
-          reason: "gateway restart drain",
-        }),
-      ).resolves.toEqual({ marked: 1, skipped: 0 });
-      markGatewayRestartDraining();
-      await expect(
-        runWithGatewayIndependentRootWorkAdmission(async () => undefined),
-      ).rejects.toBeInstanceOf(GatewayDrainingError);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const runId = "drain-overlap-run";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      await writeStore(sessionsDir, {
+        [sessionKey]: runningSessionEntry("main-session"),
+      });
       await writeTranscript(sessionsDir, "main-session", [
-        {
-          role: "toolResult",
-          toolName: "sessions_spawn",
-          isError: true,
-          content: [{ type: "text", text: "Gateway restart admission is closed." }],
-        },
-        makeAssistantTextMessage("The Gateway is restarting; retry after it comes back."),
+        { role: "user", content: "finish the admitted work after the restart" },
       ]);
-      await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+
+      const rootAdmission = tryBeginGatewayRootWorkAdmission();
+      expect(rootAdmission).not.toBeNull();
+      await rootAdmission?.run(async () => {
+        await expect(
+          markRestartAbortedMainSessions({
+            resolveGatewayContext,
+            stateDir: tmpDir,
+            activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
+            reason: "gateway restart drain",
+          }),
+        ).resolves.toEqual({ marked: 1, skipped: 0 });
+        markGatewayRestartDraining();
+        await expect(
+          runWithGatewayIndependentRootWorkAdmission(async () => undefined),
+        ).rejects.toBeInstanceOf(GatewayDrainingError);
+        await writeTranscript(sessionsDir, "main-session", [
+          {
+            role: "toolResult",
+            toolName: "sessions_spawn",
+            isError: true,
+            content: [{ type: "text", text: "Gateway restart admission is closed." }],
+          },
+          makeAssistantTextMessage("The Gateway is restarting; retry after it comes back."),
+        ]);
         await persistGatewaySessionLifecycleEvent({
           sessionKey,
           agentId: "main",
@@ -1330,35 +1341,35 @@ describe("main-session-restart-recovery", () => {
           },
         });
       });
-    });
-    rootAdmission?.release();
+      rootAdmission?.release();
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      status: "running",
-      abortedLastRun: true,
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })?.restartRecoveryRuns).toBeUndefined();
+      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+      });
+      expect(loadSessionEntry({ sessionKey, storePath })?.restartRecoveryRuns).toBeUndefined();
 
-    resetGatewayWorkAdmission();
-    rotateAgentEventLifecycleGeneration();
-    const recovery = scheduleRestartAbortedMainSessionRecovery({
-      delayMs: 0,
-      getConfig: () => ({}),
-      maxRetries: 1,
-      stateDir: tmpDir,
-    });
-    await mockRecoveryRuntime.expectAdmission(1, recovery, { sessionKey, storePath });
+      resetGatewayWorkAdmission();
+      rotateAgentEventLifecycleGeneration();
+      const recovery = scheduleRestartAbortedMainSessionRecovery({
+        delayMs: 0,
+        getConfig: () => ({}),
+        maxRetries: 1,
+        stateDir: tmpDir,
+      });
+      await mockRecoveryRuntime.expectAdmission(1, recovery, { sessionKey, storePath });
 
-    expect(gatewayParams()).toMatchObject({
-      expectedExistingSessionId: "main-session",
-      inputProvenance: {
-        kind: "internal_system",
-        sourceSessionKey: sessionKey,
-        sourceTool: "main_session_restart_recovery",
-      },
-      sessionKey,
+      expect(gatewayParams()).toMatchObject({
+        expectedExistingSessionId: "main-session",
+        inputProvenance: {
+          kind: "internal_system",
+          sourceSessionKey: sessionKey,
+          sourceTool: "main_session_restart_recovery",
+        },
+        sessionKey,
+      });
+      expect(gatewayParams().idempotencyKey).not.toBe(runId);
     });
-    expect(gatewayParams().idempotencyKey).not.toBe(runId);
   });
 
   registerParentRestartRecoveryCases({
@@ -1373,132 +1384,129 @@ describe("main-session-restart-recovery", () => {
   registerHarnessCompletionRecoveryCases(getHarnessRecoveryFixture);
 
   it("delivers a resumed reply through hooks using the interrupted route", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const deliveredText = vi.fn();
-    const hookHandler = vi.fn(
-      async (event: { payload: { text?: string } }, context: Record<string, unknown>) => ({
-        payload: {
-          ...event.payload,
-          text: `hooked: ${event.payload.text ?? ""}`,
-        },
-        metadata: context,
-      }),
-    );
-    const discordOutbound: ChannelOutboundAdapter = {
-      deliveryMode: "direct",
-      sendText: async ({ to, text }) => {
-        deliveredText({ to, text });
-        return { channel: "discord", messageId: "delivered-1" };
-      },
-    };
-    const registry = createTestRegistry([
-      {
-        pluginId: "discord",
-        source: "test",
-        plugin: createOutboundTestPlugin({ id: "discord", outbound: discordOutbound }),
-      },
-    ]);
-    addTestHook({
-      registry,
-      pluginId: "recovery-hook-test",
-      hookName: "reply_payload_sending",
-      handler: hookHandler,
-    });
-    resetGlobalHookRunner();
-    initializeGlobalHookRunner(registry);
-    setActivePluginRegistry(registry);
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      try {
+        const sessionsDir = await makeSessionsDir();
+        const storePath = path.join(sessionsDir, "sessions.json");
+        const deliveredText = vi.fn();
+        const hookHandler = vi.fn(
+          async (event: { payload: { text?: string } }, context: Record<string, unknown>) => ({
+            payload: {
+              ...event.payload,
+              text: `hooked: ${event.payload.text ?? ""}`,
+            },
+            metadata: context,
+          }),
+        );
+        const discordOutbound: ChannelOutboundAdapter = {
+          deliveryMode: "direct",
+          sendText: async ({ to, text }) => {
+            deliveredText({ to, text });
+            return { channel: "discord", messageId: "delivered-1" };
+          },
+        };
+        const registry = createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: createOutboundTestPlugin({ id: "discord", outbound: discordOutbound }),
+          },
+        ]);
+        addTestHook({
+          registry,
+          pluginId: "recovery-hook-test",
+          hookName: "reply_payload_sending",
+          handler: hookHandler,
+        });
+        resetGlobalHookRunner();
+        initializeGlobalHookRunner(registry);
+        setActivePluginRegistry(registry);
+        await writeMainSession({
+          sessionsDir,
+          sessionKey: "agent:main:discord:direct:123",
+          deliveryContext: { channel: "discord", to: "discord:dm:stale", accountId: "old" },
+          restartRecoveryDeliveryContext: {
+            channel: "discord",
+            to: "discord:dm:123",
+            accountId: "main",
+            threadId: 123,
+          },
+        });
+        await writeCompletedToolTranscript(sessionsDir);
+        vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
+          const request = params as Record<string, unknown>;
+          const runId = String(request.idempotencyKey);
+          const sessionKey = String(request.sessionKey);
+          const result = {
+            payloads: [{ text: "final answer" }],
+            meta: { durationMs: 1 },
+          };
+          await deliverAgentCommandResult({
+            cfg: {} as OpenClawConfig,
+            deps: {} as CliDeps,
+            runtime: { log: vi.fn(), error: vi.fn() } as never,
+            opts: {
+              message: String(request.message),
+              deliver: request.deliver === true,
+              bestEffortDeliver: request.bestEffortDeliver === true,
+              channel: String(request.channel),
+              to: String(request.to),
+              accountId: String(request.accountId),
+              threadId: String(request.threadId),
+              sessionKey,
+              runId,
+            },
+            outboundSession: { key: sessionKey, agentId: "main" },
+            sessionEntry: loadSessionEntry({ sessionKey, storePath }),
+            payloads: result.payloads,
+            result,
+          } as Parameters<typeof deliverAgentCommandResult>[0]);
+          return { runId, status: "ok" };
+        });
 
-    await writeMainSession({
-      sessionsDir,
-      sessionKey: "agent:main:discord:direct:123",
-      deliveryContext: { channel: "discord", to: "discord:dm:stale", accountId: "old" },
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        threadId: 123,
-      },
-    });
-    await writeCompletedToolTranscript(sessionsDir);
-    vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
-      const request = params as Record<string, unknown>;
-      const runId = String(request.idempotencyKey);
-      const sessionKey = String(request.sessionKey);
-      const result = {
-        payloads: [{ text: "final answer" }],
-        meta: { durationMs: 1 },
-      };
-      await deliverAgentCommandResult({
-        cfg: {} as OpenClawConfig,
-        deps: {} as CliDeps,
-        runtime: { log: vi.fn(), error: vi.fn() } as never,
-        opts: {
-          message: String(request.message),
-          deliver: request.deliver === true,
-          bestEffortDeliver: request.bestEffortDeliver === true,
-          channel: String(request.channel),
-          to: String(request.to),
-          accountId: String(request.accountId),
-          threadId: String(request.threadId),
-          sessionKey,
-          runId,
-        },
-        outboundSession: { key: sessionKey, agentId: "main" },
-        sessionEntry: loadSessionEntry({ sessionKey, storePath }),
-        payloads: result.payloads,
-        result,
-      } as Parameters<typeof deliverAgentCommandResult>[0]);
-      return { runId, status: "ok" };
-    });
-
-    try {
-      await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
-      const resumeParams = gatewayParams() as Record<string, unknown>;
-      expect(resumeParams).toMatchObject({
-        sessionKey: "agent:main:discord:direct:123",
-        deliver: true,
-        bestEffortDeliver: true,
-        lane: "main",
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        threadId: "123",
-      });
-      const recoveryRunId = String(resumeParams.idempotencyKey);
-      expect(hookHandler).toHaveBeenCalledWith(
-        {
-          payload: expect.objectContaining({ text: "final answer" }),
-          kind: "final",
+        await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+        const resumeParams = gatewayParams() as Record<string, unknown>;
+        expect(resumeParams).toMatchObject({
+          sessionKey: "agent:main:discord:direct:123",
+          deliver: true,
+          bestEffortDeliver: true,
+          lane: "main",
           channel: "discord",
-          sessionKey: "agent:main:discord:direct:123",
-          runId: recoveryRunId,
-          usageState: undefined,
-        },
-        {
-          channelId: "discord",
+          to: "discord:dm:123",
           accountId: "main",
-          conversationId: "discord:dm:123",
-          sessionKey: "agent:main:discord:direct:123",
-          runId: recoveryRunId,
-        },
-      );
-      expect(deliveredText).toHaveBeenCalledExactlyOnceWith({
-        to: "discord:dm:123",
-        text: "hooked: final answer",
-      });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      resetGlobalHookRunner();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+          threadId: "123",
+        });
+        const recoveryRunId = String(resumeParams.idempotencyKey);
+        expect(hookHandler).toHaveBeenCalledWith(
+          {
+            payload: expect.objectContaining({ text: "final answer" }),
+            kind: "final",
+            channel: "discord",
+            sessionKey: "agent:main:discord:direct:123",
+            runId: recoveryRunId,
+            usageState: undefined,
+          },
+          {
+            channelId: "discord",
+            accountId: "main",
+            conversationId: "discord:dm:123",
+            sessionKey: "agent:main:discord:direct:123",
+            runId: recoveryRunId,
+          },
+        );
+        expect(deliveredText).toHaveBeenCalledExactlyOnceWith({
+          to: "discord:dm:123",
+          text: "hooked: final answer",
+        });
+      } finally {
+        try {
+          await cleanupSessionStateForTest({ stateDir: tmpDir });
+        } finally {
+          resetGlobalHookRunner();
+          setActivePluginRegistry(createEmptyPluginRegistry());
+        }
       }
-    }
+    });
   });
 
   it("keeps recovered Telegram notice authority current after a transport failure", async () => {
@@ -1548,164 +1556,161 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("re-adopts a persisted Telegram private-topic route and releases the next turn", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:telegram:direct:12345:thread:12345:99";
-    const deliveryContext = {
-      channel: "telegram",
-      to: "telegram:12345",
-      accountId: "work",
-      threadId: "99",
-    } as const;
-    const delivery = {
-      kind: "external" as const,
-      context: deliveryContext,
-      route: {
-        channel: "telegram",
-        accountId: "work",
-        target: { to: "telegram:12345", chatType: "direct" as const },
-        thread: { id: "99", kind: "topic" as const, source: "turn" as const },
-      },
-      origin: {
-        provider: "telegram",
-        to: "telegram:12345",
-        accountId: "work",
-        threadId: "99",
-      },
-    };
-    const interruptedEntry = mainSessionEntry({ delivery });
-    const recoveryContext = resolveReplyRunDeliveryContext({
-      cfg: {},
-      sessionCtx: {
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:12345",
-        AccountId: "work",
-        MessageThreadId: 99,
-        TransportThreadId: 99,
-        SessionKey: sessionKey,
-      },
-      sessionEntry: interruptedEntry,
-      sessionKey,
-    });
-    expect(recoveryContext).toEqual({ ...deliveryContext, threadId: 99 });
-    await writeMainSession({
-      sessionsDir,
-      sessionKey,
-      delivery,
-    });
-    await writeCompletedToolTranscript(sessionsDir);
-
-    const deliveredText = vi.fn();
-    const telegramOutbound: ChannelOutboundAdapter = {
-      deliveryMode: "direct",
-      sendText: async ({ to, text, threadId }) => {
-        deliveredText({ to, text, threadId });
-        return { channel: "telegram", messageId: "delivered-telegram-1" };
-      },
-    };
-    resetGlobalHookRunner();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
-        },
-      ]),
-    );
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-
-    vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
-      const request = params as Record<string, unknown>;
-      const runId = String(request.idempotencyKey);
-      const current = loadSessionEntry({ sessionKey, storePath });
-      if (!current) {
-        throw new Error("expected claimed Telegram recovery session");
-      }
-      expect(
-        buildCurrentRunRestartRecoveryClaim({
-          deliveryContext,
-          entry: current,
-          runId,
-        }),
-      ).toMatchObject({
-        restartRecoveryDeliveryContext: deliveryContext,
-        restartRecoveryDeliveryRunId: runId,
-      });
-      const result = {
-        payloads: [{ text: "recovered private-topic reply" }],
-        meta: { durationMs: 1 },
-      };
-      await deliverAgentCommandResult({
-        cfg: {} as OpenClawConfig,
-        deps: {} as CliDeps,
-        runtime: { log: vi.fn(), error: vi.fn() } as never,
-        opts: {
-          message: String(request.message),
-          deliver: request.deliver === true,
-          bestEffortDeliver: request.bestEffortDeliver === true,
-          channel: String(request.channel),
-          to: String(request.to),
-          accountId: String(request.accountId),
-          threadId: String(request.threadId),
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      try {
+        const sessionsDir = await makeSessionsDir();
+        const storePath = path.join(sessionsDir, "sessions.json");
+        const sessionKey = "agent:main:telegram:direct:12345:thread:12345:99";
+        const deliveryContext = {
+          channel: "telegram",
+          to: "telegram:12345",
+          accountId: "work",
+          threadId: "99",
+        } as const;
+        const delivery = {
+          kind: "external" as const,
+          context: deliveryContext,
+          route: {
+            channel: "telegram",
+            accountId: "work",
+            target: { to: "telegram:12345", chatType: "direct" as const },
+            thread: { id: "99", kind: "topic" as const, source: "turn" as const },
+          },
+          origin: {
+            provider: "telegram",
+            to: "telegram:12345",
+            accountId: "work",
+            threadId: "99",
+          },
+        };
+        const interruptedEntry = mainSessionEntry({ delivery });
+        const recoveryContext = resolveReplyRunDeliveryContext({
+          cfg: {},
+          sessionCtx: {
+            Provider: "telegram",
+            OriginatingChannel: "telegram",
+            OriginatingTo: "telegram:12345",
+            AccountId: "work",
+            MessageThreadId: 99,
+            TransportThreadId: 99,
+            SessionKey: sessionKey,
+          },
+          sessionEntry: interruptedEntry,
           sessionKey,
-          runId,
-        },
-        outboundSession: { key: sessionKey, agentId: "main" },
-        sessionEntry: current,
-        payloads: result.payloads,
-        result,
-      } as Parameters<typeof deliverAgentCommandResult>[0]);
-      return { runId, status: "ok" };
-    });
+        });
+        expect(recoveryContext).toEqual({ ...deliveryContext, threadId: 99 });
+        await writeMainSession({
+          sessionsDir,
+          sessionKey,
+          delivery,
+        });
+        await writeCompletedToolTranscript(sessionsDir);
 
-    try {
-      await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
-      expect(gatewayParams()).toMatchObject({
-        sessionKey,
-        channel: "telegram",
-        to: "telegram:12345",
-        accountId: "work",
-        threadId: "99",
-      });
-      expect(deliveredText).toHaveBeenCalledWith({
-        to: "telegram:12345",
-        text: "recovered private-topic reply",
-        threadId: "99",
-      });
-      expect(sendRecoveryNotice).not.toHaveBeenCalled();
-      const completed = loadSessionEntry({ sessionKey, storePath });
-      expect(completed).toMatchObject({ status: "done", abortedLastRun: false });
-      expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(completed?.restartRecoveryDeliveryContext).toBeUndefined();
-      if (!completed) {
-        throw new Error("expected completed Telegram recovery session");
+        const deliveredText = vi.fn();
+        const telegramOutbound: ChannelOutboundAdapter = {
+          deliveryMode: "direct",
+          sendText: async ({ to, text, threadId }) => {
+            deliveredText({ to, text, threadId });
+            return { channel: "telegram", messageId: "delivered-telegram-1" };
+          },
+        };
+        resetGlobalHookRunner();
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+            },
+          ]),
+        );
+        vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
+          const request = params as Record<string, unknown>;
+          const runId = String(request.idempotencyKey);
+          const current = loadSessionEntry({ sessionKey, storePath });
+          if (!current) {
+            throw new Error("expected claimed Telegram recovery session");
+          }
+          expect(
+            buildCurrentRunRestartRecoveryClaim({
+              deliveryContext,
+              entry: current,
+              runId,
+            }),
+          ).toMatchObject({
+            restartRecoveryDeliveryContext: deliveryContext,
+            restartRecoveryDeliveryRunId: runId,
+          });
+          const result = {
+            payloads: [{ text: "recovered private-topic reply" }],
+            meta: { durationMs: 1 },
+          };
+          await deliverAgentCommandResult({
+            cfg: {} as OpenClawConfig,
+            deps: {} as CliDeps,
+            runtime: { log: vi.fn(), error: vi.fn() } as never,
+            opts: {
+              message: String(request.message),
+              deliver: request.deliver === true,
+              bestEffortDeliver: request.bestEffortDeliver === true,
+              channel: String(request.channel),
+              to: String(request.to),
+              accountId: String(request.accountId),
+              threadId: String(request.threadId),
+              sessionKey,
+              runId,
+            },
+            outboundSession: { key: sessionKey, agentId: "main" },
+            sessionEntry: current,
+            payloads: result.payloads,
+            result,
+          } as Parameters<typeof deliverAgentCommandResult>[0]);
+          return { runId, status: "ok" };
+        });
+
+        await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+        expect(gatewayParams()).toMatchObject({
+          sessionKey,
+          channel: "telegram",
+          to: "telegram:12345",
+          accountId: "work",
+          threadId: "99",
+        });
+        expect(deliveredText).toHaveBeenCalledWith({
+          to: "telegram:12345",
+          text: "recovered private-topic reply",
+          threadId: "99",
+        });
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        const completed = loadSessionEntry({ sessionKey, storePath });
+        expect(completed).toMatchObject({ status: "done", abortedLastRun: false });
+        expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(completed?.restartRecoveryDeliveryContext).toBeUndefined();
+        if (!completed) {
+          throw new Error("expected completed Telegram recovery session");
+        }
+        expect(
+          buildCurrentRunRestartRecoveryClaim({
+            deliveryContext,
+            entry: completed,
+            runId: "telegram-follow-up-run",
+            sourceIngress: "channel",
+            sourceRunId: "telegram-follow-up-source",
+          }),
+        ).toMatchObject({
+          restartRecoveryDeliveryContext: deliveryContext,
+          restartRecoveryDeliveryRunId: "telegram-follow-up-run",
+          restartRecoveryDeliverySourceRunId: "telegram-follow-up-source",
+        });
+      } finally {
+        try {
+          await cleanupSessionStateForTest({ stateDir: tmpDir });
+        } finally {
+          resetGlobalHookRunner();
+          setActivePluginRegistry(createEmptyPluginRegistry());
+        }
       }
-      expect(
-        buildCurrentRunRestartRecoveryClaim({
-          deliveryContext,
-          entry: completed,
-          runId: "telegram-follow-up-run",
-          sourceIngress: "channel",
-          sourceRunId: "telegram-follow-up-source",
-        }),
-      ).toMatchObject({
-        restartRecoveryDeliveryContext: deliveryContext,
-        restartRecoveryDeliveryRunId: "telegram-follow-up-run",
-        restartRecoveryDeliverySourceRunId: "telegram-follow-up-source",
-      });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      resetGlobalHookRunner();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+    });
   });
 
   it("reuses a transcript-only claim without inferring historical session routes", async () => {
@@ -2737,6 +2742,19 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
   });
 
+  registerStartupSessionRepairCases(() => ({
+    tmpDir,
+    makeSessionsDir,
+    writeStore,
+    writeTranscript,
+    runningSessionEntry,
+    makePendingFinalDelivery,
+    readStore,
+    expectRecovery,
+    gatewayRuntime: mockRecoveryRuntime,
+    dispatchSettlement,
+  }));
+
   it("does not create empty agent databases while scanning startup recovery", async () => {
     const agentIds = Array.from({ length: 12 }, (_, index) => `agent-${index + 1}`);
     const databasePaths = await Promise.all(
@@ -2986,9 +3004,8 @@ describe("main-session-restart-recovery", () => {
     const lateSessionsDir = path.join(tmpDir, "agents", "late", "sessions");
     const lateStorePath = path.join(lateSessionsDir, "sessions.json");
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "late" }] },
+      agents: { entries: { main: {}, late: {} } },
     } as OpenClawConfig;
-    const discoverySpy = vi.spyOn(configSessions, "resolveAllAgentSessionStoreTargetsSync");
     const originalApply = sessionAccessor.applySessionEntryReplacements;
     let restoredLateStore = false;
     const replacementSpy = vi
@@ -3036,14 +3053,10 @@ describe("main-session-restart-recovery", () => {
 
       expect(readStore(storePath)["agent:main:main"]?.abortedLastRun).toBe(false);
       expect(readStore(lateStorePath)["agent:late:main"]?.abortedLastRun).toBe(false);
-      expect(discoverySpy.mock.calls.filter(([observedCfg]) => observedCfg === cfg)).toHaveLength(
-        2,
-      );
     } finally {
       dispatchSettlement.resolve();
       await recovery.stop();
       replacementSpy.mockRestore();
-      discoverySpy.mockRestore();
     }
   });
 
@@ -3178,7 +3191,7 @@ describe("main-session-restart-recovery", () => {
       { role: "toolResult", content: "done" },
     ]);
     let currentConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     } as OpenClawConfig;
 
     const recovery = scheduleRestartAbortedMainSessionRecovery({
@@ -3189,7 +3202,7 @@ describe("main-session-restart-recovery", () => {
     });
     await Promise.resolve();
     currentConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
     } as OpenClawConfig;
     releaseStartup.resolve();
 
@@ -3398,7 +3411,7 @@ describe("main-session-restart-recovery", () => {
   it.each([false, true])(
     "resumes healthy stores when another startup marker fails (transient=%s)",
     async (transient) => {
-      const cfg = { agents: { entries: { main: { default: true }, worker: {} } } };
+      const cfg = { agents: { entries: { main: {}, worker: {} } } };
       for (const agentId of ["main", "worker"]) {
         const sessionsDir = await makeSessionsDir(agentId);
         await writeStore(sessionsDir, {
@@ -3487,7 +3500,6 @@ describe("main-session-restart-recovery", () => {
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
     const cfg = {} as OpenClawConfig;
-    const discoverySpy = vi.spyOn(configSessions, "resolveAllAgentSessionStoreTargetsSync");
     const firstDispatch = createDeferred();
     const secondDispatch = createDeferred();
     let firstAgentDispatch = true;
@@ -3555,13 +3567,9 @@ describe("main-session-restart-recovery", () => {
       });
       expect(lateEntry).toMatchObject({ status: "running" });
       expect(lateEntry?.abortedLastRun).toBeUndefined();
-      expect(discoverySpy.mock.calls.filter(([observedCfg]) => observedCfg === cfg)).toHaveLength(
-        4,
-      );
     } finally {
       await recovery?.stop();
       setTimeoutSpy.mockRestore();
-      discoverySpy.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -4191,7 +4199,7 @@ describe("main-session-restart-recovery", () => {
     try {
       await dispatchEntered.promise;
       expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
-      mutation = runExclusiveSessionLifecycleMutation({
+      mutation = runExclusiveSessionLifecycleMutation("recover", {
         scope: storePath,
         identities: [sessionKey, sessionId],
         prepare: async () => {
@@ -4253,27 +4261,6 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryDeliverySourceRunId: "replacement-source",
       sessionId: "replacement-session",
     });
-  });
-
-  it("does not dispatch an archived durable recovery claim", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        sessionId: "archived-session",
-        updatedAt: Date.now() - 10_000,
-        archivedAt: Date.now() - 5_000,
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "archived-recovery",
-        restartRecoveryDeliverySourceRunId: "archived-source",
-      },
-    });
-    await writeTranscript(sessionsDir, "archived-session", [
-      { role: "user", content: "do not recover while archived" },
-    ]);
-
-    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
-    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("completes an interrupted turn whose exact terminal source reply was delivered", async () => {

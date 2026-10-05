@@ -1,132 +1,93 @@
-import fs, { type FSWatcher } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  admitObservationRoot,
+  watch,
+  type WatchSubscription,
+} from "openclaw/plugin-sdk/file-access-runtime";
 
 export type DirtyDirectoryWatch = {
-  /** Direct-child names changed since the previous take, or "all" when coverage is uncertain. */
+  /** Direct-child names to re-read, or "all" when coverage is uncertain. */
   takeDirty(): "all" | Set<string>;
-  /** Linux only: maintain one non-recursive watcher per named child directory. */
-  observeChildDirectories(names: Iterable<string>): void;
-  close(): void;
+  close(): Promise<void>;
 };
 
 const WATCH_RETRY_MS = 5_000;
-// macOS creates the FSEvents stream asynchronously after fs.watch() returns, so writes landing
-// before it is live are never reported. A watch vouches for coverage only once it has been
-// attached this long and polled; the caller's full read on that poll closes the gap.
-const WATCH_ARM_MS = 250;
 
-export function createDirtyDirectoryWatch(root: string): DirtyDirectoryWatch {
-  const recursive = process.platform === "darwin" || process.platform === "win32";
-  const children = new Map<string, FSWatcher>();
-  let rootWatch: FSWatcher | undefined;
-  let dirty: "all" | Set<string> = new Set();
+export function createDirtyDirectoryWatch(directory: string, depth = 2): DirtyDirectoryWatch {
+  let subscription: WatchSubscription | undefined;
+  let starting: Promise<void> | undefined;
+  let dirty: "all" | Set<string> = "all";
   let retryAt = 0;
-  let armAt = 0;
-  let armed = false;
   let closed = false;
-  const closeWatchers = () => {
-    rootWatch?.close();
-    rootWatch = undefined;
-    for (const watcher of children.values()) {
-      watcher.close();
-    }
-    children.clear();
-  };
-  const fail = () => {
-    closeWatchers();
-    dirty = "all";
-    retryAt = Date.now() + WATCH_RETRY_MS;
-  };
-  const attach = (child?: string): FSWatcher | undefined => {
-    try {
-      if (!recursive && process.platform !== "linux") {
-        fail();
-        return undefined;
+  const start = () => {
+    starting = (async () => {
+      await subscription?.close();
+      subscription = undefined;
+      // Catalog reads already trust a configured projects root through a symlink.
+      const canonical = await fs.realpath(directory);
+      const authority = await admitObservationRoot(canonical, "allow");
+      const scope = path.relative(authority.rootDir, canonical) || ".";
+      if (closed) {
+        return;
       }
-      // Linux recursive fs.watch uses internal/fs/recursive_watch and watches every file.
-      // Root + immediate-directory watches avoid fan-out into the much larger transcript trees.
-      return fs
-        .watch(
-          child ? path.join(root, child) : root,
-          { recursive, persistent: false },
-          (event, filename) => {
-            const name = child ?? filename?.split(/[\\/]/, 1)[0];
-            if (!name || (!child && event === "rename" && filename === path.basename(root))) {
-              dirty = "all";
-            } else if (dirty !== "all") {
+      subscription = watch(authority, {
+        mode: "auto",
+        persistent: false,
+        scopes: [{ path: scope, kind: "tree", depth }],
+        onInvalidate: ({ changes }) => {
+          if (!changes) {
+            dirty = "all";
+          } else if (dirty !== "all") {
+            for (const change of changes) {
+              const relative = path.relative(
+                canonical,
+                path.resolve(authority.rootDir, change.path),
+              );
+              const name = relative.split(path.sep, 1)[0];
+              if (!name || name === "." || name === "..") {
+                dirty = "all";
+                break;
+              }
               dirty.add(name);
             }
-            if (!child && event === "rename" && name) {
-              children.get(name)?.close();
-              children.delete(name);
-            }
-          },
-        )
-        .on("error", fail);
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      if (child && (code === "ENOENT" || code === "ENOTDIR")) {
-        return undefined;
-      }
-      fail();
-      return undefined;
-    }
+          }
+        },
+        onHealth: (health) => {
+          if (health.state === "unavailable") {
+            dirty = "all";
+            retryAt = Date.now() + WATCH_RETRY_MS;
+          }
+        },
+      });
+      await subscription.ready;
+    })()
+      .catch(() => {
+        dirty = "all";
+        retryAt = Date.now() + WATCH_RETRY_MS;
+      })
+      .finally(() => {
+        starting = undefined;
+      });
   };
-  const attachRoot = () => {
-    rootWatch = attach();
-    armAt = performance.now() + WATCH_ARM_MS;
-    armed = false;
-    dirty = rootWatch ? new Set() : "all";
-  };
-  attachRoot();
+  start();
   return {
     takeDirty() {
-      if (closed || !rootWatch) {
-        if (!closed && Date.now() >= retryAt) {
-          attachRoot();
+      const state = subscription?.health().state;
+      if (closed || starting || !subscription || state === "unavailable" || state === "closed") {
+        if (!closed && !starting && Date.now() >= retryAt) {
+          start();
         }
-        return "all";
-      }
-      if (!armed) {
-        armed = performance.now() >= armAt;
         return "all";
       }
       const result = dirty;
-      if (result === "all") {
-        // Unknown coverage may mean the watched inode was replaced; re-arm before the full read.
-        closeWatchers();
-        attachRoot();
-      } else {
-        dirty = new Set();
-      }
+      dirty = new Set();
       return result;
     },
-    observeChildDirectories(names) {
-      if (recursive || closed || !rootWatch) {
-        return;
-      }
-      const wanted = new Set(names);
-      for (const [name, watcher] of children) {
-        if (!wanted.has(name)) {
-          watcher.close();
-          children.delete(name);
-        }
-      }
-      for (const name of wanted) {
-        if (!children.has(name)) {
-          const watcher = attach(name);
-          if (!rootWatch) {
-            break;
-          }
-          if (watcher) {
-            children.set(name, watcher);
-          }
-        }
-      }
-    },
-    close() {
+    async close() {
       closed = true;
-      closeWatchers();
+      await starting;
+      await subscription?.close();
     },
   };
 }

@@ -60,6 +60,25 @@ describe("Claude CLI adapter equivalence", () => {
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
   });
 
+  it("disables native Bash while retaining native denials for managed shell turns", () => {
+    for (const baseArgs of [commonArgs, [...commonArgs, "--resume", "session"]]) {
+      const args = resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp/managed-shell",
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        useResume: baseArgs.includes("--resume"),
+        baseArgs,
+        hostOwnedTools: ["exec", "process"],
+      });
+      expect(args.filter((arg) => arg === "--disallowedTools")).toHaveLength(1);
+      const denials = args[args.indexOf("--disallowedTools") + 1]?.split(",");
+      expect(denials).toEqual(
+        expect.arrayContaining(["Bash", "CronCreate", "ScheduleWakeup", "Monitor"]),
+      );
+      expect(args).not.toContain("--tools");
+    }
+  });
+
   it("privately acknowledges isolated completion preparation", () => {
     const backend = buildAnthropicCliBackend();
     const prepared = backend.prepareExecution?.({

@@ -17,6 +17,7 @@ import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
 import type { AuthenticatedGitHubIdentitySync } from "./github-user-identity.types.js";
+import { firstHeaderValue } from "./http-header-value.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
 const CLOUDFLARE_ACCESS_ASSERTION_HEADER = "cf-access-jwt-assertion";
@@ -39,10 +40,6 @@ type GitHubIdentityMetadataCache = {
   pending: Map<string, Promise<ResolvedGitHubUserIdentity>>;
 };
 const identityMetadataCaches = new WeakMap<typeof fetch, GitHubIdentityMetadataCache>();
-
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
 
 function cloudflareAccessIssuer(assertion: string): URL {
   if (Buffer.byteLength(assertion, "utf8") > ACCESS_ASSERTION_MAX_BYTES) {
@@ -155,13 +152,15 @@ async function resolveGitHubUserIdentityByLogin(
   if (!requestedLogin) {
     throw new TypeError("GitHub username is invalid");
   }
-  const token = githubApiToken();
+  const token = githubApiToken(process.env, undefined, "github.com");
   let payload: unknown;
   try {
     payload = await gitHubPublicApi.fetchGitHubJson(
       `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
       fetch,
       token,
+      undefined,
+      gitHubPublicApi.GITHUB_API_ORIGIN,
     );
   } catch (error) {
     if (error instanceof gitHubPublicApi.ControlUiGitHubError) {
@@ -220,6 +219,9 @@ function resolveGitHubUserIdentityById(
           undefined,
           undefined,
           cached?.etag,
+          undefined,
+          undefined,
+          gitHubPublicApi.GITHUB_API_ORIGIN,
         );
         let identity: ResolvedGitHubUserIdentity;
         if (response.status === 304 && cached?.etag) {
@@ -280,7 +282,7 @@ function cloudflareAccessAssertion(params: {
     return undefined;
   }
   const principal = params.authResult.user?.trim();
-  const assertion = headerValue(
+  const assertion = firstHeaderValue(
     params.requestHeaders?.[CLOUDFLARE_ACCESS_ASSERTION_HEADER],
   )?.trim();
   return principal && assertion ? { assertion, principal } : undefined;
@@ -334,7 +336,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     }
     const identityBinding = { accountId, email: access.principal };
     // Service auth raises public-data quota; Access still owns the signed-in account id.
-    const token = githubApiToken();
+    const token = githubApiToken(process.env, undefined, "github.com");
     let lookup: GitHubIdentityLookup;
     try {
       lookup = await gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>

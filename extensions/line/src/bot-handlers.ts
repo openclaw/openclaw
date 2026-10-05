@@ -695,45 +695,36 @@ export async function handleLineWebhookEvents(
     return;
   }
   try {
-    await handleLineWebhookEvent(event, context, setParts);
+    switch (event.type) {
+      case "message":
+        await handleMessageEvent(
+          event,
+          context,
+          setParts.filter((part): part is MessageEvent => part.type === "message"),
+        );
+        break;
+      case "follow":
+      case "unfollow": {
+        const { userId } = getLineSourceInfo(event.source);
+        logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
+        break;
+      }
+      case "join":
+        await handleJoinEvent(event, context);
+        break;
+      case "leave": {
+        const { groupId, roomId } = getLineSourceInfo(event.source);
+        logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+        break;
+      }
+      case "postback":
+        await handlePostbackEvent(event, context);
+        break;
+      default:
+        logVerbose(`line: unhandled event type: ${event.type}`);
+    }
   } catch (err) {
     context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
     throw toErrorObject(err, "Non-Error thrown");
-  }
-}
-
-async function handleLineWebhookEvent(
-  event: WebhookEvent,
-  context: LineHandlerContext,
-  /** The remaining parts of the image set this event opens, if any. */
-  setParts: readonly WebhookEvent[] = [],
-): Promise<void> {
-  switch (event.type) {
-    case "message":
-      await handleMessageEvent(
-        event,
-        context,
-        setParts.filter((part): part is MessageEvent => part.type === "message"),
-      );
-      break;
-    case "follow":
-    case "unfollow": {
-      const { userId } = getLineSourceInfo(event.source);
-      logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
-      break;
-    }
-    case "join":
-      await handleJoinEvent(event, context);
-      break;
-    case "leave": {
-      const { groupId, roomId } = getLineSourceInfo(event.source);
-      logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
-      break;
-    }
-    case "postback":
-      await handlePostbackEvent(event, context);
-      break;
-    default:
-      logVerbose(`line: unhandled event type: ${event.type}`);
   }
 }

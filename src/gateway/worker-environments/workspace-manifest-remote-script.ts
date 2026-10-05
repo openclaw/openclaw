@@ -26,7 +26,7 @@ function canonicalEntry(entry) {
 function compareManifestPaths(left, right) {
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
-function serializeManifest(baseCommit, entries, comparePaths = compareManifestPaths) {
+function serializeManifest(baseCommit, entries) {
   const stagedInputs = stagedInputDirectoriesFromEntries(entries);
   return JSON.stringify({
     version: 1,
@@ -34,7 +34,7 @@ function serializeManifest(baseCommit, entries, comparePaths = compareManifestPa
     entries: entries
       .filter((entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)))
       .map(canonicalEntry)
-      .sort(comparePaths),
+      .sort(compareManifestPaths),
   });
 }`;
 

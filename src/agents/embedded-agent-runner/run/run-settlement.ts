@@ -99,7 +99,9 @@ export async function settleEmbeddedRun(input: {
   if (params.isFinalFallbackAttempt !== false) {
     await runInput.progressController.maybeEmitFastModeAutoResetBestEffort();
   }
-  forgetPromptBuildDrainCacheForRun(params.runId);
+  if (ownedContextEngineLease) {
+    forgetPromptBuildDrainCacheForRun(params.runId);
+  }
   clearProviderPromptState(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
   await ownedContextEngineLease?.dispose();

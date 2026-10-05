@@ -286,7 +286,9 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): string[] | undefined {
+function resolveExplicitProfileAlsoAllow(
+  tools?: Pick<AgentToolsConfig, "alsoAllow">,
+): string[] | undefined {
   return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
 }
 

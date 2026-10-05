@@ -4,7 +4,9 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
@@ -32,6 +34,7 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -44,7 +47,30 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
   return embeddedLog;
 }
 
-export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
+export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessionParams) {
+  let params = input;
+  const onAgentEvent = params.onAgentEvent;
+  if (onAgentEvent) {
+    let transcriptStartPublished = false;
+    const sessionManager = params.session.sessionManager;
+    params = {
+      ...params,
+      onAgentEvent: (event) => {
+        if (
+          transcriptStartPublished ||
+          (event.stream === "lifecycle" && typeof event.data.phase !== "string")
+        ) {
+          return onAgentEvent(event);
+        }
+        const transcriptStart = sessionManager[sessionManagerReadTranscriptStart]();
+        transcriptStartPublished = true;
+        return onAgentEvent({
+          ...event,
+          transcriptStart,
+        });
+      },
+    };
+  }
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
@@ -58,6 +84,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     hasSuccessfulModelResponse,
   } = createEmbeddedModelState(params, log);
   let compactionCount = 0;
+  let compactionRetry: Deferred | undefined;
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
@@ -99,15 +126,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const ensureCompactionPromise = () => {
-    if (!state.compactionRetryPromise) {
-      // Create a single promise that resolves when ALL pending compactions complete
-      // (tracked by pendingCompactionRetry counter, decremented in resolveCompactionRetry)
-      state.compactionRetryPromise = new Promise((resolve, reject) => {
-        state.compactionRetryResolve = resolve;
-        state.compactionRetryReject = reject;
-      });
+    if (!compactionRetry) {
+      // One wait covers both active compaction and queued retries.
+      compactionRetry = createDeferredCore();
       // Prevent unhandled rejection if rejected after all consumers have resolved
-      state.compactionRetryPromise.catch((err: unknown) => {
+      compactionRetry.promise.catch((err: unknown) => {
         log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
@@ -122,10 +145,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (state.pendingCompactionRetry !== 0 || state.compactionInFlight) {
       return;
     }
-    state.compactionRetryResolve?.();
-    state.compactionRetryResolve = undefined;
-    state.compactionRetryReject = undefined;
-    state.compactionRetryPromise = null;
+    compactionRetry?.resolve();
+    compactionRetry = undefined;
   };
 
   const resolveCompactionRetry = () => {
@@ -395,16 +416,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.liveEditDiffStateById.clear();
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
-    if (state.compactionRetryPromise) {
+    if (compactionRetry) {
       log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
-      const reject = state.compactionRetryReject;
-      state.compactionRetryResolve = undefined;
-      state.compactionRetryReject = undefined;
-      state.compactionRetryPromise = null;
-      // Reject with AbortError so it's caught by isAbortError() check in cleanup paths
-      const abortErr = new Error("Unsubscribed during compaction");
-      abortErr.name = "AbortError";
-      reject?.(abortErr);
+      const { reject } = compactionRetry;
+      compactionRetry = undefined;
+      reject(createAbortError("Unsubscribed during compaction"));
     }
     // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
     // Only abort if compaction is actually running to avoid unnecessary work.
@@ -474,6 +490,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getMessagingToolSourceReplyPayloads: () => messagingToolSourceReplyPayloads.slice(),
     getSourceReplyDelivered: () => state.sourceReplyDelivered,
     getSourceReplyDeliveryState: () => state.sourceReplyDeliveryState,
+    endsWithSourceProgress: () => state.lastToolTurnOnlySourceProgress === true,
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
@@ -508,25 +525,21 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success
       if (state.unsubscribed) {
-        const err = new Error("Unsubscribed during compaction wait");
-        err.name = "AbortError";
-        return Promise.reject(err);
+        return Promise.reject(createAbortError("Unsubscribed during compaction wait"));
       }
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
         ensureCompactionPromise();
-        return state.compactionRetryPromise ?? Promise.resolve();
+        return compactionRetry?.promise ?? Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
         queueMicrotask(() => {
           if (state.unsubscribed) {
-            const err = new Error("Unsubscribed during compaction wait");
-            err.name = "AbortError";
-            reject(err);
+            reject(createAbortError("Unsubscribed during compaction wait"));
             return;
           }
           if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
             ensureCompactionPromise();
-            void (state.compactionRetryPromise ?? Promise.resolve()).then(resolve, reject);
+            void (compactionRetry?.promise ?? Promise.resolve()).then(resolve, reject);
           } else {
             resolve();
           }

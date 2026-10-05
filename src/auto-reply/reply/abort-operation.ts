@@ -141,29 +141,19 @@ async function resolveBoundAcpAbortTargetSessionKey(params: {
   });
 }
 
-function normalizeRequesterSessionKey(
-  cfg: OpenClawConfig,
-  key: string | undefined,
-): string | undefined {
-  const cleaned = normalizeOptionalString(key);
-  if (!cleaned) {
-    return undefined;
-  }
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
-}
-
 export async function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
   requesterAgentId?: string;
   beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
 }): Promise<{ stopped: number; failed: number }> {
-  const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
-  if (!requesterKey) {
+  const cleaned = normalizeOptionalString(params.requesterSessionKey);
+  if (!cleaned) {
     await params.beforeKill?.();
     return { stopped: 0, failed: 0 };
   }
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  const requesterKey = resolveInternalSessionKey({ key: cleaned, alias });
   const controllerAgentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: requesterKey,

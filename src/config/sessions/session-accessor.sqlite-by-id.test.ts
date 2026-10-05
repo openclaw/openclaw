@@ -81,30 +81,45 @@ describe("current session ID entry reads", () => {
     },
   );
 
-  it("uses the current-ID index without a trimmed fallback on an exact hit", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-session-by-id-index-") };
-    const scope = { agentId: "main", env };
-    runOpenClawAgentWriteTransaction(() => {
-      for (let index = 0; index < 32; index += 1) {
+  it.each([false, true])("uses a trimmed query only after an exact miss (padded=%s)", (padded) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-session-by-id-query-") };
+    const scope = { agentId: "main", env, projection: "list" as const };
+    const sessionId = padded ? "legacy-id" : "id-17";
+    if (padded) {
+      for (const name of ["z-padded", "a-padded", "internal-session-effects:padded"]) {
         replaceSessionEntrySync(
-          { ...scope, sessionKey: `agent:main:entry-${index}` },
-          { sessionId: `id-${index}`, updatedAt: 1 },
+          { ...scope, sessionKey: `agent:main:${name}` },
+          { sessionId: " \t\u00a0legacy-id\ufeff\r\n", updatedAt: 1, spawnDepth: 2 },
         );
       }
-    }, scope);
-    replaceSessionEntrySync(
-      { ...scope, sessionKey: "agent:main:a-padded" },
-      { sessionId: " id-17 ", updatedAt: 1 },
-    );
+    } else {
+      runOpenClawAgentWriteTransaction(() => {
+        for (let index = 0; index < 32; index += 1) {
+          replaceSessionEntrySync(
+            { ...scope, sessionKey: `agent:main:entry-${index}` },
+            { sessionId: `id-${index}`, updatedAt: 1 },
+          );
+        }
+      }, scope);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:a-padded" },
+        { sessionId: " id-17 ", updatedAt: 1 },
+      );
+    }
     const queries = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
-    try {
-      expect(
-        loadSessionEntryByIdReadOnly({ ...scope, sessionId: "id-17", projection: "list" }),
-      ).toMatchObject({ sessionKey: "agent:main:entry-17" });
-      const idQueries = queries.mock.calls
-        .map(([database, query]) => ({ database, ...query.compile() }))
-        .filter(({ sql }) => /where "current_session_id" = /u.test(sql));
-      expect(idQueries).toHaveLength(1);
+    expect(loadSessionEntryByIdReadOnly({ ...scope, sessionId })).toMatchObject(
+      padded
+        ? { sessionKey: "agent:main:a-padded", entry: { spawnDepth: 2 } }
+        : { sessionKey: "agent:main:entry-17" },
+    );
+    const idQueries = queries.mock.calls
+      .map(([database, query]) => ({ database, ...query.compile() }))
+      .filter(({ sql }) => /where (?:"current_session_id"|trim\()/u.test(sql));
+    expect(idQueries).toHaveLength(padded ? 2 : 1);
+    expect(idQueries[0]?.sql).toMatch(/where "current_session_id" = /u);
+    if (padded) {
+      expect(idQueries[1]?.sql).toMatch(/where trim\("current_session_id", /u);
+    } else {
       expect(queries.mock.calls.some(([, query]) => /trim\(/u.test(query.compile().sql))).toBe(
         false,
       );
@@ -123,31 +138,7 @@ describe("current session ID entry reads", () => {
         expect.stringMatching(/\bSEARCH\b.*\bidx_agent_session_nodes_current_session_id\b/u),
       );
       expect(plan).not.toContainEqual(expect.stringMatching(/\bSCAN session_nodes\b/u));
-    } finally {
-      queries.mockRestore();
     }
-  });
-
-  it("runs a trimmed query only after an exact miss and preserves visible match order", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-session-by-id-padded-") };
-    const scope = { agentId: "main", env, projection: "list" as const };
-    for (const name of ["z-padded", "a-padded", "internal-session-effects:padded"]) {
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: `agent:main:${name}` },
-        { sessionId: " \t\u00a0legacy-id\ufeff\r\n", updatedAt: 1, spawnDepth: 2 },
-      );
-    }
-    const queries = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
-    expect(loadSessionEntryByIdReadOnly({ ...scope, sessionId: "legacy-id" })).toMatchObject({
-      sessionKey: "agent:main:a-padded",
-      entry: { spawnDepth: 2 },
-    });
-    const idQueries = queries.mock.calls
-      .map(([, query]) => query.compile())
-      .filter(({ sql }) => /where (?:"current_session_id"|trim\()/u.test(sql));
-    expect(idQueries).toHaveLength(2);
-    expect(idQueries[0]?.sql).toMatch(/where "current_session_id" = /u);
-    expect(idQueries[1]?.sql).toMatch(/where trim\("current_session_id", /u);
   });
 
   it("validates a selected row again after a warm read", () => {

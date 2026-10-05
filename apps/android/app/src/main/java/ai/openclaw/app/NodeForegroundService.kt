@@ -10,7 +10,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -250,15 +249,9 @@ class NodeForegroundService : Service() {
   private fun isBackgroundLocationActive(): Boolean {
     if (!SensitiveFeatureConfig.backgroundLocationEnabled) return false
     if ((application as NodeApp).prefs.locationMode.value != LocationMode.Always) return false
-    val fineGranted =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-    val coarseGranted =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-    val backgroundGranted =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
+    val fineGranted = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+    val coarseGranted = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+    val backgroundGranted = hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
     return (fineGranted || coarseGranted) && backgroundGranted
   }
 

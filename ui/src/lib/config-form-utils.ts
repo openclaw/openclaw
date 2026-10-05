@@ -3,9 +3,13 @@ import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { translateActive } from "../i18n/lib/translate.ts";
 
+export function isEnvPlaceholder(value: string): boolean {
+  return /^\$\{[^}]*\}$/.test(value.trim());
+}
+
 export function isSensitiveLeafValue(value: unknown): boolean {
   if (typeof value === "string") {
-    return value.trim().length > 0 && !/^\$\{[^}]*\}$/.test(value.trim());
+    return value.trim().length > 0 && !isEnvPlaceholder(value);
   }
   return value !== undefined && value !== null;
 }

@@ -61,7 +61,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
     metadata: DiagnosticEventMetadata,
   ) => {
-    if (!metadata.trusted) {
+    if (!metadata.trusted || (evt.phase === "response" && evt.firstResponse === false)) {
       return;
     }
     const attrs = { "openclaw.gateway.rpc.method": evt.method };
@@ -387,11 +387,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         ...(message ? { message } : {}),
       });
     }
-    if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
-      return;
-    }
-    span.end(evt.ts);
+    completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
   };
 
   return {

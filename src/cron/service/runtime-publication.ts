@@ -29,25 +29,10 @@ export function applyCronRuntimeRowsToState(
 export function publishDurableNextRunChanges(params: {
   state: CronServiceState;
   storeJobs: readonly CronJob[];
-  stateOnly: boolean;
   suppressScheduledJobId?: string;
 }) {
   const previous = params.state.durableNextRunAtMsByJobId;
-  const next = params.stateOnly
-    ? new Map(previous)
-    : new Map(params.storeJobs.map((job) => [job.id, job.state.nextRunAtMs] as const));
-
-  if (params.stateOnly) {
-    const currentJobsById = new Map(params.storeJobs.map((job) => [job.id, job] as const));
-    // State-only writes cannot create or delete rows. Preserve durable topology
-    // and update only rows that both snapshots know SQLite already contains.
-    for (const jobId of previous.keys()) {
-      const job = currentJobsById.get(jobId);
-      if (job) {
-        next.set(jobId, job.state.nextRunAtMs);
-      }
-    }
-  }
+  const next = new Map(params.storeJobs.map((job) => [job.id, job.state.nextRunAtMs] as const));
 
   const changedJobs = params.storeJobs.filter((job) => {
     if (!previous.has(job.id) || !next.has(job.id)) {
@@ -77,5 +62,5 @@ export function publishCronRuntimeRows(state: CronServiceState): void {
   if (!state.store) {
     return;
   }
-  publishDurableNextRunChanges({ state, storeJobs: state.store.jobs, stateOnly: false });
+  publishDurableNextRunChanges({ state, storeJobs: state.store.jobs });
 }

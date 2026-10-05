@@ -172,7 +172,6 @@ describe("yielded private settle outcomes", () => {
       requesterSessionKey: sessionKey,
       targetRequesterSessionKey: sessionKey,
       triggerMessage: "settled private findings",
-      steerMessage: "settled private findings",
       requesterSessionOrigin: origin,
       directOrigin: origin,
       sourceTool: "subagent_settle",

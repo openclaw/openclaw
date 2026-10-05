@@ -1,4 +1,4 @@
-import { html, type PropertyValues, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -7,6 +7,7 @@ import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.t
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
+import type { AttachmentAdmission } from "./chat-message-attachment-admission.ts";
 import type { AssistantAttachmentItem, AttachmentItem } from "./chat-message-media.ts";
 
 export function isPastedTextAttachment(
@@ -39,6 +40,7 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpen?: () => void;
   @property({ attribute: false }) composerAction?: TemplateResult;
   @property({ attribute: false }) composerRemoveAction?: TemplateResult;
+  @property({ attribute: false }) admission?: AttachmentAdmission;
   @state() private excerpt = "";
   private key = "";
   private loading?: AbortController;
@@ -54,7 +56,7 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
-  protected override willUpdate(_changed: PropertyValues<this>) {
+  protected override willUpdate() {
     const key = JSON.stringify([this.scope, this.src, this.sizeBytes]);
     if (key === this.key) {
       return;
@@ -107,6 +109,8 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
       label: this.excerpt || t("chat.attachments.pastedText"),
       icon: icons.fileText,
       onClick: this.onOpen,
+      onReveal: this.admission?.onAdmit,
+      elementRef: this.admission?.observeElement,
     });
   }
 }

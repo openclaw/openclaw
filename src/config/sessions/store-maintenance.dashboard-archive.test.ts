@@ -15,7 +15,6 @@ function entry(updatedAt: number, extra: Partial<SessionEntry> = {}): SessionEnt
 function artifacts() {
   return {
     archiveRemovedSessionTranscripts: async () => new Set<string>(),
-    removeRemovedSessionTrajectoryArtifacts: async () => {},
     cleanupArchivedSessionTranscripts: async () => {},
   };
 }

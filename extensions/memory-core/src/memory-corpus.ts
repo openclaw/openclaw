@@ -8,6 +8,7 @@ import {
   listMemoryCorpusSupplements,
   type MemoryCorpusSearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   createMemorySearchDeadlineError,
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
@@ -67,23 +68,16 @@ async function raceMemoryCorpusSignal<T>(signal: AbortSignal, run: () => Promise
   if (signal.aborted) {
     throw resolveMemorySearchAbortError(signal);
   }
-  let removeAbort = () => {};
-  const aborted = new Promise<never>((_resolve, reject) => {
-    const onAbort = () => reject(resolveMemorySearchAbortError(signal));
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbort = () => signal.removeEventListener("abort", onAbort);
-  });
-  try {
-    const task = Promise.resolve().then(run);
-    const result = await Promise.race([task, aborted]);
-    memoryCorpusDeadlineChecks.get(signal)?.();
-    if (signal.aborted) {
-      throw resolveMemorySearchAbortError(signal);
-    }
-    return result;
-  } finally {
-    removeAbort();
+  const result = await racePromiseWithAbortSignal(
+    Promise.resolve().then(run),
+    signal,
+    resolveMemorySearchAbortError,
+  );
+  memoryCorpusDeadlineChecks.get(signal)?.();
+  if (signal.aborted) {
+    throw resolveMemorySearchAbortError(signal);
   }
+  return result;
 }
 
 export async function attemptMemoryCorpus<T>(params: {

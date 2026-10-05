@@ -13,18 +13,18 @@ import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 /** Applies gateway CLI options to the pending config and returns normalized runtime settings. */
-export function applyNonInteractiveGatewayConfig(params: {
+export async function applyNonInteractiveGatewayConfig(params: {
   nextConfig: OpenClawConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   defaultPort: number;
-}): {
+}): Promise<{
   nextConfig: OpenClawConfig;
   port: number;
   bind: string;
   authMode: string;
   tailscaleMode: string;
-} | null {
+} | null> {
   const { opts, runtime } = params;
 
   const existingGateway = params.nextConfig.gateway;
@@ -77,6 +77,15 @@ export function applyNonInteractiveGatewayConfig(params: {
     authMode = "token";
   }
   if (changesAuthOrTailscale && tailscaleMode === "funnel" && authMode !== "password") {
+    if (authMode === "trusted-proxy") {
+      rejectOnboardingOption(
+        opts,
+        runtime,
+        'Tailscale Funnel requires password auth, but the Gateway is configured with "trusted-proxy" auth. ' +
+          "Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.",
+      );
+      return null;
+    }
     authMode = "password";
   }
 
@@ -120,10 +129,12 @@ export function applyNonInteractiveGatewayConfig(params: {
       } else if (!explicitGatewayToken && !existingPlaintextToken && envGatewayToken) {
         auth.token = createGatewayEnvSecretRef(nextConfig, "OPENCLAW_GATEWAY_TOKEN");
       } else {
-        auth.token = provisionGatewayTokenStoreRef({
-          config: nextConfig,
-          ...(gatewayToken ? { token: gatewayToken } : {}),
-        }).ref;
+        auth.token = (
+          await provisionGatewayTokenStoreRef({
+            config: nextConfig,
+            ...(gatewayToken ? { token: gatewayToken } : {}),
+          })
+        ).ref;
       }
     }
   }

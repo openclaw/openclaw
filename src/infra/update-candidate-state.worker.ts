@@ -1,5 +1,7 @@
-import { collectErrorGraphCandidates, formatErrorMessageWithCode } from "./errors.js";
-import { createUpdateStateInspectionReporter } from "./update-candidate-state.diagnostics.js";
+import {
+  createUpdateStateInspectionReporter,
+  formatUpdateStateInspectionError,
+} from "./update-candidate-state.diagnostics.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateCandidateStateInventoryInProcess,
@@ -80,11 +82,6 @@ async function snapshotCandidateState(): Promise<unknown> {
 void snapshotCandidateState()
   .then((value) => process.stdout.write(JSON.stringify(value)))
   .catch((error: unknown) => {
-    process.stderr.write(formatErrorMessageWithCode(error));
-    const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);
-    if (causes.length > 1) {
-      // The update ledger retains the final diagnostic line within its existing bound.
-      process.stderr.write(`\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`);
-    }
+    process.stderr.write(formatUpdateStateInspectionError(error));
     process.exitCode = 1;
   });

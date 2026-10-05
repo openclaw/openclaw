@@ -8,6 +8,7 @@ import {
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -204,6 +205,31 @@ describe("canonical validation schema admission", () => {
     reason: "table-missing",
     missingTables: ["session_canonical_validation_pending"],
     cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
+  });
+  it("refuses a drifted canonical trigger at read-only open", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path("drifted.sqlite");
+      const seed = new DatabaseSync(pathname);
+      try {
+        seed.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        seed.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);
+          DROP TRIGGER session_nodes_canonical_pending_after_update;`);
+      } finally {
+        seed.close();
+      }
+      expect(() => {
+        const opened = openOpenClawAgentDatabaseReadOnly({
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+        });
+        if (opened.found) {
+          opened.database.close();
+        }
+      }).toThrow(/canonical validation schema is missing or drifted.*openclaw doctor --fix/u);
+    });
   });
   it.each([
     "DROP TABLE session_canonical_validation_pending",

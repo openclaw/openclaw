@@ -132,12 +132,21 @@ const hello = {
 };
 
 describe("GatewayClient host token storage", () => {
-  it("awaits a stored token before sending its connect request", async () => {
+  it.each([false, true])("settles pending token loading (stopped: %s)", async (stop) => {
     const loaded = createDeferred<DeviceAuthTokenRecord | null>();
-    const { socket } = connect({ loadDeviceAuthToken: () => loaded.promise });
+    const { client, socket, onHelloOk } = connect({ loadDeviceAuthToken: () => loaded.promise });
     expect(socket.send).not.toHaveBeenCalled();
+    const stopped = stop ? client.stopAndWait() : undefined;
     loaded.resolve(storedToken);
+    if (stopped) {
+      await stopped;
+    }
     await vi.advanceTimersByTimeAsync(0);
+    if (stop) {
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(onHelloOk).not.toHaveBeenCalled();
+      return;
+    }
     const sent = socket.send.mock.calls[0];
     assert(sent);
     expect(JSON.parse(sent[0])).toMatchObject({
@@ -146,18 +155,7 @@ describe("GatewayClient host token storage", () => {
     });
   });
 
-  it("keeps synchronous storage callbacks and their ignored return values compatible", async () => {
-    const { socket, onHelloOk } = connect({
-      storeDeviceAuthToken: () => storedToken,
-      clearDeviceAuthToken: () => true,
-    });
-    expect(socket.send).toHaveBeenCalledOnce();
-    socket.respond(hello);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onHelloOk).toHaveBeenCalledOnce();
-  });
-
-  it.each(["ready", "closing", "stop"] as const)(
+  it.each(["sync", "ready", "closing", "stop"] as const)(
     "settles token persistence before completing %s",
     async (completion) => {
       const stored = storageGate();
@@ -170,11 +168,20 @@ describe("GatewayClient host token storage", () => {
         params.assertCurrent?.();
         persistedToken = params.token;
       });
-      const { client, socket, onHelloOk, onConnectError } = connect({
-        storeDeviceAuthToken,
-      });
+      const { client, socket, onHelloOk, onConnectError } = connect(
+        completion === "sync"
+          ? { storeDeviceAuthToken: () => storedToken, clearDeviceAuthToken: () => true }
+          : { storeDeviceAuthToken },
+      );
+      if (completion === "sync") {
+        expect(socket.send).toHaveBeenCalledOnce();
+      }
       socket.respond(hello);
       await vi.advanceTimersByTimeAsync(0);
+      if (completion === "sync") {
+        expect(onHelloOk).toHaveBeenCalledOnce();
+        return;
+      }
       expect(onHelloOk).not.toHaveBeenCalled();
       expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
       const operation = storeDeviceAuthToken.mock.calls[0]?.[0];
@@ -329,91 +336,71 @@ describe("GatewayClient host token storage", () => {
     expect(onHelloOk).not.toHaveBeenCalled();
   });
 
-  it.each(["active", "disconnected", "stopped"] as const)(
-    "reports an accepted persistence rejection exactly once when %s",
-    async (lifetime) => {
+  it.each([
+    { storage: "sync", lifetime: "active", reporter: "reported" },
+    { storage: "async", lifetime: "active", reporter: "reported" },
+    { storage: "async", lifetime: "disconnected", reporter: "reported" },
+    { storage: "async", lifetime: "stopped", reporter: "reported" },
+    { storage: "async", lifetime: "disconnected", reporter: "missing" },
+    { storage: "async", lifetime: "stopped", reporter: "throwing" },
+  ] as const)(
+    "preserves $storage storage errors when $lifetime with a $reporter reporter",
+    async ({ storage, lifetime, reporter }) => {
       const permitStore = storageGate();
-      const failure = new Error("synthetic async persistence failure");
-      const { client, socket, onConnectError } = connect({
-        storeDeviceAuthToken: async () => {
-          await permitStore.promise;
-          throw failure;
-        },
-      });
-      socket.respond(hello);
-      await vi.advanceTimersByTimeAsync(0);
-      if (lifetime === "disconnected") {
-        socket.close(1006, "transport retired");
-      }
-      const stopped = lifetime === "stopped" ? client.stopAndWait() : undefined;
-      permitStore.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      await stopped;
-      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(failure);
-    },
-  );
-
-  it.each(["missing", "throwing"] as const)(
-    "drains the original undelivered async persistence error with a %s reporter",
-    async (reporter) => {
-      const permitStore = storageGate();
-      const failure = new Error("synthetic undelivered persistence failure");
-      const { client, socket } = connect(
+      const failure = new Error(`synthetic ${storage} persistence failure`);
+      const { client, socket, onConnectError } = connect(
         {
-          storeDeviceAuthToken: async () => {
-            await permitStore.promise;
-            throw failure;
-          },
+          storeDeviceAuthToken:
+            storage === "sync"
+              ? () => {
+                  throw failure;
+                }
+              : async () => {
+                  await permitStore.promise;
+                  throw failure;
+                },
         },
         {},
         reporter === "missing"
           ? false
-          : () => {
-              throw new Error("synthetic reporter failure");
-            },
+          : reporter === "throwing"
+            ? () => {
+                throw new Error("synthetic reporter failure");
+              }
+            : undefined,
       );
       socket.respond(hello);
       await vi.advanceTimersByTimeAsync(0);
-      if (reporter === "throwing") {
-        const stopped = expect(client.stopAndWait()).rejects.toBe(failure);
-        permitStore.resolve();
-        await vi.advanceTimersByTimeAsync(0);
-        await stopped;
-      } else {
+      if (storage === "sync") {
+        expect(onConnectError).toHaveBeenCalledOnce();
+        await expect(client.stopAndWait()).resolves.toBeUndefined();
+        return;
+      }
+      if (lifetime === "disconnected") {
         socket.close(1006, "transport retired");
-        permitStore.resolve();
-        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      const stopped =
+        lifetime === "stopped"
+          ? reporter === "throwing"
+            ? expect(client.stopAndWait()).rejects.toBe(failure)
+            : client.stopAndWait()
+          : undefined;
+      permitStore.resolve();
+      await vi.advanceTimersByTimeAsync(reporter === "missing" ? 1_000 : 0);
+      if (reporter === "missing") {
         const replacement = MockWebSocket.instances[1];
         assert(replacement);
         replacement.open();
         expect(replacement.send).toHaveBeenCalledOnce();
         await expect(client.stopAndWait()).rejects.toBe(failure);
+      } else {
+        await stopped;
+        if (reporter === "reported") {
+          expect(onConnectError).toHaveBeenCalledExactlyOnceWith(failure);
+        }
       }
     },
   );
-
-  it("keeps synchronous store exceptions on the existing connect-error path", async () => {
-    const { client, socket, onConnectError } = connect({
-      storeDeviceAuthToken: () => {
-        throw new Error("synthetic synchronous persistence failure");
-      },
-    });
-    socket.respond(hello);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onConnectError).toHaveBeenCalledOnce();
-    await expect(client.stopAndWait()).resolves.toBeUndefined();
-  });
-
-  it("retires pending token loading when stopped", async () => {
-    const loaded = createDeferred<DeviceAuthTokenRecord | null>();
-    const { client, socket, onHelloOk } = connect({ loadDeviceAuthToken: () => loaded.promise });
-    const stopped = client.stopAndWait();
-    loaded.resolve(storedToken);
-    await stopped;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(socket.send).not.toHaveBeenCalled();
-    expect(onHelloOk).not.toHaveBeenCalled();
-  });
 
   it.each([false, true])(
     "preserves rejection and cleanup when the peer closes (already closing: %s)",

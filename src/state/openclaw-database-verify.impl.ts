@@ -4,6 +4,8 @@ import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coer
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { parseSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import type { SqliteIntegrityConfirmation } from "../infra/sqlite-integrity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -29,7 +31,8 @@ function isVerifyResult(result: unknown): result is OpenClawDatabaseVerifyResult
     typeof result.path === "string" &&
     typeof result.ok === "boolean" &&
     (result.error === undefined || typeof result.error === "string") &&
-    (result.terminal === undefined || typeof result.terminal === "boolean")
+    (result.terminal === undefined || typeof result.terminal === "boolean") &&
+    (result.generation === undefined || typeof result.generation === "string")
   );
 }
 
@@ -39,6 +42,11 @@ type DatabaseVerifyWorkerLifecycle = {
   requestTermination: () => void;
 };
 const workerLifecycles = new WeakMap<ChildProcess, DatabaseVerifyWorkerLifecycle>();
+
+export type DatabaseVerifyWorkerLifetime = {
+  onWorker?: (worker: ChildProcess | undefined) => void;
+  assertCurrent?: () => void;
+};
 
 function ownDatabaseVerifyWorker(worker: ChildProcess): DatabaseVerifyWorkerLifecycle {
   let terminationRequested = false;
@@ -113,15 +121,16 @@ function ownDatabaseVerifyWorker(worker: ChildProcess): DatabaseVerifyWorkerLife
 
 export function runDatabaseVerifyWorker(
   targets: readonly OpenClawDatabaseVerifyTarget[],
-  options: { onWorker?: (worker: ChildProcess | undefined) => void; workerUrl?: URL } = {},
+  options: DatabaseVerifyWorkerLifetime & { workerUrl?: URL } = {},
 ): Promise<OpenClawDatabaseVerifyResult[]> {
+  options.assertCurrent?.();
   const workerUrl =
     options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   let worker: ChildProcess;
   try {
     // Closing a source reader can release the Gateway's process-owned SQLite
-    // locks, so quick checks keep their own process.
+    // locks, so verification keeps its own process.
     worker = fork(fileURLToPath(workerUrl), [DATABASE_VERIFY_CHILD_ARG], {
       execArgv,
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -193,20 +202,52 @@ export async function terminateDatabaseVerifyWorker(worker: ChildProcess): Promi
   await lifecycle.settled;
 }
 
+/** The caller drains its owners; the child binds full confirmation to file generations. */
+export async function confirmDatabaseVerifyWorker(
+  target: Omit<OpenClawDatabaseVerifyTarget, "check" | "confirm">,
+  lifetime: DatabaseVerifyWorkerLifetime = {},
+): Promise<SqliteIntegrityConfirmation> {
+  const [result] = await runDatabaseVerifyWorker(
+    [{ ...target, check: "full", confirm: true }],
+    lifetime,
+  );
+  lifetime.assertCurrent?.();
+  if (!result || result.path !== target.path) {
+    throw new Error("database verification worker returned no confirmation");
+  }
+  const generation = result.generation ? parseSqliteFileGeneration(result.generation) : undefined;
+  if (result.ok && generation) {
+    return { status: "healthy", generation };
+  }
+  const error = new Error(result.error ?? "database integrity confirmation was unbound");
+  if (result.terminal && generation) {
+    error.name = "SqliteIntegrityError";
+    return { status: "failed", error, terminal: true, generation };
+  }
+  return { status: "failed", error, terminal: false };
+}
+
 /** Reconfirm worker failures on live owners before quarantine and latching. */
 export async function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
   results: readonly OpenClawDatabaseVerifyResult[];
   targets: readonly OpenClawDatabaseVerifyTarget[];
+  workerLifetime?: DatabaseVerifyWorkerLifetime;
 }): Promise<void> {
   const targetByPath = new Map(options.targets.map((target) => [target.path, target]));
 
   for (const result of options.results) {
+    options.workerLifetime?.assertCurrent?.();
     const target = targetByPath.get(result.path);
     if (!target) {
       continue;
     }
-    const details = { kind: target.kind, label: target.label, path: result.path };
+    const details = {
+      kind: target.kind,
+      label: target.label,
+      path: result.path,
+      check: target.check,
+    };
     if (result.ok) {
       log.info("database integrity verification passed", details);
       continue;
@@ -218,11 +259,10 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
       });
       continue;
     }
-    const confirmIntegrity =
-      target.kind === "state"
-        ? confirmOpenClawStateDatabaseIntegrity
-        : confirmOpenClawAgentDatabaseIntegrity;
-    const confirmation = await confirmIntegrity(result.path);
+    const confirmation = await (target.kind === "state"
+      ? confirmOpenClawStateDatabaseIntegrity(result.path)
+      : confirmOpenClawAgentDatabaseIntegrity(result.path, options.workerLifetime));
+    options.workerLifetime?.assertCurrent?.();
     if (confirmation.status === "healthy") {
       log.info("discarding stale database integrity verification result", details);
       continue;

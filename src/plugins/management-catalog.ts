@@ -15,8 +15,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -401,20 +401,14 @@ export function compareCatalogEntries(
   if (featured !== 0) {
     return featured;
   }
-  if (left.featured && right.featured) {
-    const leftFeaturedAt = left.featuredAt;
-    const rightFeaturedAt = right.featuredAt;
-    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
-      if (leftFeaturedAt === undefined) {
-        return 1;
-      }
-      if (rightFeaturedAt === undefined) {
-        return -1;
-      }
-      if (leftFeaturedAt !== rightFeaturedAt) {
-        return rightFeaturedAt - leftFeaturedAt;
-      }
+  if (left.featured && right.featured && left.featuredAt !== right.featuredAt) {
+    if (left.featuredAt === undefined) {
+      return 1;
     }
+    if (right.featuredAt === undefined) {
+      return -1;
+    }
+    return right.featuredAt - left.featuredAt;
   }
   const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
   return order !== 0 ? order : left.name.localeCompare(right.name);
@@ -478,16 +472,16 @@ export function resolveInstalledHostedOfficialEntry(params: {
 } {
   const identityPluginId = params.installOwner ?? params.record.pluginId;
   const trustedOfficialClawHubSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialClawHubSpec({
+    ? resolveTrustedSourceLinkedOfficialClawHubInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.clawhubSpec
     : undefined;
   const trustedOfficialNpmSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialNpmSpec({
+    ? resolveTrustedSourceLinkedOfficialNpmInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.npmSpec
     : undefined;
   const sourceLinkedOfficialClawHubPackage = trustedOfficialClawHubSpec
     ? parseClawHubPluginSpec(trustedOfficialClawHubSpec)?.name

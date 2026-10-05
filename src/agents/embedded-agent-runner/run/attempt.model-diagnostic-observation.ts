@@ -83,21 +83,10 @@ function jsonLength(
   }
 }
 
-function utf8JsonByteLength(value: unknown): number | undefined {
-  return jsonLength(value, true);
-}
-
-function jsonCharLength(
-  value: unknown,
-  promptStringLengths?: PromptStringLengthPass,
-): number | undefined {
-  return jsonLength(value, false, promptStringLengths);
-}
-
 function responseStreamChunkByteLength(chunk: unknown): number | undefined {
   try {
     if (!isRecord(chunk)) {
-      return utf8JsonByteLength(chunk);
+      return jsonLength(chunk, true);
     }
     const type = chunk.type;
     if (
@@ -107,12 +96,12 @@ function responseStreamChunkByteLength(chunk: unknown): number | undefined {
       return Buffer.byteLength(chunk.delta, "utf8");
     }
     if (!("partial" in chunk)) {
-      return utf8JsonByteLength(chunk);
+      return jsonLength(chunk, true);
     }
     // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
     // count the new stream payload, not the answer-so-far replay.
     const { partial: _partial, ...snapshotlessChunk } = chunk;
-    return utf8JsonByteLength(snapshotlessChunk);
+    return jsonLength(snapshotlessChunk, true);
   } catch {
     return undefined;
   }
@@ -163,8 +152,10 @@ function streamContextModelPromptStats(
   const tools = Array.isArray(streamContext.tools) ? streamContext.tools : undefined;
   const systemPrompt =
     typeof streamContext.systemPrompt === "string" ? streamContext.systemPrompt : undefined;
-  const inputMessagesChars = messages ? jsonCharLength(messages, promptStringLengths) : undefined;
-  const toolDefinitionsChars = tools ? jsonCharLength(tools, promptStringLengths) : undefined;
+  const inputMessagesChars = messages
+    ? jsonLength(messages, false, promptStringLengths)
+    : undefined;
+  const toolDefinitionsChars = tools ? jsonLength(tools, false, promptStringLengths) : undefined;
   const systemPromptChars = systemPrompt?.length;
   if (messages === undefined && tools === undefined && systemPrompt === undefined) {
     return undefined;
@@ -271,7 +262,7 @@ function observeResultMessageContent(
     state.outputMessages = [cloneDiagnosticContentValue(result)];
   }
   if (state.responseStreamBytes === 0) {
-    const bytes = utf8JsonByteLength(result);
+    const bytes = jsonLength(result, true);
     if (bytes !== undefined) {
       state.responseStreamBytes = bytes;
     }
@@ -376,7 +367,7 @@ export function createModelObserver(params: {
     promptStats,
     modelContent,
     assignRequestPayloadBytes(payload: unknown) {
-      const bytes = utf8JsonByteLength(payload);
+      const bytes = jsonLength(payload, true);
       if (bytes !== undefined) {
         state.requestPayloadBytes = bytes;
       }

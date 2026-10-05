@@ -3,11 +3,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
 
@@ -19,7 +18,7 @@ vi.mock("../cli-runner/log.js", () => ({
   cliBackendLog: { warn: vi.fn() },
 }));
 
-vi.mock("../../gateway/cli-session-history.js", () => ({
+vi.mock("../../gateway/cli-session-history.claude.js", () => ({
   readClaudeCliFallbackSeed: mocks.readClaudeCliFallbackSeed,
 }));
 
@@ -35,7 +34,9 @@ import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir
 
 function formatClaudeCliFallbackPrelude(
   seed: NonNullable<
-    ReturnType<typeof import("../../gateway/cli-session-history.js").readClaudeCliFallbackSeed>
+    ReturnType<
+      typeof import("../../gateway/cli-session-history.claude.js").readClaudeCliFallbackSeed
+    >
   >,
   options?: { charBudget?: number },
 ) {
@@ -162,6 +163,7 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
 });
 
 describe("sessionTranscriptHasContent", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "oc-transcript-probe-");
   let tmpDir: string;
   let target: {
     agentId: string;
@@ -171,7 +173,7 @@ describe("sessionTranscriptHasContent", () => {
   };
 
   beforeEach(async () => {
-    tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "oc-transcript-probe-")));
+    tmpDir = sessionDirs.make();
     target = {
       agentId: "audit",
       sessionId: "fallback-history",
@@ -179,15 +181,6 @@ describe("sessionTranscriptHasContent", () => {
       storePath: path.join(tmpDir, "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-  });
-
-  afterEach(async () => {
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: target.agentId,
-      path: target.storePath,
-    });
-    closeOpenClawAgentDatabaseByPath(target.storePath);
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   const assistantMessage = () =>

@@ -391,10 +391,11 @@ describe("historical model disclosure", () => {
         });
         restores.push(() => spy.mockRestore());
       } else {
-        const prepare = rows.ensureMaterialized.bind(rows);
-        const spy = vi.spyOn(rows, "ensureMaterialized").mockImplementationOnce(async () => {
-          await prepare();
+        const prepare = rows.prepareSelection.bind(rows);
+        const spy = vi.spyOn(rows, "prepareSelection").mockImplementationOnce(async (...args) => {
+          const result = await prepare(...args);
           await hold();
+          return result;
         });
         restores.push(() => spy.mockRestore());
       }

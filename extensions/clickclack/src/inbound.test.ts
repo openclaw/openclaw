@@ -800,7 +800,7 @@ describe("handleClickClackInbound", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const cfg = {
-      agents: { list: [{ id: "service-bot" }] },
+      agents: { entries: { "service-bot": {} } },
       session: { dmScope: "main" },
       bindings: [
         {
