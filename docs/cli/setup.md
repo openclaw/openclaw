@@ -10,6 +10,12 @@ title: "Setup CLI"
 
 # `openclaw setup`
 
+Interactive setup offers optional memory embedding provider/model setup with a
+synthetic readiness check. Skip it without changing existing memory settings, or
+configure it later with `openclaw configure --section memory`. This step does not
+download local models or rebuild indexes. Baseline and non-interactive setup do
+not prompt for embeddings. See [Configure](/cli/configure#memory-section).
+
 `openclaw setup` is the system-agent entry point. On a configured system, bare
 `openclaw setup` opens an interactive OpenClaw chat. On a fresh system, it
 falls through to guided onboarding. Use `-m`/`--message` for one request or
