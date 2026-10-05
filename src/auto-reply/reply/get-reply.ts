@@ -597,7 +597,7 @@ export async function getReplyFromConfig(
   let sessionState: Awaited<ReturnType<typeof initSessionState>>;
   try {
     sessionState = useFastTestBootstrap
-      ? initFastReplySessionState({
+      ? await initFastReplySessionState({
           ctx: finalized,
           cfg,
           agentId,

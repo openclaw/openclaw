@@ -377,9 +377,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.handleInlineActions).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the exact multiline reset payload during fast bootstrap", () => {
+  it("preserves the exact multiline reset payload during fast bootstrap", async () => {
     const payload = "keep [Q3]\nline 2";
-    const result = bootstrap(
+    const result = await bootstrap(
       buildGetReplyCtx({
         Body: `/new ${payload}`,
         BodyForCommands: `/new ${payload}`,
@@ -397,7 +397,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   it("preserves node provenance, lineage, and usage preferences during fast reset bootstrap", async () => {
     const preserved = { ...FAST_RESET_LINEAGE_FIXTURE, responseUsage: "full" as const };
     await seedSession({ sessionId: "existing-fast-reset-lineage", ...preserved });
-    const result = bootstrap();
+    const result = await bootstrap();
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionEntry).toMatchObject({
       previousSessionId: "existing-fast-reset-lineage",
@@ -412,7 +412,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       modelSelectionLocked: true,
     };
     await seedSession(entry);
-    expect(() => bootstrap()).toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+    await expect(bootstrap()).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
     expect(readSession()).toMatchObject(entry);
   });
 });

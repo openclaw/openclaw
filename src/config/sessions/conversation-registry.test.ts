@@ -159,7 +159,7 @@ describe("conversation registry", () => {
       chatType: "channel",
       deliveryContext: { channel: "discord", accountId: "default", to: "channel:ops" },
     });
-    const snapshot = loadReplySessionInitializationSnapshot(scope);
+    const snapshot = await loadReplySessionInitializationSnapshot(scope);
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
@@ -265,7 +265,7 @@ describe("conversation registry", () => {
         chatType: "channel",
         deliveryContext: { channel: "discord", accountId: "default", to: target },
       });
-      const snapshot = loadReplySessionInitializationSnapshot(scope);
+      const snapshot = await loadReplySessionInitializationSnapshot(scope);
       const committed = await commitReplySessionInitialization({
         activeSessionKey: sessionKey,
         agentId: "main",
@@ -315,7 +315,7 @@ describe("conversation registry", () => {
       chatType: "channel",
       deliveryContext: { channel: "discord", accountId: "default", to: "channel:rollover" },
     });
-    let snapshot = loadReplySessionInitializationSnapshot(scope);
+    let snapshot = await loadReplySessionInitializationSnapshot(scope);
     await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -327,7 +327,7 @@ describe("conversation registry", () => {
       storePath,
     });
 
-    snapshot = loadReplySessionInitializationSnapshot(scope);
+    snapshot = await loadReplySessionInitializationSnapshot(scope);
     const rollover = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -350,7 +350,7 @@ describe("conversation registry", () => {
       await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" }),
     ).toMatchObject({ routeContext: { guildId: "guild-a" } });
 
-    snapshot = loadReplySessionInitializationSnapshot(scope);
+    snapshot = await loadReplySessionInitializationSnapshot(scope);
     await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",

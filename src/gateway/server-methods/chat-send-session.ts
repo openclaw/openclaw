@@ -591,7 +591,8 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   ]);
   await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
   const scope = { agentId, sessionKey, storePath: session.storePath };
-  const snapshot = loadReplySessionInitializationSnapshot(scope);
+  const snapshot = await loadReplySessionInitializationSnapshot(scope);
+  await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
   if (snapshot.currentEntry) {
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
