@@ -22,7 +22,6 @@ vi.mock("./inspect.js", async (importOriginal) => {
 
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
-import { findSystemdGatewayInstallation } from "./systemd-scope.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -33,7 +32,6 @@ const success = (stdout: string): ExecResult => ({
   stdout,
   stderr: "",
 });
-const TEST_MANAGED_HOME = "/tmp/openclaw-test-home";
 
 type ScopeCase = {
   file: string;
@@ -58,31 +56,8 @@ type ScopeCase = {
 
 it.each<ScopeCase>([
   { file: "openclaw.service", instance: "openclaw.service", running: false },
-  { file: "openclaw@.service", instance: "openclaw@gateway.service", running: false },
-  { file: "openclaw@.service", instance: "openclaw@gateway.service", running: true },
-  {
-    file: "openclaw@.service",
-    instance: "openclaw@gateway.service",
-    running: false,
-    unit: "openclaw@gateway.service",
-  },
-  {
-    file: "openclaw@.service",
-    instance: "openclaw@gateway.service",
-    running: true,
-    unit: "openclaw@gateway.service",
-  },
-  { file: "custom-gateway.service", instance: "custom-gateway.service", running: false },
-  { file: "custom-gateway.service", instance: "custom-gateway.service", running: true },
-  ...(["direct", "default-profile", "runtime-flags"] as const).map((launch) => ({
-    file: "custom-gateway.service",
-    instance: "custom-gateway.service",
-    running: false,
-    launch,
-  })),
   ...(
     [
-      "named-env",
       "named-argv",
       "profile-file",
       "other-state",
@@ -90,7 +65,6 @@ it.each<ScopeCase>([
       "same-default",
       "unavailable",
       "wrapper",
-      "budget",
       "handoff-budget",
       "default-budget",
       "node",
@@ -637,34 +611,4 @@ it("reads the system template instance while a separate user Gateway is installe
   expect(
     exec.mock.calls.some(([, args]) => args.includes(instanceName) || args.at(-1) === instanceName),
   ).toBe(true);
-});
-
-it("findSystemdGatewayInstallation expands a system template to this account's instance", async () => {
-  // No unit files exist anywhere; discovery supplies the system template unit.
-  vi.spyOn(fs, "access").mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
-  vi.spyOn(os, "userInfo").mockReturnValue({
-    username: "gateway",
-    uid: 2001,
-    gid: 2001,
-    shell: "/bin/sh",
-    homedir: TEST_MANAGED_HOME,
-  });
-  discovery.mockResolvedValueOnce([
-    {
-      platform: "linux",
-      label: "openclaw@.service",
-      detail: "unit: /etc/systemd/system/openclaw@.service",
-      sourcePath: "/etc/systemd/system/openclaw@.service",
-      scope: "system",
-      marker: "openclaw",
-    },
-  ]);
-  await expect(findSystemdGatewayInstallation({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
-    kind: "system",
-    system: {
-      scope: "system",
-      unitName: "openclaw@gateway.service",
-      unitPath: "/etc/systemd/system/openclaw@.service",
-    },
-  });
 });

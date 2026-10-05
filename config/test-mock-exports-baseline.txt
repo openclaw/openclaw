@@ -7018,7 +7018,6 @@
 ["src/daemon/hosted-stop.test.ts","./hosted-stop-executor.js","6b38da0b9ed5ead9ac1255d7ec15d421fe918794789ce131e12936ad95d4a89b",1]
 ["src/daemon/hosted-stop.test.ts","./launchd-runtime.js","2bc378ed313875d09d9fb0b6d5736249df47c41b73e11180804c2396b8643808",1]
 ["src/daemon/hosted-stop.test.ts","./systemd-exec.js","6acc462cff969b2fd0ff9d59919984e5dd851018645bbcb37342d577814d5b24",1]
-["src/daemon/inspect.incomplete-inventory.test.ts","./systemd-loaded-unit-inventory.js","9d1367fa89835efe60a3b5739aa5330068bd1e9d98909eed521419bb4353e4d8",1]
 ["src/daemon/inspect.test.ts","./systemd-loaded-unit-inventory.js","68824ae3a5065d0ca0638c9adde593f7b1dcf676500bc9b06d170c0e090f976d",1]
 ["src/daemon/launchd-ancestry.test-support.ts","../infra/ports-format.js","d2c0657e1b51b2decbb235547baa0567a0e3666206cea0ce69c775a695346bfd",1]
 ["src/daemon/launchd-ancestry.test-support.ts","../infra/ports-inspect.js","bb6068e74af50205b94119abe5cc4e8628b921733c9710b94362398a624b4e67",1]
