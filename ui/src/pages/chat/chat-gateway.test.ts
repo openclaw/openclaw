@@ -2198,7 +2198,9 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it("keeps materialized text after its prompt without changing the stream timestamp", async () => {
+  it("places materialized streamed text after a persisted user prompt with a later clock", async () => {
+    // Prompt and stream timestamps come from different clocks, so the prompt can be the later one.
+    // The user turn owns placement; retiming the saved stream would reorder live tools.
     const userTimestamp = 200;
     const streamTimestamp = 100;
 
