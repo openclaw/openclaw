@@ -345,7 +345,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
   timeoutMs?: number;
 }): Promise<SystemAgentGreetingResolution> {
   const timeoutMs = params.timeoutMs ?? SYSTEM_AGENT_GREETING_TIMEOUT_MS;
-  let plan: SystemAgentGreetingPlan | null = null;
+  let plan: SystemAgentGreetingPlan | null;
   try {
     // This is the only metered greeting turn. The single-slot hash keeps unchanged
     // caretaker opens at zero tokens while preserving a model-free rescue path.
