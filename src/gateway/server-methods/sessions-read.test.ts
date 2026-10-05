@@ -759,6 +759,39 @@ test("sessions.search accepts an ACP allowlist owner absent from the agent roste
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
 });
 
+test("sessions history reads a configured ACP owner without an explicit agent id", async () => {
+  const agentId = "gemini";
+  const sessionKey = `agent:${agentId}:acp:history-owner`;
+  const sessionId = "session-acp-owner-history";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  await seedLinearSessionTranscript({
+    agentId,
+    contents: ["ACP owner history needle"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  const history = await directSessionReq<{ messages: Array<{ content: unknown }> }>(
+    "chat.history",
+    {
+      sessionKey,
+      limit: 10,
+    },
+  );
+  expect(history).toMatchObject({ ok: true });
+  expect(
+    history.payload?.messages.some((message) => message.content === "ACP owner history needle"),
+  ).toBe(true);
+  // The explicit roster-gated id stays rejected so redundant callers keep failing loudly.
+  const rejected = await directSessionReq("chat.history", { sessionKey, agentId, limit: 10 });
+  expect(rejected).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+});
+
 test("session reads find a retired store only reachable through its deterministic template", async () => {
   const agentId = "template-retired";
   const sessionKey = `agent:${agentId}:existing`;

@@ -18,6 +18,7 @@ import {
 import {
   isAcpSessionKey,
   isIncognitoSessionKey,
+  normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
@@ -403,11 +404,22 @@ export async function resolveVisibleSessionReference(params: {
     (params.action === "history" || params.action === "send")
   ) {
     try {
+      // An agent-qualified key already selects its owner; repeating the same id
+      // only re-gates the request against the native roster and rejects
+      // configured ACP store owners (#164847). Keep the id when it adds a check
+      // the key cannot perform: unqualified keys or a genuine owner mismatch.
+      const keyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
+      const probeAgentId =
+        keyAgentId &&
+        resolvedAgentId &&
+        normalizeAgentId(keyAgentId) === normalizeAgentId(resolvedAgentId)
+          ? undefined
+          : resolvedAgentId;
       const resolved = await requestResolvedSession(
         buildSessionResolveQuery({
           input: resolvedKey,
           kind: "key",
-          agentId: resolvedAgentId,
+          agentId: probeAgentId,
           requesterInternalKey: params.requesterSessionKey,
           restrictToSpawned: params.restrictToSpawned,
           allowMissing: params.allowMissingKey,

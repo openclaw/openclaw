@@ -913,9 +913,11 @@ describe("sessions_history redaction", () => {
 
     await tool.execute("research-current-history", { sessionKey: "current" });
 
+    // The requester's qualified key implies its owner; repeating the same id
+    // would re-gate the read against the fixed-store owner (#164847).
     expect(requests).toContainEqual({
       method: "chat.history",
-      params: expect.objectContaining({ sessionKey: "agent:research:main", agentId: "research" }),
+      params: { sessionKey: "agent:research:main" },
     });
     expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
   });
