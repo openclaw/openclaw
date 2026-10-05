@@ -279,7 +279,12 @@ enum ShellExecutor {
                                 await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
                             }
                         }
-                        return try await group.reduce(false) { $0 || $1 }
+                        // Consume every result so a timeout cannot hide a later output-drain error.
+                        var timedOut = false
+                        for try await childTimedOut in group {
+                            timedOut = timedOut || childTimedOut
+                        }
+                        return timedOut
                     }
                 } onCancel: {
                     _ = Darwin.kill(-processIdentifier, SIGKILL)
