@@ -255,7 +255,11 @@ joins final chat persistence, drains Memory's database borrows, and closes agent
 databases before exiting. It skips plugin and channel teardown that could retain
 the process until the deadline. Database admission stays fenced through lock
 release and log flushing, which have a final five-second exit window. Shutdown
-logs report the elapsed time for these steps. The supervisor deadline remains
+logs report each cleanup step that takes at least one second, including its name
+and elapsed milliseconds. Deadline exits list the currently pending cleanup steps
+and how long each has been waiting (up to eight, with a count of any others).
+These diagnostics are always enabled; `OPENCLAW_GATEWAY_RESTART_TRACE=1` adds
+begin/end timing for fast steps too. The supervisor deadline remains
 the hard upper bound. Clean database restart proof is published only after writer
 leases, checkpointing, and native connection closure settle; one database's idle
 receipt alone does not authorize process exit.
@@ -657,6 +661,12 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
+Startup recovery prepares and admits one continuation at a time to bound database
+and worker pressure. Once execution starts, the normal main lane owns concurrency;
+a long recovered turn does not hold a separate startup slot. Deferred database
+admissions join the same startup scheduler. Shutdown stops new preparation and
+joins the current pass, leaving unstarted interruptions available for the next boot.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the
@@ -671,9 +681,11 @@ automatically without surviving authority. Missing or invalid provenance does no
 establish a human sender for an internal claim. Legacy channel and Control UI
 turns retain their existing recovery checks. Child-completion follow-ups still use
 their existing recovery and delivery ownership checks. If their agent database is
-still undergoing startup inspection or preparation, the pending completion wake
-retries after 30 seconds without consuming delivery attempts or changing its
-replay identity. The retained wake survives another restart. A confirmed
+still undergoing startup inspection or preparation, a child result changes while
+being read, or a preparation worker refuses work at capacity, the pending completion
+wake retries after 30 seconds without consuming delivery attempts or changing its
+batch, replay identity, or retry counters. Each retry reads fresh results under
+the same ownership checks. The retained wake survives another restart. A confirmed
 inspection failure or ownership mismatch remains a failure, not permission to
 bypass database admission; cancellation still retires the wake.
 
@@ -850,6 +862,8 @@ follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection
 does not consume an attempt, and cancellation of an admitted attempt does
 not exhaust the obligation. Existing delivery retry limits still apply.
+Transient cleanup preparation failures keep required final delivery scheduled
+within its existing delivery window. Incidental cleanup retains its bounded retry limit.
 Settling a yielded turn's wake leaves its unfinished native run and final delivery
 intact. Completed cancellation keeps its wake and cleanup bookkeeping in the
 native subagent record; it does not require a separate Tasks row.
@@ -951,9 +965,11 @@ channels.start --params '{"channel":"<id>"}'`
   `openclaw_session_recovery_age_seconds`.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
-  subsystems. A startup scan that finds interrupted candidates but starts none
-  still logs one summary, including bounded skip counts by reason such as
-  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`.
+  subsystems. Every startup pass includes bounded skip counts by reason such as
+  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`, even when
+  other sessions started. Each interrupted main candidate has a structured
+  decision line with boot/pass, session and source-run identity, outcome
+  (`started`, `settled`, `deferred`, or `blocked`), and the next responsible owner.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

@@ -212,7 +212,7 @@ export async function createSetupMigrationStage(params: {
     path.basename(params.reportDir),
   );
   const stageEnv = { ...process.env, OPENCLAW_STATE_DIR: stagedStateDir };
-  const stagedConfig: OpenClawConfig = {
+  let currentStagedConfig: OpenClawConfig = {
     ...structuredClone(params.targetConfig),
     agents: {
       ...structuredClone(params.targetConfig.agents),
@@ -244,7 +244,6 @@ export async function createSetupMigrationStage(params: {
   const projectConfigToFinal = (config: OpenClawConfig) =>
     projectValue(config, toFinal) as OpenClawConfig;
   let finalConfig = structuredClone(params.targetConfig);
-  let currentStagedConfig = structuredClone(stagedConfig);
   const getStagedConfig = () => structuredClone(currentStagedConfig);
   const replaceStagedConfig = (config: OpenClawConfig) => {
     finalConfig = structuredClone(projectConfigToFinal(config));

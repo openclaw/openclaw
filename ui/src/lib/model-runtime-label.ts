@@ -17,8 +17,9 @@ const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
 function formatAgentRuntimeLabel(id: string): string {
   const normalized = id.trim().toLowerCase();
   return (
-    AGENT_RUNTIME_LABELS[normalized] ??
-    `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
+    (Object.hasOwn(AGENT_RUNTIME_LABELS, normalized)
+      ? AGENT_RUNTIME_LABELS[normalized]
+      : undefined) ?? `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
   );
 }
 

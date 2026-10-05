@@ -18,13 +18,14 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses list row encodings across clients and refreshes compact, published, and clock facts", async () => {
+it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {
   const start = 1_800_000_000_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(start);
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
-    const clients = [roleClient("view", "first-list"), roleClient("view", "second-list")];
+    const client = roleClient("view", "first-list");
+    const clients = [client, { ...client }, roleClient("view", "second-identity")];
     const scope = { agentId: "main", sessionKey: "agent:main:serialized" };
     const entry = {
       sessionId: "serialized",
@@ -40,6 +41,7 @@ it("reuses list row encodings across clients and refreshes compact, published, a
         client: clients[index]!,
         context,
         request: compact ? { rowMode: "compact" } : {},
+        acceptsSerializedJson: true,
       });
     // Admission work is not part of response encoding.
     await read(0, false);
@@ -64,7 +66,11 @@ it("reuses list row encodings across clients and refreshes compact, published, a
     stringify.mockRestore();
     expect(rowTraversals).toBe(0);
     expect(JSON.parse(firstWire).payload.sessions).toEqual(JSON.parse(secondWire).payload.sessions);
-    expect(first.sessions[0]).not.toBe(second.sessions[0]);
+    expect(first.sessions).toBe(second.sessions);
+    expect(first.owners).toBe(second.owners);
+    const otherIdentity = await read(2, false);
+    expect(otherIdentity.sessions).not.toBe(first.sessions);
+    expect(otherIdentity.owners).not.toBe(first.owners);
     expect(first.sessions[0]).toMatchObject({ snapshotAt: start, agentStatus: entry.agentStatus });
     const compact = await read(0);
     expect(compact.sessions[0]).toMatchObject({ rowMode: "compact", label: "Original label" });
@@ -100,6 +106,14 @@ it("reuses list row encodings across clients and refreshes compact, published, a
       snapshotAt: start + 103,
     });
     clock.mockReturnValue(start + 104);
+    const readActive = () =>
+      listSessions({
+        client: clients[0]!,
+        context,
+        request: { activeOnly: true },
+        acceptsSerializedJson: true,
+      });
+    expect((await readActive()).sessions).toHaveLength(0);
     const run = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
       runId: "serialization-run",
@@ -109,6 +123,7 @@ it("reuses list row encodings across clients and refreshes compact, published, a
       timeoutMs: 60_000,
     });
     try {
+      expect((await readActive()).sessions).toHaveLength(1);
       expect((await read(0)).sessions[0]).toMatchObject({
         hasActiveRun: true,
         activeRunIds: ["serialization-run"],
@@ -118,6 +133,7 @@ it("reuses list row encodings across clients and refreshes compact, published, a
       run.cleanup();
     }
     clock.mockReturnValue(start + 105);
+    expect((await readActive()).sessions).toHaveLength(0);
     expect.soft((await read(1)).sessions[0]).toMatchObject({
       hasActiveRun: false,
       activeRunIds: [],
@@ -180,6 +196,7 @@ it("reuses list row encodings across clients and refreshes compact, published, a
           client: clients[0]!,
           context,
           request: { rowMode: "compact", spawnedBy: scope.sessionKey },
+          acceptsSerializedJson: true,
         });
       clock.mockReturnValue(start + 1_000);
       await readChildren();
@@ -206,6 +223,40 @@ it("reuses list row encodings across clients and refreshes compact, published, a
   });
 });
 
+it("refreshes shared socket selection when the same viewer changes roles", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    const context = requestContext(cfg);
+    const client = roleClient("view", "selection-viewer");
+    const profileId = client.authenticatedUserProfile!.profileId;
+    for (const [suffix, creator] of [
+      ["owned", profileId],
+      ["foreign", "other-profile"],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:selection-${suffix}` },
+        {
+          sessionId: `selection-${suffix}`,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: creator },
+        },
+      );
+    }
+    const read = () =>
+      listSessions({
+        client,
+        context,
+        request: { rowMode: "compact" },
+        acceptsSerializedJson: true,
+      });
+    expect((await read()).totalCount).toBe(2);
+    setUserProfileRole(profileId, "none");
+    expect((await read()).sessions.map((row) => row.key)).toEqual(["agent:main:selection-owned"]);
+    setUserProfileRole(profileId, "view");
+    expect((await read()).totalCount).toBe(2);
+  });
+});
+
 it("retains each embedded reader's identity when their shared row presentation is identical", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = rolePolicyConfig();
@@ -219,7 +270,12 @@ it("retains each embedded reader's identity when their shared row presentation i
     });
     const rows = [];
     for (const client of clients) {
-      const result = await listSessions({ client, context, request: { rowMode: "compact" } });
+      const result = await listSessions({
+        client,
+        context,
+        request: { rowMode: "compact" },
+        acceptsSerializedJson: false,
+      });
       expect(result.sessions).toHaveLength(1);
       rows.push(result.sessions[0]!);
     }

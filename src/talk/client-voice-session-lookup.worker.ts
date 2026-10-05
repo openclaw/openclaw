@@ -1,10 +1,11 @@
-import { sql } from "kysely";
+import { expressionBuilder, sql } from "kysely";
 import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
   parseStoredVoiceSessionRecord,
   voiceSessionRowsQuery,
@@ -16,8 +17,13 @@ function voiceSessionField(
   field: "status" | "agentId" | "sessionKey" | "origin" | "voiceSessionId",
 ) {
   // The sole writer uses JSON.stringify, so stored fields have unique object keys.
-  // kysely-allow-raw: Closed JSON paths match the canonical partial-index expressions.
-  return sql<string>`CASE WHEN json_valid(value_json) THEN json_extract(value_json, ${sql.lit(`$.${field}`)}) END`;
+  // Literal JSON paths preserve the canonical partial-index expressions.
+  const eb = expressionBuilder<DB, "cache_entries">();
+  return eb
+    .case()
+    .when(eb.fn<0 | 1>("json_valid", ["value_json"]))
+    .then(eb.fn<string>("json_extract", ["value_json", sql.lit(`$.${field}`)]))
+    .end();
 }
 
 /** The partial indexes exclude closed/invalid JSON before any payload reaches the decoder. */

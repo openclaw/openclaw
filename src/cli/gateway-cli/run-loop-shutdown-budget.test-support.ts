@@ -112,7 +112,22 @@ export function registerShutdownBudgetTests({
           }
         });
         const close = vi.fn<GatewayServer["close"]>(async () => {
-          await connectionWork.drain();
+          // The run-loop fixture reloads its module generation before every invocation.
+          const { runGatewayCloseSteps } = await import("../../gateway/server-shutdown.js");
+          await runGatewayCloseSteps({
+            owner: {
+              connectionWork,
+              stopConnectionDependentSidecars() {},
+              stopRegisteredGatewayLifetimeSidecars() {},
+              stopRegisteredPostReadySidecars() {},
+              runClosePrelude() {},
+              sealAndJoinRegisteredSidecarStops() {},
+            },
+            close() {},
+            onError: (message) => {
+              throw new Error(message);
+            },
+          });
         });
         const { start, started } = createSignaledStart(close);
         const { runtime } = createRuntimeWithExitSignal();
@@ -217,7 +232,9 @@ export function registerShutdownBudgetTests({
           expect(start).toHaveBeenCalledOnce();
           if (!honorsAbort) {
             expect(gatewayLog.warn).toHaveBeenCalledWith(
-              expect.stringMatching(/abandoning.*embeddedRuns=1/),
+              expect.stringMatching(
+                /abandoning.*embeddedRuns=1.*pending close steps: shutdown.received-connection-work=\d+ms/,
+              ),
             );
             expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
               signal === "SIGTERM"
@@ -227,6 +244,8 @@ export function registerShutdownBudgetTests({
             );
           }
         } finally {
+          provider.resolve();
+          await Promise.allSettled(close.mock.results.map((result) => result.value));
           clock.mockRestore();
           vi.clearAllTimers();
           vi.useRealTimers();

@@ -3,7 +3,10 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import {
+  readExactSessionEntryRow,
+  readSessionEntryRow,
+} from "./session-accessor.sqlite-entry-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -18,6 +21,7 @@ import type { InternalSessionEntry } from "./types.js";
 export type SessionTranscriptAnchorSelection = {
   entryIds: readonly string[];
   afterSeq?: number;
+  includeSession?: boolean;
   includeHeader?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
   contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
@@ -29,6 +33,7 @@ export type SessionTranscriptAnchorSelection = {
 
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
+  session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;
   contextValidated?: true;
   contextAuthority?: {
@@ -120,6 +125,13 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         ...(context ? { contextValidated: true as const } : {}),
         ...(replayValidated ? { replayValidated } : {}),
       };
+      const entry = selection.includeSession
+        ? readExactSessionEntryRow(database, resolved.sessionKey, "list", "canonical")?.entry
+        : undefined;
+      const session = entry
+        ? { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision }
+        : undefined;
+      const sessionFacts = selection.includeSession ? { session } : {};
       const header: Pick<SessionTranscriptAnchorFacts, "header"> = {};
       if (selection.includeHeader) {
         try {
@@ -140,7 +152,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
       if (selection.afterSeq === undefined) {
-        return { anchors: selected, ...validated, ...header };
+        return { anchors: selected, ...validated, ...sessionFacts, ...header };
       }
       const rows = loadTranscriptEventRowsAfterSeqInDatabase(
         database,
@@ -169,6 +181,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       return {
         anchors: selected,
         ...validated,
+        ...sessionFacts,
         ...header,
         tail: { lastSeq: rows.at(-1)?.seq, entries },
       };

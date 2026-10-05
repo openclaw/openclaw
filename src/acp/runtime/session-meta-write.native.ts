@@ -86,9 +86,6 @@ export async function upsertAcpSessionMetaNative(params: {
     env: params.env,
     clone: false,
   });
-  if (!storeEntry.storePath) {
-    return null;
-  }
   const { entry, storePath } = storeEntry;
   const storageSessionKey = storeEntry.storeSessionKey;
   let current: SessionAcpMeta | undefined;
@@ -172,7 +169,7 @@ export async function upsertAcpSessionMetaNative(params: {
     const patched = entry
       ? await patchSessionEntryWithKey(
           {
-            ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+            agentId: storeEntry.agentId,
             storePath: storeEntry.storePath,
             sessionKey: storageSessionKey,
           },
@@ -199,7 +196,7 @@ export async function upsertAcpSessionMetaNative(params: {
   }
   const persisted = await patchSessionEntryWithKey(
     {
-      ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+      agentId: storeEntry.agentId,
       storePath: storeEntry.storePath,
       sessionKey: storageSessionKey,
     },

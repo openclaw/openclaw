@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -18,10 +19,12 @@ import {
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
-import { createMainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
-import { restartRecoveryStoreTargetKey } from "./main-session-restart-recovery-diagnostics.js";
+import {
+  restartRecoveryStoreTargetKey,
+  type MainSessionRecoverySkipReason,
+} from "./main-session-restart-recovery-diagnostics.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
@@ -35,11 +38,9 @@ import {
 import {
   loadExpectedRestartRecoveryTarget,
   recoverStore,
-  type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-store.js";
 
 type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
-const STARTUP_RECOVERY_MAX_ACTIVE_RUNS = 1;
 
 async function runRecoveryRetries(params: {
   initialDelayMs: number;
@@ -88,9 +89,9 @@ export async function recoverRestartAbortedMainSessions(params: {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-  recoveryCapacity?: ReturnType<typeof createMainSessionRecoveryCapacity>;
 }): Promise<RecoveryCounts> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
+  const passId = randomUUID();
   const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
@@ -99,17 +100,17 @@ export async function recoverRestartAbortedMainSessions(params: {
     statuses: ["running"],
   })) {
     if (params.shouldContinue?.() === false) {
-      return result;
+      break;
     }
     if (params.excludedStoreTargets?.has(restartRecoveryStoreTargetKey(target))) {
       continue;
     }
     const storeResult = await recoverStore({
       ...params,
+      passId,
       storePath: target.storePath,
       storeAgentId: target.agentId,
       handledSessionKeys,
-      recoveryCapacity: params.recoveryCapacity,
       onSkipped: (reason) => {
         skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
       },
@@ -129,7 +130,7 @@ export async function recoverRestartAbortedMainSessions(params: {
             .join(",")}`
         : "";
     mainSessionRecoveryLog.info(
-      `main-session restart recovery startup complete: started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}${skipSummary}`,
+      `main-session restart recovery startup complete: started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}${skipSummary} boot=${params.lifecycleGeneration ?? getAgentEventLifecycleGeneration()} pass=${passId}`,
     );
   }
   return result;
@@ -274,9 +275,6 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
-  const recoveryCapacity = createMainSessionRecoveryCapacity({
-    limit: STARTUP_RECOVERY_MAX_ACTIVE_RUNS,
-  });
   const startupCheckedStorePaths = params.startupCheckedStorePaths ?? new Set<string>();
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
@@ -311,7 +309,6 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           lifecycleGeneration,
           shouldContinue,
           gatewayRuntime: params.gatewayRuntime,
-          recoveryCapacity,
         });
         result.failed += marking.failedTargets?.length ?? 0;
         return result;
@@ -418,7 +415,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       }
       if (admitted.size > 0) {
         // Admission can finish after the first scan. Retain this startup's
-        // cutoff and capacity without borrowing the publisher's preparation scope.
+        // cutoff and serial preparation without borrowing the publisher's scope.
         run = run.then(() => runRecovery(admitted));
       }
     }),

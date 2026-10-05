@@ -19,7 +19,8 @@ import {
 } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
+import { formatDateTimeMs } from "../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderApprovalPresentation } from "./approval-presentation.ts";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
@@ -39,13 +40,6 @@ function isUnavailableApprovalError(error: unknown): boolean {
     error.gatewayCode === "APPROVAL_NOT_FOUND" ||
     error.gatewayCode === "INVALID_REQUEST"
   );
-}
-
-function formatApprovalTime(timestampMs: number): string {
-  return new Intl.DateTimeFormat(i18n.getLocale(), {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestampMs));
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
@@ -577,7 +571,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
         <time
           datetime=${new Date(pending ? approval.expiresAtMs : approval.resolvedAtMs).toISOString()}
         >
-          ${formatApprovalTime(pending ? approval.expiresAtMs : approval.resolvedAtMs)}
+          ${formatDateTimeMs(pending ? approval.expiresAtMs : approval.resolvedAtMs, { dateStyle: "medium", timeStyle: "short" })}
         </time>
       </div>
       ${this.requestError === "connection" ? this.renderConnectionError() : nothing}

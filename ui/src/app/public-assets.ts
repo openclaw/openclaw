@@ -2,7 +2,7 @@ import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   type ControlUiRootPublicAsset,
 } from "../../../src/gateway/control-ui-root-assets.js";
-import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
+import { normalizeBasePath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 
 type ControlUiPublicAsset =
@@ -27,17 +27,9 @@ export function controlUiPublicAssetPath(
   return `${normalizeBasePath(resourceBasePath ?? "")}/${asset}${version}`;
 }
 
-export function inferControlUiPublicAssetPath(
-  asset: ControlUiPublicAsset,
-  params?: {
-    resourceBasePath?: string | null;
-    pathname?: string;
-  },
-): string {
-  const resourceBasePath =
-    params?.resourceBasePath ??
-    (params?.pathname === undefined
-      ? resolveControlUiPaths(typeof window === "undefined" ? "/" : window.location.pathname)[1]
-      : inferBasePathFromPathname(params.pathname));
+export function inferControlUiPublicAssetPath(asset: ControlUiPublicAsset): string {
+  const resourceBasePath = resolveControlUiPaths(
+    typeof window === "undefined" ? "/" : window.location.pathname,
+  )[1];
   return controlUiPublicAssetPath(asset, resourceBasePath);
 }

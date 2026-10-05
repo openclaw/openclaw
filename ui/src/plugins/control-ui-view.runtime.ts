@@ -500,7 +500,6 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
             "accessories",
             entry.key,
             { sessionKey: this.sessionKey, agentId: this.agentId, session: this.session },
-            nothing,
             this.presented,
           ),
         );

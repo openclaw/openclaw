@@ -14,8 +14,6 @@ import { listPluginContributionIds } from "../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
-export { describeBinding } from "./agents.binding-format.js";
-
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
   const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
   const identityKey = bindingMatchIdentityKey(match);

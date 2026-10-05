@@ -437,8 +437,9 @@ export function readResidentSessionRow(
     storePath: row.storeTarget.storePath,
     storeAgentId: row.storeTarget.agentId,
     // Cache stored fallback facts independently of the live activity chosen at presentation.
-    active: source ? undefined : false,
-    activeModel: source ? undefined : (row.fallbackModel ?? null),
+    active: source || prepared ? undefined : false,
+    activeModel: source || prepared ? undefined : (row.fallbackModel ?? null),
+    terminalModel: prepared ? (prepared.terminalModel ?? null) : undefined,
     modelCatalog: params.modelCatalog,
     modelSource: {
       entry: row.storedEntry,
@@ -457,8 +458,12 @@ export function readResidentSessionRow(
     childLinks: source || prepared ? undefined : params.links,
   });
   if (!source) {
-    inputs.derivedTitle = deriveSessionTitle(row.entry, undefined, inputs.displayName);
-    inputs.lastMessagePreview = row.lastMessagePreview;
+    inputs.derivedTitle = deriveSessionTitle(
+      row.entry,
+      prepared?.titleFields?.firstUserMessage ?? undefined,
+      inputs.displayName,
+    );
+    inputs.lastMessagePreview = prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview;
   }
   inputs.subagentRunInputs = params.subagentInputs;
   const materialized = materializeSessionRow(inputs);

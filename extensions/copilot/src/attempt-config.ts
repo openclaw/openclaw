@@ -15,7 +15,6 @@ import {
   type AttemptParamsLike,
   type AttemptResultWithSdkSessionId,
   type CopilotAttemptOperation,
-  type CopilotSessionConfig,
   type ModelRef,
   type ModelRefInputObject,
 } from "./attempt-types.js";
@@ -159,7 +158,7 @@ export function createSessionConfig(
     includeAskUser: boolean;
     operation: CopilotAttemptOperation;
   },
-): CopilotSessionConfig {
+): SessionConfig {
   const settledToolFinalization = options.operation === "settled-tool-finalization";
   const permissionPolicy = settledToolFinalization
     ? rejectAllPolicy

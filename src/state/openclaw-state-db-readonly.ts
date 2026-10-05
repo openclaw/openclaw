@@ -84,10 +84,10 @@ const stateSnapshotReads = resolveGlobalSingleton(
     >(),
 );
 
-/** Opaque identity for derived facts scoped to these owned private database bytes. */
+/** Stable identity and private bytes for reads within the enclosing snapshot scope. */
 export function getActiveOpenClawStateDatabaseReadSnapshot(
   options: OpenClawStateDatabaseOptions = {},
-): object | undefined {
+): Readonly<{ location: string }> | undefined {
   const current = stateSnapshotReads.getStore();
   return current?.path === resolveReadOnlyPath(options) ? current : undefined;
 }

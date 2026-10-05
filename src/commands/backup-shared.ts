@@ -119,10 +119,8 @@ const BACKUP_ASSET_PRIORITY = {
 } satisfies Record<BackupAssetKind, number>;
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
-function formatBackupArchiveTimestamp(
-  nowMs = Date.now(),
-  offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
-): string {
+export function buildBackupArchiveRoot(nowMs = Date.now()): string {
+  const offsetMinutes = -new Date(nowMs).getTimezoneOffset();
   const shifted = nowMs + offsetMinutes * 60_000;
   const local = new Date(shifted);
   const sign = offsetMinutes >= 0 ? "+" : "-";
@@ -136,11 +134,7 @@ function formatBackupArchiveTimestamp(
   const minutes = String(local.getUTCMinutes()).padStart(2, "0");
   const seconds = String(local.getUTCSeconds()).padStart(2, "0");
   const millis = String(local.getUTCMilliseconds()).padStart(3, "0");
-  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
-}
-
-export function buildBackupArchiveRoot(nowMs = Date.now()): string {
-  return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
+  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}-openclaw-backup`;
 }
 
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {

@@ -71,7 +71,6 @@ import { resolveAnthropicMessagesMaxTokens } from "./anthropic-transport-options
 import { resolveProviderEndpoint } from "./host-policy.js";
 import {
   coerceTransportToolCallArguments,
-  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -104,11 +103,11 @@ async function convertContentBlocks(
     (profile === "provider" || model.input.includes("image")) &&
     content.some(isImageWithMediaPayload);
   if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(
-      extractToolResultText(content),
-      mediaPlaceholder ??
-        (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""),
-    );
+    const text = extractToolResultText(content);
+    return text.trim()
+      ? text
+      : (mediaPlaceholder ??
+          (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""));
   }
   const blocks: Array<TextBlockParam | ImageBlockParam> = [];
   let hasTextBlock = false;
@@ -119,7 +118,7 @@ async function convertContentBlocks(
     }
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
-      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
+      blocks.push({ type: "text", text: blockText });
       hasTextBlock = true;
     }
     if (!isImageWithMediaPayload(record)) {

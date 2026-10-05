@@ -67,6 +67,7 @@ import type {
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
+import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -75,7 +76,6 @@ import {
   type SessionDiagnosticTextWorkerInput,
   type SessionEntryCurrentWorkerInput,
   type SessionEntryCurrentWorkerResult,
-  type SessionRowDatabaseFacts,
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
   type SessionTranscriptWorkerValues,

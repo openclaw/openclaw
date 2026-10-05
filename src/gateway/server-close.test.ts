@@ -154,7 +154,7 @@ const createGatewayCloseHandler = createGatewayCloseTestHandlerFactory(
   await import("./server-close.js"),
 );
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
-const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
+const { finishGatewayRestartTrace, formatGatewayPendingCloseSteps, startGatewayRestartTrace } =
   await import("./restart-trace.js");
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
@@ -1250,39 +1250,6 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
-  it("emits restart ready child spans without shortening the parent ready span", async () => {
-    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
-
-    startGatewayRestartTrace("restart.signal.received", [["reason", "test restart"]]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    recordGatewayRestartTraceSpan("restart.ready.runtime.post-attach", 12, 40, [
-      ["eventLoopMax", "1.0ms"],
-    ]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    finishGatewayRestartTrace("restart.ready");
-
-    const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
-    expect(messages).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(
-          /^restart trace: restart\.ready\.runtime\.post-attach 12\.0ms total=40\.0ms eventLoopMax=1\.0ms$/u,
-        ),
-      ]),
-    );
-    const parentReadyLine = messages.find((message) =>
-      /^restart trace: restart\.ready [0-9.]+ms total=[0-9.]+ms$/u.test(message),
-    );
-    expect(parentReadyLine).toBeDefined();
-    const parentDuration = Number(
-      /^restart trace: restart\.ready ([0-9.]+)ms/u.exec(parentReadyLine ?? "")?.[1],
-    );
-    expect(parentDuration).toBeGreaterThan(30);
-  });
-
   it.each([
     { action: "shutdown", timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS },
     { action: "pre-restart", timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS },
@@ -1305,11 +1272,14 @@ describe("createGatewayCloseHandler", () => {
       expect(stopPeriodicTasks).toHaveBeenCalledOnce();
       expect(mocks.stopGmailWatcher).toHaveBeenCalledOnce();
       expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(formatGatewayPendingCloseSteps()).toContain(`restart.close.gateway-${action}-hook=`);
+      expect(formatGatewayPendingCloseSteps()).not.toContain(`gateway-${action}-hook-grace=`);
     } finally {
       cleanup.resolve();
       await closing;
     }
     expect((await closing).warnings).toContain(`gateway:${action}`);
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
     expect(stopPeriodicTasks).toHaveBeenCalledOnce();
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(action === "pre-restart" ? 2 : 1);
     expect(

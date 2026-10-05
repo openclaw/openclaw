@@ -26,6 +26,7 @@ import {
 import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  SubagentAnnouncePreparationConflictError,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
 } from "./subagent-announce-result.js";
@@ -241,14 +242,18 @@ export async function readChildCompletionFindings(
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
       if (!child || !prepared.isCurrent()) {
-        throw new Error("A child result changed while preparing the completion batch.");
+        throw new SubagentAnnouncePreparationConflictError(
+          "A child result changed while preparing the completion batch.",
+        );
       }
       return { child, ...prepared };
     }),
   );
   const isCurrent = () => results.every((result) => result.isCurrent());
   if (!isCurrent()) {
-    throw new Error("A child result changed while preparing the completion batch.");
+    throw new SubagentAnnouncePreparationConflictError(
+      "A child result changed while preparing the completion batch.",
+    );
   }
   return {
     text: buildChildCompletionFindings(

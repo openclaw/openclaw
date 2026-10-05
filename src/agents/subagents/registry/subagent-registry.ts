@@ -74,7 +74,7 @@ export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 const warn = (message: string, meta?: Record<string, unknown>) => log.warn(message, meta);
 
-const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+const completionRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let activeGatewayContextResolver: GatewayContextResolver | undefined;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
@@ -107,7 +107,7 @@ const resumedRuns = new Set<object>();
 const completionRuntime = createSubagentRegistryCompletionRuntime({
   runs: subagentRuns,
   resumed: resumedRuns,
-  retryTimers: resumeRetryTimers,
+  retryTimers: completionRetryTimers,
   completeSubagentRun: (params) => completeSubagentRun(params),
   scheduleSweep: scheduleSubagentRegistrySweep,
   resumeRun: (runId) => resumeSubagentRun(runId),
@@ -158,6 +158,7 @@ const subagentLifecycleController = new SubagentLifecycleController({
 
 const {
   clearScheduledResumeTimers,
+  scheduleResume,
   completeCleanupBookkeeping,
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
@@ -188,59 +189,6 @@ function retainsRetryAfterDrain(runId: string, entry: SubagentRunRecord): boolea
   );
 }
 
-function scheduleSubagentDeliveryResumeRetry(
-  runId: string,
-  scheduledEntry: SubagentRunRecord,
-  waitMs: number,
-  stateContext = captureOpenClawStateWorkerContext(),
-) {
-  const resumeKey = getSubagentRunRuntimeKey(scheduledEntry);
-  const timer = setTimeout(() => {
-    resumeRetryTimers.delete(timer);
-    void runWithGatewayDetachedWorkAdmission(async () => {
-      assertSubagentRegistryWriteSourceCurrent(stateContext);
-      const current = subagentRuns.get(runId);
-      if (!isSameSubagentRunOwner(current, scheduledEntry)) {
-        resumedRuns.delete(resumeKey);
-        return;
-      }
-      if (current?.cleanupHandled) {
-        return;
-      }
-      resumedRuns.delete(resumeKey);
-      resumeSubagentRun(runId);
-    }, "subagents:resume-retry").catch((error: unknown) => {
-      log.warn("failed to resume subagent delivery retry", { runId, error });
-      const current = subagentRuns.get(runId);
-      if (!isSameSubagentRunOwner(current, scheduledEntry)) {
-        resumedRuns.delete(resumeKey);
-        return;
-      }
-      if (current?.cleanupHandled) {
-        return;
-      }
-      try {
-        assertSubagentRegistryWriteSourceCurrent(stateContext);
-      } catch {
-        resumedRuns.delete(resumeKey);
-        return;
-      }
-      if (retainsRetryAfterDrain(runId, scheduledEntry)) {
-        scheduleSubagentDeliveryResumeRetry(
-          runId,
-          scheduledEntry,
-          Math.max(waitMs, GATEWAY_ADMISSION_RETRY_DELAY_MS),
-          stateContext,
-        );
-        return;
-      }
-      resumedRuns.delete(resumeKey);
-    });
-  }, waitMs);
-  timer.unref?.();
-  resumeRetryTimers.add(timer);
-}
-
 function finalizeResumedAnnounceGiveUpInBackground(
   runId: string,
   entry: SubagentRunRecord,
@@ -266,12 +214,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
       return;
     }
     if (retainsRetryAfterDrain(runId, entry)) {
-      scheduleSubagentDeliveryResumeRetry(
-        runId,
-        entry,
-        GATEWAY_ADMISSION_RETRY_DELAY_MS,
-        stateContext,
-      );
+      scheduleResume(entry, GATEWAY_ADMISSION_RETRY_DELAY_MS, stateContext);
       resumedRuns.add(resumeKey);
     }
   });
@@ -328,7 +271,7 @@ export function resumeSubagentRun(runId: string, source: "live" | "restore" = "l
       log.warn("subagent settlement deferred before cleanup", { runId, error });
       if (stillCurrent()) {
         resumedRuns.delete(getSubagentRunRuntimeKey(entry));
-        scheduleSubagentDeliveryResumeRetry(runId, entry, GATEWAY_ADMISSION_RETRY_DELAY_MS);
+        scheduleResume(entry, GATEWAY_ADMISSION_RETRY_DELAY_MS);
       }
     };
     void runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -400,7 +343,7 @@ function resumeFinalizedSubagentRun(
   const earliestRetryAt = entry.delivery?.nextAttemptAt ?? 0;
   if (entry.expectsCompletionMessage === true && now < earliestRetryAt) {
     const waitMs = Math.max(1, earliestRetryAt - now);
-    scheduleSubagentDeliveryResumeRetry(runId, entry, waitMs);
+    scheduleResume(entry, waitMs);
     resumedRuns.add(getSubagentRunRuntimeKey(entry));
     return;
   }
@@ -665,10 +608,10 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
     }));
   }
   clearScheduledResumeTimers();
-  for (const timer of resumeRetryTimers) {
+  for (const timer of completionRetryTimers) {
     clearTimeout(timer);
   }
-  resumeRetryTimers.clear();
+  completionRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
   pendingLifecycle.clearAll();

@@ -1,58 +1,4 @@
-import {
-  asOptionalObjectRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type ReplayDecision =
-  | {
-      readonly action: "resume";
-      readonly sdkSessionId: string;
-      readonly downgradedFromResume: false;
-    }
-  | {
-      readonly action: "create";
-      readonly downgradedFromResume: boolean;
-      readonly downgradeReason: "no-replay-state" | "no-sdk-session-id" | "replay-invalid";
-    };
-
-interface ReplayShimInput {
-  readonly sdkSessionId?: string;
-  readonly replayInvalid?: boolean;
-}
-
-export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
-  if (!input) {
-    return {
-      action: "create",
-      downgradedFromResume: false,
-      downgradeReason: "no-replay-state",
-    };
-  }
-  const sdkSessionId = normalizeOptionalString(input.sdkSessionId);
-  if (!sdkSessionId) {
-    return {
-      action: "create",
-      downgradedFromResume: false,
-      downgradeReason: "no-sdk-session-id",
-    };
-  }
-  if (input.replayInvalid === true) {
-    return {
-      action: "create",
-      downgradedFromResume: true,
-      downgradeReason: "replay-invalid",
-    };
-  }
-  return {
-    action: "resume",
-    sdkSessionId,
-    downgradedFromResume: false,
-  };
-}
-
-type ResumeFailureClassification =
-  | { readonly recoverable: true; readonly kind: "missing" }
-  | { readonly recoverable: false; readonly kind: "unknown" };
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MISSING_SESSION_CODES = new Set([
   "SESSION_NOT_FOUND",
@@ -71,22 +17,18 @@ const MISSING_SESSION_MESSAGE_PATTERNS: readonly RegExp[] = [
 ];
 
 // Only missing sessions permit recovery; auth and transport failures must surface.
-export function classifyResumeFailure(error: unknown): ResumeFailureClassification {
+export function isMissingCopilotSessionError(error: unknown): boolean {
   const record = asOptionalObjectRecord(error);
   if (record?.status === 404 || record?.statusCode === 404) {
-    return { recoverable: true, kind: "missing" };
+    return true;
   }
   const code = record?.code;
   const message = record?.message;
-  if (
+  return (
     (typeof code === "string" && MISSING_SESSION_CODES.has(code)) ||
     (typeof message === "string" &&
       MISSING_SESSION_MESSAGE_PATTERNS.some((pattern) => pattern.test(message)))
-  ) {
-    return { recoverable: true, kind: "missing" };
-  }
-
-  return { recoverable: false, kind: "unknown" };
+  );
 }
 
 interface ReplayMetadataComputeInput {

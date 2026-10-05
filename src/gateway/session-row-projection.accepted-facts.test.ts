@@ -25,12 +25,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import * as canonical from "../config/sessions/session-canonical-key.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";

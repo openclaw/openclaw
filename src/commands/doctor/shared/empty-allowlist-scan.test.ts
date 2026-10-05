@@ -35,10 +35,6 @@ vi.mock("../channel-capabilities.js", () => ({
   },
 }));
 
-vi.mock("./channel-doctor.js", () => ({
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: () => false,
-}));
-
 describe("doctor empty allowlist policy scan", () => {
   it("scans top-level and account-scoped channel warnings", async () => {
     const warnings = await scanEmptyAllowlistPolicyWarnings(

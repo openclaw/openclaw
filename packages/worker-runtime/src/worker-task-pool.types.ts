@@ -2,6 +2,7 @@ import type { Transferable, WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation, RetainedOutcome } from "./retained-operation.js";
 import type { RetainedNativeWorker, WorkerLifecycle } from "./worker-lifecycle.js";
 import type { WorkerComputePermit } from "./worker-task-capacity.js";
+import type { WorkerTaskObservation } from "./worker-task-host.js";
 import type { WorkerNativeSectionState } from "./worker-task-native-sections.js";
 
 export type WorkerTaskPoolOptions<Output> = {
@@ -129,6 +130,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   inputBytes: number;
   computePermit?: WorkerComputePermit;
   enqueuedAt: number;
+  observation?: WorkerTaskObservation;
   startedAt?: number;
   preparedAt?: number;
   transferMs: number;

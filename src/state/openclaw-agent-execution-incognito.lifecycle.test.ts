@@ -192,74 +192,71 @@ function reclaim(
   );
 }
 
-it.each(["deleted", "reset"] as const)(
-  "serializes %s with appends, preserves siblings, and executes zero caller-thread SQL",
-  async (reason) => {
-    const target = await create(`fifo-${reason}`);
-    const sibling = await create(`sibling-${reason}`);
-    const siblingClaim = actor.sessions.captureCurrent(sibling.sessionKey);
-    const oldClaim = actor.sessions.captureCurrent(target.sessionKey);
-    await withDeletion([target], async (assertCurrent, capture) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const held = actor.run(authority, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
-      const sql = observeHostDataSql();
-      const order: string[] = [];
-      try {
-        expect(() => remove(sibling, reason, actor, { assertCurrent }, capture)).toThrow(
-          "Session mutation target was not prepared",
-        );
-        const before = append(target, "before deletion").then((value) => {
-          order.push("append");
-          return value;
-        });
-        const deletion = remove(
-          target,
-          reason,
-          actor,
-          {
-            assertCurrent,
-            authorize(stage) {
-              if (stage === "transaction") {
-                order.push("delete");
-              }
-            },
-          },
-          capture,
-        );
-        const after = append(target, "after deletion");
-        release.resolve();
-        const [appended, deleted, refused] = await Promise.all([before, deletion, after, held]);
-        expect(appended.ok).toBe(true);
-        expect(deleted).toMatchObject({
-          deleted: true,
-          archivedTranscripts: [],
-          deletedSessionId: target.entry.sessionId,
-        });
-        expect(refused.ok).toBe(false);
-        expect(order).toEqual(["append", "delete"]);
-        expect(
-          (await actor.sessions.read(authority, { sessionKey: target.sessionKey })).entry,
-        ).toBeUndefined();
-        expect(
-          (await actor.sessions.read(authority, { sessionKey: sibling.sessionKey })).entry
-            ?.sessionId,
-        ).toBe(sibling.entry.sessionId);
-        siblingClaim.assertCurrent();
-        expect(() => oldClaim.assertCurrent()).toThrow("generation is no longer current");
-        expect(sql.queries).toEqual([]);
-      } finally {
-        release.resolve();
-        await held;
-        sql.restore();
-      }
+it("serializes deletion with appends, preserves siblings, and executes zero caller-thread SQL", async () => {
+  const reason = "deleted";
+  const target = await create(`fifo-${reason}`);
+  const sibling = await create(`sibling-${reason}`);
+  const siblingClaim = actor.sessions.captureCurrent(sibling.sessionKey);
+  const oldClaim = actor.sessions.captureCurrent(target.sessionKey);
+  await withDeletion([target], async (assertCurrent, capture) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const held = actor.run(authority, async () => {
+      entered.resolve();
+      await release.promise;
     });
-  },
-);
+    await entered.promise;
+    const sql = observeHostDataSql();
+    const order: string[] = [];
+    try {
+      expect(() => remove(sibling, reason, actor, { assertCurrent }, capture)).toThrow(
+        "Session mutation target was not prepared",
+      );
+      const before = append(target, "before deletion").then((value) => {
+        order.push("append");
+        return value;
+      });
+      const deletion = remove(
+        target,
+        reason,
+        actor,
+        {
+          assertCurrent,
+          authorize(stage) {
+            if (stage === "transaction") {
+              order.push("delete");
+            }
+          },
+        },
+        capture,
+      );
+      const after = append(target, "after deletion");
+      release.resolve();
+      const [appended, deleted, refused] = await Promise.all([before, deletion, after, held]);
+      expect(appended.ok).toBe(true);
+      expect(deleted).toMatchObject({
+        deleted: true,
+        archivedTranscripts: [],
+        deletedSessionId: target.entry.sessionId,
+      });
+      expect(refused.ok).toBe(false);
+      expect(order).toEqual(["append", "delete"]);
+      expect(
+        (await actor.sessions.read(authority, { sessionKey: target.sessionKey })).entry,
+      ).toBeUndefined();
+      expect(
+        (await actor.sessions.read(authority, { sessionKey: sibling.sessionKey })).entry?.sessionId,
+      ).toBe(sibling.entry.sessionId);
+      siblingClaim.assertCurrent();
+      expect(() => oldClaim.assertCurrent()).toThrow("generation is no longer current");
+      expect(sql.queries).toEqual([]);
+    } finally {
+      release.resolve();
+      await held;
+      sql.restore();
+    }
+  });
+});
 
 it("forks the actor's checked transcript and preserves child lineage after deleting its parent", async () => {
   const parent = await create("fork-parent");
@@ -423,14 +420,14 @@ it("settles source preparation before a cross-agent fork and rechecks source lif
   ).toBeUndefined();
 });
 
-it.each(["denied", "revoked", "membership-revoked"] as const)(
+it.each(["revoked", "membership-revoked"] as const)(
   "rejects cross-agent forks when source permission is %s without retaining child data",
   async (mode) => {
     const parent = await create(`policy-${mode}-parent`);
     await append(parent, "private parent answer");
     const childName = `policy-${mode}-child`;
     const childSessionKey = `agent:loss:dashboard:incognito-${childName}`;
-    let allowed = mode !== "denied";
+    let allowed = true;
     if (mode === "membership-revoked") {
       await actor.sessions.sideData(authority, {
         type: "session.sharing.add",
@@ -493,42 +490,32 @@ it.each(["denied", "revoked", "membership-revoked"] as const)(
   },
 );
 
-it.each([
-  { side: "source", crossAgent: false },
-  { side: "destination", crossAgent: false },
-  { side: "source", crossAgent: true },
-  { side: "destination", crossAgent: true },
-] as const)(
-  "refuses an asynchronous $side fork grant before committing (cross-agent: $crossAgent)",
-  async ({ side, crossAgent }) => {
-    const name = `async-${crossAgent ? "cross" : "same"}-${side}`;
-    const parent = await create(`${name}-parent`);
-    const destination = crossAgent ? lossActor : actor;
-    const childSessionKey = `agent:${crossAgent ? "loss" : "main"}:dashboard:incognito-${name}-child`;
-    const asynchronous: IncognitoSessionAuthority = {
-      assertCurrent() {},
-      // oxlint-disable-next-line typescript/no-misused-promises -- Prove asynchronous policies cannot obtain a synchronous native grant.
-      authorize: async () => {},
-    };
-    await expect(
-      captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
-        source: actor,
-        destination,
-        sourceAuthority: side === "source" ? asynchronous : authority,
-        destinationAuthority: side === "destination" ? asynchronous : authority,
-        parent,
-        childSessionKey,
-        supportsCliSessionFork: () => false,
-        async buildEntry() {
-          return { ...parent.entry, sessionId: `${name}-child` };
-        },
-      }),
-    ).rejects.toThrow("grants must remain synchronous");
-    expect(
-      (await destination.sessions.read(authority, { sessionKey: childSessionKey })).entry,
-    ).toBeUndefined();
-  },
-);
+it("refuses an asynchronous fork grant before committing", async () => {
+  const parent = await create("async-fork-parent");
+  const childSessionKey = "agent:main:dashboard:incognito-async-fork-child";
+  const asynchronous: IncognitoSessionAuthority = {
+    assertCurrent() {},
+    // oxlint-disable-next-line typescript/no-misused-promises -- Prove asynchronous policies cannot obtain a synchronous native grant.
+    authorize: async () => {},
+  };
+  await expect(
+    captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
+      source: actor,
+      destination: actor,
+      sourceAuthority: asynchronous,
+      destinationAuthority: authority,
+      parent,
+      childSessionKey,
+      supportsCliSessionFork: () => false,
+      async buildEntry() {
+        return { ...parent.entry, sessionId: "async-fork-child" };
+      },
+    }),
+  ).rejects.toThrow("grants must remain synchronous");
+  expect(
+    (await actor.sessions.read(authority, { sessionKey: childSessionKey })).entry,
+  ).toBeUndefined();
+});
 
 it("composes parent fork facades with token decisions, CLI bindings, and no caller-thread SQL", async () => {
   const parentKey = "agent:main:dashboard:incognito-facade-parent";

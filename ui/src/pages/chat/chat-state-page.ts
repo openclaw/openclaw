@@ -173,7 +173,6 @@ async function loadPageAssistantIdentity(state: ChatPageHost) {
     }
     state.assistantName = identity.name;
     state.assistantAvatar = identity.avatar;
-    state.assistantAvatarSource = identity.avatarSource ?? null;
     state.assistantAvatarStatus = identity.avatarStatus ?? null;
     state.assistantAvatarReason = identity.avatarReason ?? null;
     state.assistantAgentId = identity.agentId ?? null;
@@ -212,7 +211,6 @@ export function createPageState(
     assistantAvatar: null,
     assistantAvatarStatus: null,
     assistantAvatarReason: null,
-    assistantAvatarSource: null,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
@@ -265,7 +263,6 @@ export function createPageState(
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
     chatAvatarUrl: null,
-    chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatModelSwitchPromises: {},

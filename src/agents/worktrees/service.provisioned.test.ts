@@ -686,7 +686,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     await addRemote(root, repo);
     const legacyPath = path.join(root, "legacy-worktree");
     await git(repo, "worktree", "add", "-b", "openclaw/legacy", legacyPath, "HEAD");
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: "legacy",
       name: "legacy",
       repoFingerprint: "legacy-fingerprint",

@@ -410,10 +410,11 @@ public enum GatewayTLSStore {
         for legacyAccount in accounts {
             switch self.readLegacyKeychainFingerprint(account: legacyAccount) {
             case let .value(fingerprint):
-                return self.migrateLegacyFingerprint(
-                    fingerprint,
-                    stableID: stableID,
-                    account: account)
+                guard let winner = self.createCanonicalFingerprintIfAbsent(fingerprint, account: account) else {
+                    return .unavailable
+                }
+                _ = self.clearSafeLegacyFingerprint(stableID: stableID)
+                return .value(winner)
             case .unavailable:
                 return .unavailable
             case .missing:
@@ -421,18 +422,6 @@ public enum GatewayTLSStore {
             }
         }
         return .missing
-    }
-
-    private static func migrateLegacyFingerprint(
-        _ fingerprint: String,
-        stableID: String,
-        account: String) -> FingerprintRead
-    {
-        guard let winner = self.createCanonicalFingerprintIfAbsent(fingerprint, account: account) else {
-            return .unavailable
-        }
-        _ = self.clearSafeLegacyFingerprint(stableID: stableID)
-        return .value(winner)
     }
 
     private static func readCanonicalFingerprint(account: String) -> FingerprintRead {
@@ -684,23 +673,18 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     }
 
     public var allowsDeviceTokenRetryAuth: Bool {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.pinningState.enforcedFingerprint != nil
+        self.failureLock.withLock { self.pinningState.enforcedFingerprint != nil }
     }
 
     public var effectiveTLSFingerprintSHA256: String? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.pinningState.acceptedFingerprint
+        self.failureLock.withLock { self.pinningState.acceptedFingerprint }
     }
 
     public func consumeLastTLSFailure() -> GatewayTLSValidationFailure? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        let failure = self.lastTLSFailure
-        self.lastTLSFailure = nil
-        return failure
+        self.failureLock.withLock {
+            defer { self.lastTLSFailure = nil }
+            return self.lastTLSFailure
+        }
     }
 
     // periphery:ignore - External TLS transports delegate trust ownership to this session.
@@ -729,53 +713,35 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             expectedFingerprint: expectedFingerprint)
         {
         case let .accept(fingerprint, enforcePin):
-            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
+            self.failureLock.withLock {
+                self.lastTLSFailure = nil
+                self.pinningState.recordAcceptance(fingerprint, enforcePin: enforcePin)
+            }
             return true
         case let .reject(failure, enforcedFingerprint):
-            if let enforcedFingerprint { self.recordTLSPinExpectation(enforcedFingerprint) }
+            if let enforcedFingerprint {
+                self.failureLock.withLock { self.pinningState.enforceFingerprint(enforcedFingerprint) }
+            }
             self.recordTLSFailure(failure)
             return false
         }
     }
 
     private func recordTLSFailure(_ failure: GatewayTLSValidationFailure) {
-        self.failureLock.lock()
-        self.lastTLSFailure = failure
-        self.failureLock.unlock()
+        self.failureLock.withLock { self.lastTLSFailure = failure }
     }
 
     private func currentEnforcedFingerprint() -> String? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.pinningState.enforcedFingerprint
-    }
-
-    private func recordTLSPinExpectation(_ fingerprint: String) {
-        self.failureLock.lock()
-        self.pinningState.enforceFingerprint(fingerprint)
-        self.failureLock.unlock()
-    }
-
-    private func recordTLSAcceptance(_ fingerprint: String?, enforcePin: Bool) {
-        self.failureLock.lock()
-        self.lastTLSFailure = nil
-        self.pinningState.recordAcceptance(fingerprint, enforcePin: enforcePin)
-        self.failureLock.unlock()
+        self.failureLock.withLock { self.pinningState.enforcedFingerprint }
     }
 
     private func registerExpectedAuthority(url: URL?) {
         guard let url, let authority = GatewayTLSAuthority(url: url) else { return }
-        self.failureLock.lock()
-        if self.expectedAuthority == nil {
-            self.expectedAuthority = authority
+        self.failureLock.withLock {
+            if self.expectedAuthority == nil {
+                self.expectedAuthority = authority
+            }
         }
-        self.failureLock.unlock()
-    }
-
-    private func currentExpectedAuthority() -> GatewayTLSAuthority? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.expectedAuthority
     }
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
@@ -897,7 +863,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let host = challenge.protectionSpace.host
         let port = challenge.protectionSpace.port
         let expected = self.currentEnforcedFingerprint()
-        guard let expectedAuthority = self.currentExpectedAuthority(),
+        guard let expectedAuthority = self.failureLock.withLock({ self.expectedAuthority }),
               expectedAuthority.matches(host: host, port: port)
         else {
             self.recordTLSFailure(GatewayTLSValidationFailure(
@@ -976,12 +942,8 @@ private func certificateFingerprint(_ trust: SecTrust) -> String? {
     else {
         return nil
     }
-    return sha256Hex(SecCertificateCopyData(cert) as Data)
-}
-
-private func sha256Hex(_ data: Data) -> String {
-    let digest = SHA256.hash(data: data)
-    return digest.map { String(format: "%02x", $0) }.joined()
+    return SHA256.hash(data: SecCertificateCopyData(cert) as Data)
+        .map { String(format: "%02x", $0) }.joined()
 }
 
 private func normalizeFingerprint(_ raw: String) -> String {

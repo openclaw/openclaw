@@ -4,8 +4,11 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as runtimePaths from "../config/paths.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
@@ -56,17 +59,23 @@ test("automatic list and search projection reuse conventional state-directory pr
             for (const agentRuntimeOverride of ["openclaw", undefined]) {
               // Search changes only the request; reuse each runtime's admitted stores.
               for (const agentId of agentIds) {
-                await writeSessionStore({
-                  agentId,
-                  entries: {
-                    [`agent:${agentId}:main`]: {
-                      sessionId: `session-${agentId}`,
-                      updatedAt: 10,
-                      agentRuntimeOverride,
-                    },
+                const storePath = storeTemplate.replace("{agentId}", agentId);
+                // Seed list metadata without running unrelated lifecycle deletion workers.
+                await withOpenClawAgentDatabaseWrite(
+                  {
+                    agentId,
+                    path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
                   },
-                  storePath: storeTemplate.replace("{agentId}", agentId),
-                });
+                  () =>
+                    replaceSessionEntrySync(
+                      { agentId, sessionKey: `agent:${agentId}:main`, storePath },
+                      {
+                        sessionId: `session-${agentId}`,
+                        updatedAt: 10,
+                        agentRuntimeOverride,
+                      },
+                    ),
+                );
               }
               for (const search of [undefined, "unmatched-runtime-search", "openclaw"]) {
                 const request = { configuredAgentsOnly: true, includeGlobal: false, search };

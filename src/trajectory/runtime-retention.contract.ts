@@ -1,9 +1,17 @@
 export type TrajectoryRuntimeRetentionInput = { sessionId: string; maxGlobalRuntimeBytes?: number };
 
 export type TrajectoryRuntimeRetentionPlan = {
-  complete: boolean;
+  cutoff: number;
+  maxBytes: number;
   sessionId: string;
-  runs: { sessionId: string; runId: string | null }[];
+  runs: {
+    sessionId: string;
+    runId: string | null;
+    newest: number;
+    bytes: number;
+    events: number;
+    order: string;
+  }[];
 };
 
 export type TrajectoryRuntimeRetentionReadOperations = {

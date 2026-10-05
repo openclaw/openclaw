@@ -92,6 +92,7 @@ const PUBLICATION_CONTRACT_FILES = [
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/arg-utils.runtime.mjs",
   "scripts/lib/bounded-response.mjs",
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/lib/canonical-json.mjs",
   "scripts/lib/npm-core-release-packages.json",

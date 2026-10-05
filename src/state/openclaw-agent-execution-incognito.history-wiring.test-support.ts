@@ -339,20 +339,21 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
     const session = await create("async-preview-grant");
     await append(session, "preview content");
     const target = { ...targetInput(session), agentId: actor.agentId, storePath: actor.path, env };
+    const grant: IncognitoSessionAuthority = { assertCurrent() {} };
+    // Inject an invalid runtime hook to exercise the synchronous-grant boundary.
+    Object.defineProperty(grant, "authorize", {
+      value(stage: "transaction" | "commit") {
+        if (stage === "transaction") {
+          return Promise.reject(new Error("asynchronous grant denied"));
+        }
+        return undefined;
+      },
+    });
     await expect(
       readSessionPreviewItemsFromTranscriptAsync(target, 10, 100, "model-context", {
         actor,
         target,
-        authority: {
-          assertCurrent() {},
-          // oxlint-disable-next-line typescript/no-misused-promises -- Prove composed policies reject asynchronous native grants.
-          authorize(stage) {
-            if (stage === "transaction") {
-              return Promise.reject(new Error("asynchronous grant denied"));
-            }
-            return undefined;
-          },
-        },
+        authority: grant,
       }),
     ).rejects.toThrow("Incognito session grants must remain synchronous");
   });
@@ -425,16 +426,14 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
         );
         if (mode === "revoke") {
           revoked = true;
-        } else if (mode !== "unchanged") {
-          if (mode === "release") {
-            releasing = borrowed.release().then(() => {
-              released = true;
-            });
-          }
+        } else if (mode === "write") {
           await append(session, "context changed while consumer awaited");
-          if (mode === "release") {
-            expect(released).toBe(false);
-          }
+        } else if (mode === "release") {
+          releasing = borrowed.release().then(() => {
+            released = true;
+          });
+          await actor.run(authority, async () => undefined);
+          expect(released).toBe(false);
         }
         resume.resolve();
         await Promise.all([settled, releasing]);

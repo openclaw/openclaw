@@ -139,6 +139,7 @@ packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-context.ts
+packages/worker-runtime/src/worker-task-error.ts
 packages/worker-runtime/src/worker-task-host.ts
 packages/worker-runtime/src/worker-task-native-sections.ts
 packages/worker-runtime/src/worker-task-pool-bootstrap.ts
@@ -181,6 +182,8 @@ scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
 scripts/lib/official-external-provider-catalog.json
+scripts/lib/package-dist-inventory-contract.mts
+scripts/lib/package-lifecycle-marker.mjs
 scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
@@ -276,6 +279,7 @@ src/agents/sandbox/config-contract.ts
 src/agents/sandbox/host-paths.ts
 src/agents/sandbox/network-mode.ts
 src/agents/session-dirs.ts
+src/agents/session-slug.ts
 src/agents/tool-catalog.ts
 src/agents/tool-description-presets.ts
 src/agents/tool-policy-match.ts
@@ -324,6 +328,7 @@ src/agents/worktrees/registry-run-end.worker.ts
 src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
+src/agents/sandbox/registry-lifecycle.ts
 src/agents/worktrees/run-lease-owner.ts
 src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/run-lease-store.ts
@@ -599,6 +604,7 @@ src/acp/runtime/session-meta-readonly.ts
 src/acp/runtime/session-meta-read.types.ts
 src/config/sessions/session-incognito-actor.ts
 src/config/sessions/session-incognito-admission.ts
+src/config/sessions/session-incognito-authority.ts
 src/config/sessions/session-collaboration-scope.ts
 src/config/sessions/session-incognito-compute-contract.ts
 src/config/sessions/session-incognito-compute.ts
@@ -610,6 +616,7 @@ src/config/sessions/session-incognito-manager-contract.ts
 src/config/sessions/session-incognito-pending-input-contract.ts
 src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
+src/config/sessions/session-row-facts.types.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
@@ -822,6 +829,7 @@ src/infra/errno.ts
 src/infra/error-graph-internal.ts
 src/infra/errors.ts
 src/infra/exec-allowlist-pattern.ts
+src/infra/exec-approval-action.types.ts
 src/infra/exec-approvals-core.ts
 src/infra/exec-command-resolution.ts
 src/infra/exec-safe-bin-policy-profiles.ts
@@ -931,6 +939,7 @@ src/infra/package-update-activation-journal.ts
 src/infra/package-update-activation-launcher.ts
 src/infra/package-update-activation-paths.ts
 src/infra/package-update-activation-schema.ts
+src/infra/package-update-activation-settlement.ts
 src/infra/package-update-activation-status.ts
 src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
@@ -1122,6 +1131,7 @@ src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
+src/infra/worker-request-diagnostics.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts
@@ -1560,6 +1570,7 @@ src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
 src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
+src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-startup.ts

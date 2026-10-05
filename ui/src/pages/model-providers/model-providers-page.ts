@@ -22,7 +22,6 @@ import type { ModelAccountUsage } from "./account-usage.ts";
 import {
   buildDefaultsPatch,
   DEFAULT_MODELS_REPLACE_PATHS,
-  modelProviderApiKeySuccess,
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
   modelDefaultsActions,
@@ -43,11 +42,7 @@ import {
 } from "./data.ts";
 import { ModelProviderDiscoveryController } from "./discovery-controller.ts";
 import { InstalledAgentsController } from "./installed-agents.ts";
-import {
-  EMPTY_MODEL_PROVIDERS_DATA,
-  MODEL_PROVIDERS_COST_DAYS,
-  type ModelProvidersData,
-} from "./load.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
 import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
@@ -487,7 +482,14 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         agentId: this.selectedAgentId,
         provider: configKey,
         apiKey,
-        success: modelProviderApiKeySuccess(action, apiKey, provider),
+        success: t(
+          action === "add"
+            ? "modelProviders.add.saved"
+            : apiKey === null
+              ? "modelProviders.apiKey.removed"
+              : "modelProviders.apiKey.saved",
+          { provider },
+        ),
       },
     );
     if (!result.ok || !isCurrent()) {
@@ -641,7 +643,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       providerUsageFailed: data.providerUsage?.ok === false,
       supplementalLoading: this.loaderPending || this.supplemental.loading,
       updatedAt: data.updatedAt,
-      costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selected ? normalizeAgentLabel(selected) : this.selectedAgentId,
       cards: noSelectableAgents ? [] : this.installedAgents.filterProviders(cards),
       configuredModels,

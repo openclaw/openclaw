@@ -10,12 +10,10 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { sleep } from "../../utils/sleep.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
-import { readRegistryWorktree } from "./registry-read.js";
+import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
 import {
   claimWorktreeRemovalRow,
-  getRegistryWorktree,
   hasLiveWorktreeRunLeaseRow,
-  listRegistryWorktrees,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
 import {
@@ -37,6 +35,11 @@ type WorktreeRunLease = {
   id: string;
   token: string;
   release: () => Promise<void>;
+};
+
+type WorktreeRunSource = {
+  context: OpenClawStateWorkerContext;
+  record: ManagedWorktreeRecord;
 };
 
 type HeldWorktreeLock = { refcount: number; gitLocked: boolean };
@@ -63,7 +66,7 @@ type LeaseCleanup = {
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
 
-function withGitLockTransition<T>(id: string, task: () => Promise<T>): Promise<T> {
+export function withGitLockTransition<T>(id: string, task: () => Promise<T>): Promise<T> {
   return enqueueKeyedTask({ tails: gitLockTransitionTails, key: id, task });
 }
 
@@ -137,23 +140,25 @@ async function realpathOrSelf(candidate: string): Promise<string> {
   }
 }
 
-export async function resolveWorktreeIdForPath(params: {
+export async function resolveWorktreeForPath(params: {
   sessionEntry?: { worktree?: { id: string } };
   candidatePaths: Array<string | undefined>;
   env?: NodeJS.ProcessEnv;
-}): Promise<string | undefined> {
+}): Promise<WorktreeRunSource | undefined> {
   const env = params.env ?? process.env;
+  const context = captureOpenClawStateWorkerContext({ env });
   const boundId = params.sessionEntry?.worktree?.id;
   if (boundId !== undefined) {
     // The session's stored binding is authoritative: if that worktree is gone the
     // run must fail closed rather than silently continue as an unmanaged directory.
-    const record = getRegistryWorktree(env, boundId);
+    const record = await readRegistryWorktree(context, boundId);
     if (!record || record.removedAt !== undefined) {
       throw new Error(`managed worktree was removed: ${record?.path ?? boundId}`);
     }
-    return boundId;
+    return { context, record };
   }
-  const records = listRegistryWorktrees(env).filter((record) => record.removedAt === undefined);
+  const records = await readRegistryWorktrees(context.environment, { liveOnly: true });
+  context.admission.assertCurrent();
   if (records.length === 0) {
     return undefined;
   }
@@ -171,10 +176,12 @@ export async function resolveWorktreeIdForPath(params: {
     for (const record of records) {
       const base = bases.get(record.id);
       if (base && (real === base || real.startsWith(`${base}${path.sep}`))) {
-        return record.id;
+        context.admission.assertCurrent();
+        return { context, record };
       }
     }
   }
+  context.admission.assertCurrent();
   return undefined;
 }
 
@@ -251,16 +258,21 @@ export async function acquireWorktreeRunLease(
     exclusive?: true;
     /** Creation can reconcile a missing checkout while retaining exclusive registry custody. */
     allowMissingCheckout?: true;
+    source?: WorktreeRunSource;
   } = {},
 ): Promise<WorktreeRunLease> {
   const env = opts.env ?? process.env;
+  const context = opts.source?.context ?? captureOpenClawStateWorkerContext({ env });
+  const observed = opts.source ? structuredClone(opts.source.record) : undefined;
+  if (observed && observed.id !== id) {
+    throw new Error("Worktree run source belongs to another worktree");
+  }
   ensureExitCleanupRegistered();
   // Retry any cleanup a prior run could not finish before starting a new one.
   await drainPendingLeaseCleanups();
   const token = randomUUID();
   const pid = process.pid;
   const startTime = getFileLockProcessStartTime(pid);
-  const context = captureOpenClawStateWorkerContext({ env });
   const cleanup: LeaseCleanup = {
     env,
     context,
@@ -282,6 +294,7 @@ export async function acquireWorktreeRunLease(
         pid,
         startTime,
         now: Date.now(),
+        observed,
         ...(opts.exclusive || opts.allowMissingCheckout ? { exclusive: true } : {}),
       },
       (kind) => {

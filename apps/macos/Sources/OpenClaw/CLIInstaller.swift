@@ -321,9 +321,6 @@ enum CLIInstaller {
         guard let normalized, Semver.parse(normalized) != nil else {
             return .unusable(location: location)
         }
-        guard Semver.parse(expectedVersion) != nil else {
-            return .ready(location: location, version: normalized)
-        }
         guard Semver.satisfiesExpectedGatewayVersion(installed: normalized, expected: expectedVersion) else {
             return .incompatible(
                 location: location,

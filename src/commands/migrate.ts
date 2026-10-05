@@ -39,12 +39,6 @@ import type {
   MigrateDefaultOptions,
 } from "./migrate/types.js";
 
-function hasAuthCredentialCandidate(plan: MigrationPlan): boolean {
-  return plan.items.some(
-    (item) => item.kind === "auth" || item.kind === "secret" || item.sensitive === true,
-  );
-}
-
 function hasPlannedAuthCredentialItem(plan: MigrationPlan): boolean {
   return plan.items.some(
     (item) =>
@@ -53,9 +47,7 @@ function hasPlannedAuthCredentialItem(plan: MigrationPlan): boolean {
   );
 }
 
-function resolveDefaultIncludeSecrets<T extends MigrateCommonOptions & { yes?: boolean }>(
-  opts: T,
-): T {
+function resolveDefaultIncludeSecrets<T extends MigrateCommonOptions>(opts: T): T {
   if (opts.authCredentials === false) {
     return { ...opts, includeSecrets: false };
   }
@@ -72,28 +64,6 @@ function shouldPromptForAuthCredentials(opts: MigrateCommonOptions & { yes?: boo
   );
 }
 
-async function createMigrationPlanWithProgress(
-  runtime: RuntimeEnv,
-  opts: MigrateCommonOptions & { provider: string },
-  provider: MigrationProviderPlugin,
-): Promise<MigrationPlan> {
-  const createPlan = async (): Promise<MigrationPlan> =>
-    await createMigrationPlan(runtime, opts, provider);
-  if (opts.json) {
-    return applyMigrationSelections(await createPlan(), opts);
-  }
-  const plan = await withProgress(
-    { label: `Scanning ${opts.provider} migration…`, indeterminate: true },
-    async (progress) => {
-      progress.setLabel("Reading migration source…");
-      const planLocal = await createPlan();
-      progress.tick();
-      return planLocal;
-    },
-  );
-  return applyMigrationSelections(plan, opts);
-}
-
 async function createInteractiveMigrationPlanWithAuthPrompt(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions & { provider: string; yes?: boolean },
@@ -102,7 +72,7 @@ async function createInteractiveMigrationPlanWithAuthPrompt(
   if (!shouldPromptForAuthCredentials(opts)) {
     return await migratePlanCommand(runtime, resolveDefaultIncludeSecrets(opts), provider);
   }
-  const initialPlan = await migratePlanCommand(
+  let plan = await migratePlanCommand(
     runtime,
     {
       ...opts,
@@ -111,25 +81,23 @@ async function createInteractiveMigrationPlanWithAuthPrompt(
     },
     provider,
   );
-  if (!hasAuthCredentialCandidate(initialPlan)) {
-    if (!opts.suppressPlanLog) {
-      log.message(formatMigrationPreview(initialPlan).join("\n"));
+  if (
+    plan.items.some(
+      (item) => item.kind === "auth" || item.kind === "secret" || item.sensitive === true,
+    )
+  ) {
+    // Rescan with secrets only after explicit consent.
+    const includeSecrets = await confirm({
+      message: stylePromptMessage("Do you want to migrate your auth credentials as well?"),
+      initialValue: true,
+    });
+    if (isCancel(includeSecrets)) {
+      cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
+      runtime.exit(0);
+      throw new Error("unreachable");
     }
-    return initialPlan;
-  }
-  // Build the first plan without secrets, then only rescan with secrets after
-  // explicit consent so credential handling is opt-in for interactive users.
-  const includeSecrets = await confirm({
-    message: stylePromptMessage("Do you want to migrate your auth credentials as well?"),
-    initialValue: true,
-  });
-  if (isCancel(includeSecrets)) {
-    cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
-    runtime.exit(0);
-    throw new Error("unreachable");
-  }
-  const finalPlan = includeSecrets
-    ? await migratePlanCommand(
+    if (includeSecrets) {
+      plan = await migratePlanCommand(
         runtime,
         {
           ...opts,
@@ -137,12 +105,13 @@ async function createInteractiveMigrationPlanWithAuthPrompt(
           suppressPlanLog: true,
         },
         provider,
-      )
-    : initialPlan;
-  if (!opts.suppressPlanLog) {
-    log.message(formatMigrationPreview(finalPlan).join("\n"));
+      );
+    }
   }
-  return finalPlan;
+  if (!opts.suppressPlanLog) {
+    log.message(formatMigrationPreview(plan).join("\n"));
+  }
+  return plan;
 }
 
 function assertVerifyPluginAppsProvider(providerId: string, opts: MigrateCommonOptions): void {
@@ -326,13 +295,21 @@ export async function migratePlanCommand(
       async (owned) => await migratePlanCommand(runtime, opts, owned),
     );
   }
-  const plan = await createMigrationPlanWithProgress(
-    runtime,
-    {
-      ...resolvedOpts,
-      provider: providerId,
-    },
-    provider,
+  const createPlan = () =>
+    createMigrationPlan(runtime, { ...resolvedOpts, provider: providerId }, provider);
+  const plan = applyMigrationSelections(
+    resolvedOpts.json
+      ? await createPlan()
+      : await withProgress(
+          { label: `Scanning ${providerId} migration…`, indeterminate: true },
+          async (progress) => {
+            progress.setLabel("Reading migration source…");
+            const scanned = await createPlan();
+            progress.tick();
+            return scanned;
+          },
+        ),
+    resolvedOpts,
   );
   if (resolvedOpts.json) {
     writeRuntimeJson(runtime, redactMigrationPlan(plan));

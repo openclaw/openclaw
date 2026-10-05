@@ -67,6 +67,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length > 0,
+    );
   }
 
   /** Local branch selections revoke pending writes; committed view adoption does not. */

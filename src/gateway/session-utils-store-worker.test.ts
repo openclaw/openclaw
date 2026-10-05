@@ -24,6 +24,11 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
     );
     const input = { cfg, key: "main", agentId: "main", env };
     await loadGatewaySessionEntryReadOnlyInWorker(input);
+    const internalKey = "agent:main:internal-session-effects:fixture";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: internalKey, env },
+      { sessionId: "internal-effects", updatedAt: 1 },
+    );
     const sibling = "agent:main:matrix:channel:!mixed:example.org";
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: sibling, env },
@@ -51,6 +56,16 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
         sessionId: "worker-projection",
         skillsSnapshot: { prompt: "Complete saved skill instructions", skills: [] },
       });
+      const internal = { ...input, key: internalKey };
+      const ordinary = await loadGatewaySessionEntryReadOnlyInWorker({
+        ...internal,
+        excludeInternalEffects: true,
+      });
+      expect(ordinary.entry).toBeUndefined();
+      expect(ordinary.store[internalKey]).toBeUndefined();
+      expect((await loadGatewaySessionEntryReadOnlyInWorker(internal)).entry?.sessionId).toBe(
+        "internal-effects",
+      );
       expect(
         sql.queries.filter((query) =>
           /\bfrom\s+"?session_(?:nodes|windows|participants)\b/i.test(query),

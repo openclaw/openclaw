@@ -144,6 +144,9 @@ vi.mock("./update-command-post-plugin-readiness.js", () => ({
 vi.mock("./update-command-service.js", async (original) => ({
   ...(await original<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restart,
+}));
+vi.mock("./update-command-service-revalidation.js", async (original) => ({
+  ...(await original<typeof import("./update-command-service-revalidation.js")>()),
   revalidateManagedGatewayServiceAfterUpdate: async ({ root }: { root: string }) => ({
     kind: "owned",
     root,

@@ -62,7 +62,6 @@ import {
 
 export {
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
   mutableUpdateGatewayServiceBlock,
   UpdateCommandAbort,
   type PreManagedServiceStop,
@@ -70,35 +69,6 @@ export {
 } from "./update-command-service-maintenance.js";
 export { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
 export { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
-
-export function shouldPrepareUpdatedInstallRestart(params: {
-  updateMode: UpdateRunResult["mode"];
-  serviceInstalled: boolean;
-  serviceLoaded: boolean;
-  serviceStoppedForUpdate?: boolean;
-  serviceMatchesUpdateRoot?: boolean;
-  requiresInstallRootRefresh?: boolean;
-}): boolean {
-  const useInstalledState =
-    params.requiresInstallRootRefresh === true ||
-    isPackageManagerUpdateMode(params.updateMode) ||
-    (params.updateMode === "git" && params.serviceStoppedForUpdate);
-  return useInstalledState
-    ? params.serviceInstalled
-    : params.serviceLoaded &&
-        (params.updateMode !== "git" || params.serviceMatchesUpdateRoot === true);
-}
-
-export function resolvePostUpdateServiceStateReadEnv(params: {
-  updateMode: UpdateRunResult["mode"];
-  processEnv?: NodeJS.ProcessEnv;
-  preManagedServiceEnv?: NodeJS.ProcessEnv;
-}): NodeJS.ProcessEnv {
-  const fallbackEnv = params.processEnv ?? process.env;
-  const usesServiceEnv =
-    params.updateMode === "git" || isPackageManagerUpdateMode(params.updateMode);
-  return usesServiceEnv ? (params.preManagedServiceEnv ?? fallbackEnv) : fallbackEnv;
-}
 
 export async function tryInstallShellCompletion(opts: {
   root: string;

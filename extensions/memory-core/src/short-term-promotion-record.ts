@@ -231,9 +231,7 @@ export async function recordShortTermRecalls(params: {
           ? Object.values(store.entries).find(
               (entry) =>
                 !entry.key.startsWith("memory:claim:") &&
-                Math.max(0, Math.floor(entry.recallCount ?? 0)) +
-                  Math.max(0, Math.floor(entry.groundedCount ?? 0)) >
-                  0 &&
+                entry.recallCount + entry.groundedCount > 0 &&
                 entry.claimHash === claimHash,
             )
           : undefined;
@@ -273,18 +271,11 @@ export async function recordShortTermRecalls(params: {
         queryHashesBase.includes(queryHash) &&
         recallDaysBase.includes(dayBucket);
       const addedSignals = dedupeSignal ? 0 : signalCount;
-      const recallCount = Math.max(
-        0,
-        Math.floor(existing?.recallCount ?? 0) + (signalType === "recall" ? addedSignals : 0),
-      );
-      const dailyCount = Math.max(
-        0,
-        Math.floor(existing?.dailyCount ?? 0) + (signalType === "daily" ? addedSignals : 0),
-      );
-      const groundedCount = Math.max(
-        0,
-        Math.floor(existing?.groundedCount ?? 0) + (signalType === "grounded" ? addedSignals : 0),
-      );
+      const recallCount =
+        (existing?.recallCount ?? 0) + (signalType === "recall" ? addedSignals : 0);
+      const dailyCount = (existing?.dailyCount ?? 0) + (signalType === "daily" ? addedSignals : 0);
+      const groundedCount =
+        (existing?.groundedCount ?? 0) + (signalType === "grounded" ? addedSignals : 0);
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score * addedSignals);
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
       const queryHashes = mergeRecentDistinct(queryHashesBase, queryHash, MAX_QUERY_HASHES);
@@ -379,35 +370,6 @@ export async function recordShortTermRecalls(params: {
     if (skipped.length > 0) {
       await appendSkippedEvent(admitted.length);
     }
-  });
-}
-
-export async function recordGroundedShortTermCandidates(params: {
-  workspaceDir?: string;
-  query: string;
-  items: Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    snippet: string;
-    score: number;
-    query?: string;
-    signalCount?: number;
-    dayBucket?: string;
-    projectKey?: string;
-    provenance?: MemoryEntryProvenance;
-    sessionOrigin?: SessionEntryOrigin;
-  }>;
-  dedupeByQueryPerDay?: boolean;
-  dayBucket?: string;
-  nowMs?: number;
-  timezone?: string;
-}): Promise<void> {
-  const { items, ...options } = params;
-  await recordShortTermRecalls({
-    ...options,
-    signalType: "grounded",
-    results: items.map((item) => Object.assign({}, item, { source: "memory" as const })),
   });
 }
 

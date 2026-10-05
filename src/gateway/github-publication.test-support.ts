@@ -408,7 +408,7 @@ export function installGitHubPublicationTestHarness(
     const syntheticIndex = path.join(root, "synthetic-index");
     await fs.writeFile(syntheticIndex, "synthetic Git transport index");
     if (!realWorktree) {
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: "worktree-1",
         name: "publication",
         repoRoot: "/repo",

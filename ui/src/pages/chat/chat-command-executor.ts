@@ -66,7 +66,6 @@ type SlashCommandContext = {
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
   chatModelCatalog?: ModelCatalogEntry[];
-  modelCatalog?: ModelCatalogEntry[];
   defaultAgentId?: string;
   agentId?: string;
   ownsModelOverride?: () => boolean;
@@ -303,7 +302,7 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const modelCatalog = context.chatModelCatalog ?? [];
     const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
     if (!level) {
       return {
@@ -560,7 +559,7 @@ async function loadModelCommandState(
   context: SlashCommandContext,
   sessionKey: string,
 ) {
-  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const modelCatalog = context.chatModelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
   const [state, models] = await Promise.all([
     loadCurrentSessionState(context, sessionKey),

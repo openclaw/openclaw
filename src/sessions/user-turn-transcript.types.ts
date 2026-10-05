@@ -211,6 +211,7 @@ export type UserTurnTranscriptRecorder = {
     assertCurrent: () => void;
     assertAdmittedCurrent?: () => void;
     assertCompletionCurrent?: () => void;
+    authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   }) => Promise<boolean>;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
   /** Released synchronous SDK contract; internal recorders use completeProcessingAsync. */
@@ -221,6 +222,8 @@ export type UserTurnTranscriptRecorder = {
   getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;
   isPendingInputConsumed?: () => boolean;
   withPendingInput?: <T>(run: () => T) => T;
+  withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
+  assertPendingInputLifetimeCurrent?: () => void;
   finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
   /** Join accepted completion and disposition writes before releasing the turn's admission. */
   waitForPendingInputSettlement?: () => Promise<void>;

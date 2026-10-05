@@ -45,6 +45,7 @@ function startLogin(
     browserOrigin: params.browserOrigin,
     openUrl: async (url) => opened.resolve(url),
   });
+  expect(session.available).toBe(true);
   const result = session.authorize({
     state: "login-state",
     timeoutMs: params.timeoutMs ?? 60_000,
@@ -71,12 +72,20 @@ function callback(query: string, method = "GET") {
 describe("provider browser sign-in", () => {
   it.each([
     "https://gateway.example",
+    "https://work.example:8447",
     "http://localhost:18789",
     "http://127.0.0.1:18789",
     "http://[::1]:18789",
   ])("receives one bound callback through the Gateway for %s", async (origin) => {
+    if (origin === "https://work.example:8447") {
+      clearOrigin();
+    }
     const login = startLogin({
-      browserOrigin: { origin, requestHost: new URL(origin).host, isLocalClient: true },
+      browserOrigin: {
+        origin,
+        requestHost: new URL(origin).host,
+        isLocalClient: origin.startsWith("http:"),
+      },
     });
     const url = new URL(await login.opened);
     expect(new URL(url.searchParams.get("callback_url")!).origin).toBe(origin);
@@ -196,7 +205,9 @@ describe("provider browser sign-in", () => {
   it.each([
     { origin: "http://localhost:3000", requestHost: "localhost:18789", isLocalClient: true },
     { origin: "http://localhost:18789", requestHost: "localhost:18789", isLocalClient: false },
-    { origin: "https://other.example", requestHost: "other.example", isLocalClient: true },
+    { origin: "https://other.example", requestHost: "gateway.example", isLocalClient: false },
+    { origin: "https://work.example:8447", requestHost: "work.example:8448", isLocalClient: false },
+    { origin: "https://work.example/path", requestHost: "work.example", isLocalClient: false },
     { origin: "http://192.168.1.2:18789", requestHost: "192.168.1.2:18789", isLocalClient: true },
     { origin: "file://localhost", requestHost: "localhost", isLocalClient: true },
   ])("rejects an unserved or unattested browser return ($origin)", async (browserOrigin) => {

@@ -102,8 +102,8 @@ function prepareSessionManagerIncognitoContext(
     assertAdmission();
     signal?.throwIfAborted();
     assertOwned();
-    actor.assertCurrent();
     claim.assertCurrent();
+    actor.assertReadable();
   };
   const authority = { assertCurrent };
   const check = <Value>(result: IncognitoContextReadResult<Value>) => {
@@ -116,16 +116,12 @@ function prepareSessionManagerIncognitoContext(
   const checked = async <Value>(pending: Promise<IncognitoContextReadResult<Value>>) =>
     check(await pending);
   return {
-    retain: <T>(operation: () => Promise<T>) => actor.sessions.withSharedState(operation),
-    readModel: (through?: TranscriptEntryAnchor, limits?: SessionModelContextLimits) =>
-      actor.sessions.history(
-        authority,
-        {
-          type: "session.history.context",
-          input: { ...input, through, limits },
-        },
-        signal,
-      ),
+    binding: { actor, authority, target: input },
+    retain: async <T>(operation: () => Promise<T>) => {
+      const value = await actor.sessions.withSharedState(operation);
+      assertCurrent();
+      return value;
+    },
     readMessages: () =>
       checked(
         actor.sessions.history(
@@ -198,17 +194,15 @@ export async function readSessionManagerModelContextAsync<T>(
     prepareSessionManagerIncognitoContext(readTarget, options.signal, manager),
   );
   if (actor) {
-    return actor.retain(async () => {
-      const context = await actor.readModel(through, limits);
-      let accepted: { value: T } | undefined;
-      await actor.validate(context.version, through, () => {
-        accepted = { value: consume(context) };
-      });
-      if (!accepted) {
-        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
-      }
-      return accepted.value;
-    });
+    return readSessionTranscriptModelContextAsync(
+      readTarget,
+      consume,
+      admission,
+      options.signal,
+      through,
+      limits,
+      actor.binding,
+    );
   }
   const native =
     isIncognitoSessionKey(readTarget.sessionKey) ||

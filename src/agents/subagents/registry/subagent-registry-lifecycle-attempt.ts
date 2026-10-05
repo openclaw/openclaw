@@ -1,11 +1,19 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayDetachedWorkAdmission,
+  runWithGatewayDetachedWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { resolveAnnounceRetryDelayMs } from "./subagent-registry-helpers.js";
+import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
+import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+  resolveAnnounceRetryDelayMs,
+} from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
@@ -27,7 +35,6 @@ export function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): P
 
 export function scheduleResumeSubagentRun(
   context: SubagentLifecycleCleanupContext,
-  runId: string,
   entry: SubagentRunRecord,
   delayMs: number,
   cleanupGeneration?: number,
@@ -35,51 +42,78 @@ export function scheduleResumeSubagentRun(
 ): void {
   const params = context.options;
   const runtimeKey = getSubagentRunRuntimeKey(entry);
+  const currentRun = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    const current = getCurrentSubagentRunOwner(params.runs, entry);
+    return current &&
+      (cleanupGeneration === undefined
+        ? !current.cleanupHandled
+        : context.isCleanupGenerationCurrent(entry, cleanupGeneration))
+      ? current
+      : undefined;
+  };
+  if (!currentRun()) {
+    return;
+  }
+  clearTimeout(context.scheduledResumeTimers.get(runtimeKey));
+  const currentOwner = () =>
+    context.scheduledResumeTimers.get(runtimeKey) === timer ? currentRun() : undefined;
   const timer = setTimeout(() => {
-    context.scheduledResumeTimers.delete(timer);
-    void runWithSubagentCleanupWorkAdmission(async () => {
-      assertSubagentRegistryWriteSourceCurrent(stateContext);
-      const current = getCurrentSubagentRunOwner(params.runs, entry);
+    const run =
+      cleanupGeneration === undefined
+        ? runWithGatewayDetachedWorkAdmission
+        : runWithSubagentCleanupWorkAdmission;
+    void run(async () => {
+      const current = currentOwner();
       if (!current) {
         return;
       }
-      if (cleanupGeneration !== undefined) {
-        if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
-          return;
-        }
-        if (current.cleanupHandled) {
-          await commitSubagentLifecycleMutation(context, {
-            entry,
-            stateContext,
-            assertCurrent() {
-              if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
-                throw new Error("Subagent cleanup resume generation changed.");
-              }
-            },
-            mutate: (draft) => {
-              draft.cleanupHandled = false;
-            },
-            onPublished: () => params.resumedRuns.delete(runtimeKey),
-          });
-        }
+      if (current.cleanupHandled) {
+        await commitSubagentLifecycleMutation(context, {
+          entry,
+          stateContext,
+          assertCurrent() {
+            if (!currentOwner()) {
+              throw new Error("Subagent cleanup resume owner changed.");
+            }
+          },
+          mutate: (draft) => {
+            draft.cleanupHandled = false;
+          },
+        });
       }
-      assertSubagentRegistryWriteSourceCurrent(stateContext);
-      const resumedEntry = getCurrentSubagentRunOwner(params.runs, entry);
-      if (
-        !resumedEntry ||
-        (cleanupGeneration !== undefined &&
-          !context.isCleanupGenerationCurrent(entry, cleanupGeneration))
-      ) {
-        return;
+      const resumedEntry = currentOwner();
+      if (resumedEntry) {
+        context.scheduledResumeTimers.delete(runtimeKey);
+        params.resumedRuns.delete(runtimeKey);
+        params.resumeSubagentRun(resumedEntry.runId);
       }
-      params.resumedRuns.delete(runtimeKey);
-      params.resumeSubagentRun(resumedEntry.runId);
-    }).catch((err: unknown) => {
-      defaultRuntime.log(`[warn] subagent cleanup resume failed (${runId}): ${String(err)}`);
-    });
+    })
+      .catch((err: unknown) => {
+        params.warn("subagent delivery resume failed", { runId: entry.runId, error: err });
+        try {
+          if (isGatewayRestartDraining() && currentOwner()) {
+            scheduleResumeSubagentRun(
+              context,
+              entry,
+              Math.max(delayMs, 1_000),
+              cleanupGeneration,
+              stateContext,
+            );
+          }
+        } catch {
+          // A replaced state owner cannot retain this retry.
+        }
+      })
+      .finally(() => {
+        if (context.scheduledResumeTimers.get(runtimeKey) === timer) {
+          context.scheduledResumeTimers.delete(runtimeKey);
+          params.resumedRuns.delete(runtimeKey);
+        }
+      });
   }, delayMs);
   timer.unref?.();
-  context.scheduledResumeTimers.add(timer);
+  context.scheduledResumeTimers.set(runtimeKey, timer);
 }
 
 export function runDetachedCleanupAttempt(
@@ -185,12 +219,23 @@ export function runDetachedCleanupAttempt(
           return;
         }
         const failureCount = context.incrementCleanupFailureCount(current);
-        if (failureCount <= MAX_DETACHED_CLEANUP_RETRIES) {
+        const requiredDeliveryPending =
+          current.expectsCompletionMessage === true && current.delivery?.status === "pending";
+        const remainingDeliveryMs = requiredDeliveryPending
+          ? resolveAnnounceDeliveryDeadline(
+              current,
+              Date.now(),
+              ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+            ) - Date.now()
+          : 0;
+        // Expiry closes sending, not the pending obligation to record its disposition.
+        if (requiredDeliveryPending || failureCount <= MAX_DETACHED_CLEANUP_RETRIES) {
           scheduleResumeSubagentRun(
             context,
-            current.runId,
             current,
-            resolveAnnounceRetryDelayMs(failureCount),
+            remainingDeliveryMs > 0
+              ? Math.min(remainingDeliveryMs, resolveAnnounceRetryDelayMs(failureCount))
+              : resolveAnnounceRetryDelayMs(failureCount),
             args.cleanupGeneration,
             stateContext,
           );
