@@ -3,6 +3,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -16,6 +17,28 @@ const PENDING_DELIVERY_NOTICE =
 
 function noticeId(intentId: string): string {
   return `main-session-restart-recovery:pending-final:${intentId}`;
+}
+
+/**
+ * A queued final settles its custody "unknown" (and owes this notice) before
+ * platform I/O starts, so a crash mid-send cannot lose the debt. While the
+ * durable queue still owns that send, the outcome is pending rather than lost:
+ * settlement clears the notice on delivery or affirms it on failure. Announcing
+ * inside that window reports a reply as unconfirmed while it is still on its way.
+ */
+function isNoticedFinalStillQueued(entry: SessionEntry, intentId: string): boolean {
+  const pending = entry.pendingFinalDelivery;
+  if (pending?.intentId !== intentId) {
+    return false;
+  }
+  return (pending.deliveries ?? []).some((delivery) => {
+    if (delivery.state === "delivered" || delivery.state === "suppressed") {
+      return false;
+    }
+    // Channel sends enqueue a pending final under its delivery id.
+    const owner = findDeliveryIntentOwner(delivery.id);
+    return owner?.status === "pending" || owner?.settlementPending === true;
+  });
 }
 
 export async function deliverPendingDeliveryNotice(
@@ -40,6 +63,10 @@ export async function deliverPendingDeliveryNotice(
     !context.to ||
     deliveryContextKey(context) !== deliveryContextKey(deliveryContextFromSession(entry))
   ) {
+    return;
+  }
+  if (isNoticedFinalStillQueued(entry, notice.intentId)) {
+    // Leave the debt owed; the queue's settlement decides whether it is announced.
     return;
   }
   const idempotencyKey = noticeId(notice.intentId);
