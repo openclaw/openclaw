@@ -153,8 +153,8 @@ export function registerWorkboardGatewayMethods(params: {
     method: string,
     mutate: (id: string, input: Record<string, unknown>) => Promise<WorkboardCard>,
   ) =>
-    register(`workboard.cards.${method}`, WRITE_SCOPE, ({ params }) =>
-      redactCardResult(mutate(readId(params), params)),
+    register(`workboard.cards.${method}`, WRITE_SCOPE, ({ params: input }) =>
+      redactCardResult(mutate(readId(input), input)),
     );
   const dispatchCards = createWorkboardDispatchHandler({ api, store });
 
