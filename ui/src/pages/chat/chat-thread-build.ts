@@ -1,3 +1,4 @@
+import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
@@ -409,7 +410,24 @@ export function buildChatItems(
     }
     latestBoundaryRunId = normalizeOptionalString(segment.boundaryRunId) ?? latestBoundaryRunId;
   }
-  const keyedSegments = segments.filter(streamSegmentHasItemId);
+  // History can arrive before stream reconciliation retires a keyed commentary
+  // segment. Match the persisted row by both item and compatible run ownership;
+  // an unrelated run may legitimately reuse the same item ID.
+  const persistedCommentary = props.messages.flatMap((message) => {
+    const identity = readAssistantStreamSegmentIdentity(message);
+    return identity ? [identity] : [];
+  });
+  const keyedSegments = segments.filter((segment) => {
+    const itemId = normalizeOptionalString(segment.itemId);
+    if (!itemId || segment.persisted === true) {
+      return false;
+    }
+    const runId = normalizeOptionalString(segment.runId);
+    return !persistedCommentary.some(
+      (identity) =>
+        identity.itemId === itemId && (!identity.runId || !runId || identity.runId === runId),
+    );
+  });
   const indexedSegments = segments.filter(
     (segment) => !streamSegmentHasItemId(segment) && segment.boundaryMarker !== true,
   );
