@@ -1,4 +1,5 @@
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type {
@@ -17,6 +18,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import type {
+  GatewayModelCatalogLoadParams,
   GatewayModelCatalogSnapshot,
   PreparedGatewayModelCatalog,
   PreparedGatewayModelCatalogReadResult,
@@ -35,15 +37,14 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   providerDiscoveryProviderIds?: readonly string[];
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
-type LoadGatewayModelCatalogParams = {
-  agentId?: string;
-  agentDir?: string;
+type LoadPreparedModelCatalogSnapshot = (
+  params: LoadPreparedModelCatalogParams,
+) => Promise<ModelCatalogSnapshot>;
+type LoadGatewayModelCatalogParams = GatewayModelCatalogLoadParams & {
   getConfig?: () => GatewayModelCatalogConfig;
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
-  readOnly?: boolean;
+  loadPreparedModelCatalogSnapshot?: LoadPreparedModelCatalogSnapshot;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
-  providerDiscoveryProviderIds?: readonly string[];
-  workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
   authScope?: PreparedModelRuntimeAuthScope;
@@ -126,8 +127,30 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
       throw error;
     }
     const { owner } = loaded;
+    let modelCatalog = owner.modelCatalog;
+    const providerIds = params?.providerDiscoveryProviderIds;
+    if (providerIds?.length) {
+      if (!owner.isCurrent()) {
+        continue;
+      }
+      const loadScoped =
+        params?.loadPreparedModelCatalogSnapshot ??
+        (await import("../agents/prepared-model-catalog.js")).loadPreparedModelCatalogSnapshot;
+      modelCatalog = await loadScoped({
+        agentId: owner.agentId,
+        agentDir: owner.agentDir,
+        config: owner.config,
+        providerDiscoveryProviderIds: providerIds,
+        readOnly: true,
+        ...(params?.scopedLiveProviderDiscovery ? { scopedLiveProviderDiscovery: true } : {}),
+        workspaceDir: owner.workspaceDir,
+      });
+      if (!owner.isCurrent()) {
+        continue;
+      }
+    }
     return {
-      ...projectGatewayModelCatalogSnapshot(owner),
+      ...projectGatewayModelCatalogSnapshot({ ...owner, modelCatalog }),
       authModes: refreshedAuth?.authModes ?? owner.authModes,
       authStore: refreshedAuth?.authStore ?? owner.authStore,
       metadataSnapshot: owner.metadataSnapshot,
