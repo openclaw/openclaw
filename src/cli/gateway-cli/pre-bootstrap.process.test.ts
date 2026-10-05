@@ -300,6 +300,13 @@ describe("Gateway config selection before migration admission", () => {
         proxyRetained: true,
       });
       expect(stateManifest(stateDir)).toEqual(before);
+      if (code === 78) {
+        // Service startup ignores the override, so its refusal must not recommend it.
+        expect(result.stderr).not.toContain(
+          "Set OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1",
+        );
+        expect(result.stderr).toContain("rollback-and-recovery#downgrade");
+      }
     },
     75_000,
   );

@@ -1,7 +1,4 @@
-import {
-  cloneEnvWithPlatformSemantics,
-  createConfigRuntimeEnv,
-} from "../../config/config-env-vars.js";
+import { createConfigRuntimeEnv } from "../../config/config-env-vars.js";
 import {
   ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV,
   formatFutureConfigActionBlock,
@@ -41,15 +38,12 @@ function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardP
       : params.opts.force
         ? { action: "force-kill gateway port listeners", exitCode: 1 }
         : { action: "run gateway state preparation", exitCode: 1 };
-  const guardEnv = serviceMode ? cloneEnvWithPlatformSemantics(process.env) : process.env;
-  if (serviceMode) {
-    delete guardEnv[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
-  }
+  // Service startup never honors the older-binary override; the refusal says so.
   const block = resolveFutureConfigActionBlock({
     action: futureAction.action,
     snapshot: params.snapshot,
     config: params.config,
-    env: guardEnv,
+    allowOverride: !serviceMode,
   });
   return block ? { block, exitCode: futureAction.exitCode, serviceMode } : null;
 }
