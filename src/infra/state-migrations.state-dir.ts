@@ -27,7 +27,7 @@ import { resolveUserPath } from "./home-dir.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
 import { listRetiredDeliveryQueueFiles } from "./state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
-import type { MigrationLogger } from "./state-migrations.types.js";
+import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
 
 let autoMigrateStateDirChecked = false;
 
@@ -260,7 +260,6 @@ function renameLegacyPath(source: string, target: string, kind: "directory" | "f
 type StateDirMigrationParams = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-  log?: MigrationLogger;
 };
 
 /** Reserve the once-only migration while its caller transfers maintenance custody. */
@@ -307,6 +306,7 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
     );
     return result();
   }
+  assertNoRetiredRuntimeStateFiles(source, env, params.homedir);
   const configPath = resolveLegacyStateConfigPath(source);
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(source));
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env, configPath });

@@ -532,10 +532,18 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
                 requireEffective: true,
                 requireLoadedCommand: true,
               }),
-            ).resolves.toMatchObject({ installed: true, running: true });
+            ).resolves.toMatchObject({
+              installed: true,
+              running: false,
+              runtime: { status: "unknown", state: "Running" },
+            });
             await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
               refuse: false,
             });
+            task.state = 2;
+            await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual(
+              result,
+            );
             task.state = 3;
             await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual({
               refuse: false,

@@ -33,6 +33,89 @@ afterEach(() => {
 });
 
 describe("X account monitor", () => {
+  it.each([
+    { pollSeconds: 15, backfillMs: 60_000 },
+    { pollSeconds: 60, backfillMs: 240_000 },
+  ])(
+    "backfills missed mentions every $backfillMs ms without admitting a streamed post twice",
+    async ({ pollSeconds, backfillMs }) => {
+      const mentions = [post("502", "10"), post("501", "10")];
+      const admitted: string[] = [];
+      const test = fixture({
+        posts: mentions,
+        queue: createQueue<Payload>({ onEnqueued: (id) => admitted.push(id) }),
+        cfg: {
+          ...config,
+          channels: {
+            ...config.channels,
+            x: {
+              ...config.channels?.x,
+              bearerToken: "test-bearer",
+              events: { mode: "stream", pollSeconds },
+            },
+          },
+        },
+      });
+      const cursor = test.openKeyedStore<{ userId: string; sinceId?: string }>({
+        namespace: "x.cursor",
+      });
+      await cursor.register("default", { userId: "100", sinceId: "500" });
+      test.api.getMentions
+        .mockResolvedValueOnce(page([]))
+        .mockImplementation(async ({ sinceId }) =>
+          page(mentions.filter((mention) => BigInt(mention.id) > BigInt(sinceId ?? "0"))),
+        );
+      const encoder = new TextEncoder();
+      let stream!: ReadableStreamDefaultController<Uint8Array>;
+      test.api.openActivityStream.mockImplementationOnce(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                stream = controller;
+              },
+            }),
+          ),
+      );
+      const running = test.start();
+      let keepAlive: ReturnType<typeof setInterval> | undefined;
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        stream.enqueue(
+          encoder.encode(
+            `${JSON.stringify({
+              data: {
+                event_type: "post.mention.create",
+                payload: {
+                  ...mentions[0],
+                  entities: { mentions: [{ id: "100", username: "roboclawbot" }] },
+                },
+              },
+            })}\n`,
+          ),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(admitted).toEqual(["502"]);
+        expect(test.replies.map((reply) => reply.parent)).toEqual(["502"]);
+        keepAlive = setInterval(() => stream.enqueue(encoder.encode("\n")), 20_000);
+        await vi.advanceTimersByTimeAsync(backfillMs - 1);
+        expect(test.api.getMentions).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(test.api.getMentions).toHaveBeenCalledTimes(2);
+        expect(test.api.getMentions.mock.calls[1]?.[0]).toMatchObject({ sinceId: "500" });
+        expect(admitted).toEqual(["502", "501"]);
+        expect(test.replies.map((reply) => reply.parent)).toEqual(["502", "501"]);
+        expect(test.dispatch).toHaveBeenCalledTimes(2);
+        expect(await cursor.lookup("default")).toEqual({ userId: "100", sinceId: "502" });
+        expect(test.api.openActivityStream).toHaveBeenCalledOnce();
+        expect(running.status()).toMatchObject({ connected: true, mode: "stream" });
+      } finally {
+        clearInterval(keepAlive);
+        await test.stop();
+      }
+    },
+  );
+
   it("classifies unsupported inbound media as not dispatched", async () => {
     const completed = Promise.withResolvers<void>();
     const test = fixture({

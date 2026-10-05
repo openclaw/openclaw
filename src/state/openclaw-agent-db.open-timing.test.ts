@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import * as wal from "../infra/sqlite-wal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as permissions from "./openclaw-agent-db-permissions.js";
@@ -125,6 +126,41 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
 }
 
 describe("agent database open timings", () => {
+  it("includes synchronous WAL recovery in the deferred integrity gate", () => {
+    const { options, pathname, advance } = createTimedOpen(0);
+    const database = openOpenClawAgentDatabase(options);
+    vi.spyOn(database.db, "prepare").mockRestore();
+    const prepare = database.db.prepare.bind(database.db);
+    vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql === "PRAGMA wal_checkpoint(PASSIVE)") {
+        const get = statement.get.bind(statement);
+        vi.spyOn(statement, "get").mockImplementation((...parameters) => {
+          const result = get(...parameters);
+          advance(2_400);
+          return result;
+        });
+      }
+      return statement;
+    });
+    const diagnostics: SqliteIntegrityDiagnostics = {};
+    const admission = schema.agentDatabaseIntegrityBeforeMutationSteps(
+      database.db,
+      options.agentId,
+      pathname,
+      diagnostics,
+      undefined,
+      false,
+      true,
+    );
+    expect(admission.next()).toEqual({ done: true, value: false });
+    expect(diagnostics).toMatchObject({
+      integrityGateReason: "process-death",
+      integrityGateMode: "deferred",
+      integrityGateMs: 2_400,
+    });
+  });
+
   it("reports completed phases at the slow threshold and skips live cache hits", () => {
     const { options, pathname, advance } = createTimedOpen(690);
     const database = openOpenClawAgentDatabase(options);

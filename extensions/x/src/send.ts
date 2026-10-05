@@ -7,6 +7,7 @@ import { resolveXAccount } from "./accounts.js";
 import { XAllowlistChangedError } from "./allowlist.js";
 import type { XApiClient, XPost } from "./api.js";
 import { getXApi } from "./client.js";
+import type { XSenderTier } from "./guest-policy.js";
 import { resolveXIngress } from "./ingress.js";
 import { resolveXRecipient } from "./recipient.js";
 import { sendXReply, XPartialReplyError, type XVisibleWorkSession } from "./reply.js";
@@ -40,6 +41,7 @@ export async function sendXDelivery(params: {
   mediaUrls?: readonly string[];
   signal?: AbortSignal;
   mention?: XPost;
+  senderTier?: XSenderTier;
   visibleWorkSessions?: XVisibleWorkSession[];
   assertDirectAdapterHandoff?: () => void;
 }) {
@@ -134,7 +136,10 @@ export async function sendXDelivery(params: {
     const authorization = await resolveXIngress(account.accountId, mention, cfg).catch(
       rethrowReplyAuthorizationError,
     );
-    if (!authorization.ingress.senderAccess.allowed) {
+    if (
+      !authorization.ingress.senderAccess.allowed ||
+      (params.senderTier && authorization.tier !== params.senderTier)
+    ) {
       throw new PlatformMessageNotDispatchedError("X reply author is no longer allowed.", {
         cause: undefined,
         retryable: false,
@@ -163,7 +168,7 @@ export async function sendXDelivery(params: {
       text: params.text,
       replyToId,
       signature: account.config.replySignature,
-      visibleWorkSessions: params.visibleWorkSessions,
+      visibleWorkSessions: params.senderTier === "guest" ? undefined : params.visibleWorkSessions,
       signal: params.signal,
       assertActive,
     });

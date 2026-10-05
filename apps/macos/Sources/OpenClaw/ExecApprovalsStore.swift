@@ -422,18 +422,16 @@ extension ExecApprovalsStore {
         var normalized: [ExecAllowlistUse] = []
         normalized.reserveCapacity(grants.count)
         for grant in grants {
-            switch ExecApprovalHelpers.validateAllowlistPattern(grant.match.pattern) {
-            case let .valid(pattern):
-                normalized.append(ExecAllowlistUse(
-                    match: ExecAllowlistEntry(
-                        id: grant.match.id,
-                        pattern: pattern,
-                        source: "allow-always",
-                        argPattern: grant.match.argPattern.flatMap { $0.isEmpty ? nil : $0 }),
-                    resolvedPath: grant.resolvedPath))
-            case let .invalid(reason):
-                return .failure(.invalidPattern(reason))
+            guard let pattern = grant.match.pattern.nonEmpty else {
+                return .failure(.invalidPattern(.empty))
             }
+            normalized.append(ExecAllowlistUse(
+                match: ExecAllowlistEntry(
+                    id: grant.match.id,
+                    pattern: pattern,
+                    source: "allow-always",
+                    argPattern: grant.match.argPattern.flatMap { $0.isEmpty ? nil : $0 }),
+                resolvedPath: grant.resolvedPath))
         }
         return .success(normalized)
     }

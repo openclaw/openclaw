@@ -2,7 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
-import type { WorkerTaskHost, WorkerRetirementReason } from "./worker-task-host.js";
+import {
+  serviceNativeWorkerPass,
+  type WorkerTaskHost,
+  type WorkerRetirementReason,
+} from "./worker-task-host.js";
 import {
   areWorkerNativeSectionsSettled,
   cancelWorkerNativeSections,
@@ -17,15 +21,19 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   options,
   runInContext,
   dispatch,
+  onRotationComplete,
   serviceDeadlines,
   markWorkerRetirement,
+  serviceHost,
 }: {
   slots: Set<Slot<Input, Output>>;
   options: WorkerTaskPoolOptions<Output>;
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
+  onRotationComplete: () => void;
   serviceDeadlines: () => void;
   markWorkerRetirement: WorkerTaskHost["workerRetiring"];
+  serviceHost: Pick<WorkerTaskHost, "serviceNativeWorkers">;
 }) {
   const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
@@ -47,9 +55,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     let artifacts: RetainedOperation<void> | undefined;
     let advancing = false;
     const completion = createRetainedOperation<void>(() => {
-      for (const slot of rotationSlots) {
-        slot.native?.service();
-      }
+      serviceNativeWorkerPass(serviceHost, rotationSlots);
       serviceDeadlines();
       for (const retiring of retirements ?? []) {
         retiring.service();
@@ -98,6 +104,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
             throw cleaned.error;
           }
           rotation = undefined;
+          onRotationComplete();
           completion.resolve();
           dispatch();
         } catch (error) {

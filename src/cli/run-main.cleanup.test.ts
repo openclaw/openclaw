@@ -67,7 +67,8 @@ vi.mock("../plugins/memory-runtime.js", () => ({
   closeActiveMemorySearchManagersCore: dispatch.memoryClosed,
 }));
 vi.mock("./gateway-cli/pre-bootstrap.js", () => ({ selectGatewayRunEnvironment: async () => {} }));
-vi.mock("./gateway-cli/run-command.js", () => ({
+vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/run-command.js")>()),
   addGatewayRunCommand: (command: import("commander").Command) =>
     command.action(() => dispatch.run()),
 }));

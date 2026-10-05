@@ -1,7 +1,7 @@
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
@@ -15,7 +15,7 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import type { GatewayClient, SessionMutationAuthorization } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   SessionMutationAuthorizationChangedError,
@@ -31,6 +31,7 @@ import {
   sharingIdentity,
   type SessionSharingRoleParams,
   type SessionSharingTarget,
+  type withSessionSharingTarget,
 } from "./session-sharing-policy.js";
 import {
   loadCachedSessionSharingSnapshot,
@@ -261,7 +262,7 @@ export async function prepareSessionSharingProfiles(
 }
 
 /** Refresh changed profile facts only before the synchronous consumer has begun effects. */
-export async function withCurrentSessionSharingProfiles<T>(
+async function withCurrentSessionSharingProfiles<T>(
   client: GatewayClient | null,
   read: (profiles: PreparedSessionSharingProfiles, beginConsume: () => void) => Promise<T>,
 ): Promise<T> {
@@ -282,6 +283,44 @@ export async function withCurrentSessionSharingProfiles<T>(
       readSource = error.readSource;
     }
   }
+}
+
+export function createSessionSharingInputAuthority(
+  ownedParams: { client: GatewayClient | null; preparedProfiles?: PreparedSessionSharingProfiles },
+  authorization: SessionMutationAuthorization,
+  readSharing: () => Parameters<Parameters<typeof withSessionSharingTarget>[1]>[0],
+): SessionMutationAuthorization["admittedInputAuthority"] {
+  const { withCurrent, withPreparedCurrent } = authorization;
+  if (!withCurrent || !withPreparedCurrent) {
+    return undefined;
+  }
+  return {
+    // Transport/source custody owns lifetime; profile selection ends at input acceptance.
+    assertLifetimeCurrent: () => {},
+    withCurrent: (consume) =>
+      withCurrentSessionSharingProfiles(ownedParams.client, (profiles, beginConsume) => {
+        ownedParams.preparedProfiles = profiles;
+        return withCurrent(() => {
+          beginConsume();
+          const read = readSharing();
+          return consume(
+            {
+              agentId: read.storageTarget.agentId,
+              storePath: read.storageTarget.storePath,
+              sessionKey: toAgentStoreSessionKey({
+                agentId: read.storageTarget.agentId,
+                requestKey: read.target?.storeKey ?? read.storageTarget.canonicalKey,
+              }),
+              entry: read.target?.entry,
+              readSource: read.target?.readSource,
+              members: read.members,
+            },
+            read.assertCurrent,
+          );
+        });
+      }),
+    withPreparedCurrent,
+  };
 }
 
 export function prepareProjectedSessionSharing(params: {

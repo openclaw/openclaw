@@ -603,7 +603,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
   ])("rejects invalid or client-URL parameters before loading: %j", async (input) => {
     const load = vi.fn().mockResolvedValue(result);
     const handler = expectDefined(
-      createControlUiHandlers(undefined, undefined, load)["controlUi.sessionPullRequests.checks"],
+      createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
       "CI checks handler",
     );
     const respond = vi.fn<RespondFn>();
@@ -633,9 +633,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
         }
         const load = vi.fn().mockResolvedValue(result);
         const handler = expectDefined(
-          createControlUiHandlers(undefined, undefined, load)[
-            "controlUi.sessionPullRequests.checks"
-          ],
+          createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
           "CI checks handler",
         );
         const respond = vi.fn<RespondFn>();
@@ -672,7 +670,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
         return deferred.promise;
       });
       const handler = expectDefined(
-        createControlUiHandlers(undefined, undefined, load)["controlUi.sessionPullRequests.checks"],
+        createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
         "CI checks handler",
       );
       const respond = vi.fn<RespondFn>();
@@ -718,9 +716,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
         );
         const load = vi.fn().mockResolvedValue(result);
         const handler = expectDefined(
-          createControlUiHandlers(undefined, undefined, load)[
-            "controlUi.sessionPullRequests.checks"
-          ],
+          createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
           "CI checks handler",
         );
         const respond = vi.fn<RespondFn>();
@@ -747,7 +743,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
       );
       const load = vi.fn().mockResolvedValue(result);
       const handler = expectDefined(
-        createControlUiHandlers(undefined, undefined, load)["controlUi.sessionPullRequests.checks"],
+        createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
         "CI checks handler",
       );
       const respond = vi.fn<RespondFn>();

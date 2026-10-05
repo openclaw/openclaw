@@ -10,6 +10,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
@@ -75,6 +76,28 @@ export function readUserProfileEmailBindings(
 }
 
 /** Alias lookup is observational and never initializes profile storage. */
+export function readUserProfileSnapshotCommand(
+  db: DatabaseSync,
+  command: Extract<
+    OpenClawStateReadCommand,
+    { type: "userProfiles.reconcile" | "userProfiles.catalog" }
+  >,
+) {
+  return runSqliteDeferredTransactionSync(db, () =>
+    command.type === "userProfiles.reconcile"
+      ? {
+          type: command.type,
+          profile: selectProfileAccessEntries(db, [command.profileId])[0]?.[1],
+          emailBindings: readUserProfileEmailBindings(db, command.profileId),
+        }
+      : {
+          type: command.type,
+          profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
+          emailBindings: readUserProfileEmailBindings(db),
+        },
+  );
+}
+
 export function readUserProfileIdForEmail(db: DatabaseSync, email: string): string | undefined {
   if (!tableExists(db, "user_profile_emails") || !tableExists(db, "user_profiles")) {
     return undefined;
@@ -189,18 +212,22 @@ export function readCurrentUserProfileAliases(
 ): ReadonlySet<string> {
   ensureUserProfilesSchema(options);
   const database = openOpenClawStateDatabase(options);
-  return runSqliteDeferredTransactionSync(database.db, () => {
-    const canonicalId =
-      selectResolvedUserProfileMetadataById(database.db, profileId)?.id ?? profileId;
-    const aliases = executeSqliteQuerySync(
-      database.db,
-      userProfilesDb(database.db)
-        .selectFrom("user_profiles")
-        .select("id")
-        .where("merged_into", "=", canonicalId),
-    ).rows;
-    return new Set([canonicalId, ...aliases.map((row) => row.id)]);
-  });
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const canonicalId =
+        selectResolvedUserProfileMetadataById(database.db, profileId)?.id ?? profileId;
+      const aliases = executeSqliteQuerySync(
+        database.db,
+        userProfilesDb(database.db)
+          .selectFrom("user_profiles")
+          .select("id")
+          .where("merged_into", "=", canonicalId),
+      ).rows;
+      return new Set([canonicalId, ...aliases.map((row) => row.id)]);
+    },
+    { operationLabel: "user-profiles.aliases" },
+  );
 }
 
 /** In-memory counterpart of the bounded SQL selector for the Gateway catalog. */

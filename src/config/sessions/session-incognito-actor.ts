@@ -438,26 +438,28 @@ export function createIncognitoSessionFacts(
         captureSnapshot,
         withCompute: <T>(
           authority: IncognitoSessionAuthority,
-          target: IncognitoComputeTarget,
+          target: IncognitoComputeTarget | undefined,
           operation: (scope: IncognitoComputeScope) => Promise<T>,
           signal?: AbortSignal,
-        ): Promise<T> => {
-          const held = claim(target.sessionKey, assertBorrowed);
-          return retain(
-            withIncognitoCompute({
+        ): Promise<T> =>
+          retain(
+            withIncognitoCompute<T, IncognitoSessionClaim>({
               target,
-              assertCurrent() {
-                authority.assertCurrent();
-                held.assertCurrent();
-              },
-              disclose: () => held.authorize(authority, "commit"),
+              assertAuthority: () => authority.assertCurrent(),
+              assertBorrowed,
+              captureClaim: (sessionKey, facts) => claim(sessionKey, assertBorrowed, facts),
+              authorize: (held) => held.authorize(authority, "commit"),
               operation,
-              execute: (command) =>
+              execute: (command, observeFacts) =>
                 perform(
                   authority,
                   command,
                   isIncognitoComputeWrite(command.type),
-                  (result) => result.value,
+                  (result) => {
+                    // Capture claims before the next FIFO turn can publish new facts.
+                    observeFacts(result.facts);
+                    return result.value;
+                  },
                   signal,
                 ),
               cleanup: (command) =>
@@ -471,8 +473,7 @@ export function createIncognitoSessionFacts(
                   true,
                 ),
             }),
-          );
-        },
+          ),
         read: (
           authority: IncognitoSessionAuthority,
           input: IncognitoSessionRead,

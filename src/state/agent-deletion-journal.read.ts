@@ -170,10 +170,14 @@ export function readAgentDatabaseDeletionSnapshotInDatabase(
   statePath: string,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): AgentDatabaseDeletionSnapshot {
-  return runSqliteDeferredTransactionSync(database, () => ({
-    retainedDeletions: readRetainedAgentDeletionsFromDatabase(database, statePath, purpose),
-    registeredAgentDatabases: readRegisteredAgentDatabaseRows(database, statePath, false),
-  }));
+  return runSqliteDeferredTransactionSync(
+    database,
+    () => ({
+      retainedDeletions: readRetainedAgentDeletionsFromDatabase(database, statePath, purpose),
+      registeredAgentDatabases: readRegisteredAgentDatabaseRows(database, statePath, false),
+    }),
+    { operationLabel: "agentDeletionJournal.snapshot" },
+  );
 }
 
 export function readAgentDatabaseDeletionSnapshot(

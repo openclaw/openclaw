@@ -1406,13 +1406,9 @@ struct GatewayNodeSessionTests {
             session: session,
             onDisconnected: { reason in await disconnects.record("first:\(reason)") },
             onRouteInvalidated: { await invalidations.record("first") })
-        // Keep the flat overload in this mixed sequence to cover its credential forwarding
-        // while proving that a same-route connect replaces the owning callbacks.
         try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},

@@ -1,5 +1,5 @@
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { XApiError, parseXPost, type XApiClient, type XPostEnvelope } from "./api.js";
+import { XApiError, parseXPostEnvelope, type XApiClient, type XPostEnvelope } from "./api.js";
 import { resolveXRecipient } from "./recipient.js";
 
 export type XEventStatus = {
@@ -18,6 +18,7 @@ type XReceiveOptions = {
   setCursor: (id: string) => Promise<void>;
   onPost: (envelope: XPostEnvelope) => Promise<void>;
   onStatus?: (status: XEventStatus) => void;
+  onWarning?: (message: string) => void;
   signal: AbortSignal;
 };
 
@@ -80,20 +81,19 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function eventEnvelope(value: unknown): XPostEnvelope | undefined {
-  const event = asRecord(value);
-  if (typeof event.event_type === "string" && event.event_type !== "post.mention.create") {
+  const event = asRecord(asRecord(value).data);
+  if (event.event_type !== "post.mention.create") {
     return undefined;
   }
-  const data = asRecord(event.data);
-  const post = parseXPost(event.post ?? data.post ?? event.data);
-  return post ? { post, users: [] } : undefined;
+  return parseXPostEnvelope({ post: event.payload, users: asRecord(event.includes).users });
 }
 
-async function receiveStream(options: XReceiveOptions): Promise<void> {
+async function receiveStream(options: XReceiveOptions, backfillMs: number): Promise<void> {
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let backfill: Promise<void> | undefined;
   const armIdleTimer = () => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(
@@ -115,9 +115,24 @@ async function receiveStream(options: XReceiveOptions): Promise<void> {
       streamBackoffMs: 0,
       message: "activity stream connected",
     });
-    await pollXMentions(options);
+    const backfillOptions = { ...options, signal };
+    await pollXMentions(backfillOptions);
+    backfill = (async () => {
+      while (!signal.aborted) {
+        await wait(backfillMs, signal);
+        try {
+          await pollXMentions(backfillOptions);
+        } catch {
+          signal.throwIfAborted();
+          options.onStatus?.({
+            message: "mentions backfill failed; retrying after the backfill interval",
+          });
+        }
+      }
+    })().catch((error: unknown) => controller.abort(error));
     const decoder = new TextDecoder();
     let pending = "";
+    let unparsed = 0;
     while (!signal.aborted) {
       armIdleTimer();
       const read = reader.read();
@@ -147,8 +162,35 @@ async function receiveStream(options: XReceiveOptions): Promise<void> {
         if (!line) {
           continue;
         }
-        const envelope = eventEnvelope(JSON.parse(line));
-        if (!envelope || envelope.post.author_id === options.userId) {
+        let value: unknown;
+        try {
+          value = JSON.parse(line);
+        } catch {
+          // Malformed lines count toward the same diagnostic as unrecognized envelopes.
+        }
+        const envelope = eventEnvelope(value);
+        if (!envelope) {
+          const event = asRecord(value);
+          const type = asRecord(event.data).event_type;
+          if (typeof type === "string" && type !== "post.mention.create") {
+            continue;
+          }
+          if (++unparsed === 3) {
+            const message = `X activity stream: 3 consecutive events could not be parsed; type=${JSON.stringify(typeof type === "string" ? type.slice(0, 96) : "unknown")} keys=${JSON.stringify(
+              Object.keys(event)
+                .slice(0, 20)
+                .map((key) => key.slice(0, 64)),
+            )}`;
+            options.onWarning?.(message);
+            options.onStatus?.({ message });
+          }
+          continue;
+        }
+        if (unparsed >= 3) {
+          options.onStatus?.({ message: "activity stream connected" });
+        }
+        unparsed = 0;
+        if (envelope.post.author_id === options.userId) {
           continue;
         }
         const addressed = await resolveXRecipient({
@@ -162,14 +204,14 @@ async function receiveStream(options: XReceiveOptions): Promise<void> {
           continue;
         }
         await options.onPost(addressed);
-        const cursor = laterId(await options.getCursor(), addressed.post.id);
-        await options.setCursor(cursor);
-        options.onStatus?.({ cursor, lastEventAt: Date.now() });
+        // Only a completed mentions poll can advance past gaps in stream delivery.
+        options.onStatus?.({ lastEventAt: Date.now() });
       }
     }
   } finally {
     clearTimeout(idleTimer);
     controller.abort();
+    await backfill;
     await reader?.cancel().catch(() => {});
     reader?.releaseLock();
     options.onStatus?.({ streamConnected: false, message: "activity stream disconnected" });
@@ -185,13 +227,13 @@ export async function runXEvents(
 ): Promise<void> {
   let stream = options.mode !== "poll" && options.bearerConfigured;
   let backoffMs = 1_000;
-  const fallback = () => {
+  const fallback = (error: unknown) => {
     stream = false;
     options.onStatus?.({
       eventMode: "poll",
       streamConnected: false,
       streamBackoffMs: 0,
-      message: "activity API unavailable for this app; polling",
+      message: `${error instanceof Error ? error.message : "X Activity API request failed"}; polling`,
     });
   };
   if (stream) {
@@ -200,7 +242,7 @@ export async function runXEvents(
     } catch (error) {
       options.signal.throwIfAborted();
       if (options.mode !== "stream" || (error instanceof XApiError && error.status === 403)) {
-        fallback();
+        fallback(error);
       } else {
         throw error;
       }
@@ -220,11 +262,11 @@ export async function runXEvents(
         continue;
       }
       try {
-        await receiveStream(options);
+        await receiveStream(options, Math.max(60, (options.pollSeconds ?? 60) * 4) * 1000);
       } catch (error) {
         options.signal.throwIfAborted();
-        if (error instanceof XApiError && error.status === 403) {
-          fallback();
+        if (error instanceof XApiError && (error.status === 401 || error.status === 403)) {
+          fallback(error);
           continue;
         }
         options.onStatus?.({

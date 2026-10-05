@@ -35,7 +35,10 @@ import {
   createChatSendDispatchErrorLifecycle,
   formatReturnedAgentErrors,
 } from "./chat-send-dispatch-errors.js";
-import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
+import {
+  finalizeAcceptedChatSendMessageInjection,
+  settleChatSendMessageInjection,
+} from "./chat-send-message-injection.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
@@ -48,6 +51,7 @@ import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.j
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import {
+  createFirstAssistantServerTiming,
   emitOperatorChatSendServerTiming,
   roundedChatSendTimingMs,
   type ChatSendServerTimingPhase,
@@ -237,20 +241,17 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     chatSendTiming.dispatchStartedAtMs = dispatchStartedAtMs;
   }
   emitServerTiming("dispatch-started");
-  let firstAssistantServerTimingEmitted = false;
-  const emitFirstAssistantServerTiming = () => {
-    if (firstAssistantServerTimingEmitted || chatSendTiming?.firstAssistantEventSent) {
-      return;
-    }
-    firstAssistantServerTimingEmitted = true;
-    if (chatSendTiming) {
-      chatSendTiming.firstAssistantEventSent = true;
-    }
-    emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
-  };
+  const emitFirstAssistantServerTiming = createFirstAssistantServerTiming(chatSendTiming, () =>
+    emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs),
+  );
   const dispatchAdmission = {
     run: <T>(operation: () => Promise<T>) =>
-      gatewayWorkAdmission.run(() => withCurrentUserTurnInput(userTurnRecorder, operation)),
+      gatewayWorkAdmission.run(async () => {
+        acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
+        return await (acceptedMessageInjection
+          ? operation()
+          : withCurrentUserTurnInput(userTurnRecorder, operation));
+      }),
   };
   const dashboardReadAdmission = assertDashboardReadCurrent
     ? {
@@ -272,7 +273,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // Preparation stays after the ACK but inside admitted dispatch, so the
           // same visible run owns workspace progress, cancellation, and errors.
           let assertWorkspaceRunOwnership: (() => void) | undefined;
-          if (entry && (Object.hasOwn(entry, "pendingProjectGitUrl") || entry.pendingWorktree)) {
+          if (
+            !acceptedMessageInjection &&
+            entry &&
+            (Object.hasOwn(entry, "pendingProjectGitUrl") || entry.pendingWorktree)
+          ) {
             assertWorkspaceRunOwnership = await prepareSessionWorkspace({
               admission,
               client,

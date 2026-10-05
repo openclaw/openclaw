@@ -204,6 +204,7 @@ describe("session list requests", () => {
         expect.objectContaining({ agentId: "writer", limit: 2 }),
       );
       expect(listener).toHaveBeenLastCalledWith({
+        readSucceeded: true,
         result: listResult(["agent:writer:0", "agent:writer:1"], 3),
         agentId: "writer",
         loading: false,

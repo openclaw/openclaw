@@ -56,8 +56,6 @@ export async function removeWorktreeIfLossless(
     prepareRecord: (record: ManagedWorktreeRecord) => Promise<ManagedWorktreeRecord>;
     remove: (params: {
       id: string;
-      reason: "run-end";
-      requireLossless: true;
       claimToken: string;
       inspectedHead: string;
     }) => Promise<RemoveManagedWorktreeResult>;
@@ -156,8 +154,6 @@ export async function removeWorktreeIfLossless(
     }
     const result = await params.remove({
       id,
-      reason: "run-end",
-      requireLossless: true,
       claimToken,
       inspectedHead,
     });
@@ -241,7 +237,6 @@ export function createWorktreeGcRemoval(context: {
     assertOwnerAllowsCleanup(env, record, policy, retiredOwner);
   };
   const handleError = async (
-    stage: "idle" | "limits",
     record: ManagedWorktreeRecord,
     initialError: unknown,
     retiredOwner = false,
@@ -251,7 +246,7 @@ export function createWorktreeGcRemoval(context: {
       if (!isWorktreePermissionError(error)) {
         return false;
       }
-      progress.protect(stage, record.id, "unreadable", `unreadable: ${formatErrorMessage(error)}`);
+      progress.protect("idle", record.id, "unreadable", `unreadable: ${formatErrorMessage(error)}`);
       return true;
     };
     if (retainUnreadable(initialError)) {
@@ -300,7 +295,7 @@ export function createWorktreeGcRemoval(context: {
                   assertClaim();
                 });
                 if (retired.protection) {
-                  progress.protect(stage, record.id, retired.protection);
+                  progress.protect("idle", record.id, retired.protection);
                   return;
                 }
                 if (retired.record?.removedAt !== now) {
@@ -337,7 +332,7 @@ export function createWorktreeGcRemoval(context: {
           error = retirementError;
         }
       }
-      log.warn(`${stage} cleanup failed for ${record.id}: ${String(error)}`);
+      log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       if (/not a git repository|^Git metadata is unavailable /u.test(formatErrorMessage(error))) {
         await deferWorktreeGcRecord(
           env,
@@ -347,7 +342,7 @@ export function createWorktreeGcRemoval(context: {
         );
       }
     }
-    progress.error(stage, error, record.id);
+    progress.error("idle", error, record.id);
   };
   return {
     remove: (record: ManagedWorktreeRecord, reason: string, retiredOwner = false) =>
@@ -371,6 +366,6 @@ export function createWorktreeGcRemoval(context: {
         retireMissingRegistryWorktree(env, record, now, () => assertOwnerCurrent(record)),
       ),
     onError: (...args: Parameters<typeof handleError>) =>
-      withOwnerCleanup(args[1], () => handleError(...args)),
+      withOwnerCleanup(args[0], () => handleError(...args)),
   };
 }

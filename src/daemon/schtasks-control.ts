@@ -20,6 +20,8 @@ import {
   findInstalledProcessPid,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
+import {
   resolveScheduledTaskCommandPort,
   resolveScheduledTaskGatewayContext,
   resolveScheduledTaskOwnedGatewayPids,
@@ -415,18 +417,21 @@ export async function stopScheduledTask(params: GatewayServiceControlArgs): Prom
   );
 }
 
-async function stopRegisteredScheduledTask({
+export async function stopRegisteredScheduledTask({
   env,
   stdout,
   assertCurrent,
+  beforeMutation,
   warn,
   onEndMutation,
+  onProcessStopped,
   restart = false,
   onSettlement,
   onRecovery,
 }: GatewayServiceControlArgs & {
   env: GatewayServiceEnv;
   onEndMutation?: () => void;
+  onProcessStopped?: () => void;
   restart?: boolean;
   onSettlement?: (fact: ScheduledTaskSettlement) => void;
   onRecovery?: () => void;
@@ -442,10 +447,12 @@ async function stopRegisteredScheduledTask({
     {
       warn: warn ?? ((message) => stdout.write(`Warning: ${message}\n`)),
       onStopped: onEndMutation,
+      beforeMutation,
       restart,
       onSettlement,
       onRecovery,
       end: async () => {
+        await beforeMutation?.();
         assertCurrent?.();
         const res = await execSchtasks(["/End", "/TN", taskName]);
         if (!restart && res.code !== 0 && !isScheduledTaskDefinitelyNotRunning(taskName)) {
@@ -457,9 +464,14 @@ async function stopRegisteredScheduledTask({
       },
     },
   );
+  if (terminated?.length) {
+    onProcessStopped?.();
+  }
   if (!manageGatewayPort) {
-    await terminateScheduledTaskNodeHost(env, assertCurrent);
-    await terminateInstalledStartupRuntime(env, assertCurrent);
+    if ((await terminateScheduledTaskNodeHost(env, assertCurrent, beforeMutation)).length) {
+      onProcessStopped?.();
+    }
+    await terminateInstalledStartupRuntime(env, assertCurrent, beforeMutation);
   }
   if (terminated !== null && stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];

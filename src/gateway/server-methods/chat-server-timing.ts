@@ -19,6 +19,23 @@ export function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
 
+export function createFirstAssistantServerTiming(
+  timing: { firstAssistantEventSent?: boolean } | undefined,
+  emit: () => void,
+): () => void {
+  let emitted = false;
+  return () => {
+    if (emitted || timing?.firstAssistantEventSent) {
+      return;
+    }
+    emitted = true;
+    if (timing) {
+      timing.firstAssistantEventSent = true;
+    }
+    emit();
+  };
+}
+
 export function chatSendAckServerTimingAttributes(
   timing: ChatSendAckServerTiming | undefined,
 ): Record<string, number> {

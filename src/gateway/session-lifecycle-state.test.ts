@@ -647,7 +647,7 @@ describe("session lifecycle state", () => {
         const patch = await update(structuredClone(storedEntry), {
           existingEntry: structuredClone(storedEntry),
         });
-        options?.assertCommitAllowed?.();
+        options?.workerGuard?.source?.();
         if (patch) {
           storedEntry = { ...storedEntry, ...patch };
         }

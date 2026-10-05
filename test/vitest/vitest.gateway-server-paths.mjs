@@ -72,7 +72,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-shared-publication-read.test.ts",
   "src/gateway/github-shared-publication-relevance.test.ts",
   "src/gateway/github-user-identity.authority.test.ts",
-  "src/gateway/github-user-identity.cache.test.ts",
   "src/gateway/github-user-identity.oidc.test.ts",
   "src/gateway/github-user-identity.test.ts",
   "src/gateway/health/collector.channel-discovery.test.ts",
@@ -195,6 +194,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection/message-handler.worker.test.ts",
   "src/gateway/session-activity-summaries.retry.test.ts",
   "src/gateway/session-activity-summaries.test.ts",
+  "src/gateway/session-companion-rpc.test.ts",
   "src/gateway/session-companion-runtime.test.ts",
   "src/gateway/session-create-atomic-initialization.test.ts",
   "src/gateway/session-create-preparation.test.ts",
@@ -207,6 +207,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-history-worker.integration.test.ts",
   "src/gateway/session-involvement.test.ts",
   "src/gateway/session-lifecycle-run-failure.test.ts",
+  "src/gateway/session-lifecycle-source-authority.test.ts",
   "src/gateway/session-lifecycle-state.persistence.test.ts",
   "src/gateway/session-list-viewers.perf.test.ts",
   "src/gateway/session-message-events.exec-completion.test.ts",
@@ -237,6 +238,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-sharing-preparation.test.ts",
   "src/gateway/session-sharing.worker.test.ts",
   "src/gateway/session-startup-migration.test.ts",
+  "src/gateway/session-startup-orphan-admission.test.ts",
+  "src/gateway/session-startup-orphan-races.test.ts",
   "src/gateway/session-subagent-resume.test.ts",
   "src/gateway/session-swarm-summary.test.ts",
   "src/gateway/session-transcript-preview.hydration.test.ts",
@@ -542,14 +545,10 @@ export const gatewayCoreTestExclude = [
   "src/gateway/openai-http.test.ts",
   "src/gateway/openresponses-http.test.ts",
   "src/gateway/probe.auth.integration.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-export const gatewayServerExcludedTestFiles = [
-  "src/gateway/gateway.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
-];
+export const gatewayServerExcludedTestFiles = ["src/gateway/gateway.test.ts"];
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);
 const gatewayServerExcludedTestFileSet = new Set(gatewayServerExcludedTestFiles);

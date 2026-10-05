@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
 import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 import { NativeWorker } from "./worker-native-handle.js";
@@ -23,6 +24,7 @@ function fixture() {
   const controls: NativeWorkerReply[] = [];
   const sent: NativeWorkerRequest[] = [];
   const errors: Error[] = [];
+  const references: boolean[] = [];
   const handles = new Set([1]);
   const runtime: NativeWorkerRuntime = {
     handles,
@@ -39,7 +41,9 @@ function fixture() {
     post(message) {
       sent.push(message);
     },
-    refreshReference() {},
+    refreshReference() {
+      references.push(worker.needsReference);
+    },
     resourceBroker() {
       throw new Error("This fixture owns only a task port");
     },
@@ -63,7 +67,18 @@ function fixture() {
     port1.close();
     port2.close();
   });
-  return { worker, port: port1, peer: port2, context, controls, sent, errors, handles };
+  return {
+    worker,
+    port: port1,
+    peer: port2,
+    context,
+    controls,
+    sent,
+    errors,
+    handles,
+    runtime,
+    references,
+  };
 }
 
 describe("retained worker direct task transport", () => {
@@ -151,6 +166,7 @@ describe("retained worker direct task transport", () => {
     peer.close();
     const [failure] = await failed;
     expect(failure).toMatchObject({ message: "Native worker task channel closed" });
+    expect(() => worker.ref()).toThrow("Native worker task channel closed");
     expect(worker.executionStopped).toBe(false);
     expect(sent.some((message) => message.type === "stop")).toBe(false);
     const stopping = worker.stop();
@@ -158,5 +174,45 @@ describe("retained worker direct task transport", () => {
     controls.push({ type: "execution-exit", id: 1, code: 0 }, { type: "stopped", id: 1, code: 0 });
     worker.service();
     expect(stopping.read()).toEqual({ status: "fulfilled", value: undefined });
+  });
+
+  it("sends reference transitions while retaining pending samples and checking repeated admission", async () => {
+    const { worker, controls, sent, runtime, references } = fixture();
+    controls.push({ type: "created", id: 1, threadId: 104 });
+    worker.service();
+    worker.ref();
+    worker.ref();
+    worker.unref();
+    worker.unref();
+    expect(references.at(-1)).toBe(false);
+
+    const cpu = worker.cpuUsage();
+    const sample = expectDefined(
+      sent.find((message) => message.type === "cpu"),
+      "native CPU request",
+    );
+    worker.unref();
+    expect(references.at(-1)).toBe(true);
+    controls.push({
+      type: "cpu",
+      id: 1,
+      requestId: sample.requestId,
+      value: { user: 3, system: 1 },
+    });
+    worker.service();
+    await expect(cpu).resolves.toEqual({ user: 3, system: 1 });
+    expect(references.at(-1)).toBe(false);
+
+    worker.ref();
+    worker.ref();
+    expect(sent.filter((message) => message.type === "ref")).toEqual([
+      { type: "ref", id: 1, referenced: false },
+      { type: "ref", id: 1, referenced: true },
+    ]);
+    const unavailable = new Error("Native source no longer owns execution");
+    runtime.failure = unavailable;
+    expect(() => worker.ref()).toThrow(unavailable);
+    expect(() => worker.unref()).toThrow(unavailable);
+    expect(() => worker.unref()).toThrow(unavailable);
   });
 });

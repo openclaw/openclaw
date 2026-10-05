@@ -24,6 +24,7 @@ import {
   assertNoRetiredStateFiles,
   RetiredStateFormatError,
 } from "../../infra/state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "../../infra/state-migrations.retired-runtime-files.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   parseUpdateAdmissionContext,
@@ -240,6 +241,7 @@ async function inspectUpdateAdmission(
             // The saved partition reads SQLite; admit its schema before inspecting live files
             // that published updaters omit from their later rehearsal snapshots.
             const stateDir = resolveStateDir(databaseContext.env);
+            assertNoRetiredRuntimeStateFiles(stateDir, databaseContext.env);
             assertNoRetiredStateFiles(
               "JSON delivery queues",
               listRetiredDeliveryQueueFiles(stateDir),

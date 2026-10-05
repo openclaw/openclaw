@@ -264,11 +264,10 @@ function computeLatencyStats(
 function getUtcQuarterHourBucketKey(date: Date): {
   date: string;
   quarterIndex: number;
-  bucketId: string;
 } {
   const dateKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
   const quarterIndex = Math.floor((date.getUTCHours() * 60 + date.getUTCMinutes()) / 15);
-  return { date: dateKey, quarterIndex, bucketId: `${dateKey}\0${quarterIndex}` };
+  return { date: dateKey, quarterIndex };
 }
 
 function addMessageCounts(target: SessionMessageCounts, source: SessionMessageCounts): void {
@@ -278,6 +277,30 @@ function addMessageCounts(target: SessionMessageCounts, source: SessionMessageCo
   target.toolCalls += source.toolCalls;
   target.toolResults += source.toolResults;
   target.errors += source.errors;
+}
+
+function addQuarterHourTokens(
+  target: SessionUtcQuarterHourTokenUsage,
+  source: SessionUtcQuarterHourTokenUsage,
+): void {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+}
+
+function addDailyModelUsage(target: SessionDailyModelUsage, source: SessionDailyModelUsage): void {
+  target.tokens += source.tokens;
+  target.cost += source.cost;
+  target.count += source.count;
+}
+
+function createDailyModelAccumulator() {
+  return createDatedRowsAccumulator<SessionDailyModelUsage>(addDailyModelUsage, {
+    key: (row) => usageDailyModelIdentity(row.date, row.provider, row.model),
+  });
 }
 
 function sortedModelUsage(
@@ -337,10 +360,12 @@ function createDatedRowsAccumulator<T extends { date: string; quarterIndex?: num
         }
       }
     },
-    finish(): T[] | undefined {
+    finish(compare?: (left: T, right: T) => number): T[] | undefined {
       return rows.size
         ? Array.from(rows.values()).toSorted(
-            (a, b) => a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0),
+            compare ??
+              ((a, b) =>
+                a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0)),
           )
         : undefined;
     },
@@ -403,27 +428,12 @@ export function createSessionCostSummaryAccumulator(
     createDatedRowsAccumulator<SessionDailyMessageCounts>(addMessageCounts);
   const quarterMessages =
     createDatedRowsAccumulator<SessionUtcQuarterHourMessageCounts>(addMessageCounts);
-  const quarterTokens = createDatedRowsAccumulator<SessionUtcQuarterHourTokenUsage>(
-    (current, row) => {
-      current.input += row.input;
-      current.output += row.output;
-      current.cacheRead += row.cacheRead;
-      current.cacheWrite += row.cacheWrite;
-      current.totalTokens += row.totalTokens;
-      current.totalCost += row.totalCost;
-    },
-  );
+  const quarterTokens =
+    createDatedRowsAccumulator<SessionUtcQuarterHourTokenUsage>(addQuarterHourTokens);
   const dailyLatency = createDatedRowsAccumulator<SessionDailyLatency>((current, row) => {
     Object.assign(current, mergeLatencyStats(current, row));
   });
-  const dailyModels = createDatedRowsAccumulator<SessionDailyModelUsage>(
-    (current, row) => {
-      current.tokens += row.tokens;
-      current.cost += row.cost;
-      current.count += row.count;
-    },
-    { key: (row) => usageDailyModelIdentity(row.date, row.provider, row.model) },
-  );
+  const dailyModels = createDailyModelAccumulator();
 
   return {
     add(source: SessionCostSummary): void {
@@ -513,11 +523,13 @@ export function buildSessionCostSummaryFromRollup(params: {
   const tools = new Map<string, number>();
   const models = new Map<string, SessionModelUsage>();
   const dailyUsage = new Map<string, CostUsageTotals>();
-  const dailyMessages = new Map<string, SessionDailyMessageCounts>();
-  const quarterMessages = new Map<string, SessionUtcQuarterHourMessageCounts>();
-  const quarterTokens = new Map<string, SessionUtcQuarterHourTokenUsage>();
+  const dailyMessages = createDatedRowsAccumulator<SessionDailyMessageCounts>(addMessageCounts);
+  const quarterMessages =
+    createDatedRowsAccumulator<SessionUtcQuarterHourMessageCounts>(addMessageCounts);
+  const quarterTokens =
+    createDatedRowsAccumulator<SessionUtcQuarterHourTokenUsage>(addQuarterHourTokens);
   const dailyLatencies = new Map<string, SessionUsageLatencyAggregate>();
-  const dailyModels = new Map<string, SessionDailyModelUsage>();
+  const dailyModels = createDailyModelAccumulator();
   const allLatencies = createLatencyAggregate();
   let firstActivity: number | undefined;
   let lastActivity: number | undefined;
@@ -537,51 +549,22 @@ export function buildSessionCostSummaryFromRollup(params: {
     addCostUsageTotals(daily, bucket.totals);
     dailyUsage.set(dayKey, daily);
 
-    const dailyMessage = dailyMessages.get(dayKey) ?? { date: dayKey, ...emptyMessageCounts() };
-    addMessageCounts(dailyMessage, bucket.messageCounts);
-    dailyMessages.set(dayKey, dailyMessage);
-
-    const quarterMessage = quarterMessages.get(quarter.bucketId) ?? {
-      date: quarter.date,
-      quarterIndex: quarter.quarterIndex,
-      ...emptyMessageCounts(),
-    };
-    addMessageCounts(quarterMessage, bucket.messageCounts);
-    quarterMessages.set(quarter.bucketId, quarterMessage);
-
-    const quarterUsage = quarterTokens.get(quarter.bucketId) ?? {
-      date: quarter.date,
-      quarterIndex: quarter.quarterIndex,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-    };
-    quarterUsage.input += bucket.totals.input;
-    quarterUsage.output += bucket.totals.output;
-    quarterUsage.cacheRead += bucket.totals.cacheRead;
-    quarterUsage.cacheWrite += bucket.totals.cacheWrite;
-    quarterUsage.totalTokens += bucket.totals.totalTokens;
-    quarterUsage.totalCost += bucket.totals.totalCost;
-    quarterTokens.set(quarter.bucketId, quarterUsage);
-
-    for (const model of bucket.models) {
-      const modelBucketId = usageDailyModelIdentity(dayKey, model.provider, model.model);
-      const existing = dailyModels.get(modelBucketId) ?? {
+    dailyMessages.add([{ date: dayKey, ...bucket.messageCounts }]);
+    quarterMessages.add([{ ...quarter, ...bucket.messageCounts }]);
+    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost } = bucket.totals;
+    quarterTokens.add([
+      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost },
+    ]);
+    dailyModels.add(
+      bucket.models.map((model) => ({
         date: dayKey,
         provider: model.provider,
         model: model.model,
-        tokens: 0,
-        cost: 0,
-        count: 0,
-      };
-      existing.tokens += model.totals.totalTokens;
-      existing.cost += model.totals.totalCost;
-      existing.count += model.count;
-      dailyModels.set(modelBucketId, existing);
-    }
+        tokens: model.totals.totalTokens,
+        cost: model.totals.totalCost,
+        count: model.count,
+      })),
+    );
 
     mergeLatencyAggregate(allLatencies, bucket.latency);
     const dailyLatency = dailyLatencies.get(dayKey) ?? createLatencyAggregate();
@@ -601,12 +584,6 @@ export function buildSessionCostSummaryFromRollup(params: {
   })
     .filter((entry): entry is SessionDailyLatency => entry !== null)
     .toSorted((a, b) => a.date.localeCompare(b.date));
-  const utcQuarterHourMessageCounts = Array.from(quarterMessages.values()).toSorted(
-    (a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex,
-  );
-  const utcQuarterHourTokenUsage = Array.from(quarterTokens.values()).toSorted(
-    (a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex,
-  );
 
   return {
     sessionId: params.sessionId,
@@ -621,21 +598,11 @@ export function buildSessionCostSummaryFromRollup(params: {
     dailyBreakdown: Array.from(dailyUsage, ([date, usage]) =>
       Object.assign({ date, tokens: usage.totalTokens, cost: usage.totalCost }, usage),
     ).toSorted((a, b) => a.date.localeCompare(b.date)),
-    dailyMessageCounts: Array.from(dailyMessages.values()).toSorted((a, b) =>
-      a.date.localeCompare(b.date),
-    ),
-    utcQuarterHourMessageCounts: utcQuarterHourMessageCounts.length
-      ? utcQuarterHourMessageCounts
-      : undefined,
-    utcQuarterHourTokenUsage: utcQuarterHourTokenUsage.length
-      ? utcQuarterHourTokenUsage
-      : undefined,
+    dailyMessageCounts: dailyMessages.finish() ?? [],
+    utcQuarterHourMessageCounts: quarterMessages.finish(),
+    utcQuarterHourTokenUsage: quarterTokens.finish(),
     dailyLatency: dailyLatency.length ? dailyLatency : undefined,
-    dailyModelUsage: dailyModels.size
-      ? Array.from(dailyModels.values()).toSorted(
-          (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
-        )
-      : undefined,
+    dailyModelUsage: dailyModels.finish((a, b) => a.date.localeCompare(b.date) || b.cost - a.cost),
     messageCounts,
     toolUsage: buildToolUsage(tools),
     modelUsage: sortedModelUsage(models),

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
@@ -12,11 +12,14 @@ export async function reclaimTokenlessPluginSourceCapture(
   original: Stats,
   legacy: boolean,
   sweep: TokenlessCaptureSweep,
+  assertCurrent?: () => void | Promise<void>,
 ): Promise<void> {
   if (sweep.unknownReason) {
     return;
   }
   const { inspectTemporaryDirectoryUsage } = await import("../infra/temp-directory-usage.js");
+  // Authority can await storage; inspect active use after it settles.
+  await assertCurrent?.();
   const usage = inspectTemporaryDirectoryUsage(directory);
   if (usage.kind !== "inactive") {
     if (usage.kind === "unknown") {
@@ -24,13 +27,17 @@ export async function reclaimTokenlessPluginSourceCapture(
     }
     return;
   }
-  const current = await fs.lstat(directory);
-  if (
-    current.dev !== original.dev ||
-    current.ino !== original.ino ||
-    !current.isDirectory() ||
-    (process.getuid && current.uid !== process.getuid())
-  ) {
+  const sameOwnedDirectory = (target: string) => {
+    const current = fsSync.lstatSync(target);
+    return (
+      current.dev === original.dev &&
+      current.ino === original.ino &&
+      current.uid === original.uid &&
+      current.isDirectory() &&
+      (!process.getuid || current.uid === process.getuid())
+    );
+  };
+  if (!sameOwnedDirectory(directory)) {
     return;
   }
   // Keep interrupted removals recognizable to the next sweep.
@@ -39,5 +46,9 @@ export async function reclaimTokenlessPluginSourceCapture(
     `${legacy ? PLUGIN_SOURCE_CAPTURE_PREFIX : ""}${randomUUID()}`,
   );
   await fs.rename(directory, retired);
+  await assertCurrent?.();
+  if (!sameOwnedDirectory(retired)) {
+    return;
+  }
   await fs.rm(retired, { recursive: true, force: true });
 }

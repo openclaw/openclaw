@@ -680,6 +680,7 @@ export async function runReplyAgent(
     await cleanupReplyAgentRun({
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
+      isHeartbeat,
       providedReplyOperation,
       queueKey,
       replyOperation,

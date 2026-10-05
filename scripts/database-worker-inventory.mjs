@@ -172,6 +172,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/state/openclaw-state-db.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["withOpenClawStateStartupMigrationCheckpointDatabase"],
+        evidence:
+          "Startup checkpoint callers only: startup-migration-checkpoint.ts:84,157 serves CLI startup-config-preflight.ts admission/heartbeat/release; gateway-owner-lease.ts:253,282 claims/releases the process lock, whose runtime heartbeat already uses openclaw-state-lease-heartbeat.ts. Other shared-state writes remain T1.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-reset.ts",
     [
       {
@@ -267,9 +278,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn"],
+        operations: [
+          "createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn",
+          "createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn.transition",
+        ],
         evidence:
-          "Only placementTurns.failResult in placement-turn-claims.worker.ts constructs the terminal-failure kernel; all runtime callers await its worker facade",
+          "Only placementTurns.failResult in placement-turn-claims.worker.ts constructs the terminal-failure kernel, including its transaction-local transition helper; all runtime callers await its worker facade",
       },
     ],
   ],
@@ -610,7 +624,7 @@ const reviewedOperations = new Map([
           "finishCronRunReceiptInDatabase",
         ],
         evidence:
-          "Admission/recovery/reservation/state/maintenance/dispatch workers own direct primitives; host guard at :557 still reaches run-receipt-read.ts:133 and row-codec.ts:262",
+          "Admission/recovery/reservation/state/maintenance/dispatch workers own direct primitives; service message guards consume receipt-authority-owner facts without the deleted native current-job reader",
       },
     ],
   ],
@@ -619,9 +633,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readActiveCronRunReceiptOwnersInDatabase"],
+        operations: [
+          "readActiveCronRunReceiptOwnersInDatabase",
+          "readActiveCronRunReceiptsInDatabase",
+        ],
         evidence:
-          "read-command.ts:72 -> openclaw-state-read.worker.ts:353; current-authority read stays T1",
+          "read-command.ts currentReceipt/activeReceiptOwners and run-recovery.read.ts route through openclaw-state-read.worker.ts; remaining direct callers are run-admission.worker.ts and runtime-maintenance.worker.ts",
       },
     ],
   ],
@@ -631,6 +648,7 @@ const reviewedOperations = new Map([
       {
         tier: "T3",
         operations: [
+          "loadCronRows",
           "readCronJobsFingerprint",
           "replaceCronRows",
           "upsertCronJobRow",
@@ -638,7 +656,7 @@ const reviewedOperations = new Map([
           "revokeCronJobStandingGrants",
         ],
         evidence:
-          "Cron workers or Doctor legacy-repair.ts:380,395 / store-repair.ts:175,183 / doctor-heartbeat-task-migration.ts:348; current-authority and standing-generation reads stay T1",
+          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308; the native current-job reader was deleted; standing-generation reads stay T1",
       },
       {
         tier: "W",

@@ -13,7 +13,6 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
-  type RealtimeTalkAudioFrame,
 } from "./audio.ts";
 import type { DelayedToolResult, GatewayRelayEvent } from "./gateway-relay-types.ts";
 import {
@@ -273,6 +272,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
+  // Keep callback-written errors outside start()'s field narrowing.
   private currentStartupError(): Error | null {
     return this.startupError;
   }
@@ -720,7 +720,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       this.speechFramesDuringPlayback = 0;
       return false;
     }
-    const frame: RealtimeTalkAudioFrame = measureRealtimeTalkAudioFrame(samples);
+    const frame = measureRealtimeTalkAudioFrame(samples);
     if (frame.rms >= BARGE_IN_RMS_THRESHOLD && frame.peak >= BARGE_IN_PEAK_THRESHOLD) {
       this.speechFramesDuringPlayback += 1;
     } else {

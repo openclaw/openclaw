@@ -5,6 +5,7 @@ import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  resolveCodexPluginsPolicy,
   type CodexPluginConfig,
 } from "./config.js";
 import { refreshCodexPluginRuntimeState } from "./plugin-activation.js";
@@ -2681,7 +2682,7 @@ describe("Codex plugin thread config", () => {
     expect(request.mock.calls.filter(([method]) => method === "plugin/list")).toHaveLength(1);
     expect(
       resolveRecoverableCodexPluginConfigKeys({
-        policy: first.inventory?.policy ?? second.inventory!.policy,
+        policy: resolveCodexPluginsPolicy(pluginConfig),
         metadataCache,
         appCacheKey: "runtime",
       }),
@@ -2849,12 +2850,6 @@ describe("missing configured plugins", () => {
         appCacheKey: "missing-plugin",
         request: inventoryRequest(() => false),
       });
-      expect(result.inventory?.policy.pluginPolicies.map((plugin) => plugin.configKey)).toEqual([
-        "healthy",
-      ]);
-      expect(result.inventory?.records.map((record) => record.policy.configKey)).toEqual([
-        "healthy",
-      ]);
       expect(result.policyContext.apps["healthy-app"]).toMatchObject({
         pluginName: "healthy",
         marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -2894,16 +2889,9 @@ describe("missing configured plugins", () => {
       request: inventoryRequest(() => available),
     };
     const first = await buildCodexPluginThreadConfig(params);
-    expect(first.inventory?.policy.pluginPolicies.map((plugin) => plugin.configKey)).toEqual([
-      "healthy",
-    ]);
     expect(first.policyContext.apps["healthy-app"]).toMatchObject({ pluginName: "healthy" });
     available = true;
     const next = await buildCodexPluginThreadConfig(params);
-    expect(next.inventory?.policy.pluginPolicies.map((plugin) => plugin.configKey)).toEqual([
-      "healthy",
-      "missing",
-    ]);
     expect(next.policyContext.apps["account-app"]).toMatchObject({ pluginName: "missing" });
     expect(pluginConfig).toEqual(savedSettings);
   });

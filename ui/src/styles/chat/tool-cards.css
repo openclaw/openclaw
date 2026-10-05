@@ -1254,6 +1254,7 @@
     max-height: min(360px, 55vh);
   }
 }
+.chat-activity-group__outcome,
 .chat-tool-failure,
 .chat-tool-skipped {
   flex: none;

@@ -26,12 +26,12 @@ import {
   type AppServerApprovalOutcome,
   type PluginApprovalOutcome,
 } from "./plugin-approval-roundtrip.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import type {
   CodexAppPolicyContextEntry,
   PluginAppPolicyContext,
   PluginAppPolicyContextEntry,
-} from "./plugin-thread-config.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+} from "./session-binding-record-codec.js";
 
 type ApprovalPropertyContext = {
   name: string;

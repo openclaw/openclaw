@@ -3,6 +3,8 @@ import {
   addGoogleMeetCalendarOptions,
   addGoogleMeetMeetingOption,
   addGoogleMeetOAuthOptions,
+  resolveCliMeetingInput as resolveMeetingInput,
+  resolveCliParams,
   type GoogleMeetCliCommandContext,
 } from "./cli-command-context.js";
 import { writeCalendarEventsSummary, writeLatestConferenceRecordSummary } from "./cli-export.js";
@@ -15,9 +17,8 @@ import {
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
-import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
+import { createSpaceFromParams, hasCreateSpaceConfigInput, hasGoogleMeetOAuth } from "./create.js";
 import {
-  createGoogleMeetSpace,
   endGoogleMeetActiveConference,
   fetchLatestGoogleMeetConferenceRecord,
 } from "./meet-api.js";
@@ -27,6 +28,7 @@ import {
   resolveMeetingFromParams,
   resolveSpaceFromParams,
 } from "./plugin-helpers.js";
+import type { GoogleMeetRuntime } from "./runtime.js";
 
 type GoogleMeetCreateOutput = {
   browser?: {
@@ -75,14 +77,7 @@ function writeGoogleMeetCreateOutput(
 }
 
 export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandContext): void {
-  const {
-    root,
-    callGateway,
-    operationTimeoutMs,
-    hasCreateOAuth,
-    resolveMeetingInput,
-    resolveCliParams,
-  } = context;
+  const { root, callGateway, operationTimeoutMs } = context;
 
   addGoogleMeetOAuthOptions(
     root.command("create").description("Create a new Google Meet space and print its meeting URL"),
@@ -117,55 +112,50 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
           return;
         }
       }
-      if (!hasCreateOAuth(context.config, options)) {
+      let runtime: GoogleMeetRuntime | undefined;
+      let created: GoogleMeetCreateOutput & { meetingUri: string };
+      if (!hasGoogleMeetOAuth(context.config, options)) {
         if (hasCreateSpaceConfigInput(options as Record<string, unknown>)) {
           throw new Error(
             "Google Meet access policy options require OAuth/API room creation. Configure Google Meet OAuth or remove --access-type/--entry-point-access.",
           );
         }
-        const rt = await context.ensureRuntime();
-        const result = await rt.createViaBrowser();
-        const join =
-          options.join !== false
-            ? await rt.join(resolveCliJoinRequest(result.meetingUri, options))
-            : undefined;
-        writeGoogleMeetCreateOutput(
-          {
-            source: result.source,
-            meetingUri: result.meetingUri,
-            joined: Boolean(join),
-            ...(join ? { join } : {}),
-            browser: {
-              nodeId: result.nodeId,
-              targetId: result.targetId,
-              browserUrl: result.browserUrl,
-              browserTitle: result.browserTitle,
-            },
+        runtime = await context.ensureRuntime();
+        const result = await runtime.createViaBrowser();
+        created = {
+          source: result.source,
+          meetingUri: result.meetingUri,
+          browser: {
+            nodeId: result.nodeId,
+            targetId: result.targetId,
+            browserUrl: result.browserUrl,
+            browserTitle: result.browserTitle,
           },
-          options.json,
-        );
-        return;
+        };
+      } else {
+        const {
+          token,
+          source: _source,
+          ...result
+        } = await createSpaceFromParams(context.config, resolveCliParams(options));
+        created = {
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        };
       }
-      const token = await resolveGoogleMeetTokenFromParams(
-        context.config,
-        resolveCliParams(options),
-      );
-      const result = await createGoogleMeetSpace({
-        accessToken: token.accessToken,
-        config: resolveCreateSpaceConfig(options as Record<string, unknown>),
-      });
       const join =
         options.join !== false
-          ? await (
-              await context.ensureRuntime()
-            ).join(resolveCliJoinRequest(result.meetingUri, options))
+          ? await (runtime ?? (await context.ensureRuntime())).join(
+              resolveCliJoinRequest(created.meetingUri, options),
+            )
           : undefined;
+      const { browser, ...result } = created;
       writeGoogleMeetCreateOutput(
         {
           ...result,
-          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
           joined: Boolean(join),
           ...(join ? { join } : {}),
+          ...(browser ? { browser } : {}),
         },
         options.json,
       );
@@ -204,7 +194,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
 }
 
 export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandContext): void {
-  const { root, resolveCliParams, resolveMeetingInput } = context;
+  const { root } = context;
 
   addGoogleMeetOAuthOptions(
     addGoogleMeetMeetingOption(

@@ -56,7 +56,12 @@ describe("queued chat input withdrawal", () => {
           ? recorder.withPendingInputCurrent(() => {})
           : Promise.resolve().then(() => recorder.withPendingInput?.(() => {}));
       await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
-      await expect(check()).rejects.toThrow("session is draft for this connection");
+      await expect(check()).rejects.toMatchObject({
+        message: "Message injection authority is no longer current",
+        cause: expect.objectContaining({
+          message: expect.stringContaining("session is draft for this connection"),
+        }),
+      });
       await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));
       await expect(check()).rejects.toThrow("Message injection authority is no longer current");
       await fixture.finishDispatch();

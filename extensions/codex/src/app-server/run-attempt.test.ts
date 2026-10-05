@@ -125,18 +125,16 @@ import {
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
 import { createCodexTestModel, createCodexTestOAuthProfile } from "./test-support.js";
-import {
-  buildDeveloperInstructions,
-  buildThreadStartParams,
-  buildTurnStartParams,
-  codexDynamicToolsFingerprint,
-} from "./thread-lifecycle.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
   startOrResumeAttemptThread as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
   createCodexLifecycleHarness,
   createLeasedCodexLifecycleHarness,
 } from "./thread-lifecycle.test-fixtures.js";
+import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { buildThreadStartParams } from "./thread-requests.js";
+import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
 
@@ -202,7 +200,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   return {
     ...createBaseAppServerOptions(),
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 

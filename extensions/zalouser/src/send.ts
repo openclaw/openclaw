@@ -1,4 +1,7 @@
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createAcceptedChannelDeliveryResult,
+  createChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { chunkTextRanges } from "openclaw/plugin-sdk/text-chunking";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sliceTextStyles } from "./text-styles-ranges.js";
@@ -37,31 +40,47 @@ export async function sendMessageZalouser(
   );
 
   let lastResult: ZaloSendResult | null = null;
-  for (const [index, chunk] of chunks.entries()) {
-    const chunkOptions =
-      index === 0
-        ? { ...transportOptions, textStyles: chunk.styles }
-        : {
-            ...transportOptions,
-            caption: undefined,
-            mediaLocalRoots: undefined,
-            mediaUrl: undefined,
-            textStyles: chunk.styles,
-          };
-    const result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions, onDeliveryResult);
-    if (!result.ok) {
-      const error = new Error(result.error || "Failed to send Zalouser message");
-      if (result.receipt.platformMessageIds.length > 0) {
-        throw createChannelPartialDeliveryError(error, {
-          messageIds: result.receipt.platformMessageIds,
-          receipt: result.receipt,
-          visibleReplySent: true,
-        });
+  const accepted: ZaloSendResult[] = [];
+  try {
+    for (const [index, chunk] of chunks.entries()) {
+      const chunkOptions =
+        index === 0
+          ? { ...transportOptions, textStyles: chunk.styles }
+          : {
+              ...transportOptions,
+              caption: undefined,
+              mediaLocalRoots: undefined,
+              mediaUrl: undefined,
+              textStyles: chunk.styles,
+            };
+      const chunkStart = accepted.length;
+      const result = await sendZaloTextMessage(
+        threadId,
+        chunk.text,
+        chunkOptions,
+        async (progress) => {
+          accepted.push(progress);
+          await onDeliveryResult?.(progress);
+        },
+      );
+      if (result.ok || result.receipt.platformMessageIds.length > 0) {
+        // The final chunk receipt includes any nested audio progress already reported.
+        accepted.splice(chunkStart, accepted.length - chunkStart, result);
       }
-      throw error;
+      if (!result.ok) {
+        throw new Error(result.error || "Failed to send Zalouser message");
+      }
+      await onDeliveryResult?.(result);
+      lastResult = result;
     }
-    await onDeliveryResult?.(result);
-    lastResult = result;
+  } catch (error) {
+    if (accepted.length > 0) {
+      throw createChannelPartialDeliveryError(
+        error,
+        createAcceptedChannelDeliveryResult({ results: accepted }),
+      );
+    }
+    throw error;
   }
 
   return (

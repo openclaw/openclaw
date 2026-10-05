@@ -526,16 +526,13 @@ function captureGenericBindingSupport(ref: ConversationRef) {
 
 export async function inspectGenericCurrentConversationBindingAsync(
   ref: ConversationRef,
-  options?: { assertCurrent?: () => void },
 ): Promise<SessionBindingRecord | null> {
   const conversation = captureConversationRef(ref);
   const captured = captureGenericBindingSupport(conversation);
   if (!captured.supported) {
     return null;
   }
-  options?.assertCurrent?.();
   const record = await inspectCurrentConversationBindingRecordAsync(conversation);
-  options?.assertCurrent?.();
   captured.assertCurrent();
   return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
 }

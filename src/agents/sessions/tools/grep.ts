@@ -165,7 +165,7 @@ export function createGrepToolDefinition(
 
         void (async () => {
           try {
-            const rgPath = await ensureTool("rg", true);
+            const rgPath = await ensureTool("rg");
             if (settled) {
               return;
             }

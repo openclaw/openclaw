@@ -351,6 +351,7 @@ async function handleChatSendWithOptions(
                 ? undefined
                 : (cause) => {
                     preparationFailure ??= { cause };
+                    assertAdmittedCurrent();
                     throw cause;
                   },
             )

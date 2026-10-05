@@ -3,7 +3,6 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { SessionPendingInputAuthorityFacts } from "../config/sessions/session-pending-input-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
@@ -15,10 +14,8 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
   authorizeOwnSessionMutation,
-  withSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
-import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import type { PreparedSessionSharingProfiles } from "./session-sharing-read.js";
 import type { SessionMutationTarget } from "./session-sharing-target-input.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -69,42 +66,6 @@ export type SessionSharingLookupCaches = {
 
 export function createSessionSharingLookupCaches(): SessionSharingLookupCaches {
   return { storeCache: new Map(), targetDiscoveryCache: new Map() };
-}
-
-/** Retain the current physical reader through the caller's synchronous authority decision. */
-export function withCurrentSessionMutationSharing<T>(
-  params: Pick<SessionMutationAuthorizationParams, "context" | "method">,
-  expected: AuthorizedSessionMutationTarget,
-  consume: (sharing: PreparedMutationSharing, facts: SessionPendingInputAuthorityFacts) => T,
-): Promise<T> {
-  const cfg = params.context.getRuntimeConfig();
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-    sessionMutationTargetChanged(params.method, expected.sessionKey),
-  );
-  return withSessionSharingTarget(
-    { cfg, sessionKey: expected.sessionKey, agentId: expected.agentId },
-    (read) =>
-      consume(
-        {
-          ...read,
-          assertCurrent: () => {
-            read.assertCurrent();
-            assertRoutingCurrent(params.context.getRuntimeConfig());
-          },
-        },
-        {
-          agentId: read.storageTarget.agentId,
-          storePath: read.storageTarget.storePath,
-          sessionKey: toAgentStoreSessionKey({
-            agentId: read.storageTarget.agentId,
-            requestKey: read.target?.storeKey ?? read.storageTarget.canonicalKey,
-          }),
-          entry: read.target?.entry,
-          readSource: read.target?.readSource,
-          members: read.members,
-        },
-      ),
-  );
 }
 
 // docs/gateway/protocol.md gives these handlers visibility-based authorization.

@@ -28,6 +28,8 @@ import type { ForkSessionFromParentTranscriptParams } from "./session-accessor.t
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type {
   ParentForkCandidate,
   ParentForkCommit,
@@ -41,6 +43,18 @@ import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type ForkStoreScope = { agentId?: string; sessionKey: string; storePath: string };
+export type IncognitoParentForkBinding = {
+  source: {
+    actor: IncognitoSessionActor;
+    authority: IncognitoSessionAuthority;
+    sessionKey: string;
+  };
+  destination?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority };
+};
+type ForkOwner = Pick<
+  ReturnType<typeof captureForkWorker>,
+  "scope" | "database" | "assertCurrent" | "prepareEntry" | "readSource" | "restore" | "commit"
+>;
 type ForkDiscoveryOwner = Parameters<Parameters<typeof withSessionStoreTarget>[1]>[1];
 
 /** Native callbacks, incognito, and maintenance retain their existing owner. */
@@ -60,12 +74,13 @@ export function supportsParentForkWorker(scope: ForkStoreScope): boolean {
 function withForkWorkers<T>(
   scopes: { source: ForkStoreScope; target?: ForkStoreScope },
   guard: (() => void) | undefined,
-  run: (
-    source: ReturnType<typeof captureForkWorker>,
-    target?: ReturnType<typeof captureForkWorker>,
-  ) => Promise<T>,
+  run: (source: ForkOwner, target?: ForkOwner) => Promise<T>,
+  incognito?: IncognitoParentForkBinding,
 ): Promise<T> {
   guard?.();
+  if (incognito) {
+    return withIncognitoForkWorkers(scopes, guard, run, incognito);
+  }
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const captureRequest = (scope: ForkStoreScope) => ({
     ...scope,
@@ -199,27 +214,52 @@ function captureForkWorker(
     execution.assertCurrent();
     discovery.assertCurrent();
   };
+  const read = <T>(consume: Parameters<typeof withSessionEntryWorker<T>>[3]) => {
+    return withSessionEntryWorker(
+      database,
+      undefined,
+      assertCurrent,
+      async (reader, source, context) => {
+        source.onRegistryChange = discovery.onRegistryChange;
+        await discovery.refreshBeforeDispatch(() => reader.assertCurrent());
+        const result = await consume(reader, source, context);
+        await discovery.revalidateTarget();
+        return result;
+      },
+      undefined,
+      execution,
+    );
+  };
   return {
     scope,
     database,
     execution,
     assertCurrent,
-    read<T>(read: Parameters<typeof withSessionEntryWorker<T>>[3]) {
-      return withSessionEntryWorker(
-        database,
-        undefined,
+    prepareEntry: (input: ParentForkEntryParams) =>
+      read(async (reader, source) => {
+        await reader.prepare(source);
+        return reader.runExisting(source, (worker) =>
+          executeSessionForkOperation(worker, database.agentId, {
+            type: "session.parentFork.prepare",
+            input,
+          }),
+        );
+      }),
+    readSource: (input: { sessionId: string; forkFrom?: "last-completed" }) =>
+      read(async (reader, source) => {
+        await reader.prepare(source);
+        return reader.runExisting(source, (worker) =>
+          executeSessionForkOperation(worker, database.agentId, {
+            type: "session.parentFork.source",
+            input,
+          }),
+        );
+      }),
+    restore: (sessionId: string) =>
+      restoreSessionColdTranscript(
+        { ...scope, storePath: database.path, sessionId },
         assertCurrent,
-        async (reader, source, context) => {
-          source.onRegistryChange = discovery.onRegistryChange;
-          await discovery.refreshBeforeDispatch(() => reader.assertCurrent());
-          const result = await read(reader, source, context);
-          await discovery.revalidateTarget();
-          return result;
-        },
-        undefined,
-        execution,
-      );
-    },
+      ),
     commit(input: ParentForkCommit) {
       return runSessionEntryWorkerOperation<ParentForkCandidate, ParentForkCandidate["result"]>({
         database,
@@ -262,23 +302,22 @@ function captureForkWorker(
 export async function forkParentEntryInWorker(
   params: ParentForkEntryParams & { commitGuard?: () => void },
   patch?: ParentForkEntryPatch,
+  incognito?: IncognitoParentForkBinding,
 ) {
   const { commitGuard: _guard, ...serializable } = params;
   const planned = structuredClone(serializable);
   const plannedPatch = patch ? structuredClone(patch) : undefined;
   return withForkWorkers(
-    { source: { agentId: params.agentId, sessionKey: "", storePath: params.storePath } },
+    {
+      source: {
+        agentId: params.agentId,
+        sessionKey: incognito ? params.parentTarget.canonicalKey : "",
+        storePath: params.storePath,
+      },
+    },
     params.commitGuard,
     async (owner) => {
-      const prepared = await owner.read(async (execution, source) => {
-        await execution.prepare(source);
-        return execution.runExisting(source, (worker) =>
-          executeSessionForkOperation(worker, owner.database.agentId, {
-            type: "session.parentFork.prepare",
-            input: planned,
-          }),
-        );
-      });
+      const prepared = await owner.prepareEntry(planned);
       owner.assertCurrent();
       if (!prepared?.parentEntry?.sessionId) {
         return { status: "missing-parent" as const };
@@ -289,14 +328,7 @@ export async function forkParentEntryInWorker(
       const skipExisting = plannedPatch?.skipExisting && prepared.base.sessionId?.trim();
       let cliSessionBindings;
       if (!skipExisting) {
-        await restoreSessionColdTranscript(
-          {
-            ...owner.scope,
-            storePath: owner.database.path,
-            sessionId: prepared.parentEntry.sessionId,
-          },
-          owner.assertCurrent,
-        );
+        await owner.restore(prepared.parentEntry.sessionId);
         const { cliBackendSupportsSessionFork } = await import("../../agents/cli-backends.js");
         owner.assertCurrent();
         cliSessionBindings = forkCliSessionBindings(
@@ -317,17 +349,21 @@ export async function forkParentEntryInWorker(
       }
       return result;
     },
+    incognito,
   );
 }
 
-export async function forkParentTranscriptInWorker(params: ForkSessionFromParentTranscriptParams) {
+export async function forkParentTranscriptInWorker(
+  params: ForkSessionFromParentTranscriptParams,
+  incognito?: IncognitoParentForkBinding,
+) {
   const { commitGuard: _guard, ...serializable } = params;
   const planned = structuredClone(serializable);
   return withForkWorkers(
     {
       source: {
         agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: incognito ? params.parentSessionKey : params.sessionKey,
         storePath: params.storePath,
       },
       target: params.targetStorePath
@@ -344,24 +380,12 @@ export async function forkParentTranscriptInWorker(params: ForkSessionFromParent
       if (!planned.parentEntry.sessionId) {
         return { status: "missing-parent" as const };
       }
-      await restoreSessionColdTranscript(
-        {
-          ...source.scope,
-          storePath: source.database.path,
-          sessionId: planned.parentEntry.sessionId,
-        },
-        source.assertCurrent,
-      );
+      await source.restore(planned.parentEntry.sessionId);
       source.assertCurrent();
       const snapshot = crossDatabase
-        ? await source.read(async (execution, authority) => {
-            await execution.prepare(authority);
-            return execution.runExisting(authority, (worker) =>
-              executeSessionForkOperation(worker, source.database.agentId, {
-                type: "session.parentFork.source",
-                input: { sessionId: planned.parentEntry.sessionId, forkFrom: planned.forkFrom },
-              }),
-            );
+        ? await source.readSource({
+            sessionId: planned.parentEntry.sessionId,
+            forkFrom: planned.forkFrom,
           })
         : undefined;
       source.assertCurrent();
@@ -385,6 +409,112 @@ export async function forkParentTranscriptInWorker(params: ForkSessionFromParent
       }
       return result;
     },
+    incognito,
+  );
+}
+
+export function readIncognitoParentForkSource(
+  params: {
+    storePath: string;
+    sessionId: string;
+    forkFrom?: "last-completed";
+    commitGuard?: () => void;
+  },
+  binding: IncognitoParentForkBinding,
+) {
+  const input = { sessionId: params.sessionId, forkFrom: params.forkFrom };
+  return withForkWorkers(
+    { source: { sessionKey: binding.source.sessionKey, storePath: params.storePath } },
+    params.commitGuard,
+    async (source) => {
+      const result = await source.readSource(input);
+      source.assertCurrent();
+      return result ?? null;
+    },
+    { source: binding.source },
+  );
+}
+
+function withIncognitoForkWorkers<T>(
+  scopes: { source: ForkStoreScope; target?: ForkStoreScope },
+  guard: (() => void) | undefined,
+  run: (source: ForkOwner, target?: ForkOwner) => Promise<T>,
+  binding: IncognitoParentForkBinding,
+): Promise<T> {
+  const source = { ...binding.source };
+  const destination = binding.destination ? { ...binding.destination } : source;
+  const crossActor =
+    source.actor.identity.handle !== destination.actor.identity.handle ||
+    source.actor.identity.incarnation !== destination.actor.identity.incarnation;
+  if (scopes.source.sessionKey !== source.sessionKey) {
+    throw new Error("Incognito parent fork binding does not match its captured session");
+  }
+  const sourceClaim = source.actor.sessions.captureCurrent(source.sessionKey);
+  const assertAuthority = () => {
+    guard?.();
+    source.actor.assertCurrent();
+    destination.actor.assertCurrent();
+    source.authority.assertCurrent();
+    destination.authority.assertCurrent();
+  };
+  const assertCurrent = () => {
+    assertAuthority();
+    sourceClaim.assertCurrent();
+  };
+  assertCurrent();
+  if (crossActor && !scopes.target) {
+    throw new Error("Cross-agent incognito fork requires an explicit destination store");
+  }
+  const capture = (
+    scope: ForkStoreScope,
+    owner: Pick<IncognitoParentForkBinding["source"], "actor" | "authority">,
+  ): ForkOwner => {
+    if (
+      path.resolve(scope.storePath) !== owner.actor.path ||
+      (scope.agentId && scope.agentId !== owner.actor.agentId)
+    ) {
+      throw new Error("Incognito parent fork binding does not match its captured store");
+    }
+    const authority: IncognitoSessionAuthority = {
+      assertCurrent: assertAuthority,
+      authorize(stage, facts) {
+        if (crossActor && owner === destination) {
+          sourceClaim.authorize(source.authority, stage);
+        }
+        return facts.sessionKey === scopes.source.sessionKey
+          ? source.authority.authorize?.(stage, facts)
+          : destination.authority.authorize?.(stage, facts);
+      },
+    };
+    return {
+      scope: { agentId: owner.actor.agentId, path: owner.actor.path, sessionKey: scope.sessionKey },
+      database: { agentId: owner.actor.agentId, path: owner.actor.path },
+      assertCurrent,
+      prepareEntry: (input) =>
+        owner.actor.sessions.lifecycle(authority, {
+          type: "session.lifecycle.parentFork.prepare",
+          input,
+        }),
+      readSource: (input) =>
+        owner.actor.sessions.lifecycle(authority, {
+          type: "session.lifecycle.parentFork.source",
+          input: { ...input, sessionKey: scope.sessionKey },
+        }),
+      restore: async () => {
+        assertCurrent();
+      },
+      commit: (input) =>
+        owner.actor.sessions.lifecycle(authority, {
+          type: "session.lifecycle.parentFork.commit",
+          input,
+        }),
+    };
+  };
+  const sourceOwner = capture(scopes.source, source);
+  const destinationOwner = scopes.target ? capture(scopes.target, destination) : undefined;
+  // Lifetimes surround the composition, while each read/write acquires its own FIFO turn.
+  return source.actor.sessions.withSharedState(() =>
+    destination.actor.sessions.withSharedState(() => run(sourceOwner, destinationOwner)),
   );
 }
 

@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import {
   createCronMutationCompletion,
   type CronMutationCompletion,
 } from "../../cron/mutation-completion.js";
@@ -216,17 +220,18 @@ async function callAgentToolGatewayRequestBound<T>(
   const method = request.method;
   const assertDispatchCurrent = request.assertDispatchCurrent;
   const completion = positional ? undefined : createCronMutationCompletion(method);
+  const callerSource =
+    assertCallerCurrent && Object.assign(() => assertCallerCurrent(method), assertCallerCurrent);
   const assertCurrent =
     assertCallerCurrent ||
     assertDispatchCurrent ||
     ((!revalidateOnCompletion || completion) && request.signal)
-      ? () => {
-          assertCallerCurrent?.(method);
-          assertDispatchCurrent?.();
+      ? composeSessionSourceAssertion([callerSource, assertDispatchCurrent], (assertSources) => {
+          assertSources();
           if (!revalidateOnCompletion || completion) {
             request.signal?.throwIfAborted();
           }
-        }
+        })
       : undefined;
   assertCurrent?.();
   const boundGateway = resolveGatewayContext
@@ -287,11 +292,11 @@ async function callAgentToolGatewayRequestBound<T>(
     request.agentToolCaller !== undefined;
   const assertMutationCurrent =
     assertCurrent && !transfersCreatedInput
-      ? () => {
-          assertCurrent();
-          request.sessionMutationCommitGuard?.();
-        }
-      : request.sessionMutationCommitGuard;
+      ? composeSessionSourceAssertion([
+          assertCurrent,
+          captureExternalSessionCommitGuard(request.sessionMutationCommitGuard),
+        ])
+      : captureExternalSessionCommitGuard(request.sessionMutationCommitGuard);
   const dispatchOptions = {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
