@@ -6552,7 +6552,6 @@
 ["src/commands/onboard-guided.skip.test.ts","../agents/auth-profiles.runtime.js","ce46e3ac14f3f2e75aafe79caf2f3078596ff077bb05e7693131c31d11eae8bb",1]
 ["src/commands/onboard-guided.skip.test.ts","../plugins/provider-setup-availability.js","22461a5805c73219ba4bbfe5ee5bb3a55590861ba659c0d88ad1a5fb8ea85cd6",1]
 ["src/commands/onboard-guided.skip.test.ts","./auth-choice-prompt.js","f98c05b8e9cc5470b8207a31512ef1248cf25c8f55eda37fd87ca3f11152408b",1]
-["src/commands/onboard-helpers.remote-probe.test.ts","../gateway/probe.js","3cb2912e15d07f4be0855dc95a0a7311c27ccdbeec4ea68d239c58acc27d58e8",1]
 ["src/commands/onboard-helpers.test.ts","../gateway/probe.js","e4052c52555071cc4961000d62b6832cd789e757dfb22a312b11eef037222b3e",1]
 ["src/commands/onboard-helpers.test.ts","../infra/advertised-lan-host.js","c4a13e2768263dcaf4b3aa05bcd7281cdb746f031b68c1291f5d9ba8c56dd670",1]
 ["src/commands/onboard-helpers.test.ts","../infra/tailnet.js","489b2bf4f903deb0a3456720479f2ea4b5ebe78bf8adcf35a542c55753cf5ec9",1]
