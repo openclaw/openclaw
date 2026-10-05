@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { UsageSummary as ProviderUsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
@@ -17,6 +16,7 @@ import { t } from "../../i18n/index.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 import "../../styles/usage.css";
 import { resolveUsageOverviewState } from "./cache-status.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
 import {
   buildAggregatesFromSessions,

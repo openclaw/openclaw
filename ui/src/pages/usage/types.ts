@@ -1,14 +1,20 @@
-import type { UsageSummary as ProviderUsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
-import type { SessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";
-import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
+import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type {
+  CostUsageDailyEntry,
+  ProviderUsageSummary,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+  SessionUsageTimePoint,
+} from "./data-types.ts";
 import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
 
-export type UsageSessionEntry = SessionsUsageResult["sessions"][number];
-export type UsageTotals = SessionsUsageResult["totals"];
-export type CostDailyEntry = CostUsageSummary["daily"][number];
+export type UsageSessionEntry = SessionsUsageEntry;
+export type UsageTotals = SessionsUsageTotals;
+export type CostDailyEntry = CostUsageDailyEntry;
 export type UsageAggregates = SessionsUsageResult["aggregates"];
 
 export type UsageContextDetail = {
