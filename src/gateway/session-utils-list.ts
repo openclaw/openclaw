@@ -161,6 +161,7 @@ function buildSessionsListResult(
     owners: list.ownerFacet,
     ...(list.ownerSessionCounts ? { ownerSessionCounts: list.ownerSessionCounts } : {}),
     involvingProfileId: list.involvingProfileId,
+    ...(list.activityExpiresAt !== undefined ? { activityExpiresAt: list.activityExpiresAt } : {}),
     ...(list.activityPulse ? { activityPulse: list.activityPulse } : {}),
     ...(list.people
       ? {

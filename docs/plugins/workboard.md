@@ -175,9 +175,12 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 
 Facts update live from session changes, with automatic board rereads at most once
 every five seconds. Category-only session updates and card-only changes do not
-reload Sessions boards. Reads share a prepared placement snapshot when their
-board, authorized roster, people view, and session revision match. Each request
-still obtains its own caller-scoped roster; sharing never expands session visibility.
+reload Sessions boards. Reads share one frozen snapshot for the board, people
+view, session revision, and Gateway-authorized read scope. Repeated Control UI
+reads check current authority without rebuilding the session roster. Session,
+profile, topology, or access changes retire the shared scope; age-window and
+unavailable-PR retry deadlines still refresh the snapshot. Tool callers obtain
+their own caller-scoped roster; sharing never expands session visibility.
 `workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
 `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
 Reconnects and view changes request a full snapshot. The Workboard change event's

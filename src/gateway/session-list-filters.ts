@@ -51,6 +51,7 @@ export type SessionListFilteredEntries = {
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  activityExpiresAt?: number;
   activityPulse?: SessionActivityPulse;
   involvingProfileId?: string;
 };
@@ -195,6 +196,7 @@ export function* filterSessionEntries(
   const ownerId = normalizeOptionalString(opts.ownerId);
   const ownerFirstActorId = normalizeOptionalString(params.ownerFirstActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
+  let activityExpiresAt = Infinity;
   const entries: SessionEntryPair[] = [];
   const ownerEntries: SessionEntryPair[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
@@ -317,12 +319,15 @@ export function* filterSessionEntries(
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
-    if (
-      activeCutoff !== undefined &&
-      (opts.sortBy === "activity" ? sessionActivityTimestamp(entry) : (entry.updatedAt ?? 0)) <
-        activeCutoff
-    ) {
-      continue;
+    if (activeMinutes !== undefined) {
+      const activity =
+        opts.sortBy === "activity" ? sessionActivityTimestamp(entry) : (entry.updatedAt ?? 0);
+      const expiresAt = activity + activeMinutes * 60_000;
+      if (expiresAt < now) {
+        continue;
+      }
+      // Facets include candidates absent from the selected person or returned page.
+      activityExpiresAt = Math.min(activityExpiresAt, expiresAt);
     }
     const effectiveOwner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
     if (
@@ -448,6 +453,7 @@ export function* filterSessionEntries(
       : {}),
     // Empty time/search windows do not invalidate a resolved person link.
     involvingProfileId: selectedProfileId,
+    ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
     ...(activityPulse ? { activityPulse } : {}),
     ...(opts.includePeople
       ? {

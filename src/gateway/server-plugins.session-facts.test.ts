@@ -8,8 +8,10 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { emitUserProfilesChanged } from "../state/user-profile-events.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
+import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -74,6 +76,96 @@ function read(fixture: Fixture, sessionKeys: readonly string[]) {
     () => runtime.gateway.readSessionFacts({ sessionKeys }),
   );
 }
+
+function withReadScope<T>(
+  fixture: Fixture,
+  run: (scope: string | undefined) => Promise<T>,
+  client = fixture.client,
+) {
+  return withPluginRuntimeGatewayRequestScope(
+    {
+      context: fixture.context,
+      client,
+      isWebchatConnect: () => false,
+      pluginId: "workboard",
+      pluginOrigin: "bundled",
+    },
+    () => runtime.gateway.withSessionReadScope(run),
+  );
+}
+
+describe("trusted plugin session read scopes", () => {
+  it("shares equal viewers across connections and retires on source publications", () =>
+    withFixture(async (fixture) => {
+      const scope = () => withReadScope(fixture, async (value) => value);
+      let current = await scope();
+      expect(current).toEqual(expect.any(String));
+      expect(
+        await withReadScope(
+          fixture,
+          async (value) => value,
+          fixture.addReader("other-reader").client,
+        ),
+      ).toBe(current);
+      const otherViewer = fixture.addReader("different-viewer").client;
+      otherViewer.authenticatedUserProfile = {
+        ...fixture.client.authenticatedUserProfile!,
+        profileId: fixture.other.id,
+      };
+      const otherScope = await withReadScope(fixture, async (value) => value, otherViewer);
+      expect(otherScope).toEqual(expect.any(String));
+      expect(otherScope).not.toBe(current);
+      const otherCapabilities = fixture.addReader("different-capabilities").client;
+      otherCapabilities.connect.caps = ["session-row-refs"];
+      const capabilitiesScope = await withReadScope(
+        fixture,
+        async (value) => value,
+        otherCapabilities,
+      );
+      expect(capabilitiesScope).toEqual(expect.any(String));
+      expect(capabilitiesScope).not.toBe(current);
+      for (const publish of [
+        async () => fixture.seed(sessionKey, fixture.profile.id, { label: "Changed title" }),
+        async () => emitUserProfilesChanged(),
+        async () => bumpGatewayAccessRevision(),
+        async () => setRuntimeConfigSnapshot({ ...fixture.cfg }),
+      ]) {
+        await publish();
+        const next = await scope();
+        expect(next).toEqual(expect.any(String));
+        expect(next).not.toBe(current);
+        expect(await scope()).toBe(next);
+        current = next;
+      }
+      const synthetic = {
+        ...fixture.client,
+        internal: { ...fixture.client.internal, syntheticClient: true as const },
+      };
+      expect(await withReadScope(fixture, async (value) => value, synthetic)).toBeUndefined();
+      expect(
+        await withReadScope(fixture, async () => {
+          await fixture.seed(sessionKey, fixture.profile.id, { label: "Newer snapshot" });
+          return "admitted snapshot";
+        }),
+      ).toBe("admitted snapshot");
+      expect(await scope()).not.toBe(current);
+    }));
+
+  it.each(["grant", "role", "profile"] as const)(
+    "rejects a cached disclosure when %s authority changes during the callback",
+    (change) =>
+      withFixture(async (fixture) => {
+        await withReadScope(fixture, async () => "prepared snapshot");
+        await expect(
+          withReadScope(fixture, async (scope) => {
+            expect(scope).toEqual(expect.any(String));
+            await fixture.changeReader(change);
+            return "private cached snapshot";
+          }),
+        ).rejects.toThrow();
+      }),
+  );
+});
 
 describe("trusted plugin session facts", () => {
   it("subscribes to narrow keyed invalidations until unsubscribed", () => {
