@@ -40,6 +40,7 @@ vi.mock("./doctor-platform-notes.js", () => ({
   noteMacLaunchAgentOverrides: vi.fn(),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
+  maybeRepairMacGatewayServiceEnvQuotes: vi.fn(),
 }));
 vi.mock("../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 vi.mock("../daemon/service.js", () => ({
