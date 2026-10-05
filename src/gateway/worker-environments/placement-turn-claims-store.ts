@@ -342,6 +342,29 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     }
   }
   return {
+    async completeUnreadyRepositoryTurn(claim: WorkerSessionTurnClaim, assertCurrent: () => void) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.completeUnreadyRepositoryTurn",
+          input: { claim, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+      );
+      return receipt.placement?.workspaceBaseManifestRef === null;
+    },
+    async settleRepository(
+      input: Omit<
+        PlacementTurnClaimWorkerOperations["placementTurns.settleRepository"]["input"],
+        "nowMs"
+      >,
+      assertCurrent: () => void,
+    ) {
+      const receipt = await execute(
+        { type: "placementTurns.settleRepository", input: { ...input, nowMs: runtime.now?.() } },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Repository readiness");
+    },
     async transition(
       input: Omit<
         PlacementTurnClaimWorkerOperations["placementTurns.transition"]["input"],

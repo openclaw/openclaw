@@ -161,6 +161,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       (snapshot.librarySelections?.length || (snapshot.discoverySkills && skillUsagePaths?.length))
     ) {
       const usageBySkillName = indexFirstByKey(skillUsagePaths ?? [], (usage) => usage.skillName);
+      const selectedNames = new Set(snapshot.librarySelections?.map((selection) => selection.name));
       const mapSkill = (skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number]) => {
         const materialized = usageBySkillName.get(skill.name);
         if (!materialized) {
@@ -173,7 +174,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
         });
       };
       const resolvedSkills = snapshot.resolvedSkills
-        ?.filter((skill) => snapshot.librarySelections?.length || usageBySkillName.has(skill.name))
+        ?.filter((skill) => selectedNames.has(skill.name) || usageBySkillName.has(skill.name))
         .map(mapSkill);
       // Discovery cannot advertise host resources absent from this sandbox's delivery.
       const discoverySkills = snapshot.discoverySkills

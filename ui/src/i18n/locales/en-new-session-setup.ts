@@ -143,6 +143,7 @@ const enNewSessionSetup = {
     local: "Local",
     folderPlaceholder: "Agent workspace",
     projects: "Projects",
+    repository: "Repository",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
     githubProjects: "GitHub",

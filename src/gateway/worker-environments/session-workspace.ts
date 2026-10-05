@@ -58,6 +58,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
       prepareCheckpoint: async (payload) => {
         const prepared = await stageSessionRepositoryCheckpoint({
           ...payload,
+          reconcileBranch: true,
           workspaceId: workspace.repository.workspaceId,
           expectedRevision: workspace.repository.revision,
           checkpointRef: stagedResult.ref,
@@ -89,6 +90,7 @@ export async function recoverSessionWorkspaceCheckpoint(params: {
   onAccepted: (manifestRef: string) => Promise<void>;
 }): Promise<void> {
   const accepted = await recoverSessionRepositoryCheckpoint({
+    reconcileBranch: true,
     workspaceId: params.workspace.repository.workspaceId,
     checkpointRef: params.checkpointRef,
     assertCurrent: params.assertCurrent,

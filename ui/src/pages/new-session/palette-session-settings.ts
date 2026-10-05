@@ -139,7 +139,7 @@ export class PaletteSessionSettings {
       Boolean(submission.submissionOutcomeUnknown);
     const where = resolveWhereChip({
       environments: place.canWrite() ? gateway.environments : [],
-      cloudProfiles: place.isAdmin() ? gateway.cloudProfiles : [],
+      cloudProfiles: place.canWrite() ? gateway.cloudProfiles : [],
       cloudProfileId: place.cloudProfileId,
       ...place.cloudSelection,
       deviceId: place.deviceId,
@@ -373,15 +373,15 @@ export class PaletteSessionSettings {
                     ><span class="palette-session-settings__chevron">${icons.chevronRight}</span>
                   </button>
                   ${
-                    place.checkoutVisible && !place.remoteRepository
+                    place.checkoutVisible
                       ? html`<button
                           class="palette-session-settings__row palette-session-settings__worktree"
                           type="button"
                           role="switch"
                           aria-checked=${String(place.worktree)}
                           aria-label=${t("newSession.checkoutWorktree")}
-                          title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
-                          ?disabled=${locked || place.remotePlacement}
+                          title=${place.remotePlacement && !place.remoteRepository ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
+                          ?disabled=${locked || (place.remotePlacement && !place.remoteRepository) || (!place.worktree && !place.worktreeAvailable())}
                           @click=${() => {
                             place.selectWorktree(!place.worktree);
                             onChange();

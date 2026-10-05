@@ -107,9 +107,11 @@ export class DraftRepositoryController {
   adoptPreference(preference: NewSessionPreference | null) {
     if (!this.worktreeSelectedByUser) {
       this.worktreeValue = false;
-      // Remote worktree flags describe placement isolation, not a local checkout choice.
       this.preferredWorktreeRestore =
-        preference?.worktree === true && (!preference.where || preference.where.kind === "local");
+        preference?.worktree === true &&
+        (!preference.where ||
+          preference.where.kind === "local" ||
+          Boolean(preference.remoteProject));
     }
     if (!this.baseRefSelectedByUser) {
       const baseRef = preference?.baseRef || undefined;
@@ -176,7 +178,7 @@ export class DraftRepositoryController {
   select(value: boolean): boolean {
     if (
       this.worktreeValue === value ||
-      this.read().remotePlacement ||
+      (this.read().remotePlacement && !this.remoteRepository) ||
       (value && !this.available())
     ) {
       return false;

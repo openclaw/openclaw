@@ -32,7 +32,7 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   visibility?: "draft";
 } & (
     | { worktree: true; repository?: undefined }
-    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: boolean }
   );
 
 type SessionPlacementSubmission = {
@@ -118,7 +118,7 @@ export function parseSessionPlacementCreateParams(
     (record.repository === undefined
       ? record.worktree !== true
       : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
-        record.worktree !== undefined ||
+        (record.worktree !== undefined && typeof record.worktree !== "boolean") ||
         record.projectId !== undefined ||
         record.cwd !== undefined ||
         record.worktreeBaseRef !== undefined ||

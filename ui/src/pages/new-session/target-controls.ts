@@ -82,7 +82,7 @@ export function renderNewSessionPlaceControls({
   const browser = place.browser;
   const { machineClass, os } = place.cloudSelection;
   const nativeTerminal = catalog.isTarget(data);
-  const cloudProfiles = nativeTerminal || !place.isAdmin() ? [] : gateway.cloudProfiles;
+  const cloudProfiles = nativeTerminal || !place.canWrite() ? [] : gateway.cloudProfiles;
   const branches = place.repository.kind === "git" ? place.repository : null;
   const projects = nativeTerminal ? [] : browser.projects;
   const recents = nativeTerminal
@@ -222,6 +222,12 @@ export function renderNewSessionPlaceControls({
             ),
           remoteProjects: browser.projectSearchResult?.projects ?? [],
           selectedRemoteProject: browser.remoteProject,
+          workerRepository:
+            place.remotePlacement &&
+            place.cloudProfileId &&
+            place.cloudProfileId === browser.defaultRemoteProjectProfileId
+              ? (browser.defaultRemoteProject ?? undefined)
+              : undefined,
           projectSearchCredentialMissing: browser.projectSearchResult?.credential === "missing",
           projectSearchLoading: browser.projectSearchLoading,
           projectSearchError: browser.projectSearchError,

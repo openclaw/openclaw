@@ -100,6 +100,10 @@ export function createSessionRepositoryWorkspaceInDatabase(
   const requestedRef =
     input.requestedRef === undefined ? null : bounded(input.requestedRef, "ref", 1024);
   const branch = input.branch === undefined ? undefined : bounded(input.branch, "branch", 256);
+  const branchPrefix = input.branchPrefix ?? "openclaw";
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(branchPrefix)) {
+    throw new Error("Repository branch prefix is invalid");
+  }
   if (!tableExists(db, table)) {
     ensureSessionRepositoryWorkspaceSchema(db);
   }
@@ -128,7 +132,7 @@ export function createSessionRepositoryWorkspaceInDatabase(
         run_setup_script: input.runSetupScript ? 1 : 0,
         base_commit: null,
         base_manifest_hash: null,
-        branch: branch ?? `openclaw/${workspaceId}`,
+        branch: branch ?? `${branchPrefix}/${workspaceId}`,
         checkpoint_ref: null,
         manifest_hash: null,
         revision: 0,
@@ -211,7 +215,42 @@ export function acceptSessionRepositoryWorkspaceCheckpointInDatabase(
     if (!current.baseCommit || !current.baseManifestHash) {
       throw new Error("Repository workspace base has not been captured");
     }
-    return { checkpoint_ref: input.checkpointRef, manifest_hash: input.manifestHash };
+    return {
+      checkpoint_ref: input.checkpointRef,
+      manifest_hash: input.manifestHash,
+      ...(input.branch ? { branch: bounded(input.branch, "branch", 256) } : {}),
+    };
+  });
+}
+
+export function discardSessionRepositoryWorkspaceCheckpointInDatabase(
+  db: DatabaseSync,
+  input: RepositoryWorkspaceMutation,
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  return mutate(db, input, nowMs, () => ({ checkpoint_ref: null, manifest_hash: null }));
+}
+
+export function advanceSessionRepositoryWorkspaceToPublishedHeadInDatabase(
+  db: DatabaseSync,
+  input: RepositoryWorkspaceMutation & { branch: string; headCommit: string },
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  const branch = bounded(input.branch, "branch", 256);
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(input.headCommit)) {
+    throw new Error("Repository workspace published head is invalid");
+  }
+  return mutate(db, input, nowMs, (current) => {
+    if (current.branch !== branch) {
+      throw new Error("Repository workspace publication branch changed");
+    }
+    return {
+      requested_ref: branch,
+      base_commit: input.headCommit,
+      base_manifest_hash: null,
+      checkpoint_ref: null,
+      manifest_hash: null,
+    };
   });
 }
 

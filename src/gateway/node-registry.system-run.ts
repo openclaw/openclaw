@@ -2,7 +2,22 @@ import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../infra/node-commands.js";
 import type { PendingSystemRunEvent } from "./node-registry.invoke-stream.js";
+import { requiresNodeRepositoryReadiness } from "./node-runner-inventory-runtime.js";
+
+export function nodeWorkspaceReadinessRequirement(command: string, params: unknown) {
+  return {
+    repositoryReadiness:
+      command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && requiresNodeRepositoryReadiness(params),
+  };
+}
+
+export function prepareSystemRunInvokePayload(
+  params: import("./node-invoke.types.js").NodeInvokeParams,
+) {
+  return normalizeSystemRunInvokeParams({ command: params.command, params: params.params });
+}
 
 export function resolvePendingSystemRunEvent(params: {
   command: string;

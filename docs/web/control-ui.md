@@ -20,6 +20,8 @@ Changing the serving base path or asset root still requires a Gateway restart.
 
 For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
 
+After a Gateway update, automatic stale-asset recovery probes the canonical app document at the configured mount root. Deep chat and public-session routes retain their GET-only behavior. Recovery preserves the current navigation URL and waits for existing draft and action owners to allow reload.
+
 It speaks **directly to the Gateway WebSocket** on the same port.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.

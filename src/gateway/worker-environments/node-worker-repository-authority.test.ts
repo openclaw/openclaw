@@ -73,6 +73,20 @@ async function repositoryFixture(closeAt?: ClosingBoundary) {
       if (command.seed?.action === "apply") {
         stdout = "missing";
       }
+      if (command.argv.at(-1) === "memo-v1") {
+        stdout = JSON.stringify({
+          version: 1,
+          manifestRef: baseManifestRef,
+          memo: [],
+          metrics: {
+            contentHashCount: 0,
+            contentHashDurationMs: 0,
+            memoHitCount: 0,
+            memoTruncatedCount: 0,
+            totalDurationMs: 0,
+          },
+        });
+      }
       if (command.transfer?.direction === "download") {
         const server = await startNodeWorkspaceTransferTestServer(transfer);
         try {

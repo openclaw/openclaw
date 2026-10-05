@@ -53,7 +53,10 @@ const WorkerBundleHashSchema = Type.String({
 });
 
 const SessionPlacementWorkspaceProperties = {
-  workspaceBaseManifestRef: NonEmptyString,
+  workspaceBaseManifestRef: Type.Union([NonEmptyString, Type.Null()]),
+  repositoryPreparation: Type.Optional(
+    Type.Union([Type.Literal("pending"), Type.Literal("ready"), Type.Literal("failed")]),
+  ),
   remoteWorkspaceDir: NonEmptyString,
 };
 

@@ -500,7 +500,11 @@ describe("worker turn launcher failure recovery", () => {
     await placements.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "e".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
+      baseManifestRef:
+        active.workspaceBaseManifestRef ??
+        (() => {
+          throw new Error("fixture has no accepted base");
+        })(),
       currentManifestRef: `sha256:${"f".repeat(64)}`,
       baseEntries: [
         {

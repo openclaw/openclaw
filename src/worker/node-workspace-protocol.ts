@@ -26,6 +26,19 @@ const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
 export const NODE_WORKSPACE_QUIESCENCE_COMMAND = "openclaw-internal-workspace-quiescence";
+export const NODE_WORKSPACE_REPOSITORY_COMMAND = "openclaw-internal-workspace-repository";
+
+const RepositoryPreparation = workerProtocolObject({
+  status: z.enum(["pending", "ready", "failed"]),
+  workspaceId: z.string().min(1).max(256),
+  revision: z.number().int().nonnegative(),
+  branch: z.string().min(1).max(1024),
+  baseCommit: z
+    .string()
+    .regex(/^[a-f0-9]{40}$/u)
+    .optional(),
+});
+export type NodeWorkerRepositoryPreparationInput = z.infer<typeof RepositoryPreparation>;
 
 const QuiescenceNonce = z.string().regex(/^[a-f0-9]{32}$/u);
 const QuiescenceTimeout = z
@@ -119,6 +132,7 @@ const WorkspaceInput = workerProtocolObject({
   process: WorkspaceProcess.optional(),
   quiescence: WorkspaceQuiescence.optional(),
   nativeProcessOwner: z.literal(true).optional(),
+  repositoryPreparation: RepositoryPreparation.optional(),
 });
 export type NodeWorkerWorkspaceSeedInput = z.infer<typeof SeedInput>;
 export type NodeWorkerWorkspaceExecInput = z.infer<typeof WorkspaceInput>;

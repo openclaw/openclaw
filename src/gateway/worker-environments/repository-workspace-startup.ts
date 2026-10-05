@@ -1,4 +1,10 @@
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import fs from "node:fs/promises";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { hasErrnoCode } from "../../infra/errors.js";
+import {
+  getSessionRepositoryWorkspaceStore,
+  repositoryWorkspaceArtifactsAreEphemeral,
+} from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import {
   stageSessionRepositoryCheckpoint,

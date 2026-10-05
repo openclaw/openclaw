@@ -31,6 +31,12 @@ import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
 type PlacementRow = Selectable<WorkerSessionPlacements>;
+function repositoryPreparation(value: string | null): "pending" | "ready" | "failed" | null {
+  if (value === null || value === "pending" || value === "ready" || value === "failed") {
+    return value;
+  }
+  throw new Error("Invalid repository preparation state");
+}
 type PlacementDatabase = Pick<
   StateDatabase,
   | "worker_environments"
@@ -73,6 +79,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
   const state = parseWorkerSessionPlacementState(row.state);
   const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
   const parsed = {
+    repositoryPreparation: repositoryPreparation(row.repository_preparation),
     environmentId: nullableRequired(row.environment_id, "environment id"),
     activeOwnerEpoch:
       row.active_owner_epoch === null
@@ -227,6 +234,7 @@ export function ensureLocal(
       transition_generation: 0,
       active_owner_epoch: null,
       workspace_base_manifest_ref: null,
+      repository_preparation: null,
       remote_workspace_dir: null,
       worker_bundle_hash: null,
       last_transcript_ack_cursor: null,
@@ -288,6 +296,11 @@ export function transitionValues(
       current.workspaceBaseManifestRef,
       "workspace base manifest ref",
     ),
+    repository_preparation: clearsWorkerMetadata
+      ? null
+      : patch.repositoryPreparation === undefined
+        ? (current.repositoryPreparation ?? null)
+        : patch.repositoryPreparation,
     remote_workspace_dir: text(
       patch.remoteWorkspaceDir,
       current.remoteWorkspaceDir,
@@ -331,6 +344,7 @@ export function transitionValues(
     environmentId,
     activeOwnerEpoch,
     workspaceBaseManifestRef: values.workspace_base_manifest_ref,
+    repositoryPreparation: repositoryPreparation(values.repository_preparation),
     remoteWorkspaceDir: values.remote_workspace_dir,
     workerBundleHash: values.worker_bundle_hash,
     lastTranscriptAckCursor: values.last_transcript_ack_cursor,

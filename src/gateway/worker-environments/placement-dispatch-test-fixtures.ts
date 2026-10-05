@@ -96,15 +96,21 @@ export async function seedActivePlacement(
     ownerEpoch: number;
     executionMode?: WorkerDispatchRequest["executionMode"];
   },
-): Promise<WorkerSessionPlacementRecord> {
+): Promise<
+  Extract<WorkerSessionPlacementRecord, { state: "active" }> & { workspaceBaseManifestRef: string }
+> {
   const current = await seedStartingPlacement(store, params.environmentId, params.executionMode);
-  return store.transition({
+  const active = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "starting",
     to: "active",
     expectedGeneration: current.generation,
     patch: { activeOwnerEpoch: params.ownerEpoch },
   });
+  if (active.state !== "active" || !active.workspaceBaseManifestRef) {
+    throw new Error("Accepted active fixture is unavailable");
+  }
+  return { ...active, workspaceBaseManifestRef: active.workspaceBaseManifestRef };
 }
 
 export function createDispatchEnvironmentFixtures(generation = 1) {

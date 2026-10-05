@@ -10,6 +10,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { assertGatewayLocalCheckoutAllowed } from "../infra/gateway-local-checkout.js";
 import type { GitOperationStarter } from "../infra/git-network-retry.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
@@ -58,6 +59,7 @@ export async function materializeProjectClone(
 ): Promise<ProjectRegistryRecord> {
   const { cfg, gitUrl, name, requiredCommit } = input;
   const { signal, timeoutMs, token, assertCurrent, startRun } = options;
+  assertGatewayLocalCheckoutAllowed(options.env ?? process.env);
   const parsed = parseProjectGitUrl(gitUrl, resolveConfiguredGitHubHost(cfg));
   if (!parsed) {
     throw new ProjectCloneError(
@@ -204,6 +206,7 @@ export async function refreshProjectClone(
   if (project.source !== "cloned") {
     return;
   }
+  assertGatewayLocalCheckoutAllowed(options.env ?? process.env);
   const selectedProject: ProjectRegistryIdentity = {
     id: project.id,
     repoRoot: project.repoRoot,

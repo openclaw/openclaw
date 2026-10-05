@@ -21,6 +21,7 @@ export type RepositoryWorkspaceCreate = RepositoryWorkspaceOwner & {
   requestedRef?: string;
   runSetupScript?: boolean;
   branch?: string;
+  branchPrefix?: string;
 };
 export type RepositoryWorkspaceMutation = { workspaceId: string; expectedRevision: number };
 export type RepositoryWorkspaceBase = RepositoryWorkspaceMutation & {
@@ -30,6 +31,7 @@ export type RepositoryWorkspaceBase = RepositoryWorkspaceMutation & {
 export type RepositoryWorkspaceCheckpoint = RepositoryWorkspaceMutation & {
   checkpointRef: string;
   manifestHash: string;
+  branch?: string;
 };
 
 export type RepositoryWorkspaceMutationResult = {

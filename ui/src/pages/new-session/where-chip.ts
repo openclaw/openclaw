@@ -240,24 +240,22 @@ export function renderWhereChip(params: {
       ),
     )
     .toSorted((a, b) => Number(b.selectable) - Number(a.selectable));
-  const cloudProfiles = params.isAdmin
-    ? params.state.cloudProfiles.filter((profile) =>
-        matches(
-          t("newSession.cloud"),
-          profile.id,
-          profile.providerId,
-          profile.providerDisplayId,
-          resolveCloudProfileIcon(profile).label,
-          profile.trust === "disposable"
-            ? t("newSession.environmentDisposable")
-            : profile.trust === "persistent"
-              ? t("newSession.environmentPersistent")
-              : undefined,
-        ),
-      )
-    : [];
+  const cloudProfiles = params.state.cloudProfiles.filter((profile) =>
+    matches(
+      t("newSession.cloud"),
+      profile.id,
+      profile.providerId,
+      profile.providerDisplayId,
+      resolveCloudProfileIcon(profile).label,
+      profile.trust === "disposable"
+        ? t("newSession.environmentDisposable")
+        : profile.trust === "persistent"
+          ? t("newSession.environmentPersistent")
+          : undefined,
+    ),
+  );
   const showMissingCloud =
-    params.isAdmin &&
+    Boolean(params.state.cloudProfiles.length) &&
     Boolean(params.cloudProfileId) &&
     !params.state.cloudProfiles.some((profile) => profile.id === params.cloudProfileId) &&
     matches(t("newSession.cloud"), params.cloudProfileId);
@@ -273,7 +271,7 @@ export function renderWhereChip(params: {
     );
   const busy = params.submitting || params.pendingPlacement;
   const showDeviceSkeletons = params.catalogLoading && devices.length === 0;
-  const showCloudSkeletons = params.isAdmin && params.catalogLoading && cloudProfiles.length === 0;
+  const showCloudSkeletons = params.catalogLoading && cloudProfiles.length === 0;
   return html`
     <span class="new-session-page__select new-session-page__select--where">
       <button

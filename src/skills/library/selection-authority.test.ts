@@ -5,6 +5,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSandboxSkillRuntimeInputs } from "../../agents/embedded-agent-runner/sandbox-skills.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
@@ -24,6 +25,12 @@ import {
   setUserProfileRole,
 } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveSkillTelemetrySource } from "../loading/source.js";
+import { resolveSkillsPrompt } from "../loading/workspace-skill-prompt.js";
+import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
+import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import { skillLibraryReadOperations } from "./read.kernel.js";
 import { readSkillLibrarySelectionManifests } from "./selection-read.js";
@@ -157,6 +164,121 @@ describe("skill library worker reads and prepared selection authority", () => {
     expect.soft(seeded.blobs).toBe(0);
     expect(measure("list").entryRows).toBe(501);
     expect(seeded.calls).toBe(3);
+  });
+
+  it("delivers library pins without making missing optional discovery mandatory", async () => {
+    const { alice, options, stateDir } = fixture();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const bundledDir = path.join(stateDir, "bundled");
+    const optionalDir = path.join(bundledDir, "clawhub");
+    await fs.promises.mkdir(workspaceDir, { recursive: true });
+    await fs.promises.mkdir(optionalDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(optionalDir, "SKILL.md"),
+      "---\nname: clawhub\ndescription: Optional catalog procedure\n---\n# ClawHub\n",
+    );
+    await saveSkillLibrary(alice, draft(), options);
+    const pins = await seedSkillLibrarySelection(alice, options);
+    expect(pins).toHaveLength(1);
+    const pin = pins[0];
+    if (!pin) {
+      throw new Error("missing seeded library pin");
+    }
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir },
+      async () => {
+        const snapshotParams = {
+          workspaceDir,
+          config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
+          skillFilter: [pin.name, "clawhub"],
+          watch: false,
+        };
+        const { snapshot: selected } = await resolveReusableWorkspaceSkillSnapshot({
+          ...snapshotParams,
+          librarySelections: pins,
+        });
+        expect(selected.resolvedSkills?.map((skill) => skill.name).toSorted()).toEqual(
+          [pin.name, "clawhub"].toSorted(),
+        );
+        const originalPins = structuredClone(selected.librarySelections);
+        await fs.promises.rm(optionalDir, { recursive: true });
+        const delivery = await prepareSkillResourceDelivery(selected, alice.assertCurrent);
+        expect(delivery?.skills.map((skill) => skill.name)).toEqual([pin.name]);
+        if (!delivery) {
+          throw new Error("missing library resource delivery");
+        }
+        const materialized = await materializeSkillResources(delivery, alice.assertCurrent);
+        try {
+          const sourcePin = selected.resolvedSkills?.find((skill) => skill.name === pin.name);
+          if (!sourcePin) {
+            throw new Error("missing resolved library pin");
+          }
+          const readPath = materialized.rewriteReferences(sourcePin.filePath);
+          const sandbox = {
+            enabled: true,
+            skillsWorkspaceDir: materialized.directory,
+            skillUsagePaths: [
+              {
+                skillName: pin.name,
+                skillFile: sourcePin.filePath,
+                skillSource: resolveSkillTelemetrySource(sourcePin),
+                readPath,
+              },
+            ],
+          };
+          const runtime = resolveSandboxSkillRuntimeInputs({
+            sandbox,
+            skillsAnchorWorkspace: workspaceDir,
+            skillsSnapshot: selected,
+          });
+          const entries = await resolveEmbeddedRunSkillEntries({
+            workspaceDir: runtime.skillsWorkspaceDir,
+            skillsSnapshot: runtime.skillsSnapshot,
+            workspaceOnly: runtime.workspaceOnly,
+          });
+          expect(entries.shouldLoadSkillEntries).toBe(false);
+          const prompt = await resolveSkillsPrompt({
+            workspaceDir: runtime.skillsPromptWorkspaceDir,
+            skillsSnapshot: runtime.skillsSnapshot,
+          });
+          expect(prompt).toContain(readPath);
+          expect(prompt).not.toContain("clawhub");
+          expect(prompt).not.toContain(sourcePin.filePath);
+          expect(await fs.promises.readFile(readPath, "utf8")).toBe(content);
+          expect(runtime.skillsSnapshot?.discoverySkills?.map((skill) => skill.name)).toEqual([
+            pin.name,
+          ]);
+          expect(() =>
+            resolveSandboxSkillRuntimeInputs({
+              sandbox: { ...sandbox, skillUsagePaths: [] },
+              skillsAnchorWorkspace: workspaceDir,
+              skillsSnapshot: selected,
+            }),
+          ).toThrow(`Selected skill ${pin.name} was not delivered to the sandbox.`);
+          const detached = await changeSkillLibrarySelection(
+            alice,
+            pins,
+            { sessionKey: "sandbox-session", action: "detach", skillId: pin.skillId },
+            options,
+          );
+          expect(detached).toEqual([]);
+          const replacement = await resolveReusableWorkspaceSkillSnapshot({
+            ...snapshotParams,
+            existingSnapshot: selected,
+            librarySelections: detached,
+          });
+          expect(replacement.shouldRefresh).toBe(true);
+          expect(replacement.snapshot.librarySelections).toEqual([]);
+          expect(
+            replacement.snapshot.resolvedSkills?.some((skill) => skill.name === pin.name),
+          ).toBe(false);
+          expect(replacement.snapshot.prompt).not.toContain(pin.name);
+          expect(selected.librarySelections).toEqual(originalPins);
+        } finally {
+          await materialized.cleanup();
+        }
+      },
+    );
   });
 
   it("keeps solo defaults, counts aliases once, and never creates library tables on discovery", async () => {

@@ -145,7 +145,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     requests.initialSnapshotHydration = hydration;
   }
 
-  protected readonly refreshHistory = () => {
+  protected readonly refreshConversation = () => this.refreshHistory(true);
+
+  protected readonly refreshHistory = (explicit = false) => {
     const state = this.state;
     if (!state) {
       return;
@@ -167,6 +169,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       awaitHistory: true,
       scheduleScroll: false,
       startup,
+      explicit,
     });
   };
 

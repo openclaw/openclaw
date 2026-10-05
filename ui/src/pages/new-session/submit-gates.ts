@@ -95,7 +95,7 @@ export function readNewSessionSubmissionAccess(options: {
   }
   return readSessionMethodAccess(gateway, {
     method: "sessions.dispatch",
-    requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
+    requiredScope: "operator.write",
     params: sessionPlacementDispatchParams({
       key: pendingPlacement.sessionKey,
       agentId: pendingPlacement.agentId || place.agentId,

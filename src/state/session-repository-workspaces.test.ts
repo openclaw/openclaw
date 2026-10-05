@@ -157,6 +157,22 @@ it("captures a lazy store location and retains it across environment changes and
   });
 });
 
+it("captures an explicit ephemeral artifact root without moving durable session state", async () => {
+  await withOpenClawTestState({ scenario: "empty" }, async (state) => {
+    const root = state.path("ephemeral-repository-artifacts");
+    vi.stubEnv("OPENCLAW_REPOSITORY_WORKSPACE_ROOT", root);
+    try {
+      const store = createSessionRepositoryWorkspaceStore();
+      const workspaceId = "00000000-0000-4000-8000-000000000000";
+      expect(store.artifactPath(workspaceId)).toBe(path.join(root, `${workspaceId}.git`));
+      vi.stubEnv("OPENCLAW_REPOSITORY_WORKSPACE_ROOT", state.path("replacement"));
+      expect(store.artifactPath(workspaceId)).toBe(path.join(root, `${workspaceId}.git`));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 it("retries rolled-back first-use pending owner DDL and preserves the committed column on reopen", async () => {
   const { database } = await fixture();
   database.db.exec(
@@ -209,6 +225,13 @@ it("creates one stable logical-session owner without widening replayed setup int
   expect(await store.create({ ...source, runSetupScript: true })).toEqual(initial);
   expect(initial.runSetupScript).toBe(false);
   expect(initial.branch).toBe(`openclaw/${initial.workspaceId}`);
+  expect((await store.create({ ...source, branchPrefix: "clawson" })).branch).toBe(initial.branch);
+  const prefixed = await store.create({
+    ...source,
+    sessionKey: "agent:main:prefixed",
+    branchPrefix: "clawson",
+  });
+  expect(prefixed.branch).toBe(`clawson/${prefixed.workspaceId}`);
   await expect(store.create({ ...source, requestedRef: "other" })).rejects.toThrow(
     "different repository",
   );
@@ -268,11 +291,36 @@ it("publishes committed workspace revisions, rejects stale checkpoints, and reti
     manifestHash: checkpoint.manifestHash,
     revision: bound.revision + 1,
   });
+  const discarded = await store.discardCheckpoint({
+    workspaceId: accepted.workspaceId,
+    expectedRevision: accepted.revision,
+    assertCurrent,
+  });
+  expect(discarded).toMatchObject({
+    baseCommit,
+    baseManifestHash,
+    checkpointRef: null,
+    manifestHash: null,
+  });
+  const published = await store.advanceToPublishedHead({
+    workspaceId: discarded.workspaceId,
+    expectedRevision: discarded.revision,
+    branch: discarded.branch,
+    headCommit: "e".repeat(40),
+    assertCurrent,
+  });
+  expect(published).toMatchObject({
+    requestedRef: discarded.branch,
+    baseCommit: "e".repeat(40),
+    baseManifestHash: null,
+    checkpointRef: null,
+    manifestHash: null,
+  });
   await closeOpenClawStateDatabaseByPathAsync(database.path);
   expect(() => prepared.current()).toThrow();
-  expect(await store.get(initial.workspaceId)).toEqual(accepted);
+  expect(await store.get(initial.workspaceId)).toEqual(published);
   await store.delete({ workspaceId: initial.workspaceId, assertCurrent });
-  expect(changed).toHaveBeenCalledTimes(4);
+  expect(changed).toHaveBeenCalledTimes(6);
   expect(
     changed.mock.calls.every(
       ([change]) => change.agentId === source.agentId && change.sessionKey === source.sessionKey,

@@ -18,6 +18,7 @@ import {
   seedSyncingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { requireAcceptedWorkspaceManifest } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
   advancePlacementFixtureToActive,
@@ -751,7 +752,7 @@ describe("worker placement dispatch", () => {
       {
         version: 1,
         temporaryNonce: "f".repeat(32),
-        baseManifestRef: active.workspaceBaseManifestRef,
+        baseManifestRef: requireAcceptedWorkspaceManifest(active),
         currentManifestRef: harness.reconciledManifestRef,
         baseEntries: [],
         appliedEntries: [],

@@ -104,6 +104,16 @@ function operation<
 }
 
 export const placementTurnClaimOperations = {
+  "placementTurns.completeUnreadyRepositoryTurn": operation(
+    "placementTurns.completeUnreadyRepositoryTurn",
+    (runtime, input: TransitionInput<"completeUnreadyRepositoryTurn">) =>
+      createPlacementTransitionOps(runtime).completeUnreadyRepositoryTurn(input),
+  ),
+  "placementTurns.settleRepository": operation(
+    "placementTurns.settleRepository",
+    (runtime, input: TransitionInput<"settleRepository">) =>
+      createPlacementTransitionOps(runtime).settleRepository(input),
+  ),
   "placementTurns.transition": operation(
     "placementTurns.transition",
     (runtime, input: TransitionInput<"transition">) =>

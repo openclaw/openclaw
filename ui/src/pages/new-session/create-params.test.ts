@@ -76,6 +76,7 @@ describe("buildDraftSessionCreateParams", () => {
       message: "",
       titleSource: "x".repeat(999),
       repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+      worktree: true,
     });
   });
   it("keeps plain chats minimal", () => {

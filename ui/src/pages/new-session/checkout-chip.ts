@@ -368,42 +368,41 @@ export function renderCheckoutChip(params: {
     >
       <div class="new-session-page__picker-root">
         <div class="new-session-page__menu-title">${t("newSession.checkout")}</div>
-        ${
-          params.repository
-            ? nothing
-            : html`${renderSessionMenuItem(
-                {
-                  value: "checkout",
-                  label: t("newSession.checkoutCurrent"),
-                  icon: icons.folder,
-                  sub: params.branches?.headBranch,
-                  checked: !params.worktree,
-                  disabled: params.remotePlacement,
-                  title: params.remotePlacement ? t("newSession.checkoutRemoteLocked") : undefined,
-                  onSelect: () => params.onSelectWorktree(false),
-                  keepOpen: true,
-                },
-                params.submitting,
-              )}
-              ${renderSessionMenuItem(
-                {
-                  value: "worktree",
-                  label: t("newSession.checkoutWorktree"),
-                  icon: icons.gitBranch,
-                  sub: t("newSession.checkoutWorktreeSub"),
-                  checked: params.worktree,
-                  disabled: !params.worktreeAvailable,
-                  title: params.worktreeAvailable
-                    ? undefined
-                    : params.repositoryUnavailable
-                      ? t("newSession.gitCheckUnavailable")
-                      : t("newSession.worktreeUnavailable"),
-                  onSelect: () => params.onSelectWorktree(true),
-                  keepOpen: true,
-                },
-                params.submitting,
-              )} `
-        }
+        ${renderSessionMenuItem(
+          {
+            value: "checkout",
+            label: t("newSession.checkoutCurrent"),
+            icon: icons.folder,
+            sub: params.branches?.headBranch,
+            checked: !params.worktree,
+            disabled: params.remotePlacement && !params.repository,
+            title:
+              params.remotePlacement && !params.repository
+                ? t("newSession.checkoutRemoteLocked")
+                : undefined,
+            onSelect: () => params.onSelectWorktree(false),
+            keepOpen: true,
+          },
+          params.submitting,
+        )}
+        ${renderSessionMenuItem(
+          {
+            value: "worktree",
+            label: t("newSession.checkoutWorktree"),
+            icon: icons.gitBranch,
+            sub: t("newSession.checkoutWorktreeSub"),
+            checked: params.worktree,
+            disabled: !params.worktreeAvailable,
+            title: params.worktreeAvailable
+              ? undefined
+              : params.repositoryUnavailable
+                ? t("newSession.gitCheckUnavailable")
+                : t("newSession.worktreeUnavailable"),
+            onSelect: () => params.onSelectWorktree(true),
+            keepOpen: true,
+          },
+          params.submitting,
+        )}
         ${params.worktree || params.repository ? renderWorktreeFields(params) : nothing}
         ${
           params.remotePlacement

@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
 
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
@@ -8,10 +10,130 @@ import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import * as toast from "../../lib/toast.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { requestCalls } from "./chat-host.test-support.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { createTestChatPane, createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
+import { renderChatComposerNotices } from "./chat-view-notices.ts";
+import * as performanceEvents from "./performance.ts";
+
+it.each(["failed", "healthy", "read-error", "scope-changed"] as const)(
+  "reports a scoped manual Refresh outcome for %s without retrying work",
+  async (outcome) => {
+    const history = createDeferred<Record<string, unknown>>();
+    const request = vi.fn((method: string) =>
+      method === "chat.history" ? history.promise : Promise.resolve({}),
+    );
+    const client = createGatewayBrowserClientFixture({ request });
+    const { pane, state } = createRefreshChatPane(client);
+    const key = "agent:main:dashboard:refresh-worker";
+    state.sessionKey = key;
+    state.chatRunError = {
+      runId: "prior-failed-run",
+      summary: "Runner failed: Ephemeral worker lost; recover from recorded repository branch",
+    };
+    state.chatQueue = [
+      {
+        id: "held-input",
+        text: "Unsubmitted follow-up",
+        createdAt: 1,
+        sendState: "waiting-idle",
+        sendAttempts: 0,
+      },
+    ];
+    state.eventLogBuffer = [];
+    const feedback = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    const container = document.body.appendChild(document.createElement("div"));
+    const completion = createDeferred();
+    const recordEvent = performanceEvents.recordControlUiPerformanceEvent;
+    const eventObserver = vi
+      .spyOn(performanceEvents, "recordControlUiPerformanceEvent")
+      .mockImplementation((...args) => {
+        recordEvent(...args);
+        if (args[1] === "chat.refresh" && args[2].stage === "result") {
+          completion.resolve();
+        }
+      });
+    const update = () => {
+      pane.render();
+      render(renderChatComposerNotices(pane.chatProps!), container);
+    };
+    state.requestUpdate = update;
+    try {
+      update();
+      container.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
+      expect(requestCalls(request, "chat.history")).toHaveLength(1);
+      expect(container.querySelector(".chat-error__refresh")?.getAttribute("aria-busy")).toBe(
+        "true",
+      );
+      expect(container.querySelector(".chat-error__refresh")?.textContent).toContain("Refreshing…");
+      if (outcome === "scope-changed") {
+        state.sessionKey = "agent:main:different";
+      }
+      if (outcome === "read-error") {
+        history.reject(
+          new GatewayRequestError({ code: "UNAVAILABLE", message: "Synthetic read failure" }),
+        );
+      } else {
+        history.resolve({
+          messages: [],
+          sessionInfo: {
+            key,
+            sessionId: "refresh-worker-session",
+            kind: "direct",
+            updatedAt: 1,
+            placement: {
+              state: outcome === "healthy" ? "active" : "failed",
+              generation: 19,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              stateChangedAtMs: 1,
+              recoveryError: "Ephemeral worker lost; recover from recorded repository branch",
+            },
+          },
+        });
+      }
+      await history.promise.catch(() => {});
+      await completion.promise;
+      if (outcome === "scope-changed") {
+        expect(
+          state.eventLogBuffer?.some(
+            (entry) =>
+              isRecord(entry) && isRecord(entry.payload) && entry.payload.stage === "result",
+          ),
+        ).toBe(true);
+        expect(feedback).not.toHaveBeenCalled();
+      } else {
+        expect(feedback).toHaveBeenCalledWith({
+          message:
+            outcome === "failed"
+              ? "Conversation refreshed. The runner is still unavailable."
+              : outcome === "healthy"
+                ? "Conversation refreshed."
+                : "Could not refresh this conversation. Previous state kept.",
+        });
+      }
+      expect(state.chatQueue.map((item) => item.id)).toEqual(["held-input"]);
+      for (const method of [
+        "chat.send",
+        "sessions.recover",
+        "sessions.dispatch",
+        "sessions.reclaim",
+        "sessions.create",
+      ]) {
+        expect(requestCalls(request, method)).toHaveLength(0);
+      }
+    } finally {
+      state.connected = false;
+      history.resolve({ messages: [] });
+      feedback.mockRestore();
+      eventObserver.mockRestore();
+      container.remove();
+    }
+  },
+);
 
 function createCanonicalRoutePane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;

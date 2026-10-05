@@ -178,8 +178,12 @@ describe("Checkout chip state", () => {
       }
 
       if (repository) {
-        expect(container.querySelector('[data-value="checkout"]')).toBeNull();
-        expect(container.querySelector('[data-value="worktree"]')).toBeNull();
+        const current = container.querySelector<HTMLButtonElement>('[data-value="checkout"]')!;
+        const isolated = container.querySelector<HTMLButtonElement>('[data-value="worktree"]')!;
+        expect(current.disabled).toBe(false);
+        current.click();
+        isolated.click();
+        expect(onSelectWorktree.mock.calls).toEqual([[false], [true]]);
         const inputs = container.querySelectorAll<HTMLInputElement>("input");
         expect(inputs).toHaveLength(1);
         inputs[0]!.value = "release/next";

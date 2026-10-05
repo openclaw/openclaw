@@ -38,6 +38,7 @@ type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
     sessionKey?: string;
     onSessionSelect?: (key: string) => void;
     connected?: boolean;
+    loading?: boolean;
     messages: readonly unknown[];
     providerPolicyNotice?: ProviderPolicyNotice | null;
     providerReviewNotice?: TemplateResult | typeof nothing;
@@ -192,9 +193,10 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
         class="btn btn--sm chat-error__refresh"
         type="button"
         ?disabled=${!props.connected}
+        aria-busy=${props.loading ? "true" : nothing}
         @click=${props.onRefresh}
       >
-        ${t(contention ? "chat.checkStatus" : "common.refresh")}
+        ${t(props.loading ? "common.refreshing" : contention ? "chat.checkStatus" : "common.refresh")}
       </button>`
     : nothing;
   return html`

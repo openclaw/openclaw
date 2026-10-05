@@ -352,6 +352,10 @@ describe("session placement recovery", () => {
     { projectId: "openclaw", worktree: true as const },
     { worktree: true as const, worktreeSource: "empty" as const },
     { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
+    ...[false, true].map((worktree) => ({
+      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "main" },
+      worktree,
+    })),
   ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
     const creating = {
       ...recovery,
@@ -401,8 +405,8 @@ describe("session placement recovery", () => {
     { name: "a non-string project id", value: { projectId: 42 } },
     { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },
     {
-      name: "a repository with a Gateway worktree",
-      value: { repository: { url: "https://github.com/openclaw/openclaw.git" } },
+      name: "a repository with an invalid checkout choice",
+      value: { repository: { url: "https://github.com/openclaw/openclaw.git" }, worktree: "new" },
     },
     { name: "an invalid repository", value: { worktree: undefined, repository: { url: "" } } },
     {

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { assertGatewayLocalCheckoutAllowed } from "../../infra/gateway-local-checkout.js";
 import { startGitOperationTiming } from "../../infra/git-operation-timing.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
@@ -28,11 +29,7 @@ import { hasWorktreeUnknownOutcome, WorktreePendingContentionError } from "./err
 import { collectRetiredWorktreeArtifacts } from "./gc-artifacts.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { autoRemovalProtectionReason, type WorktreeCleanupDeferrals } from "./gc-protection.js";
-import {
-  createWorktreeGcRemoval,
-  removeWorktreeIfLossless,
-  type WorktreeCleanupOwnerPolicy,
-} from "./gc-removal.js";
+import { createWorktreeGcRemoval, removeWorktreeIfLossless } from "./gc-removal.js";
 import { createWorktreeGcPrefilter, lockState, unlockWorktree } from "./git-lock.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { commandError, worktreePathExists, runGit } from "./git.js";
@@ -61,7 +58,7 @@ import {
   updateRegistryWorktree,
 } from "./registry.js";
 import { assertExactStateOwner } from "./removal-git.js";
-import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./removal.js";
+import { removeSettledManagedWorktree } from "./removal.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
@@ -88,6 +85,13 @@ import {
   type ResolvedRepository,
   type WorktreeSourceCustody,
 } from "./service-preparation.js";
+import type {
+  ServiceOptions,
+  ManagedWorktreeGcParams,
+  WorktreeMutationGuard,
+  RemoveWorktreeParams,
+  MaterializedRepositoryWorktree,
+} from "./service.types.js";
 import {
   exactStateRetirementSchema,
   type ExactStateRetirement,
@@ -109,7 +113,6 @@ import type {
   ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
   RetireManagedWorktreeSnapshotParams,
-  WorktreeWorkerAuthority,
   WorktreeCreationPublication,
   WorktreeRemovalDeferral,
 } from "./types.js";
@@ -128,34 +131,9 @@ export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 export { WorktreeRepositoryError } from "./errors.js";
 const log = createSubsystemLogger("agents/worktrees");
 
-type ServiceOptions = {
-  env?: NodeJS.ProcessEnv;
-  now?: () => number;
-  getConfig?: () => OpenClawConfig;
-};
-
-type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
-  WorktreeMutationGuard & {
-    checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
-  };
-
-type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
-  workerAuthority?: WorktreeWorkerAuthority;
-};
-
 type WorktreeCreation =
   | ManagedWorktreeCreationOutcome
   | (() => Promise<ManagedWorktreeCreationOutcome>);
-
-type MaterializedRepositoryWorktree = {
-  name: string;
-  worktreePath: string;
-  branch: string;
-  recordBase: string;
-  provisionedBytes: number;
-  setupBytes: number;
-  runRepositorySetup: boolean;
-};
 
 async function claimManagedRemoval(
   env: NodeJS.ProcessEnv,
@@ -216,6 +194,7 @@ export class ManagedWorktreeService {
     params: CreateManagedWorktreeParams,
   ): Promise<ManagedWorktreeCreationOutcome> {
     params.signal?.throwIfAborted();
+    assertGatewayLocalCheckoutAllowed(this.env);
     const repository = await resolveRepository(params.repoRoot);
     return await createWithWorktreeAllocation(
       { ...params, env: this.env },
@@ -247,6 +226,7 @@ export class ManagedWorktreeService {
   private async createEmptyWithOutcomeAccepted(
     params: CreateEmptyManagedWorktreeParams,
   ): Promise<ManagedWorktreeCreationOutcome> {
+    assertGatewayLocalCheckoutAllowed(this.env);
     let sourceRoot: string | undefined;
     try {
       return await createWithWorktreeAllocation(

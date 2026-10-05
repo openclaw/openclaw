@@ -25,6 +25,7 @@ import {
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
   withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
+import { migrateWorkerRepositoryReadiness } from "./openclaw-state-db-repository-readiness-migration.js";
 import {
   classifySqliteTableReadError,
   ensureColumn,
@@ -529,6 +530,10 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateCronDeliveryAttemptState,
     applied: "Recorded cron completion delivery attempt uncertainty (v20)",
+  },
+  {
+    migrate: migrateWorkerRepositoryReadiness,
+    applied: "Separated worker admission from repository readiness (v21)",
   },
 ];
 

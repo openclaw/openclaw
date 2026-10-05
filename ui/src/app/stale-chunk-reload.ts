@@ -12,6 +12,7 @@ import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
+import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
@@ -61,7 +62,13 @@ function probeControlUiDocument(): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DOCUMENT_PROBE_TIMEOUT_MS);
     try {
-      const response = await fetch(window.location.href, {
+      const documentUrl = new URL(window.location.href);
+      const [basePath] = resolveControlUiPaths(documentUrl.pathname);
+      // Deep chat/share routes intentionally deny HEAD; probe the app document.
+      documentUrl.pathname = `${basePath}/`;
+      documentUrl.search = "";
+      documentUrl.hash = "";
+      const response = await fetch(documentUrl.href, {
         method: "HEAD",
         cache: "no-store",
         signal: controller.signal,

@@ -52,6 +52,177 @@ describe("worker session placement store", () => {
     );
   }
 
+  it("admits a conversational turn with repository pending, fences settlement, and retains the exact epoch", async () => {
+    const { seedAttachedPlacementEnvironment } = await import("./placement-test-fixtures.js");
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "repository-worker",
+      sessionId: SESSION.sessionId,
+      ownerEpoch: 7,
+    });
+    let placement = await store.startDispatch({ ...SESSION, executionMode: "remote-exec" });
+    for (const transition of [
+      { to: "provisioning", patch: { environmentId: "repository-worker" } },
+      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: null,
+          remoteWorkspaceDir: "/worker/repository",
+          repositoryPreparation: "pending",
+        },
+      },
+      { to: "active", patch: { activeOwnerEpoch: 7 } },
+    ] as const) {
+      placement = await store.transition({
+        sessionId: SESSION.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        ...transition,
+      });
+    }
+    const claim = await store.claimTurn({
+      ...SESSION,
+      owner: { kind: "local", environmentId: "repository-worker", ownerEpoch: 7 },
+      claimId: "conversation",
+      runId: "conversation",
+    });
+    await store.markWorkspaceResultPending(claim);
+    await expect(
+      store.settleRepository(
+        {
+          ...SESSION,
+          environmentId: "repository-worker",
+          ownerEpoch: 6,
+          expectedGeneration: placement.generation,
+          status: "ready",
+          manifestRef: `sha256:${"b".repeat(64)}`,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("exact active placement");
+    await expect(
+      store.settleRepository(
+        {
+          ...SESSION,
+          sessionKey: "foreign",
+          environmentId: "repository-worker",
+          ownerEpoch: 7,
+          expectedGeneration: placement.generation,
+          status: "ready",
+          manifestRef: `sha256:${"b".repeat(64)}`,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("exact active placement");
+    expect(await store.completeUnreadyRepositoryTurn(claim, () => {})).toBe(true);
+    await store.completeWorkspaceResultAndReleaseTurn(claim);
+    expect(store.get(SESSION.sessionId)).toMatchObject({
+      ...SESSION,
+      state: "active",
+      generation: placement.generation,
+      remoteWorkspaceDir: "/worker/repository",
+      workspaceBaseManifestRef: null,
+      repositoryPreparation: "pending",
+      turnClaim: null,
+    });
+    const next = await store.claimTurn({
+      ...SESSION,
+      owner: { kind: "local", environmentId: "repository-worker", ownerEpoch: 7 },
+      claimId: "fresh",
+      runId: "fresh",
+    });
+    const ready = await store.settleRepository(
+      {
+        ...SESSION,
+        environmentId: "repository-worker",
+        ownerEpoch: 7,
+        expectedGeneration: placement.generation,
+        status: "ready",
+        manifestRef: `sha256:${"b".repeat(64)}`,
+      },
+      () => {},
+    );
+    expect(ready).toMatchObject({
+      ...SESSION,
+      generation: placement.generation,
+      repositoryPreparation: "ready",
+      remoteWorkspaceDir: "/worker/repository",
+    });
+    expect(store.validateTurnClaim(next)).toBe(true);
+    expect(store.validateTurnClaim(claim)).toBe(false);
+    const unavailable = await store.settleRepository(
+      {
+        ...SESSION,
+        environmentId: "repository-worker",
+        ownerEpoch: 7,
+        expectedGeneration: placement.generation,
+        status: "failed",
+      },
+      () => {},
+    );
+    expect(unavailable).toMatchObject({
+      repositoryPreparation: "failed",
+      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+    });
+    await store.releaseTurn(next);
+  });
+
+  it("clears accepted repository readiness atomically when redispatching a failed placement", async () => {
+    const active = await advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...SESSION, executionMode: "remote-exec" },
+      {
+        environmentId: "repository-redispatch",
+        workspaceBaseManifestRef: null,
+        repositoryPreparation: "pending",
+      },
+    );
+    const ready = await store.settleRepository(
+      {
+        ...SESSION,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+        status: "ready",
+        manifestRef: `sha256:${"b".repeat(64)}`,
+      },
+      () => {},
+    );
+    const draining = await store.startDrain({
+      sessionId: SESSION.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: ready.generation,
+    });
+    const reconciling = await store.startReconcile({
+      sessionId: SESSION.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    const failed = await store.fail({
+      sessionId: SESSION.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError: "fixture worker failed",
+    });
+    expect(failed).toMatchObject({
+      repositoryPreparation: "ready",
+      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+    });
+    const requested = await store.startDispatch({ ...SESSION, executionMode: "remote-exec" });
+    expect(requested).toMatchObject({
+      ...SESSION,
+      state: "requested",
+      generation: failed.generation + 1,
+      repositoryPreparation: null,
+      workspaceBaseManifestRef: null,
+      environmentId: null,
+      activeOwnerEpoch: null,
+    });
+    expect(store.get(SESSION.sessionId)).toEqual(requested);
+  });
+
   it("closes local admission before draining the existing local turn", async () => {
     const localClaim = await store.claimTurn({
       ...SESSION,
@@ -687,7 +858,11 @@ describe("worker session placement store", () => {
     await store.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "a".repeat(32),
-      baseManifestRef: draining.workspaceBaseManifestRef,
+      baseManifestRef:
+        draining.workspaceBaseManifestRef ??
+        (() => {
+          throw new Error("fixture has no accepted base");
+        })(),
       currentManifestRef: manifestRef,
       baseEntries: [],
       appliedEntries: [],

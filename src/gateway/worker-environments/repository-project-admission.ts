@@ -251,12 +251,27 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   if (expected && repositoryId !== expected.source.repositoryId) {
     sourceChanged();
   }
-  const requestedRef =
+  let requestedRef =
     request.ref === undefined || request.ref === "HEAD"
       ? typeof metadata.defaultBranch === "string"
         ? `heads/${metadata.defaultBranch}`
         : ""
       : request.ref.replace(/^refs\/(?=heads\/|tags\/)/u, "");
+  const currentBranch = params.repository?.currentBranch === true;
+  if (currentBranch) {
+    if (
+      !requestedRef ||
+      requestedRef === "heads/" ||
+      requestedRef.startsWith("tags/") ||
+      requestedRef.startsWith("refs/") ||
+      GitObject.test(requestedRef)
+    ) {
+      throw new Error(
+        "Current checkout requires a named branch; use New worktree for a tag or commit.",
+      );
+    }
+    requestedRef = requestedRef.startsWith("heads/") ? requestedRef : `heads/${requestedRef}`;
+  }
   if (
     !request.baseCommit &&
     (!requestedRef || requestedRef.length > 1024 || /\p{Cc}/u.test(requestedRef))
@@ -398,6 +413,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   };
   return {
     project,
+    ...(currentBranch ? { branch: requestedRef.slice("heads/".length) } : {}),
     setupRecipe,
     assertCurrent,
     revalidate,

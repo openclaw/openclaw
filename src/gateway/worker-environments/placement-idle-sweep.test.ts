@@ -265,7 +265,11 @@ describe("worker placement idle suspension", () => {
           {
             version: 1,
             temporaryNonce: "a".repeat(32),
-            baseManifestRef: active.workspaceBaseManifestRef,
+            baseManifestRef:
+              active.workspaceBaseManifestRef ??
+              (() => {
+                throw new Error("fixture has no accepted base");
+              })(),
             currentManifestRef: `sha256:${"c".repeat(64)}`,
             baseEntries: [],
             appliedEntries: [],

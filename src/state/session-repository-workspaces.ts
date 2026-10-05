@@ -27,6 +27,7 @@ import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
   SessionRepositoryWorkspaceRecord,
@@ -34,6 +35,26 @@ import type {
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
 
 export type { PreparedRepositoryWorkspace } from "./session-repository-workspaces.publication.js";
+
+export function repositoryWorkspaceArtifactsAreEphemeral(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.OPENCLAW_REPOSITORY_WORKSPACE_EPHEMERAL === "1";
+}
+
+function resolveRepositoryWorkspaceArtifactRoot(
+  databasePath: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  const configured = env.OPENCLAW_REPOSITORY_WORKSPACE_ROOT?.trim();
+  if (configured) {
+    if (!path.isAbsolute(configured) || path.normalize(configured) !== configured) {
+      throw new Error("Repository workspace artifact root must be an absolute normalized path");
+    }
+    return configured;
+  }
+  return path.join(path.dirname(databasePath), "repository-workspaces");
+}
 
 type Guarded<T> = T & { assertCurrent: () => void };
 type Mutation = Exclude<
@@ -95,6 +116,7 @@ export function createSessionRepositoryWorkspaceStore(
 ) {
   const env = options.env && cloneEnvWithPlatformSemantics(options.env);
   const databasePath = resolveDatabasePath({ path: options.path, env });
+  const artifactRoot = resolveRepositoryWorkspaceArtifactRoot(databasePath, env ?? process.env);
   const now = options.now;
   const context = () => captureOpenClawStateWorkerContext({ path: databasePath, env });
   async function mutate(
@@ -239,7 +261,7 @@ export function createSessionRepositoryWorkspaceStore(
     if (!/^[a-f0-9-]{36}$/u.test(workspaceId)) {
       throw new Error("Repository workspace id is invalid");
     }
-    return path.join(path.dirname(databasePath), "repository-workspaces", `${workspaceId}.git`);
+    return path.join(artifactRoot, `${workspaceId}.git`);
   };
   return {
     path: databasePath,
@@ -277,6 +299,7 @@ export function createSessionRepositoryWorkspaceStore(
               requestedRef: input.requestedRef,
               runSetupScript: input.runSetupScript,
               branch: input.branch,
+              branchPrefix: input.branchPrefix,
               nowMs: now?.(),
             },
           },
@@ -311,6 +334,41 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               checkpointRef: input.checkpointRef,
               manifestHash: input.manifestHash,
+              branch: input.branch,
+              nowMs: now?.(),
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    async discardCheckpoint(input: Guarded<RepositoryWorkspaceMutation>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.discardCheckpoint",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              nowMs: now?.(),
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    async advanceToPublishedHead(
+      input: Guarded<RepositoryWorkspaceMutation & { branch: string; headCommit: string }>,
+    ) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.advanceToPublishedHead",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              branch: input.branch,
+              headCommit: input.headCommit,
               nowMs: now?.(),
             },
           },

@@ -19,6 +19,12 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { generateWorktreeSessionTitle } from "../dashboard-session-title.js";
+import { factoryGitHubActorEnvironment } from "../factory-github-actor.js";
+import {
+  factoryGitHubClientProof,
+  factoryGitHubRequestDigest,
+  readFactoryGitHubToken,
+} from "../factory-github-proof.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
@@ -64,7 +70,6 @@ export function resolveSessionRepositoryCreation(
     params.execNode ||
     params.projectId ||
     params.projectGitUrl ||
-    params.worktree !== undefined ||
     params.worktreeBaseRef ||
     params.worktreeName ||
     params.catalogId
@@ -83,17 +88,33 @@ export function resolveSessionRepositoryCreation(
 
 export function prepareSessionRepositoryWorkspace(
   repository: RepositorySource,
-  options: { runSetupScript: boolean; assertCurrent: () => void },
+  options: {
+    runSetupScript: boolean;
+    branchPrefix?: string;
+    assertCurrent: () => void;
+  } & (
+    | { currentCheckout?: false }
+    | {
+        currentCheckout: true;
+        getConfig: GatewayRequestHandlerOptions["context"]["getRuntimeConfig"];
+        client: GatewayRequestHandlerOptions["client"];
+      }
+  ),
 ): PrepareGatewaySessionLifecycle {
-  const { assertCurrent } = options;
   return async (target) => {
     const store = getSessionRepositoryWorkspaceStore();
     const source = captureOpenClawStateWorkerContext({ path: store.path });
-    const assertSourceCurrent = () => {
+    const assertNativeCurrent = () => {
       source.admission.assertCurrent();
-      assertCurrent();
+      options.assertCurrent();
+    };
+    let assertRepositoryCurrent: (() => void) | undefined;
+    const assertCurrent = () => {
+      assertNativeCurrent();
+      assertRepositoryCurrent?.();
     };
     const existing = await store.find({ agentId: target.agentId, sessionKey: target.key });
+    assertCurrent();
     if (
       target.entry &&
       (!target.entry.repositoryWorkspaceId ||
@@ -101,24 +122,87 @@ export function prepareSessionRepositoryWorkspace(
     ) {
       return invalidSessionRequest("repository source requires a new repository session");
     }
-    if (
-      existing &&
-      (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
-    ) {
+    if (existing && existing.url !== repository.url) {
       return invalidSessionRequest("session repository source cannot be changed");
     }
-    assertSourceCurrent();
+    let ref = repository.ref;
+    let branch: string | undefined;
+    if (options.currentCheckout) {
+      const { prepareRepositoryWorkerProjectSource, selectedCurrentCheckoutRef } =
+        await import("../worker-environments/repository-project-admission.js");
+      assertCurrent();
+      const selectedRef = ref && ref !== "HEAD" ? selectedCurrentCheckoutRef(ref) : undefined;
+      // Dispatch verifies an explicit branch before any repository command
+      // executes; omitted or HEAD refs need a remote default-branch lookup here.
+      const selected =
+        selectedRef ??
+        (await prepareRepositoryWorkerProjectSource({
+          namespace: "session-create",
+          repository: {
+            agentId: target.agentId,
+            url: repository.url,
+            ref: ref ?? (existing ? `refs/heads/${existing.branch}` : undefined),
+            currentBranch: true,
+          },
+          getConfig: options.getConfig,
+          assertCurrent: assertNativeCurrent,
+          ...(process.env.FACTORY_AUTH_MODE === "github"
+            ? {
+                readNativeCredential: async (_selectedEnv, admission) => {
+                  assertCurrent();
+                  const env = factoryGitHubActorEnvironment(options.client, target.key);
+                  if (!env) {
+                    throw new Error("Factory GitHub caller authority changed.");
+                  }
+                  return await readFactoryGitHubToken(
+                    env,
+                    factoryGitHubClientProof({
+                      client: options.client,
+                      claim: {
+                        purpose: "session-create-project",
+                        binding: {
+                          kind: "session-create",
+                          agentId: target.agentId,
+                          sessionKey: target.key,
+                          ...(target.entry ? { sessionId: target.entry.sessionId } : {}),
+                          requestDigest: factoryGitHubRequestDigest(repository.url),
+                        },
+                      },
+                      assertCurrent,
+                    }),
+                    admission,
+                  );
+                },
+              }
+            : {}),
+        }));
+      if ("assertCurrent" in selected) {
+        assertRepositoryCurrent = selected.assertCurrent;
+      }
+      assertCurrent();
+      branch = selected.branch;
+      if (!branch) {
+        throw new Error("Current checkout requires a verified repository branch.");
+      }
+      ref = `refs/heads/${branch}`;
+    }
+    if (existing && existing.requestedRef !== (ref ?? null)) {
+      return invalidSessionRequest("session repository source cannot be changed");
+    }
+    assertCurrent();
     const workspace = await store.create({
       agentId: target.agentId,
       sessionKey: target.key,
       url: repository.url,
-      requestedRef: repository.ref,
+      requestedRef: ref,
+      branch,
       runSetupScript: options.runSetupScript,
-      assertCurrent: assertSourceCurrent,
+      branchPrefix: options.branchPrefix,
+      assertCurrent,
     });
     const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
-      runOpenClawStateWorkerOperation(source, () => run(assertSourceCurrent), {
-        assertCurrent: assertSourceCurrent,
+      runOpenClawStateWorkerOperation(source, () => run(assertCurrent), {
+        assertCurrent,
       });
     return ok({
       repositoryWorkspaceId: workspace.workspaceId,
@@ -232,6 +316,7 @@ export async function prepareSessionWorkspace(params: {
     entry,
     runId: clientRunId,
     context,
+    client,
     signal,
     assertCurrent: assertRunOwnership,
     runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
@@ -252,6 +337,7 @@ export async function prepareSessionWorkspaceForRun(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
   runSetupScript: boolean;
+  client?: GatewayRequestHandlerOptions["client"];
 }): Promise<void> {
   const {
     entry,
@@ -261,6 +347,7 @@ export async function prepareSessionWorkspaceForRun(params: {
     sessionKey,
     storePath,
     context,
+    client,
     signal,
   } = params;
   const assertRunOwnership = () => {
@@ -313,7 +400,10 @@ export async function prepareSessionWorkspaceForRun(params: {
       delete entry.pendingWorktree;
       return;
     }
-    const configuredToken = gitUrl ? githubApiToken(process.env, cfg) : undefined;
+    const configuredToken =
+      gitUrl && process.env.FACTORY_AUTH_MODE !== "github"
+        ? githubApiToken(process.env, cfg)
+        : undefined;
     const projectIdentity =
       gitUrl && !configuredToken
         ? await prepareGatewayProjectGitHubIdentity({

@@ -104,6 +104,39 @@ describe("isStaleChunkImportError", () => {
   });
 });
 
+describe("deep-session document reachability", () => {
+  it.each(["", "/gateway"])(
+    "probes the canonical app document before reloading %s chat",
+    async (basePath) => {
+      const replace = stubDocumentNavigation();
+      const url = `https://gateway.example.test${basePath}/chat/main/89a86108?dashboard=expanded#draft`;
+      window.location.href = url;
+      document.documentElement.setAttribute("data-openclaw-control-ui-base-path", basePath);
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        expect(init?.method).toBe("HEAD");
+        return new Response(null, {
+          status:
+            (typeof input === "string" ? input : input instanceof URL ? input.href : input.url) ===
+            `https://gateway.example.test${basePath}/`
+              ? 200
+              : 405,
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      try {
+        await expect(scheduleStaleChunkReload()).resolves.toBe(true);
+        expect(fetchMock).toHaveBeenCalledOnce();
+        const navigation = new URL(replace.mock.calls[0]![0]);
+        expect(navigation.pathname).toBe(`${basePath}/chat/main/89a86108`);
+        expect(navigation.searchParams.get("dashboard")).toBe("expanded");
+        expect(navigation.hash).toBe("#draft");
+      } finally {
+        document.documentElement.removeAttribute("data-openclaw-control-ui-base-path");
+      }
+    },
+  );
+});
+
 describe("document reload ownership", () => {
   it.each(["automatic", "manual"])(
     "checks live owners before and after the %s document probe",

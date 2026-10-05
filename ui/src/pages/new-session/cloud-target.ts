@@ -26,13 +26,16 @@ registerSessionPlacementEnglish();
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   runtimeId?: string,
+  isAdmin = true,
 ): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
   const result = await client.request<EnvironmentsListResult>(
     "environments.list",
     runtimeId ? { runtimeId } : {},
   );
   return {
-    profiles: readDraftCloudProfiles(result?.profiles),
+    profiles: readDraftCloudProfiles(result?.profiles).filter(
+      (profile) => isAdmin || result?.dispatchableProfileIds?.includes(profile.id),
+    ),
     environments: readDraftEnvironments(result?.environments),
   };
 }

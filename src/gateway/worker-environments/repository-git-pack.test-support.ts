@@ -245,6 +245,7 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
   return {
     root,
     source,
+    remote,
     endpoint,
     scratch,
     home,

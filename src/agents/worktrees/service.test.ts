@@ -141,6 +141,16 @@ describe("ManagedWorktreeService", () => {
     });
   });
 
+  it("refuses Gateway worktree creation when checkout custody is remote", async () => {
+    env.OPENCLAW_GATEWAY_CHECKOUTS_DISABLED = "1";
+    await expect(service.create({ repoRoot: repo, name: "remote-task" })).rejects.toThrow(
+      "Gateway repository checkouts are disabled",
+    );
+    await expect(
+      service.createEmpty({ ownerKind: "session", ownerId: "agent:main:remote-task" }),
+    ).rejects.toThrow("Gateway repository checkouts are disabled");
+  });
+
   it("does not remove a worktree owned by another caller", async () => {
     const created = await service.create({
       repoRoot: repo,

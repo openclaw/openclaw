@@ -101,6 +101,15 @@ async function closeServer(server: http.Server) {
 }
 
 describe("project registry", () => {
+  it("refuses a Gateway checkout when repositories belong on workers", async () => {
+    await expect(
+      materializeProjectClone(
+        { cfg: {}, gitUrl: "https://github.com/openclaw/openclaw.git" },
+        { env: { ...process.env, OPENCLAW_GATEWAY_CHECKOUTS_DISABLED: "1" } },
+      ),
+    ).rejects.toThrow("Gateway repository checkouts are disabled");
+  });
+
   it.each([
     "https://github.com/OpenClaw/OpenClaw",
     "git@github.com:OpenClaw/OpenClaw.git",

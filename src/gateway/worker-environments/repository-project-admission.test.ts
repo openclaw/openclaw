@@ -1,17 +1,49 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedGitHubSourceReadIdentity } from "../../agents/github-read-identity.js";
+import { createGitHubReadIdentity } from "../../agents/github-read-identity.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 
 const mocks = vi.hoisted(() => ({
   captureAgentLifecycleBinding: vi.fn(),
   matchesAgentLifecycleBinding: vi.fn(),
   prepareGitHubReadIdentity: vi.fn(),
   prepareGitPack: vi.fn(),
+  phaseLog: vi.fn(),
+  credentialReads: vi.fn(),
+  workspace: vi.fn(),
+  advance: vi.fn(),
+  publication: vi.fn(),
+  release: vi.fn(),
 }));
+vi.mock("../../state/session-repository-workspaces.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/session-repository-workspaces.js")>()),
+  getSessionRepositoryWorkspaceStore: () => ({
+    find: mocks.workspace,
+    advanceToPublishedHead: mocks.advance,
+  }),
+}));
+vi.mock("../github-repository-publication-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../github-repository-publication-store.js")>()),
+  prepareRepositoryGitHubPublicationBranch: mocks.publication,
+}));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...original,
+    createSubsystemLogger: (name: string) => {
+      const log = original.createSubsystemLogger(name);
+      return name === "gateway/repository-admission" || name === "github/api"
+        ? { ...log, info: mocks.phaseLog }
+        : log;
+    },
+  };
+});
 vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
   captureAgentLifecycleBinding: mocks.captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding: mocks.matchesAgentLifecycleBinding,
@@ -32,6 +64,7 @@ vi.mock("./repository-git-pack.js", () => ({
 
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import { prepareRepositoryRefRecovery } from "./repository-recovery-checkpoint.js";
 
 const commit = "a".repeat(40);
 const rootTree = "b".repeat(40);
@@ -68,6 +101,7 @@ describe("repository project admission", () => {
     fetchImpl.mock.calls.map(([input]) => new URL(new Request(input).url).pathname);
 
   beforeEach(() => {
+    mocks.phaseLog.mockReset();
     observedRepositoryUrl = repositoryUrl;
     selection = { source: "system-configured", profileId: `ghp_${"1".repeat(32)}`, accountId: 1 };
     token = "synthetic-github-source-token";
@@ -80,6 +114,7 @@ describe("repository project admission", () => {
     mocks.captureAgentLifecycleBinding.mockReset().mockReturnValue(agent);
     mocks.prepareGitPack.mockReset().mockResolvedValue("/synthetic/source.pack");
     mocks.matchesAgentLifecycleBinding.mockReset().mockReturnValue(true);
+    mocks.credentialReads.mockReset().mockImplementation(async () => token);
     mocks.prepareGitHubReadIdentity.mockReset().mockImplementation(async ({ assertActive }) => {
       assertActive();
       const admittedToken = token;
@@ -89,18 +124,13 @@ describe("repository project admission", () => {
           throw new Error("GitHub identity changed");
         }
       };
-      return {
-        token: admittedToken,
-        selection: structuredClone(selection),
-        cacheScope: "credential-scoped-memory-only",
+      return createGitHubReadIdentity({
+        ...(admittedToken === undefined || selection.source === "anonymous"
+          ? { token: undefined, selection: { source: "anonymous" } as const }
+          : { token: admittedToken, selection: structuredClone(selection) }),
         assertSelected,
-        revalidate: async () => {
-          assertSelected();
-          if (admittedToken !== token) {
-            throw new Error("GitHub credential changed");
-          }
-        },
-      };
+        readToken: mocks.credentialReads,
+      });
     });
     fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(new Request(input).url);
@@ -142,12 +172,232 @@ describe("repository project admission", () => {
       return new Response(JSON.stringify(value));
     });
     vi.stubGlobal("fetch", fetchImpl);
+    mocks.advance.mockReset().mockImplementation(async ({ assertCurrent }) => assertCurrent());
+    mocks.workspace.mockReset();
+    mocks.release.mockReset();
+    mocks.publication.mockReset();
   });
+
+  it.each([
+    "unpublished",
+    "attempted",
+    "deleted",
+    "unknown effect",
+    "external branch",
+    "revoked",
+  ] as const)(
+    "recovers only a proven generated local branch from its original immutable base: %s",
+    async (state) => {
+      const workspaceId = "db9ec53a-081a-4343-8bf8-64810cf01793";
+      const branch = `clawson/${workspaceId}`;
+      const workspace: SessionRepositoryWorkspaceRecord = {
+        workspaceId,
+        agentId: "main",
+        sessionKey: "agent:main:original",
+        url: repositoryUrl,
+        requestedRef: state === "external branch" ? `refs/heads/${branch}` : "main",
+        branch,
+        baseCommit: commit,
+        runSetupScript: false,
+        revision: 4,
+        baseManifestHash: null,
+        checkpointRef: null,
+        manifestHash: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      };
+      mocks.workspace.mockResolvedValue(workspace);
+      mocks.publication.mockResolvedValue({
+        current: () => ({
+          attempted: state === "attempted" || state === "deleted" || state === "unknown effect",
+          unsettled: state === "unknown effect",
+          head: state === "deleted" ? { pushed_head_commit: "e".repeat(40) } : undefined,
+        }),
+        release: mocks.release,
+      });
+      const transport = fetchImpl.getMockImplementation()!;
+      fetchImpl.mockImplementation(async (input, init) => {
+        if (state === "revoked") {
+          selected = false;
+        }
+        if (new Request(input).url.includes("/commits/heads%2Fclawson")) {
+          return new Response(JSON.stringify({ message: "No commit found" }), { status: 422 });
+        }
+        return transport(input, init);
+      });
+      const recovered = prepareRepositoryRefRecovery({
+        profileId: "development",
+        executionMode: "remote-exec",
+        agentId: "main",
+        sessionKey: workspace.sessionKey,
+        sessionId: "original",
+        assertCurrent: () => {},
+      });
+      if (state === "unpublished") {
+        await recovered;
+        expect(mocks.advance).toHaveBeenCalledWith(
+          expect.objectContaining({
+            workspaceId,
+            expectedRevision: 4,
+            branch,
+            headCommit: commit,
+            preserveRequestedRef: true,
+          }),
+        );
+        expect(requestPaths()).toContain(`/repos/acme/project/git/commits/${commit}`);
+        expect(requestPaths().some((value) => value.includes("/commits/heads%2Fclawson"))).toBe(
+          false,
+        );
+      } else {
+        await expect(recovered).rejects.toThrow();
+        expect(mocks.advance).not.toHaveBeenCalled();
+        if (state !== "unknown effect" && state !== "revoked") {
+          expect(requestPaths()).toContain(
+            `/repos/acme/project/commits/heads%2Fclawson%2F${workspaceId}`,
+          );
+        }
+      }
+      expect(workspace).toMatchObject({ revision: 4, branch, baseCommit: commit });
+      expect(mocks.release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["current", "credential changed", "authority revoked", "caller aborted"] as const)(
+    "bounds metadata credential verification while preserving %s refusal",
+    async (outcome) => {
+      const transport = fetchImpl.getMockImplementation()!;
+      const abort = new AbortController();
+      let current = true;
+      fetchImpl.mockImplementation(async (...args) => {
+        const response = await transport(...args);
+        if (fetchImpl.mock.calls.length === 3) {
+          if (outcome === "credential changed") {
+            token = "different-synthetic-credential";
+          }
+          if (outcome === "authority revoked") {
+            current = false;
+          }
+          if (outcome === "caller aborted") {
+            abort.abort();
+          }
+        }
+        return response;
+      });
+      const pendingAdmission = prepareRepositoryWorkerProjectSource({
+        ...initial,
+        signal: abort.signal,
+        assertCurrent: () => {
+          abort.signal.throwIfAborted();
+          if (!current) {
+            throw new Error("Synthetic authority revoked");
+          }
+        },
+      });
+      if (outcome === "current") {
+        const admitted = await pendingAdmission;
+        expect(admitted.project.baseCommit).toBe(commit);
+        expect(fetchImpl.mock.calls.length).toBeGreaterThan(3);
+        expect(mocks.credentialReads).toHaveBeenCalledTimes(2);
+      } else {
+        await expect(pendingAdmission).rejects.toThrow();
+        expect(mocks.prepareGitPack).not.toHaveBeenCalled();
+      }
+    },
+  );
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each(["success", "error"] as const)(
+    "observes identity admission before settlement and preserves its %s outcome",
+    async (status) => {
+      const entered = createDeferred();
+      const settle = createDeferred();
+      const original = mocks.prepareGitHubReadIdentity.getMockImplementation()!;
+      mocks.prepareGitHubReadIdentity.mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await settle.promise;
+        return original(params);
+      });
+      const traceId = "1234567890abcdef1234567890abcdef";
+      const request = runWithDiagnosticTraceContext({ traceId, spanId: "1234567890abcdef" }, () =>
+        prepareRepositoryWorkerProjectSource(initial),
+      );
+      const outcome = request.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await entered.promise;
+      try {
+        expect(mocks.phaseLog).toHaveBeenCalledWith(
+          "repository admission phase",
+          expect.objectContaining({
+            traceId,
+            name: "identityAdmission",
+            status: "entry",
+            operation: "identity",
+            admissionPhase: "prepare",
+          }),
+        );
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally {
+        if (status === "error") {
+          settle.reject(new Error("synthetic-private-credential-diagnostic"));
+        } else {
+          settle.resolve();
+        }
+        await outcome;
+      }
+      const result = await outcome;
+      expect(result.ok).toBe(status === "success");
+      if (result.ok) {
+        expect(result.value.project.baseCommit).toBe(commit);
+        expect(mocks.phaseLog).toHaveBeenCalledWith(
+          "repository admission phase",
+          expect.objectContaining({ traceId, name: "responseBody", status: "success" }),
+        );
+        await runWithDiagnosticTraceContext({ traceId, spanId: "1234567890abcdef" }, () =>
+          result.value.revalidate(),
+        );
+        for (const operation of ["pinned_repository", "repository_confirm"]) {
+          expect(mocks.phaseLog).toHaveBeenCalledWith(
+            "repository admission phase",
+            expect.objectContaining({
+              traceId,
+              operation,
+              admissionPhase: "revalidate",
+              name: "authenticatedRequest",
+              status: "success",
+              durationMs: expect.any(Number),
+            }),
+          );
+        }
+      } else {
+        expect(result.error).toMatchObject({ reason: "unverified" });
+        expect(fetchImpl).not.toHaveBeenCalled();
+      }
+      const records = mocks.phaseLog.mock.calls.map(([, fields]) => fields);
+      const entry = records.find(
+        (record) => record.name === "identityAdmission" && record.status === "entry",
+      );
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          traceId,
+          requestSpanId: entry.requestSpanId,
+          name: "identityAdmission",
+          spanId: entry.spanId,
+          status,
+          durationMs: expect.any(Number),
+        }),
+      );
+      expect(records.every((record) => record.traceId === traceId)).toBe(true);
+      expect(JSON.stringify(records)).not.toMatch(
+        /synthetic-private|synthetic-github-source-token|acme|project\.git/,
+      );
+    },
+  );
 
   it("prepares an authenticated pack for an internal enterprise repository", async () => {
     setRuntimeConfigSnapshot({ gateway: { github: { host: "ghe.example.test" } } });
@@ -345,7 +595,7 @@ describe("repository project admission", () => {
   );
 
   it.each(["agent", "identity", "credential", "caller"] as const)(
-    "rejects %s revocation after successful or refused GraphQL reads without falling back",
+    "rejects %s revocation before accepting GraphQL results or starting a refused-route fallback",
     async (revoked) => {
       const admitted = await prepareRepositoryWorkerProjectSource(initial);
       const originalToken = token;
@@ -377,7 +627,11 @@ describe("repository project admission", () => {
           );
         });
         await expect(admitted.revalidate(controller.signal)).rejects.toThrow();
-        expect(requestPaths()).toEqual(["/graphql"]);
+        expect(requestPaths()).toEqual(
+          revoked === "credential" && status === 200
+            ? ["/graphql", "/repos/acme/project"]
+            : ["/graphql"],
+        );
       }
     },
   );

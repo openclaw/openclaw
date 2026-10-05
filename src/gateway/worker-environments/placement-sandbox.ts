@@ -5,7 +5,7 @@ import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { createSandboxFsBridge } from "../../agents/sandbox/fs-bridge.js";
 import { createPreprovisionedSshSandboxBackend } from "../../agents/sandbox/ssh-backend.js";
 import type { SandboxConfig, SandboxContext } from "../../agents/sandbox/types.js";
-import { resolveSessionSkillResourceMounts } from "../../agents/session-placement-skill-resources.js";
+import { resolveSessionSkillResourceSandboxInputs } from "../../agents/session-placement-skill-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -19,6 +19,7 @@ type PlacementSandboxEnvironmentService = Pick<WorkerEnvironmentService, "get"> 
 type RemoteExecPlacementSandbox = SandboxContext & {
   placementExecutionMode: "remote-exec";
   placementAgentId: string;
+  repositoryPreparationRequired?: true;
 } & (
     | {
         backendId: "node";
@@ -111,11 +112,12 @@ export async function createRemoteExecPlacementSandbox(params: {
     enabled: true,
     placementExecutionMode: "remote-exec" as const,
     placementAgentId: placement.agentId,
+    ...(placement.repositoryPreparation ? { repositoryPreparationRequired: true as const } : {}),
     sessionKey: placement.sessionKey,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.workspaceDir,
     workspaceAccess: "rw" as const,
-    readOnlyResourceMounts: resolveSessionSkillResourceMounts(),
+    ...resolveSessionSkillResourceSandboxInputs(),
     runtimeId,
     runtimeLabel: runtimeId,
     containerName: runtimeId,

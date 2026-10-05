@@ -24,7 +24,6 @@ import {
   type PreparedRepositoryPublicationStatus,
 } from "./github-personal-publication.js";
 import {
-  assertExpectedSharedGitHubPublisher,
   factoryPublicationPreflightCredential,
   prepareCurrentGitHubPublicationIdentity,
   sameGitHubPublicationWorkspace,
@@ -36,7 +35,10 @@ import {
   type GitHubPublicationClaimRequest,
   type GitHubPublicationSessionRequest as SharedRequest,
 } from "./github-publication-coordinator-methods.js";
-import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
+import {
+  assertExpectedSharedGitHubPublisher,
+  GitHubPublicationRequesterUnavailableError,
+} from "./github-publication-failure.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   matchesGitHubPublicationIdentityRow,
@@ -187,8 +189,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
           row = bindRepositoryGitHubPublicationCheckpoint(row, facts, assertExecution);
         }
         assertExecution();
-        return await executeRepositoryGitHubPublication({
-          execution: claimExecution(),
+        const claimedExecution = claimExecution();
+        const result = await executeRepositoryGitHubPublication({
+          execution: claimedExecution,
           snapshot: prepared.snapshot,
           snapshotRoot: prepared.snapshotRoot,
           storePath: loaded.storePath,
@@ -216,8 +219,29 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
                   },
                 },
               }
-            : {}),
+            : process.env.FACTORY_AUTH_MODE === "github"
+              ? {
+                  identity: createFactoryRepositoryPublicationIdentity({
+                    row,
+                    execution: claimedExecution,
+                    assertExecution,
+                    getRequester,
+                  }),
+                }
+              : {}),
         });
+        if (result.status === "published" && result.headCommit) {
+          await advanceRepositoryPublishedHead(row, result.headCommit, (publishedOwner) => {
+            assertReceiptOwner(row, publishedOwner);
+            assertCustody();
+            if (row.owner_profile_id === null) {
+              getRequester().assertCurrent();
+            }
+            context.assertCurrent?.();
+            bound?.assertCurrent();
+          });
+        }
+        return result;
       });
     } catch (error) {
       if (

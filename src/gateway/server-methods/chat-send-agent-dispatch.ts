@@ -1,9 +1,5 @@
 // Detached chat.send dispatch owns runtime delivery, post-dispatch persistence, and terminalization.
 import { performance } from "node:perf_hooks";
-import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -22,8 +18,7 @@ import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
-import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { attachSessionGitHubIssueContext } from "../chat-github-issue-context.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta, broadcastChatError } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -49,6 +44,7 @@ import {
   waitForAcceptedChatSendRetry,
 } from "./chat-send-retry.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+import { registerChatRunToolEventRecipients } from "./chat-send-tool-event-recipients.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import {
@@ -64,7 +60,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     diagnostics,
     admissionStartedAt,
     admission,
-    attachments,
+    attachments: { imageOrder, offloadedRefs },
     client,
     context,
     toolsAllow,
@@ -80,7 +76,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     turn,
     userTurn,
   } = params;
-  const { imageOrder } = attachments;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     activeRunAbort,
@@ -137,7 +132,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     titleReady.resolve(duringTurn);
   };
 
-  const jobSessionBinding = admission.sessionBinding;
   let agentRunStarted = false;
   let replyDispatchRun: ReplyDispatchRun | undefined;
   const isRunCurrent = () =>
@@ -259,17 +253,22 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             (Object.hasOwn(entry, "pendingProjectGitUrl") || entry.pendingWorktree)
           ) {
             phase?.mark("worktree");
-            assertWorkspaceRunOwnership = await prepareSessionWorkspace({
-              admission,
-              client,
-              context,
-              session,
-            });
+            assertWorkspaceRunOwnership = await diagnostics.measure("worktree", () =>
+              prepareSessionWorkspace({
+                admission,
+                client,
+                context,
+                session,
+              }),
+            );
             assertWorkspaceRunOwnership();
           }
           phase?.mark("replyContext");
           if (replyContextFieldsPromise && !preAckReplyContextPromise) {
-            const replyContextFields = await replyContextFieldsPromise;
+            const replyContextFields = await diagnostics.measure(
+              "replyContext",
+              () => replyContextFieldsPromise,
+            );
             assertWorkspaceRunOwnership?.();
             applyChatSendReplyContextFields(ctx, replyContextFields);
             messageInjectionAttempt = await withCurrentUserTurnInput(
@@ -280,7 +279,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           if (messageInjectionAttempt) {
             const injected = await finalizeAcceptedChatSendMessageInjection({
               attempt: messageInjectionAttempt,
-              sessionBinding: jobSessionBinding,
+              sessionBinding,
               context,
               ctx,
               persistUserTurnTranscriptBestEffort: async () => {
@@ -300,12 +299,42 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             }
           }
           phase?.mark("preparation");
-          await turn.prepareSessionCreation();
+          await diagnostics.measure("sessionCreation", () => turn.prepareSessionCreation());
           phase?.mark("authoring");
-          const skillLibraryAuthoring = await prepareSkillLibraryAuthoring();
+          const skillLibraryAuthoring = await diagnostics.measure(
+            "authoring",
+            prepareSkillLibraryAuthoring,
+          );
           admission.assertWorkAdmissionCurrent();
           phase?.mark("preparation");
-          const pluginBoundMedia = await pluginBoundMediaPromise;
+          if (request.turnKind === "main") {
+            await diagnostics.measure("issueContext", () =>
+              attachSessionGitHubIssueContext({
+                agentId,
+                assertActive: () => {
+                  if (!isRunCurrent()) {
+                    throw new Error("GitHub issue context turn changed during preparation");
+                  }
+                  admission.assertWorkAdmissionCurrent();
+                  admission.assertSessionTargetCurrent();
+                  admission.operatorAuthority?.assertCurrent();
+                },
+                config: cfg,
+                context,
+                client,
+                sessionKey,
+                sessionId: sessionBinding.sessionId,
+                lifecycleRevision: entry?.lifecycleRevision,
+                message: request.inboundMessage,
+                repositoryWorkspaceId: entry?.repositoryWorkspaceId,
+                templateContext: ctx,
+              }),
+            );
+          }
+          const pluginBoundMedia = await diagnostics.measure(
+            "managedMedia",
+            () => pluginBoundMediaPromise,
+          );
           assertWorkspaceRunOwnership?.();
           applyChatSendManagedMedia(ctx, pluginBoundMedia, managedMediaApplyMode);
           phase?.mark("replyInitialization");
@@ -393,6 +422,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId, _identity, options, transcriptStart) => {
+                  diagnostics.agentRunStarted(runId);
                   queuedFollowup.onRunStarted(runId);
                   diagnostics.finish();
                   if (titleWaiting) {
@@ -426,36 +456,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     runId !== clientRunId ? { agentRunId: runId } : undefined,
                     dispatchStartedAtMs,
                   );
-                  const connId = typeof client?.connId === "string" ? client.connId : undefined;
-                  const wantsToolEvents = hasGatewayClientCap(
-                    client?.connect?.caps,
-                    GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-                  );
-                  if (connId && wantsToolEvents) {
-                    context.registerToolEventRecipient(runId, connId);
-                    // Register for any other active runs *in the same session* so
-                    // late-joining clients (e.g. page refresh mid-response) receive
-                    // in-progress tool events without leaking cross-session data.
-                    const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
-                      cfg,
-                      sessionKey,
-                    );
-                    const selectedSessionAgentId = selectedAgent.agentId;
-                    for (const [activeRunId, active] of context.chatAbortControllers) {
-                      const sameSelectedAgent =
-                        selectedSessionAgentId !== undefined &&
-                        chatRunBelongsToSelectedAgent({
-                          agentId: active.agentId,
-                          sessionKey: active.sessionKey,
-                          defaultAgentId: compatibilityOwnerAgentId,
-                          selectedAgentId: selectedSessionAgentId,
-                        });
-                      const sameSession = active.sessionKey === sessionKey && sameSelectedAgent;
-                      if (activeRunId !== runId && sameSession) {
-                        context.registerToolEventRecipient(activeRunId, connId);
-                      }
-                    }
-                  }
+                  registerChatRunToolEventRecipients({
+                    client,
+                    context,
+                    session: { cfg, sessionKey, selectedAgent },
+                    runId,
+                  });
                   return options?.completionSource;
                 },
                 onModelSelected: (modelSelection) => {
@@ -490,13 +496,15 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   activeRunAbort.controller.signal,
                 ),
             });
-          const dispatchResult = await (cronCreatorAuthority && externalAuthorityAdmission
-            ? externalAuthorityAdmission.run(
-                cronCreatorAuthority,
-                dispatchWithRetry,
-                activeRunAbort.controller.signal,
-              )
-            : dispatchWithRetry());
+          const dispatchResult = await diagnostics.measure("replyInitialization", () =>
+            cronCreatorAuthority && externalAuthorityAdmission
+              ? externalAuthorityAdmission.run(
+                  cronCreatorAuthority,
+                  dispatchWithRetry,
+                  activeRunAbort.controller.signal,
+                )
+              : dispatchWithRetry(),
+          );
           if (dispatchResult.beforeAgentRunBlocked === true) {
             userTurnRecorder.markBlocked();
           }
@@ -631,7 +639,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             setGatewayDedupeEntry({
               dedupe: context.dedupe,
               key: `chat:${clientRunId}`,
-              session: captureAgentJobSession(jobSessionBinding),
+              session: captureAgentJobSession(sessionBinding),
               entry: {
                 ts: Date.now(),
                 ok: !shouldBroadcastAgentError,
@@ -696,12 +704,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         { sessionKey, agentId, reason: "agent.input.settled" },
         { accessChanged: false },
       );
-      if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
+      if (userTurnRecorder.isBlocked() && offloadedRefs.length > 0) {
         // A blocked turn persists only the redacted block reason — no media
         // markers — so the prepared inbound media stays unreferenced forever
         // (sweep is off by default). Same custody rule as the pre-ACK owner
         // in chat-send-admission.ts: unreferenced staged media is discarded.
-        void discardPreparedInboundMedia(attachments.offloadedRefs);
+        void discardPreparedInboundMedia(offloadedRefs);
       }
     }
   })();

@@ -23,6 +23,7 @@ export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.
 export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
+export const NODE_WORKER_REPOSITORY_READINESS_VERSION = 1;
 
 // Supervisors predating launchToolNames admit this closed vocabulary: OpenClaw 2026.9.6
 // is the only published release that passes the worker-turn launch gate. Retire with the next dialect.
@@ -85,6 +86,7 @@ const WorkerHost = z
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
+      repositoryReadiness: z.literal(NODE_WORKER_REPOSITORY_READINESS_VERSION).optional(),
       launchToolNames: LaunchToolNames.optional(),
       idleRetention: z.literal(true).optional(),
       nativeInference: z.literal(NODE_WORKER_NATIVE_INFERENCE_VERSION).optional(),

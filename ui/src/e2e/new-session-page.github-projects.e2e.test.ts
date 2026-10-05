@@ -36,6 +36,79 @@ const remoteSearchResult = {
 };
 
 suite.define(() => {
+  it.each([false, true])(
+    "dispatches a repository with an explicit worker checkout choice (%s)",
+    async (worktree) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const sessionKey = `agent:main:worker-checkout-${worktree}`;
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+          workspace: WORKSPACE,
+          deferredMethods: ["sessions.dispatch"],
+          featureMethods: [
+            "projects.list",
+            "projects.searchRemote",
+            "sessions.create",
+            "sessions.dispatch",
+            "environments.list",
+          ],
+          methodResponses: {
+            "projects.list": { projects: [] },
+            "projects.searchRemote": remoteSearchResult,
+            "environments.list": {
+              environments: [],
+              profiles: [{ id: "aws", providerId: "crabbox" }],
+            },
+            "sessions.create": { key: sessionKey },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        await page.locator("#new-session-where-trigger").click();
+        await page
+          .locator("wa-popover.new-session-page__where-popover")
+          .getByRole("button", { name: "aws", exact: true })
+          .click();
+        await page.locator("#new-session-project-trigger").click();
+        const projects = page.locator("wa-popover.new-session-page__project-popover");
+        await projects
+          .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
+          .fill("openclaw");
+        await projects.getByRole("button", { name: /openclaw\/openclaw/u }).click();
+        await page.locator("#new-session-checkout-trigger").click();
+        const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+        await checkoutBaseRefInput(checkout).waitFor();
+        await captureProjectUiProof(suite, page, `repository-checkout-menu-${worktree}.png`);
+        const choice = checkout.locator(`[data-value="${worktree ? "worktree" : "checkout"}"]`);
+        expect(await choice.count()).toBe(1);
+        expect(await choice.isEnabled()).toBe(true);
+        await choice.click();
+        await page.locator(`#new-session-checkout-trigger[data-worktree="${worktree}"]`).waitFor();
+        await page.keyboard.press("Escape");
+        await page.locator(".new-session-page__message").fill("Inspect this worker checkout");
+        await page.getByRole("button", { name: "Start session" }).click();
+        const created = await gateway.waitForRequest("sessions.create");
+        expect(created.params).toMatchObject({
+          repository: { url: "https://github.com/openclaw/openclaw.git", ref: "main" },
+          worktree,
+        });
+        for (const local of [
+          "cwd",
+          "projectId",
+          "projectGitUrl",
+          "worktreeBaseRef",
+          "worktreeName",
+        ]) {
+          expect(created.params).not.toHaveProperty(local);
+        }
+        const dispatch = await gateway.waitForRequest("sessions.dispatch");
+        expect(dispatch.params).toMatchObject({ key: sessionKey, profileId: "aws" });
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("projects.add")).toHaveLength(0);
+      });
+    },
+  );
+
   it.each(["saved", "explicit"] as const)(
     "keeps a %s worker selection after late default repository discovery",
     async (source) => {

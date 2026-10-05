@@ -389,12 +389,24 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     sessionCwd = preparedRoot?.value.sessionCwd;
     if (repository) {
-      prepareLifecycle = prepareSessionRepositoryWorkspace(repository, {
+      const repositoryOptions = {
         runSetupScript: clientScopes.includes(ADMIN_SCOPE),
+        branchPrefix: cfg.repositoryBranchPrefix,
         assertCurrent: commitGuard,
-      });
+      };
+      prepareLifecycle = prepareSessionRepositoryWorkspace(
+        repository,
+        p.worktree === false
+          ? {
+              ...repositoryOptions,
+              currentCheckout: true,
+              getConfig: context.getRuntimeConfig,
+              client,
+            }
+          : repositoryOptions,
+      );
     }
-    if (p.worktree === true) {
+    if (p.worktree === true && !repository) {
       // Raw cwd authorization and project-registry selection have already been checked.
       const agentId = explicitlyRequestedAgent.agentId;
       let targetKey = sessionKey;
@@ -528,7 +540,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       execCwd: sessionExecCwd,
       clearExecBinding: !requestedExecNode,
       // A plain New Chat with no cwd must not inherit the prior session cwd.
-      clearSpawnedCwd: p.worktree !== true && !sessionCwd,
+      clearSpawnedCwd: (repository !== undefined || p.worktree !== true) && !sessionCwd,
       fork: p.fork,
       forkFrom: p.forkFrom,
       ...resolveSessionCreateSpawnContext({

@@ -534,7 +534,7 @@ describe("Where chip", () => {
 
   it.each([
     { isAdmin: true, cloudProfileId: "aws", blocked: false, shown: true },
-    { isAdmin: false, cloudProfileId: "aws", blocked: false, shown: false },
+    { isAdmin: false, cloudProfileId: "aws", blocked: false, shown: true },
     { isAdmin: true, cloudProfileId: "", blocked: false, shown: true },
     { isAdmin: true, cloudProfileId: "aws", blocked: true, shown: false },
   ])(
@@ -759,7 +759,7 @@ describe("Where chip", () => {
     expect(state.devices[0]?.facts).toEqual([]);
   });
 
-  it("renders devices for writers while cloud and Connect remain admin-only", () => {
+  it("renders authorized Cloud profiles for writers while Connect remains admin-only", () => {
     const writer = renderPicker(false);
     const autoRow = writer.querySelector('[data-value="auto-device"]');
     expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe("Any available device");
@@ -779,8 +779,13 @@ describe("Where chip", () => {
       "beta-dev",
     );
     expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
-    expect(writer.querySelector('[data-value="cloud:aws"]')).toBeNull();
+    expect(writer.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
     expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
+    expect(
+      renderPicker(false, undefined, { cloudProfiles: [] }).querySelector(
+        '[data-value="cloud:aws"]',
+      ),
+    ).toBeNull();
 
     const admin = renderPicker(true);
     expect(admin.querySelector('[data-value="device:runner"]')).not.toBeNull();

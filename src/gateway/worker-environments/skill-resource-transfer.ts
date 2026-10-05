@@ -5,8 +5,10 @@ import {
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
+import { resolveSkillTelemetrySource } from "../../skills/loading/source.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import type { SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
+import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -217,6 +219,7 @@ export async function transferSkillResources(params: {
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
+    const skillUsagePaths: SkillUsagePath[] = [];
     for (const [index, skill] of delivery.skills.entries()) {
       const bundle = prepareSkillBundle(skill.files);
       for (const file of bundle.files) {
@@ -259,6 +262,15 @@ export async function transferSkillResources(params: {
       const remoteBase = `${params.remoteWorkspaceDir.replaceAll("\\", "/")}/${directory}/${index}`;
       mounts.push({ hostPath: sourceBase, containerPath: remoteBase });
       if (selected) {
+        const sourceReadPath = resolveSkillReadPath(selected);
+        // Preserve the selected alias independently of untrusted SKILL.md frontmatter.
+        skillUsagePaths.push({
+          skillName: selected.name,
+          skillSource: resolveSkillTelemetrySource(selected),
+          skillFile: selected.filePath,
+          ...(sourceReadPath !== selected.filePath ? { sourceReadPath } : {}),
+          readPath: `${remoteBase}/SKILL.md`,
+        });
         selected.filePath = `${remoteBase}/SKILL.md`;
         selected.baseDir = remoteBase;
         // Code Mode reads the same verified instructions even when the node has no filesystem bridge.
@@ -279,6 +291,7 @@ export async function transferSkillResources(params: {
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },
       mounts,
+      skillUsagePaths,
       assertCurrent: check,
       cleanup,
     };

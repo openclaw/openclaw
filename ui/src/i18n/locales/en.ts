@@ -2815,6 +2815,9 @@ export const en: TranslationMap & {
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
     errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
     checkStatus: "Check status",
+    refreshCompleted: "Conversation refreshed.",
+    refreshWorkerFailed: "Conversation refreshed. The runner is still unavailable.",
+    refreshFailed: "Could not refresh this conversation. Previous state kept.",
     details: "Details",
     copyError: "Copy error",
     providerAccessRemoved:

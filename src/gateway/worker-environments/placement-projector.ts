@@ -282,6 +282,9 @@ export function projectWorkerSessionPlacement(
   const workspace = {
     ...bundle,
     workspaceBaseManifestRef: record.workspaceBaseManifestRef,
+    ...(record.repositoryPreparation
+      ? { repositoryPreparation: record.repositoryPreparation }
+      : {}),
     remoteWorkspaceDir: record.remoteWorkspaceDir,
   };
   if (record.state === "starting") {
@@ -294,6 +297,9 @@ export function projectWorkerSessionPlacement(
     activeOwnerEpoch: record.activeOwnerEpoch,
     workerBundleHash: record.workerBundleHash,
     workspaceBaseManifestRef: record.workspaceBaseManifestRef,
+    ...(record.repositoryPreparation
+      ? { repositoryPreparation: record.repositoryPreparation }
+      : {}),
     remoteWorkspaceDir: record.remoteWorkspaceDir,
     ...progress,
     ...(record.state === "active" && inference ? { inference } : {}),

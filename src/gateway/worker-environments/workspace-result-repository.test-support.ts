@@ -225,6 +225,9 @@ export function useRepositoryWorkspaceResultFixture() {
         throw new Error("unexpected local-project preparation");
       },
       assertPreparedIntentCurrent: vi.fn(),
+      revalidatePreparedIntentRepository: async () => {
+        throw new Error("unexpected prepared repository revalidation");
+      },
       getPreparedCandidates: () => [],
       schedulePreparedRefill: vi.fn(),
       bindPreparedWorkspace: async () => {

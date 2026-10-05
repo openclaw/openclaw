@@ -2,9 +2,31 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
+import {
+  renderSessionMenuItem,
+  renderCloudProfileMenuItems,
+  requestPlaceCatalog,
+} from "./cloud-target.ts";
 
 describe("cloud target menu", () => {
+  it("uses the Gateway role projection for a writer's native Cloud choices", async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue({
+        environments: [],
+        profiles: [
+          { id: "teamclaw-azure", providerId: "crabbox" },
+          { id: "other", providerId: "crabbox" },
+        ],
+        dispatchableProfileIds: ["teamclaw-azure"],
+      }),
+    } as never;
+    expect(
+      (await requestPlaceCatalog(client, "codex", false)).profiles.map((profile) => profile.id),
+    ).toEqual(["teamclaw-azure"]);
+    expect(
+      (await requestPlaceCatalog(client, "codex", true)).profiles.map((profile) => profile.id),
+    ).toEqual(["other", "teamclaw-azure"]);
+  });
   it("renders explicit remediation commands on separate lines", () => {
     const container = document.createElement("div");
     render(

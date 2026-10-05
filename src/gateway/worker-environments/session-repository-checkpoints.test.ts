@@ -106,6 +106,7 @@ async function publicationFixture(root: string, content = "working tree\n") {
     baseCommit,
     baseTree: "b".repeat(40),
     workspaceTree: "c".repeat(40),
+    branch: "fix/reviewed-task",
     entries: [{ path: "edit.txt", mode: "100644", sha }],
   });
   await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
@@ -758,7 +759,7 @@ it.each([false, true])(
     const { root, remote, store, workspace, stage } = await fixture();
     await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
     const { sha, input } = await publicationFixture(root);
-    const prepared = await stage("turn-publication", input);
+    const prepared = await stage("turn-publication", { ...input, reconcileBranch: true });
     const sourceArtifact = store.artifactPath(workspace.workspaceId);
     const candidates = (
       await requireWorkspaceResultGit(sourceArtifact, [
@@ -769,6 +770,7 @@ it.each([false, true])(
     ).split("\n");
     expect(candidates).toHaveLength(2);
     await prepared.publish();
+    expect((await store.get(workspace.workspaceId))?.branch).toBe("fix/reviewed-task");
     for (const candidate of candidates) {
       await fs.mkdir(path.dirname(path.join(sourceArtifact, candidate)), { recursive: true });
       await fs.writeFile(path.join(sourceArtifact, `${candidate}.lock`), "another Git writer\n", {
@@ -784,10 +786,23 @@ it.each([false, true])(
       sourceWorkspaceId: workspace.workspaceId,
       agentId: "main",
       sessionKey: "agent:main:fork",
+      branchPrefix: "clawson",
       assertCurrent,
     });
     expect(fork.workspaceId).not.toBe(workspace.workspaceId);
     expect(fork.branch).not.toBe(workspace.branch);
+    expect(fork.branch).toBe(`clawson/${fork.workspaceId}`);
+    expect(
+      (
+        await recoverSessionRepositoryCheckpoint({
+          store,
+          workspaceId: fork.workspaceId,
+          checkpointRef: fork.checkpointRef!,
+          reconcileBranch: true,
+          assertCurrent,
+        })
+      ).branch,
+    ).toBe(fork.branch);
     await store.delete({ workspaceId: workspace.workspaceId, assertCurrent });
     if (corrupt) {
       const artifact = store.artifactPath(fork.workspaceId);

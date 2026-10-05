@@ -7,9 +7,17 @@ read_when:
 title: "Configuration — runtime basics"
 ---
 
-Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `worktreeMaxCount`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
+Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `worktreeMaxCount`, `repositoryBranchPrefix`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
 
 For the full key index and the other top-level config domains, see [Configuration reference](/gateway/configuration-reference).
+
+## `repositoryBranchPrefix`
+
+New remote repository sessions using **New worktree** allocate branches as `<prefix>/<workspace GUID>`. **Current checkout** retains the selected repository branch instead.
+The prefix defaults to `openclaw`; set `repositoryBranchPrefix: "my-agent"` to
+choose another prefix. Use 1–64 letters, digits, underscores, or hyphens, starting
+with a letter or digit. The setting also applies to new repository-session forks.
+Existing session branches and explicit branch selections keep their recorded names.
 
 ## `worktreeRoot`
 

@@ -166,8 +166,8 @@ export class DraftGatewayState {
         if (!canWrite) {
           return { profiles: [], environments: [] };
         }
-        const result = await requestPlaceCatalog(client, runtimeId);
-        return { ...result, profiles: isAdmin ? result.profiles : [] };
+        const result = await requestPlaceCatalog(client, runtimeId, isAdmin);
+        return result;
       },
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();

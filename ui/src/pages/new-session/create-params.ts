@@ -122,7 +122,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),
     ...(projectGitUrl ? { projectGitUrl } : {}),
-    ...(repository ? { repository: { ...repository } } : {}),
+    ...(repository ? { repository: { ...repository }, worktree: draft.worktree } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(emptyWorkspace ? { worktree: true, worktreeSource: "empty" as const } : {}),
     ...(draft.worktree && !repository && !emptyWorkspace

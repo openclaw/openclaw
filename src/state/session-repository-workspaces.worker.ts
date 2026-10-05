@@ -10,6 +10,8 @@ import {
   bindSessionRepositoryWorkspaceBaseInDatabase,
   createSessionRepositoryWorkspaceInDatabase,
   deleteSessionRepositoryWorkspaceInDatabase,
+  discardSessionRepositoryWorkspaceCheckpointInDatabase,
+  advanceSessionRepositoryWorkspaceToPublishedHeadInDatabase,
   findSessionRepositoryWorkspaceInDatabase,
   readSessionRepositoryWorkspaceInDatabase,
 } from "./session-repository-workspaces.kernel.js";
@@ -17,6 +19,7 @@ import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
 } from "./session-repository-workspaces.types.js";
@@ -47,6 +50,24 @@ export const repositoryWorkspaceOperations = {
   ) =>
     mutate(open(), "repositoryWorkspaces.acceptCheckpoint", (db) =>
       acceptSessionRepositoryWorkspaceCheckpointInDatabase(db, input, input.nowMs ?? Date.now()),
+    ),
+  "repositoryWorkspaces.discardCheckpoint": (
+    input: RepositoryWorkspaceMutation & { nowMs?: number },
+    { open },
+  ) =>
+    mutate(open(), "repositoryWorkspaces.discardCheckpoint", (db) =>
+      discardSessionRepositoryWorkspaceCheckpointInDatabase(db, input, input.nowMs ?? Date.now()),
+    ),
+  "repositoryWorkspaces.advanceToPublishedHead": (
+    input: RepositoryWorkspaceMutation & { branch: string; headCommit: string; nowMs?: number },
+    { open },
+  ) =>
+    mutate(open(), "repositoryWorkspaces.advanceToPublishedHead", (db) =>
+      advanceSessionRepositoryWorkspaceToPublishedHeadInDatabase(
+        db,
+        input,
+        input.nowMs ?? Date.now(),
+      ),
     ),
   "repositoryWorkspaces.delete": (
     input: { workspaceId: string; sessionEntryCurrentSource?: SessionEntryCurrentSource },
