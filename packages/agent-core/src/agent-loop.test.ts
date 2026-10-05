@@ -412,6 +412,38 @@ describe("deferred tool hydration", () => {
 });
 
 describe("agentLoop tool termination", () => {
+  it.each(["responseId", "turnId"] as const)(
+    "carries the issuing assistant %s on completions with reused call ids",
+    async (identityField) => {
+      const executed: string[] = [];
+      const responses = [1, 2].map((turn) =>
+        Object.assign(makeAssistantMessage([makeCall("lookup", "lookup_0")]), {
+          responseId: identityField === "responseId" ? ` response-${turn} ` : "  ",
+          turnId: ` turn-${turn} `,
+        }),
+      );
+      const events = await collectEvents(
+        captureTools([makeTool("lookup", executed)], () =>
+          reply(responses.shift() ?? makeAssistantMessage([{ type: "text", text: "done" }])),
+        ),
+      );
+
+      expect(executed).toEqual(["lookup", "lookup"]);
+      expect(events.filter((event) => event.type === "tool_execution_end")).toMatchObject([
+        {
+          toolCallId: "lookup_0",
+          assistantTurnId: identityField === "responseId" ? "response-1" : "turn-1",
+          isError: false,
+        },
+        {
+          toolCallId: "lookup_0",
+          assistantTurnId: identityField === "responseId" ? "response-2" : "turn-2",
+          isError: false,
+        },
+      ]);
+    },
+  );
+
   it.each(["sequential", "parallel"] as const)(
     "pairs every tool lifecycle before rejecting a %s admission commit failure",
     async (toolExecution) => {

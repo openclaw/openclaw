@@ -9,8 +9,8 @@ title: "X / Twitter"
 
 The X plugin turns mentions of your bot account into agent conversations and
 posts the agent's answer as a public reply. Only allowlisted authors can trigger
-a reply by default. Unknown authors are silently dropped; they receive no
-pairing prompt or other response.
+a reply by default. Unknown authors are silently dropped unless you enable guest mode; they receive no
+pairing prompt.
 
 Each X conversation is a group thread identified by its `conversation_id`.
 The agent receives the triggering mention together with available ancestors,
@@ -97,9 +97,103 @@ The Gateway methods `x.allowlist.list`, `x.allowlist.add`, and
 either `987654321` or `x:987654321`; handles belong in the add-by-handle UI, not
 in `allowFrom`.
 
-`groupPolicy: "open"` allows any author whose post reaches the mention feed and
-emits a security warning. Keep `allowlist` for a maintainer bot. `disabled`
-turns off inbound turns. `dmPolicy` accepts only `disabled`.
+`guests.enabled` controls admission outside the maintainer allowlist. The legacy
+`groupPolicy: "open"` setting is unnecessary and cannot bypass the guest switch.
+`groupPolicy: "disabled"` turns off all inbound turns. `dmPolicy` accepts only
+`disabled`.
+
+## Guest mode
+
+Guest mode lets people outside the maintainer allowlist ask repository questions.
+It defaults to off. After configuring the front-door agent below, use the
+**Guest mode** switch on **X replies**, or run:
+
+```bash
+openclaw config set channels.x.guests.enabled true
+openclaw config set channels.x.guests.enabled false
+```
+
+The config watcher reloads the X channel without restarting the Gateway. The UI
+uses the administrator-only `x.guests.set` method and persists the same config.
+For an explicitly configured account, the switch writes that account's override;
+otherwise it writes `channels.x.guests.enabled`. Account overrides inherit the
+other guest settings from the channel root.
+
+Guests receive only the core `read` and `ls` tools, further restricted by the
+agent's normal policy. They cannot edit files, run commands, browse or fetch the
+web, use memory, send messages, inspect other sessions, or create work sessions.
+Subagents, `sessions_spawn`, and `sessions_yield` are currently excluded. The
+optional `guests.tools.allow` can narrow access to `read`, `ls`, or neither;
+`guests.tools.deny` takes precedence. It cannot add stronger tools.
+
+Each guest mention gets a separate channel session and the quoted X thread
+context. It does not reuse a maintainer's conversation history, permission mode,
+root directory, or selected skills. Maintainers keep their existing sessions,
+tools, and work-session replies. Guest replies may cite documentation URLs, but
+OpenClaw never appends a work-session link to a guest reply.
+
+### Repository containment
+
+Tool names alone do not confine filesystem reads. Configure the X front-door
+agent's `cwd` and `workspace` to the OpenClaw clone and enable the core's
+workspace-only file guard. The supported guest setup also disables selected
+skills and Docker/remote sandbox mode: skill directories and sandbox mounts are
+explicit read exceptions in core and can expose files outside that clone.
+For example, add these fields to the agent selected by your X binding:
+
+```json5 validate=false
+{
+  workspace: "/srv/openclaw",
+  cwd: "/srv/openclaw",
+  skills: [],
+  sandbox: { mode: "off" },
+  tools: { fs: { workspaceOnly: true } },
+}
+```
+
+The effective filesystem setting is
+`agents.entries.<agentId>.tools.fs.workspaceOnly`, falling back to
+`tools.fs.workspaceOnly`. The X plugin refuses guests before thread expansion
+when that setting is absent or false, skills are enabled, or sandbox mode is
+active. Channel status reports the required correction as
+`guestModeBlockedReason`; maintainer mentions continue normally.
+
+Core owns path and symlink containment and rejects reads outside the session
+root with `Path escapes sandbox root`. Keep guest channel sessions in their
+initial permissions: do not grant full permission, widen their session root,
+or attach external skills or skill-library pins through operator controls.
+Those operator actions deliberately change core's filesystem authority. Guest
+turns have no tools that can make those changes. Put maintainer work in their
+normal work sessions when it needs a broader filesystem or skills.
+
+### Limits and identity
+
+The default limit is **5 mentions per guest author per UTC day**, independently
+for each bot account. Set `guests.maxMentionsPerAuthorPerDay` from 0 to 1000;
+0 admits no guests. Over-limit mentions are dropped silently before thread
+expansion. Guest thread context defaults to **10 posts**, controlled by
+`guests.threadContextMaxPosts`; maintainers retain `threadContext.maxPosts`.
+The UI and channel status expose `guests.enabled`, `admittedToday`, and
+`rateLimitedToday`. Admitted counts include reserved turns even when a later
+thread lookup or model run fails; retries reuse their reservation.
+
+Usage lives in bounded, worker-backed plugin state (`x.guest-usage`) for two
+days. Capacity exhaustion pauses new guest admissions rather than evicting a
+current author's quota. Recent rejected post IDs are retained to avoid counting
+normal retries twice; unusually late retries after that bounded history can
+increment the rate-limited statistic again. The ingress queue separately
+suppresses completed event replay.
+
+Guest turns incur the same X API and model costs as other turns. Thread reads
+and each reply post are billed normally; a guest citation URL receives X's
+higher URL-containing reply price. The author quota is not a dollar budget.
+
+**Security:** the host determines the tier only from X's numeric `author_id`
+against the effective union of configured and administrator-managed allowlist
+entries. Handles, display names, post text, and model output never grant
+maintainer access. Every agent-facing turn starts with a host-generated sender
+line; all thread posts below it are quoted data. Removing a maintainer from the
+allowlist makes subsequent mentions guests when guest mode is on.
 
 ## Event modes
 
@@ -109,15 +203,32 @@ turns off inbound turns. `dmPolicy` accepts only `disabled`.
 | `stream` | Requests Activity API streaming with the app-only bearer token; falls back to polling when no bearer token is configured. |
 | `poll`   | Polls the mentions endpoint using the user-context token.                                                                 |
 
-The default is `auto`. Streaming ensures a `post.mention.create` subscription
-for the bot, ignores blank keep-alives, and reconnects with
-backoff after a stalled or disconnected stream. Each connection runs a mentions
-backfill from the saved cursor; post IDs deduplicate stream and polling events.
-An Activity API `403` switches to polling and reports:
+The default is `auto`. Streaming lists existing subscriptions with the app-only
+`bearerToken`, then creates a missing `post.mention.create` subscription for the
+bot with its OAuth2 user access token (refreshed from `refreshToken`). Mention
+subscriptions require the user to grant `tweet.read`. The persistent
+`GET /2/activity/stream` connection uses the app-only bearer token, as specified
+by [X's Activity Stream API](https://docs.x.com/x-api/activity/activity-stream).
+
+Streaming reads `post.mention.create` events from X's `data.payload` envelope,
+checks that the post addresses the bot, and ignores other event types and blank
+keep-alives. It reconnects with backoff after a stalled or disconnected stream.
+Each connection runs a mentions backfill with the user token from the saved
+cursor; post IDs deduplicate stream and polling events.
+
+In `auto` mode, any subscription setup failure switches to polling. In `stream`
+mode, subscription HTTP `403` switches to polling; other setup errors stop the
+event source. A stream HTTP `401` or `403` switches either mode to polling. The
+channel status `message` includes the failed endpoint, HTTP status, and first X
+error message when available, with credentials redacted. For example:
 
 ```text
-activity API unavailable for this app; polling
+X API /2/activity/subscriptions failed (HTTP 400): OauthAccessTokenRequired: OAuth user access token is required for this event type; polling
 ```
+
+This message explains why Activity could not start; polling remains active.
+Unreadable error bodies still report the HTTP status. Network and token-refresh
+failures report their client error without provider response details.
 
 Polling defaults to 60 seconds; `events.pollSeconds` cannot be less than 15.
 Inbound posts are durably queued before the cursor advances. Completed event
@@ -139,7 +250,7 @@ per post; each URL counts as 23 characters. The last chunk receives
 `replySignature`, whose default is `🤖 automated reply`. Set it to an
 empty string to disable the signature.
 
-When the agent starts a visible work session, its first session URL is appended
+When a maintainer turn starts a visible work session, its first session URL is appended
 to the reply unless the text already contains that URL. This is a public link
 in a public reply and uses X's URL-containing reply price.
 
@@ -177,25 +288,30 @@ configured usernames alone cannot authorize a reply.
 
 These fields work at `channels.x` and on individual account entries unless noted.
 
-| Field                    | Default              | Purpose                                                                 |
-| ------------------------ | -------------------- | ----------------------------------------------------------------------- |
-| `enabled`                | `true`               | Enables the channel or account.                                         |
-| `name`                   | Unset                | Optional account display name.                                          |
-| `userId`                 | Required             | Numeric user ID of the bot account.                                     |
-| `username`               | Required             | Bot username without `@`.                                               |
-| `clientId`               | Required             | OAuth2 confidential application client ID.                              |
-| `clientSecret`           | Required             | Application secret; supports SecretRef.                                 |
-| `refreshToken`           | Required             | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
-| `bearerToken`            | Unset                | App-only Activity API bearer token; supports SecretRef.                 |
-| `events.mode`            | `auto`               | `auto`, `stream`, or `poll`.                                            |
-| `events.pollSeconds`     | `60`                 | Mentions polling interval, minimum 15 seconds.                          |
-| `allowFrom`              | `[]`                 | Numeric author IDs, optionally prefixed with `x:`.                      |
-| `groupPolicy`            | `allowlist`          | `allowlist`, `open`, or `disabled`.                                     |
-| `dmPolicy`               | `disabled`           | Only `disabled` is accepted.                                            |
-| `threadContext.maxPosts` | `50`                 | Maximum posts included in agent thread context, from 2 to 100.          |
-| `replySignature`         | `🤖 automated reply` | Added to the last reply chunk; up to 140 characters, empty disables it. |
-| `accounts`               | Unset                | Named account overrides; channel root only.                             |
-| `defaultAccount`         | `default`            | Account selected when none is specified; channel root only.             |
+| Field                               | Default              | Purpose                                                                 |
+| ----------------------------------- | -------------------- | ----------------------------------------------------------------------- |
+| `enabled`                           | `true`               | Enables the channel or account.                                         |
+| `name`                              | Unset                | Optional account display name.                                          |
+| `userId`                            | Required             | Numeric user ID of the bot account.                                     |
+| `username`                          | Required             | Bot username without `@`.                                               |
+| `clientId`                          | Required             | OAuth2 confidential application client ID.                              |
+| `clientSecret`                      | Required             | Application secret; supports SecretRef.                                 |
+| `refreshToken`                      | Required             | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
+| `bearerToken`                       | Unset                | App-only Activity API bearer token; supports SecretRef.                 |
+| `events.mode`                       | `auto`               | `auto`, `stream`, or `poll`.                                            |
+| `events.pollSeconds`                | `60`                 | Mentions polling interval, minimum 15 seconds.                          |
+| `allowFrom`                         | `[]`                 | Numeric author IDs, optionally prefixed with `x:`.                      |
+| `groupPolicy`                       | `allowlist`          | `allowlist`, `open`, or `disabled`.                                     |
+| `dmPolicy`                          | `disabled`           | Only `disabled` is accepted.                                            |
+| `threadContext.maxPosts`            | `50`                 | Maximum posts included in agent thread context, from 2 to 100.          |
+| `guests.enabled`                    | `false`              | Enables repository-only answers for non-allowlisted authors.            |
+| `guests.maxMentionsPerAuthorPerDay` | `5`                  | Per-author, per-account UTC-day limit, from 0 to 1000.                  |
+| `guests.threadContextMaxPosts`      | `10`                 | Guest thread context cap, from 2 to 100 posts.                          |
+| `guests.tools.allow`                | `["read", "ls"]`     | Narrows the read-only guest tools; an empty array disables all tools.   |
+| `guests.tools.deny`                 | `[]`                 | Further denies guest tools; deny wins.                                  |
+| `replySignature`                    | `🤖 automated reply` | Added to the last reply chunk; up to 140 characters, empty disables it. |
+| `accounts`                          | Unset                | Named account overrides; channel root only.                             |
+| `defaultAccount`                    | `default`            | Account selected when none is specified; channel root only.             |
 
 ## Troubleshooting
 
@@ -204,9 +320,11 @@ The dropped-mention counter and last dropped author explain intentional silence.
 There is no pairing flow. An empty allowlist blocks all authors under the
 default policy.
 
-**Streaming falls back:** the Activity API is unavailable for the app, or no
-app-only bearer token was supplied in `auto` or `stream` mode. Polling remains operational;
-check the reported event mode, stream connection/backoff, last event, and cursor.
+**Streaming falls back:** check the status message for the Activity endpoint,
+HTTP status, and X error detail. Verify the app bearer and the bot's OAuth2
+grant, including `tweet.read`. Without an app bearer, `auto` and `stream` use
+polling. Check the reported event mode, stream connection/backoff, last event,
+and cursor.
 
 **Token refresh fails:** check the client ID, client secret, refresh token, and
 granted OAuth2 scopes. Status reports refresh state without exposing secrets.

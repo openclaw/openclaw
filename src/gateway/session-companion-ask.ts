@@ -15,6 +15,7 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
@@ -455,10 +456,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
     const assertSourceCurrent = request.operatorAuthority
-      ? () => {
-          request.assertSourceCurrent?.();
-          request.operatorAuthority?.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([
+          request.assertSourceCurrent,
+          request.operatorAuthority.assertCurrent,
+        ])
       : request.assertSourceCurrent;
     assertSourceCurrent?.();
     const requestSignal = request.operatorAuthority?.signal

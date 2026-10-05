@@ -41,15 +41,11 @@ import {
   withLeasedCodexTestClient,
 } from "./test-support.js";
 import {
-  buildDeveloperInstructions,
-  buildTurnStartParams,
-  buildThreadResumeParams,
-  buildThreadStartParams,
   areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
-  startOrResumeThread as startOrResumeThreadImpl,
-} from "./thread-lifecycle.js";
+} from "./thread-fingerprints.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createLeasedCodexLifecycleHarness,
   createThreadRequestAppServerOptions as createAppServerOptions,
@@ -57,7 +53,13 @@ import {
   disabledMcpServerStatus,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
-import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
+import { buildDeveloperInstructions } from "./thread-prompt.js";
+import {
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
+  buildThreadResumeParams,
+  buildThreadStartParams,
+} from "./thread-requests.js";
+import { buildTurnStartParams } from "./turn-params.js";
 
 it("uses direct OpenClaw functions and hosted web search for subscription sharing", () => {
   const params = createAttemptParams({ provider: "openai", authProfileId: "openai:sharing" });
@@ -478,7 +480,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -1096,7 +1097,6 @@ describe("Codex app-server turn params", () => {
         approvalsReviewer: "guardian_subagent" as const,
         sandbox: "danger-full-access" as const,
         connectionClass: "local-loopback" as const,
-        remoteAppsSubstrate: "preconfigured" as const,
         serviceTier: "flex" as const,
       };
 
@@ -3163,61 +3163,56 @@ describe("Codex app-server thread lifecycle timing", () => {
   installLifecycleHooks();
 
   it.each([
-    { action: "resumed", duration: 9, threshold: 1_000, trace: true },
-    { action: "started", duration: 25, threshold: 10, trace: false },
-  ])(
-    "reports a $action request with trace=$trace",
-    async ({ action, duration, threshold, trace }) => {
-      let nowMs = 0;
-      const log = createTimingLogger(trace);
-      const threadId = trace ? "thread-existing" : "thread-slow";
-      const respond = createLifecycleRequest(async (method: string) => {
-        if (method === "thread/start" || (trace && method === "thread/resume")) {
-          if (method === (trace ? "thread/resume" : "thread/start")) {
-            nowMs += duration;
-          }
-          return threadStartResult(threadId);
+    { action: "resumed", duration: 9, trace: true },
+    { action: "started", duration: 10_000, trace: false },
+  ])("reports a $action request with trace=$trace", async ({ action, duration, trace }) => {
+    let nowMs = 0;
+    const log = createTimingLogger(trace);
+    const threadId = trace ? "thread-existing" : "thread-slow";
+    const respond = createLifecycleRequest(async (method: string) => {
+      if (method === "thread/start" || (trace && method === "thread/resume")) {
+        if (method === (trace ? "thread/resume" : "thread/start")) {
+          nowMs += duration;
         }
-        throw new Error(`unexpected method: ${method}`);
-      });
-      const fixture = trace
-        ? await createLeasedCodexLifecycleHarness({
-            agentDir: path.join(tempDir, "agent"),
-            respond,
-          })
-        : undefined;
-      const common = {
-        client: fixture?.client ?? ({ request: respond } as never),
-        ...lifecycleOptions(createThreadLifecycleParams()),
-        ...(trace ? { signal: new AbortController().signal } : {}),
-      };
-      if (fixture) {
-        await startOrResumeThread({
-          ...common,
-          timing: { enabled: true, now: () => nowMs, log: createTimingLogger(false) },
-        });
-        await fixture.endTurn(threadId);
+        return threadStartResult(threadId);
       }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = trace
+      ? await createLeasedCodexLifecycleHarness({
+          agentDir: path.join(tempDir, "agent"),
+          respond,
+        })
+      : undefined;
+    const common = {
+      client: fixture?.client ?? ({ request: respond } as never),
+      ...lifecycleOptions(createThreadLifecycleParams()),
+      ...(trace ? { signal: new AbortController().signal } : {}),
+    };
+    if (fixture) {
       await startOrResumeThread({
         ...common,
-        timing: {
-          enabled: trace,
-          now: () => nowMs,
-          log,
-          totalThresholdMs: threshold,
-          stageThresholdMs: threshold,
-        },
+        timing: { enabled: true, now: () => nowMs, log: createTimingLogger(false) },
       });
-      const message = expectSingleLogMessage(log, trace ? "trace" : "warn");
-      if (!trace) {
-        expect(log.trace).not.toHaveBeenCalled();
-      }
-      expect(message).toContain(`action=${action}`);
-      expect(message).toContain(
-        `thread-${trace ? "resume" : "start"}-request:${duration}ms@${duration}ms`,
-      );
-    },
-  );
+      await fixture.endTurn(threadId);
+    }
+    await startOrResumeThread({
+      ...common,
+      timing: {
+        enabled: trace,
+        now: () => nowMs,
+        log,
+      },
+    });
+    const message = expectSingleLogMessage(log, trace ? "trace" : "warn");
+    if (!trace) {
+      expect(log.trace).not.toHaveBeenCalled();
+    }
+    expect(message).toContain(`action=${action}`);
+    expect(message).toContain(
+      `thread-${trace ? "resume" : "start"}-request:${duration}ms@${duration}ms`,
+    );
+  });
 });
 
 describe("resolveCodexAppServerReasoningEffort (#71946)", () => {

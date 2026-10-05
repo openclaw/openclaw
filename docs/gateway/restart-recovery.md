@@ -163,10 +163,9 @@ When launchd drives the stop, macOS uses the running job's own `ExitTimeOut`, ca
 by the launcher's own stop timer when a launcher is in the path, and Linux units use
 their own stop timeout; both are described in the deadline sections below.
 This requires a Gateway started with the updated launcher: replacing files cannot
-change a launcher that is already running. The stop deadlines below are the
-exception: the serving Gateway derives the launcher's reap timer rather than being
-told it, precisely so a Gateway started by an already-running older launcher still
-bounds itself correctly.
+change a launcher that is already running. On macOS, a marked launcher parent
+keeps a conservative 19-second child deadline because its existing markers do not
+identify whether it loaded the old or new stop policy.
 
 For these managed restarts, if the CLI cannot verify the service command, serving
 owner, or restart-intent recording, it refuses the restart before signaling with
@@ -346,9 +345,22 @@ new work and wait for active turns and background tasks to settle. The rest is
 reserved for final writes and service cleanup (up to 10 seconds). The Gateway
 logs the chosen source, drain, shutdown deadline, reserve, and exit margin.
 
-For the installed 20-second LaunchAgent job, the nominal split is 5 seconds of
-drain, 10 seconds for cleanup, and 5 seconds before launchd's deadline. Time
-spent inspecting the job is debited. For a shorter custom deadline the exit
+New LaunchAgent plists request `ExitTimeOut=330`, derived from the same service
+stop budget as Linux's `TimeoutStopSec=330`. With that effective deadline, the
+nominal split is 315 seconds of drain, 10 seconds for cleanup, and 5 seconds before
+the supervisor deadline. `openclaw doctor --fix` backs up and migrates the retired
+installer value of 20 seconds to 330 only when the definition otherwise matches
+the retired generated template. A 20-second timeout in a customized definition
+is ambiguous: Doctor reports that it is below the drain budget and preserves it.
+An installer comment alone does not authorize replacing an operator's policy.
+Other explicit values, including 600 and
+unlimited (`0`), are reported and preserved; short custom values receive a warning.
+Update finalization uses the same backed-up service reconciliation. The first
+stop still obeys the previously loaded job's deadline until the replacement is
+bootstrapped.
+
+Time spent inspecting the job is debited. A legacy 20-second job nominally leaves
+5 seconds of drain, 10 seconds for cleanup, and a 5-second exit margin. For a shorter custom deadline the exit
 margin is at most a quarter, and the cleanup reserve gives way to leave active
 work up to 5 seconds of drain (at most half of the remaining shutdown budget
 when it is very short). For example, a 5-second job nominally leaves 1.875
@@ -361,7 +373,10 @@ consume up to three 2-second calls; a very slow inspection can leave no drain.
 If a Node-recovery or compile-cache launcher is the job's PID, its own child
 reap timer may be shorter than launchd's deadline. The Gateway caps its budget
 at that timer only when its respawn markers establish that this launcher started
-it; an unrelated parent does not shorten the budget.
+it; an unrelated parent does not shorten the budget. New launchers use the shared
+330-second service budget, but the child conservatively retains the older
+19-second launcher cap until a parent runtime-generation contract can distinguish
+already-running launchers. Raising the plist value alone does not remove that cap.
 
 A direct signal to a marked launcher can start its own timer while launchd
 still reports `running`. The Gateway cannot distinguish that forwarded signal
@@ -599,6 +614,13 @@ other stores continue recovery. `openclaw status` and `openclaw doctor` show
 outstanding startup recovery failures from the running Gateway; the warning clears
 when the store scan succeeds.
 
+A restart abort preserves the interrupted turn's recovery claim even when command
+cleanup finishes before shutdown marking. On upgrade, startup also repairs an
+internal chat turn left running and aborted with a dead writer, a missing claim,
+and an incorrect terminal marker for that writer. It restores that turn's claim
+only when no live owner or recorded terminal delivery remains, then uses the normal
+transcript replay checks to resume. Earlier completed turns keep their receipts.
+
 If an older Gateway left a dead writer and an unfinished recovery cycle in a
 running, failed, or statusless session, `sessions.recover` reconciles that writer
 and starts a continuation in the same session. A new Control UI message also reconciles this
@@ -771,6 +793,13 @@ An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
 
+Startup skips superseded requester completion claims and logs the affected run.
+Those historical rows do not block current children in the same requester turn
+or recovery of other subagents. Saved yield intent is evaluated from the same
+current children used for the transfer. The existing cleanup owner settles historical rows;
+interrupted current children still report their restart outcome to the parent.
+Turns with only superseded children need no requester settlement.
+
 If a parent yielded while waiting for children, its saved batch collects both
 completed and interrupted results and wakes the parent once the batch settles.
 A parent already working on those results resumes through ordinary main-session
@@ -905,7 +934,9 @@ channels.start --params '{"channel":"<id>"}'`
   `openclaw_session_recovery_age_seconds`.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
-  subsystems.
+  subsystems. A startup scan that finds interrupted candidates but starts none
+  still logs one summary, including bounded skip counts by reason such as
+  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

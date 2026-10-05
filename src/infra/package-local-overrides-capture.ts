@@ -230,7 +230,6 @@ export async function captureLocalPackageOverrides(params: {
         JSON.stringify({ packageRoot, changes }, null, 2) + "\n",
       );
       return {
-        packageRoot,
         recoveryDir: snapshotDir,
         changes,
         result: {
@@ -343,7 +342,6 @@ export async function captureLocalPackageOverrides(params: {
       "utf8",
     );
     return {
-      packageRoot: params.recordedPackageRoot ?? params.packageRoot,
       recoveryDir: finalRecoveryDir,
       changes,
       result,

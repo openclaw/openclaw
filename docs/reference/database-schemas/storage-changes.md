@@ -2267,8 +2267,8 @@ contracts, and update behavior are unchanged; no migration is required.
 The accepted trajectory retention design keeps canonical runtime events in the
 per-agent store and replaces its derived `idx_agent_trajectory_runtime_run`
 index with `(session_id, run_id, created_at, octet_length(event_json))`. The
-existing worker-owned append transaction aggregates directly from that covering
-index. The materialized staging query is removed; no summary table, trigger,
+retention read worker aggregates directly from that covering index, outside the
+append transaction. No materialized event-size staging, summary table, trigger,
 counter, second index, or new persistence owner is introduced.
 
 Writable database admission atomically repairs the same-name index through the
@@ -2282,9 +2282,14 @@ Strict read-only validation may require that writable repair before reopening.
 
 Retention keeps the 14-day age rule, whole-run eviction, current-session exemption,
 512 MiB default global budget, JSONL separator accounting, and existing database
-encoding semantics. Per-session trimming still measures UTF-8 bytes. First-use
-and hourly handle-local sweeps, postcommit cadence publication, atomic append
-outcomes, permissions, and durability are unchanged.
+encoding semantics. Per-session trimming still measures UTF-8 bytes. Appends
+serialize events before writer admission and commit independently of global
+cleanup. First-use and hourly cleanup uses one lifecycle-owned reader and deletion
+transactions bounded to 100 runs and 10 MiB, allowing one oversized complete run.
+Each deletion rechecks the captured native revision; concurrent changes defer
+remaining cleanup until a later append. Cadence advances only after the sweep
+completes. Nested synchronous appends defer cleanup until a later independent
+append. Permissions and durability are unchanged.
 
 A synthetic 241,697-event fixture measured the aggregate at 31–40 ms versus
 407–453 ms with the staged query, with all 3,836 groups equal. The replacement
@@ -2292,9 +2297,9 @@ index occupied 7,712,768 bytes versus 6,598,656 bytes for the old partial index,
 about 1.06 MiB more. A warm 320-row insert/rollback probe was roughly 0.7 ms for
 both shapes, excluding commit, cache eviction, and checkpoint amplification.
 These are component measurements, not production throughput or end-to-end hold
-guarantees. Regression proof captures the append's aggregate plan, requires
-covering access without temporary grouping or table-body reads, compares grouped
-results for null and named runs, and opens a populated old-index fixture through
+guarantees. Regression proof captures the retention read's aggregate plan, requires
+covering access without temporary grouping or table-body reads, asserts retained
+events for null and named runs, and opens a populated old-index fixture through
 canonical admission without changing its version or rows.
 
 ## Review checkpoint for material changes

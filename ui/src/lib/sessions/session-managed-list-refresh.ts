@@ -229,6 +229,7 @@ export function createSessionManagedListRefresh(
           entry.connectionEpoch = scope.epoch;
           entry.startupRetryAttempt = 0;
           const snapshot: SessionListSnapshot = {
+            readSucceeded: true,
             result: decorated,
             agentId: agentId ?? null,
             loading: false,
@@ -271,6 +272,7 @@ export function createSessionManagedListRefresh(
               ...entry.snapshot,
               loading: false,
               error: awaitingGateway ? null : formatUiError(error),
+              readSucceeded: false,
               startupPending,
             },
             isCurrent,

@@ -323,14 +323,13 @@ async function batchViaPlaywright(
       : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
   let mainFrameNavigations = 0;
   let navigationsAtLastDispatch = 0;
-  const currentMainFrameUrl = () => page.mainFrame?.().url() ?? page.url();
   const onFrameNavigated = (frame: Frame) => {
-    if (frame === page.mainFrame?.()) {
+    if (frame === page.mainFrame()) {
       mainFrameNavigations += 1;
     }
   };
   const finishNavigation = (afterAction: number, skipped: number) => {
-    const url = currentMainFrameUrl();
+    const url = page.url();
     const lastResult = results.at(-1);
     if (lastResult) {
       results[results.length - 1] = { ...lastResult, navigated: true, url };
@@ -341,7 +340,7 @@ async function batchViaPlaywright(
   // Snapshot refs are document-scoped, so any committed main-frame navigation
   // ends the batch. A commit after the next action dispatch is inherently unguardable;
   // callers that expect navigation can use separate act calls as the escape hatch.
-  page.on?.("framenavigated", onFrameNavigated);
+  page.on("framenavigated", onFrameNavigated);
   try {
     for (const [index, action] of opts.actions.entries()) {
       if (opts.signal?.aborted) {
@@ -350,8 +349,8 @@ async function batchViaPlaywright(
       if (mainFrameNavigations > navigationsAtLastDispatch) {
         return finishNavigation(index, opts.actions.length - index);
       }
-      if (page.isClosed?.()) {
-        return finishAborted("closed", index, currentMainFrameUrl(), opts.actions.length - index);
+      if (page.isClosed()) {
+        return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
       navigationsAtLastDispatch = mainFrameNavigations;
       let result: BrowserBatchActionResult;
@@ -380,13 +379,8 @@ async function batchViaPlaywright(
         result = { ok: false, error: formatErrorMessage(err) };
       }
       results.push(result);
-      if (page.isClosed?.()) {
-        return finishAborted(
-          "closed",
-          index + 1,
-          currentMainFrameUrl(),
-          opts.actions.length - index - 1,
-        );
+      if (page.isClosed()) {
+        return finishAborted("closed", index + 1, page.url(), opts.actions.length - index - 1);
       }
       if (mainFrameNavigations > navigationsAtLastDispatch) {
         return finishNavigation(index + 1, opts.actions.length - index - 1);
@@ -397,6 +391,6 @@ async function batchViaPlaywright(
     }
     return { results };
   } finally {
-    page.off?.("framenavigated", onFrameNavigated);
+    page.off("framenavigated", onFrameNavigated);
   }
 }

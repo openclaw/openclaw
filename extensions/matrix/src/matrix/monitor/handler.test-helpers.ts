@@ -85,7 +85,6 @@ type MatrixHandlerTestHarnessOptions = {
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   mediaMaxBytes?: number;
   startupMs?: number;
-  startupGraceMs?: number;
   dropPreStartupMessages?: boolean;
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
@@ -380,7 +379,6 @@ export function createMatrixHandlerTestHarness(
     dmPolicy,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
-    startupGraceMs: options.startupGraceMs ?? 0,
     dropPreStartupMessages: options.dropPreStartupMessages ?? true,
     inboundDeduper: options.inboundDeduper,
     directTracker: {

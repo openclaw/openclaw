@@ -35,6 +35,10 @@ import {
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
 export class GatewayBoardProvider implements BoardProvider {
+  readonly canPinWidgets = true;
+  readonly canPinMcpApps = false;
+  readonly canMutate = true;
+  readonly canGrant = true;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly events: BoardEventStream<BoardCommandEvent>;
@@ -60,10 +64,6 @@ export class GatewayBoardProvider implements BoardProvider {
     private readonly session: BoardGetParams,
     client: BoardGatewayClient,
     connected = true,
-    public readonly canPinWidgets = true,
-    public readonly canPinMcpApps = false,
-    public readonly canMutate = true,
-    public readonly canGrant = true,
   ) {
     this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(this.sessionKey));
     this.snapshot$ = this.snapshotSignal;

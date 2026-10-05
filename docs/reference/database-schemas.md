@@ -19,6 +19,16 @@ Progress-card writes reuse the transaction's admitted table facts. The schema ow
 
 Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
 
+Agent ownership metadata follows that admitted read revision as well. Unchanged
+reads reuse the handle's metadata; foreign commits, local mutations, and schema
+changes require a new ownership read. Transactions, pinned snapshots, and dynamic
+authorizers keep querying the metadata. This changes no schema, stored bytes, or
+update behavior.
+
+Session row-facts reads reuse a canonical continuation's existing transaction
+instead of nesting a savepoint. Reads without an active transaction still open
+one so entry metadata, board presence, and transcript watermarks share a snapshot.
+
 Canonical main-key policy reads reuse the existing reader admission's value only within a current read operation. The connection owner tracks local SQL mutations, including raw and trigger-driven writes; its mutation revision, admitted schema facts, and observed foreign-commit version invalidate that value. Transactions, pinned snapshots, native mutation callbacks, and authorizer-controlled reads continue querying the policy. Continuation authority remains with canonical session admission.
 
 The Gateway does not schedule daily full-database scans. Admission-requested

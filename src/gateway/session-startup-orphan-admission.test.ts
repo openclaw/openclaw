@@ -24,7 +24,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { agentDatabaseHeldRuntimeEntrypoint } from "../state/openclaw-state-lease-runtime.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { runStartupSessionMigration } from "./server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "./server-startup-session-migration.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 let holder: ChildProcess | undefined;
@@ -70,7 +70,7 @@ it("admits cold orphan repair asynchronously while a foreign native reader holds
       const terminal = loadSessionEntryReadOnly(terminalScope);
       const log = { info: vi.fn(), warn: vi.fn() };
       // Certify the store before closing it, as a predecessor Gateway does.
-      await runStartupSessionMigration({ cfg, log });
+      await runStartupSessionMaintenanceForTest({ cfg, log });
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -142,7 +142,7 @@ it("admits cold orphan repair asynchronously while a foreign native reader holds
       }
       try {
         await lock.run(async () => {
-          await runStartupSessionMigration({ cfg, log });
+          await runStartupSessionMaintenanceForTest({ cfg, log });
           expect(loadSessionEntryReadOnly(scope)).toMatchObject({
             ...predecessor,
             status: "interrupted",
@@ -151,7 +151,7 @@ it("admits cold orphan repair asynchronously while a foreign native reader holds
           expect(loadSessionEntryReadOnly(terminalScope)).toEqual(terminal);
           expect(log.warn).not.toHaveBeenCalled();
           expect(integrity).toEqual([]);
-          await runStartupSessionMigration({ cfg, log });
+          await runStartupSessionMaintenanceForTest({ cfg, log });
           const events = await loadTranscriptEvents({ ...scope, sessionId: predecessor.sessionId });
           expect(
             events.filter(

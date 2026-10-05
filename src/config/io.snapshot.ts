@@ -17,11 +17,7 @@ import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
-import {
-  createConfigReadError,
-  formatInvalidConfigDetails,
-  isConfigReadFailure,
-} from "./io.invalid-config.js";
+import { createConfigReadError, isConfigReadFailure } from "./io.invalid-config.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   prepareSuspiciousConfigRead,
@@ -136,8 +132,13 @@ async function readConfigSnapshotWithPreparation(
     issue: ConfigFileSnapshot["issues"][number],
     runtimeConfig: OpenClawConfig = fallbackSourceConfig,
     readError?: ConfigFileSnapshot["readError"],
-  ) =>
-    createConfigFileSnapshot({
+    cause?: unknown,
+  ) => {
+    if (cause !== undefined) {
+      // Keep the original stack in process without exposing it in config RPC/JSON diagnostics.
+      Object.defineProperty(issue, "cause", { value: cause });
+    }
+    return createConfigFileSnapshot({
       path: configPath,
       includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
       exists: true,
@@ -152,6 +153,7 @@ async function readConfigSnapshotWithPreparation(
       warnings: [],
       legacyIssues: [],
     });
+  };
 
   try {
     const raw = await deps.measure(
@@ -234,7 +236,7 @@ async function readConfigSnapshotWithPreparation(
       const message =
         error instanceof ConfigIncludeError
           ? error.message
-          : `Include resolution failed: ${String(error)}`;
+          : `Include resolution failed at ${configPath}: ${String(error)}`;
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: invalidSourceSnapshot(
           {
@@ -246,6 +248,8 @@ async function readConfigSnapshotWithPreparation(
             message,
           },
           coerceConfig(effectiveParsed),
+          undefined,
+          error,
         ),
         includeFileHashesForWrite,
         includeFileTargetsForWrite,
@@ -451,7 +455,7 @@ async function readConfigSnapshotWithPreparation(
       const uid = process.getuid?.();
       const uidHint = typeof uid === "number" ? String(uid) : "$(id -u)";
       message = [
-        `read failed: ${String(error)}`,
+        `read failed at ${configPath}: ${String(error)}`,
         "",
         "Config file is not readable by the current process. If running in a container",
         "or 1-click deployment, fix ownership with:",
@@ -460,7 +464,7 @@ async function readConfigSnapshotWithPreparation(
       ].join("\n");
       deps.logger.error(message);
     } else {
-      message = `read failed: ${String(error)}`;
+      message = `read failed at ${configPath}: ${String(error)}`;
     }
     return await finalizeReadConfigSnapshotInternalResult(deps, {
       snapshot: invalidSourceSnapshot(
@@ -468,6 +472,7 @@ async function readConfigSnapshotWithPreparation(
         fallbackSourceConfig,
         // Diagnostic classification must not broaden readError's unavailable-source write guard.
         fallbackRaw === null ? { code: nodeError?.code ?? null } : undefined,
+        error,
       ),
       envSnapshotForRestore: fallbackEnvSnapshotForRestore,
       includeFileHashesForWrite,
@@ -522,7 +527,7 @@ export async function prepareConfigRecoveryFromContext(
         plan.candidate.raw,
       );
       if (isConfigReadFailure(snapshot)) {
-        throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+        throw createConfigReadError(snapshot);
       }
       return snapshot.valid ? { snapshot, pluginMetadataSnapshot, apply: plan.apply } : null;
     } finally {

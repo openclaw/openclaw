@@ -417,9 +417,7 @@ describe("MCP loopback Computer Use schema", () => {
       const computerDenied = cfg.tools?.deny?.includes("computer");
       return {
         agentId: "main",
-        tools: computerDenied
-          ? []
-          : [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
+        tools: computerDenied ? [] : [createComputerTool({ pairedNodeComputerUse })],
       };
     });
   });

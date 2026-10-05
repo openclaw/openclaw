@@ -374,7 +374,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/bot-message-dispatch.reasoning-room-events.test.ts",
   "extensions/telegram/src/bot-message-dispatch.recovery.telegram-http.test.ts",
   "extensions/telegram/src/bot-message-dispatch.reply-targets.telegram-http.test.ts",
-  "extensions/telegram/src/bot-native-command-dispatch.auth.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.concurrency.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.delivery.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.miniapp.test.ts",
@@ -433,6 +432,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/approval-reactions.persistence.test.ts",
   "extensions/imessage/src/send.sqlite.test.ts",
   "extensions/imessage/src/send.test.ts",
+  "extensions/x/src/guest-usage.test.ts",
 ];
 
 export function isDatabaseWorkerExtensionRoot(root) {

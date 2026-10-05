@@ -6,6 +6,7 @@ import {
   mockWindowsTaskkillSuccess,
   readGatewayOwnerLease,
   restartScheduledTask,
+  resolveTaskScriptPath,
   spawnSync,
   spawnSyncResult,
   scheduledTaskProbeResult,
@@ -14,7 +15,111 @@ import {
 } from "./schtasks.stop.test-support.js";
 import { schtasksCalls, schtasksResponses } from "./test-helpers/schtasks-fixtures.js";
 
+const { stopRegisteredScheduledTask } = await import("./schtasks-control.js");
+
 describe("Scheduled Task settlement", () => {
+  it("preserves a node-host replacement published during End", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      env.OPENCLAW_SERVICE_KIND = "node";
+      env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
+      env.OPENCLAW_TASK_SCRIPT_NAME = "node.cmd";
+      const scriptPath = resolveTaskScriptPath(env);
+      const original =
+        "@echo off\r\nC:\\node-a.exe C:\\openclaw\\entry.js node run --host 127.0.0.1 --port 18789\r\n";
+      const replacement = original.replace("node-a.exe", "node-b.exe");
+      fs.writeFileSync(scriptPath, original);
+      const push = schtasksCalls.push.bind(schtasksCalls);
+      vi.spyOn(schtasksCalls, "push").mockImplementation((...calls) => {
+        if (calls.some(([action]) => action === "/End")) {
+          fs.writeFileSync(scriptPath, replacement);
+        }
+        return push(...calls);
+      });
+      let killed = false;
+      spawnSync.mockImplementation((exe) => {
+        if (exe.endsWith("taskkill.exe")) {
+          killed = true;
+          return spawnSyncResult("");
+        }
+        if (exe.endsWith("tasklist.exe")) {
+          return spawnSyncResult(killed ? "No tasks" : '"node.exe","5151","Console","1","1 K"');
+        }
+        return spawnSyncResult(
+          JSON.stringify([{ ProcessId: 5151, CommandLine: replacement.split("\r\n")[1] }]),
+        );
+      });
+      let failure: unknown;
+      try {
+        await stopRegisteredScheduledTask({
+          env,
+          stdout,
+          assertCurrent: () => {},
+          beforeMutation: async () => {
+            if (fs.readFileSync(scriptPath, "utf8") !== original) {
+              throw new Error("Original node definition changed");
+            }
+          },
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(killed).toBe(false);
+      expect(String(failure)).toContain("Original node definition changed");
+      expect(fs.readFileSync(scriptPath, "utf8")).toBe(replacement);
+    });
+  });
+  it.each(["capture", "end"])(
+    "preserves a registration changed during native %s",
+    async (phase) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let changed = false;
+        let exited = false;
+        readGatewayOwnerLease.mockImplementation(() => (exited ? undefined : GATEWAY_OWNER));
+        spawnSync.mockImplementation((exe, args) => {
+          if (args?.includes("-EncodedCommand")) {
+            if (phase === "capture") {
+              changed = true;
+            }
+            return scheduledTaskProbeResult(
+              schtasksCalls.some(([action]) => action === "/End") ? 3 : 4,
+            );
+          }
+          return spawnSyncResult(
+            exe.endsWith("tasklist.exe") && !exited
+              ? '"node.exe","4242","Console","1","1 K"'
+              : "No tasks",
+          );
+        });
+        callGatewayCli.mockImplementation(async (options) => {
+          options.assertDispatchCurrent();
+          exited = true;
+          if (phase === "end") {
+            changed = true;
+          }
+          return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+        });
+        await expect(
+          stopRegisteredScheduledTask({
+            env,
+            stdout,
+            beforeMutation: async () => {
+              if (changed) {
+                throw new Error("Original registration changed");
+              }
+            },
+          }),
+        ).rejects.toThrow("Original registration changed");
+        expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(
+          false,
+        );
+        if (phase === "capture") {
+          expect(callGatewayCli).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
   it.each([
     { name: "graceful shutdown", native: false, end: false, delayedResult: false, settles: true },
     {
@@ -330,3 +435,4 @@ describe("Scheduled Task settlement", () => {
     },
   );
 });
+import fs from "node:fs";

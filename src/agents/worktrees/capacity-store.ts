@@ -47,6 +47,7 @@ export async function releaseWorktreeCapacity(params: {
   const cleanupContext = {
     environment: params.context.environment,
     existingSchemaPath: params.context.existingSchemaPath,
+    stateIntegrity: params.context.stateIntegrity,
   };
   const store = await openOpenClawStateWorkerCleanupStore(
     databasePath,

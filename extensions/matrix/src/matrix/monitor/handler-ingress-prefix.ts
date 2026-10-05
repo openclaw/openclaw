@@ -16,7 +16,6 @@ type MatrixIngressPrefixConfig = {
   eventTs?: number;
   eventAge?: number;
   startupMs: number;
-  startupGraceMs: number;
   event: MatrixRawEvent;
   eventType: string;
   eventId: string;
@@ -41,7 +40,6 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     eventTs,
     eventAge,
     startupMs,
-    startupGraceMs,
     event,
     eventType,
     eventId,
@@ -56,10 +54,10 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     return undefined;
   }
   if (dropPreStartupMessages) {
-    if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
+    if (typeof eventTs === "number" && eventTs < startupMs) {
       return undefined;
     }
-    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > startupGraceMs) {
+    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > 0) {
       return undefined;
     }
   }

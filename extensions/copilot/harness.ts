@@ -329,7 +329,6 @@ function computeSessionKey(
     const authContext = {
       agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
       agentDir: input.params.agentDir,
-      workspaceDir: input.params.workspaceDir,
       copilotHome: input.params.copilotHome,
     };
     const resolved = !options.includeAuth

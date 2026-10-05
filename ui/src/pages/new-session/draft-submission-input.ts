@@ -1,44 +1,16 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
-import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
-import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { attachmentBatchRejection } from "../chat/components/chat-attachment-admission.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
-import type { NewSessionCapabilityController } from "./capability-controller.ts";
-import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
-import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
-import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
-
-/** Project the draft's explicit choices through the existing session-create parameter owner. */
-export function buildDraftSubmissionCreateParams(
-  place: DraftPlaceState,
-  gateway: DraftGatewayState,
-  draft: {
-    capabilities: Pick<NewSessionCapabilityController, "toolOverrides">;
-    permissionMode: SessionCreateParams["permissionMode"];
-    visibility: NewSessionVisibility;
-  },
-  snapshot: DraftSubmissionSnapshot,
-  options: DraftSessionCreateOverrides = {},
-) {
-  return buildSelectedSessionCreateParams(place, {
-    ...options,
-    message: options.message ?? "",
-    toolOverrides: draft.capabilities.toolOverrides,
-    permissionMode: draft.permissionMode,
-    visibility: options.visibility ?? draft.visibility,
-    catalogId: snapshot.data?.catalogId,
-    category: gateway.resolvedGroupCategory(),
-  });
-}
 
 /** Freeze the selected or recovered input before creation can yield to another draft. */
 export function prepareDraftSubmission(
@@ -115,21 +87,5 @@ export function prepareDraftSubmission(
     recoveryScope,
     completeInBackground,
     hasInitialTurn: Boolean(message || apiAttachments?.length),
-  };
-}
-
-export function prepareDraftSubmissionTurn(
-  context: ApplicationContext,
-  input: NonNullable<ReturnType<typeof prepareDraftSubmission>>,
-  createdAt: number,
-) {
-  const { hello, selfUser } = context.gateway.snapshot;
-  const sender = resolveCurrentUserIdentity(hello, input.client.instanceId, selfUser) ?? undefined;
-  return {
-    text: input.message,
-    mentions: input.mentions,
-    attachments: input.attachments,
-    createdAt,
-    sender,
   };
 }

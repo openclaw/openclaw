@@ -58,7 +58,6 @@ import {
 } from "./native-subagent-monitor-runtime.js";
 import type {
   ChildState,
-  DirectSpawnEvidence,
   KnownChild,
   MonitorOptions,
   NativeModelToolInputRequest,
@@ -373,7 +372,10 @@ class Monitor {
       currentChild: this.currentChild.bind(this),
       resolveParentOwner: this.resolveParentOwner.bind(this),
       registerChildThread: this.registerChildThread.bind(this),
-      registerDirectSpawnChild: this.registerDirectSpawnChild.bind(this),
+      registerDirectSpawnChild: (state, turnId, evidence, owner) =>
+        this.admissionCustody.registerDirectSpawnChild(turnId, evidence, owner, (registration) =>
+          this.registerChildThread(state, evidence.childThreadId, registration),
+        ),
       observeParentInteraction: this.observeParentInteraction.bind(this),
       acceptInteraction: this.submissions.acceptInteraction.bind(this.submissions),
       observeCall: this.submissions.observeCall.bind(this.submissions),
@@ -1736,17 +1738,6 @@ class Monitor {
 
   private resolveNativeParentState(threadId: string): ParentState | undefined {
     return this.parentStates.get(threadId) ?? this.knownChildren.get(threadId)?.parent;
-  }
-
-  private registerDirectSpawnChild(
-    state: ParentState,
-    turnIdInput: string | undefined,
-    evidence: DirectSpawnEvidence,
-    owner: ParentOwner | undefined,
-  ): ChildState | undefined {
-    return this.admissionCustody.registerDirectSpawnChild(turnIdInput, evidence, owner, (options) =>
-      this.registerChildThread(state, evidence.childThreadId, options),
-    );
   }
 
   private drainPendingChildAdmissionEvidence(

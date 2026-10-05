@@ -3,6 +3,7 @@
  * @see https://bot.zaloplatforms.com/docs
  */
 
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -136,8 +137,10 @@ export async function callZaloApi<T = unknown>(
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     };
-    options?.assertDirectAdapterHandoff?.();
-    const response = await fetcher(url, request);
+    const response = await captureEffectAuthority().initiate(() => {
+      options?.assertDirectAdapterHandoff?.();
+      return fetcher(url, request);
+    });
 
     await assertOkOrThrowProviderError(response, `zalo.${method}`);
     const data = await readProviderJsonResponse<ZaloApiResponse<T>>(response, `zalo.${method}`);

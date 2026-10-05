@@ -18,7 +18,6 @@ import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
-import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type {
   CodexDynamicToolFunctionSpec,
   JsonObject,
@@ -32,6 +31,7 @@ import {
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
+import type { PluginAppPolicyContext } from "./session-binding-record-codec.js";
 import {
   createCodexTestBindingStore,
   readCodexAppServerBinding,
@@ -51,10 +51,7 @@ import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
-import {
-  buildThreadResumeParams,
-  startOrResumeThread as startOrResumeThreadImpl,
-} from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createLeasedCodexLifecycleHarness,
   startOrResumeAttemptThread,
@@ -66,6 +63,7 @@ import {
   withCodexAppServerThreadMutation,
 } from "./thread-ownership.js";
 import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
+import { buildThreadResumeParams } from "./thread-requests.js";
 
 function createLifecycleRequest(
   respond: (method: string, requestParams?: unknown) => Promise<unknown>,
@@ -191,7 +189,6 @@ function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
     codeModeOnly: false,
     loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -4588,7 +4585,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         approvalsReviewer: "user",
         sandbox: "workspace-write",
         connectionClass: "local-loopback",
-        remoteAppsSubstrate: "preconfigured",
       },
     });
 

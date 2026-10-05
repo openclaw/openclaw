@@ -1,94 +1,12 @@
 // Matrix tests cover verification manager plugin behavior.
-import { EventEmitter } from "node:events";
 import {
   VerificationPhase,
   VerificationRequestEvent,
+  type Verifier,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { describe, expect, it, vi } from "vitest";
-import {
-  MatrixVerificationManager,
-  type MatrixVerificationRequestLike,
-} from "./verification-manager.js";
-
-type MatrixVerifierLike = Awaited<ReturnType<MatrixVerificationRequestLike["startVerification"]>>;
-type MatrixShowSasCallbacks = NonNullable<ReturnType<MatrixVerifierLike["getShowSasCallbacks"]>>;
-type MatrixShowQrCodeCallbacks = NonNullable<
-  ReturnType<MatrixVerifierLike["getReciprocateQrCodeCallbacks"]>
->;
-
-class MockVerifier extends EventEmitter implements MatrixVerifierLike {
-  constructor(
-    private readonly sasCallbacks: MatrixShowSasCallbacks | null,
-    private readonly qrCallbacks: MatrixShowQrCodeCallbacks | null,
-    private readonly verifyImpl: () => Promise<void> = async () => {},
-  ) {
-    super();
-  }
-
-  verify(): Promise<void> {
-    return this.verifyImpl();
-  }
-
-  cancel(_e: Error): void {
-    void _e;
-  }
-
-  getShowSasCallbacks(): MatrixShowSasCallbacks | null {
-    return this.sasCallbacks;
-  }
-
-  getReciprocateQrCodeCallbacks(): MatrixShowQrCodeCallbacks | null {
-    return this.qrCallbacks;
-  }
-}
-
-class MockVerificationRequest extends EventEmitter implements MatrixVerificationRequestLike {
-  transactionId?: string;
-  roomId?: string;
-  initiatedByMe = false;
-  otherUserId = "@alice:example.org";
-  otherDeviceId?: string;
-  isSelfVerification = false;
-  phase = VerificationPhase.Requested;
-  pending = true;
-  accepting = false;
-  declining = false;
-  methods: string[] = ["m.sas.v1"];
-  chosenMethod?: string | null;
-  cancellationCode?: string | null;
-  verifier?: MatrixVerifierLike;
-
-  constructor(init?: Partial<MockVerificationRequest>) {
-    super();
-    Object.assign(this, init);
-  }
-
-  accept = vi.fn(async () => {
-    this.phase = VerificationPhase.Ready;
-  });
-
-  cancel = vi.fn(async () => {
-    this.phase = VerificationPhase.Cancelled;
-  });
-
-  startVerification = vi.fn(async (_method: string) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
-  scanQRCode = vi.fn(async (_qrCodeData: Uint8ClampedArray) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
-  generateQRCode = vi.fn(async () => new Uint8ClampedArray([1, 2, 3]));
-}
+import { MockVerificationRequest, MockVerifier } from "./crypto.test-support.js";
+import { MatrixVerificationManager } from "./verification-manager.js";
 
 function createSasVerifierFixture(params: {
   decimal: [number, number, number];
@@ -122,7 +40,7 @@ function createSasVerifierFixture(params: {
 function createReadyRequestWithoutVerifier(params: {
   transactionId: string;
   isSelfVerification: boolean;
-  verifier: MatrixVerifierLike;
+  verifier: Verifier;
 }) {
   const request = new MockVerificationRequest({
     transactionId: params.transactionId,

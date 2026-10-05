@@ -34,7 +34,6 @@ function createThreadLifecycleAppServerOptions(): ReturnType<typeof createAppSer
   return {
     ...createAppServerOptions(),
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 

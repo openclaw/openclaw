@@ -34,12 +34,8 @@ function assertPortableRelativePathSyntax(
   }
 }
 
-function stripTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/u, "");
-}
-
 export function normalizeArchivePath(entryPath: string, label: string): string {
-  const filename = stripTrailingSlashes(entryPath);
+  const filename = entryPath.replace(/\/+$/u, "");
   if (!filename) {
     throw new Error(`${label} is empty.`);
   }
@@ -48,11 +44,7 @@ export function normalizeArchivePath(entryPath: string, label: string): string {
     throw new Error(`${label} contains path traversal segments: ${entryPath}`);
   }
 
-  const normalized = stripTrailingSlashes(path.posix.normalize(filename));
-  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`${label} resolves outside the archive root: ${entryPath}`);
-  }
-  return normalized;
+  return path.posix.normalize(filename);
 }
 
 export function normalizeArchiveRoot(rootName: string): string {

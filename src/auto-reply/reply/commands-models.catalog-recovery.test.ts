@@ -335,7 +335,7 @@ describe("/models browse catalog recovery", () => {
       },
       env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
       authStore: { version: 1, profiles: {} },
-      allowPreparedRuntimeAuth: false,
+      preparedRuntimeAuthStore: { version: 1, profiles: {} },
     });
 
     expect(

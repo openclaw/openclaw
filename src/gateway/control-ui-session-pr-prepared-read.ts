@@ -1,3 +1,4 @@
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -66,6 +67,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   const { scope, limit, withSource, load, keyStates, stateForTarget } = deps;
+  const spawnBroker = getSpawnBroker();
   const preparing = new Map<State, Promise<void>>();
   const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
     const changed = JSON.stringify(state.snapshot) !== JSON.stringify(snapshot);
@@ -152,32 +154,35 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
       (!admitLoad || admitLoad())
     ) {
       const promise = runInDetachedAsyncContext(() =>
-        scope.track(async () => {
-          const current = await limit(async () => {
-            if (scope.isClosing || keyStates.get(preparedTarget.params.sessionKey) !== state) {
-              return undefined;
+        // Keep the Gateway's process owner without reviving the requesting caller's context.
+        runWithSpawnBroker(spawnBroker, () =>
+          scope.track(async () => {
+            const current = await limit(async () => {
+              if (scope.isClosing || keyStates.get(preparedTarget.params.sessionKey) !== state) {
+                return undefined;
+              }
+              return await prepareControlUiSessionPrServiceTarget(
+                getProjection,
+                preparedTarget.params,
+              );
+            });
+            if (!current) {
+              return;
             }
-            return await prepareControlUiSessionPrServiceTarget(
-              getProjection,
-              preparedTarget.params,
-            );
-          });
-          if (!current) {
-            return;
-          }
-          const assertCurrent = () => {
-            if (
-              scope.isClosing ||
-              keyStates.get(preparedTarget.params.sessionKey) !== state ||
-              current.identity !== preparedTarget.identity
-            ) {
-              throw new Error("Prepared session pull-request target changed");
-            }
-            current.assertCurrent?.();
-          };
-          assertCurrent();
-          await read(current, assertCurrent);
-        }),
+            const assertCurrent = () => {
+              if (
+                scope.isClosing ||
+                keyStates.get(preparedTarget.params.sessionKey) !== state ||
+                current.identity !== preparedTarget.identity
+              ) {
+                throw new Error("Prepared session pull-request target changed");
+              }
+              current.assertCurrent?.();
+            };
+            assertCurrent();
+            await read(current, assertCurrent);
+          }),
+        ),
       )
         .catch(() => {})
         .finally(() => preparing.delete(state));

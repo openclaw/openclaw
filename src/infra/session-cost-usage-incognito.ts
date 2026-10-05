@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
 import {
   formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import type {
   IncognitoComputeOperations,
   IncognitoComputeTarget,
+  IncognitoComputeInstance,
 } from "../config/sessions/session-incognito-compute-contract.js";
 import type { IncognitoComputeScope } from "../config/sessions/session-incognito-compute.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { getAsyncWorkSignal, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import type { UsageCostWorkerHostRequest } from "./session-cost-usage-worker.types.js";
@@ -17,98 +18,250 @@ import type { UsageCostWorkerHostRequest } from "./session-cost-usage-worker.typ
 export type UsageCostIncognitoBinding = {
   actor: IncognitoAgentDatabaseExecution;
   authority: IncognitoSessionAuthority;
-  target: IncognitoComputeTarget;
+  target?: IncognitoComputeTarget;
+  retainSource?: (sessionKey: string) => void;
 };
+
+export function withUsageCostIncognitoScope<T>(
+  binding: UsageCostIncognitoBinding | undefined,
+  operation: (binding?: UsageCostIncognitoBinding) => Promise<T>,
+): Promise<T> {
+  if (!binding) {
+    return operation();
+  }
+  getAsyncWorkSignal()?.throwIfAborted();
+  const { actor, authority } = binding;
+  const target = structuredClone(binding.target);
+  const claims = new Map<string, ReturnType<typeof actor.sessions.captureCurrent>>();
+  const retainSource = (sessionKey: string) => {
+    claims.set(sessionKey, claims.get(sessionKey) ?? actor.sessions.captureCurrent(sessionKey));
+    binding.retainSource?.(sessionKey);
+  };
+  if (target) {
+    retainSource(target.sessionKey);
+  }
+  const assertCurrent = () => {
+    actor.assertCurrent();
+    authority.assertCurrent();
+  };
+  assertCurrent();
+  return actor.sessions.withSharedState(() =>
+    runOutsideAsyncWorkScope(async () => {
+      const result = await operation({
+        actor,
+        target,
+        retainSource,
+        authority: {
+          assertCurrent,
+          authorize: (stage, facts) => authority.authorize?.(stage, facts),
+        },
+      });
+      assertCurrent();
+      // Native grants use transaction-local facts; retained snapshots gate disclosure.
+      claims.forEach((claim) => claim.authorize(authority, "commit"));
+      return result;
+    }),
+  );
+}
+
+export async function readIncognitoUsageTranscript(
+  binding: UsageCostIncognitoBinding,
+  marker: SqliteSessionFileMarker,
+): Promise<unknown[]> {
+  const { actor, authority } = binding;
+  const selected = structuredClone(binding.target);
+  if (
+    marker.agentId !== actor.agentId ||
+    marker.storePath !== actor.path ||
+    (selected && marker.sessionId !== selected.sessionId)
+  ) {
+    throw new Error("Usage transcript belongs to another actor session");
+  }
+  return actor.sessions.withCompute(
+    authority,
+    selected,
+    async (compute) => {
+      const target =
+        selected ??
+        (
+          await compute.execute({
+            type: "session.compute.store.inventory",
+            input: {},
+          })
+        ).find((entry) => entry.sessionId === marker.sessionId);
+      if (!target) {
+        throw new Error("Usage incognito transcript is no longer available");
+      }
+      binding.retainSource?.(target.sessionKey);
+      const sourceId = randomUUID();
+      await compute.execute({
+        type: "session.compute.source.open",
+        input: { ...target, sourceId },
+      });
+      const events: unknown[] = [];
+      let chunks: Uint8Array[] = [];
+      for (;;) {
+        const frame = await compute.execute({
+          type: "session.compute.source.read",
+          input: { ...target, sourceId },
+        });
+        if (frame.type === "source-unavailable") {
+          throw new Error("Usage incognito transcript changed while reading");
+        }
+        if (frame.type === "source-end") {
+          return events;
+        }
+        chunks.push(frame.bytes);
+        if (frame.final) {
+          events.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          chunks = [];
+        }
+      }
+    },
+    getAsyncWorkSignal(),
+  );
+}
 
 /** Explicit inactive routing; physical identity and cleanup belong to the captured actor. */
 export function createIncognitoUsageCostAdapter(
   compute: IncognitoComputeScope,
-  target: IncognitoComputeTarget,
-  marker: SqliteSessionFileMarker,
+  target: IncognitoComputeTarget | undefined,
+  marker: Pick<SqliteSessionFileMarker, "agentId" | "storePath">,
+  instances: IncognitoComputeInstance[],
 ) {
-  const filePath = formatSqliteSessionFileMarker(marker);
+  const selected = new Map(
+    instances.map((entry) => [
+      formatSqliteSessionFileMarker({ ...marker, sessionId: entry.sessionId }),
+      entry,
+    ]),
+  );
+  const filePaths = [...selected.keys()];
   const sources = new Map<string, string>();
   const assertMarker = (input: SqliteSessionFileMarker) => {
-    if (!sqliteSessionFileMarkerMatchesTarget(formatSqliteSessionFileMarker(input), marker)) {
+    const entry = selected.get(formatSqliteSessionFileMarker(input));
+    if (!entry) {
       throw new Error("Usage worker requested another incognito session");
     }
+    return entry;
   };
   const startedAt = Date.now();
   const lockJson = JSON.stringify({ pid: process.pid, startedAt, ownerNonce: randomUUID() });
   return {
-    filePath,
+    owns: (agentId: string, storePath: string) =>
+      agentId === marker.agentId && storePath === marker.storePath,
+    filePaths,
     assertCurrent: compute.assertCurrent,
     lock: {
       async acquire() {
-        const previousRaw = await compute.execute({
-          type: "session.compute.usage.refreshLock",
-          input: { ...target, request: {} },
-        });
-        return compute.execute({
-          type: "session.compute.usage.acquireLock",
-          input: {
-            ...target,
-            request: {
-              previousRaw,
-              previousOwnerIsRunning: previousRaw !== null,
-              lockJson,
-              startedAt,
-            },
-          },
-        });
+        const previousRaw = await compute.execute(
+          target
+            ? {
+                type: "session.compute.usage.refreshLock",
+                input: { ...target, request: {} },
+              }
+            : { type: "session.compute.store.refreshLock", input: { request: {} } },
+        );
+        const request = {
+          previousRaw,
+          previousOwnerIsRunning: previousRaw !== null,
+          lockJson,
+          startedAt,
+        };
+        return compute.execute(
+          target
+            ? {
+                type: "session.compute.usage.acquireLock",
+                input: { ...target, request },
+              }
+            : { type: "session.compute.store.acquireLock", input: { request } },
+        );
       },
       writeRollup(
         request: IncognitoComputeOperations["session.compute.usage.writeRollup"]["input"]["request"],
       ) {
-        return compute.execute({
-          type: "session.compute.usage.writeRollup",
-          input: { ...target, request },
-        });
+        return compute.execute(
+          target
+            ? {
+                type: "session.compute.usage.writeRollup",
+                input: { ...target, request },
+              }
+            : { type: "session.compute.store.writeRollup", input: { request } },
+        );
       },
       pruneRows(request: readonly SessionCostUsageRollupSnapshot[]) {
-        return compute.execute({
-          type: "session.compute.usage.prune",
-          input: { ...target, request },
-        });
+        return compute.execute(
+          target
+            ? {
+                type: "session.compute.usage.prune",
+                input: { ...target, request },
+              }
+            : { type: "session.compute.store.prune", input: { request } },
+        );
       },
     },
     async read(request: UsageCostWorkerHostRequest) {
       switch (request.kind) {
+        case "memory-instances":
+          if (
+            request.input.agentId !== marker.agentId ||
+            request.input.storePath !== marker.storePath
+          ) {
+            throw new Error("Usage inventory belongs to another actor");
+          }
+          return instances.map(({ sessionId, updatedAtMs }) => ({
+            agentId: marker.agentId,
+            sessionId,
+            updatedAtMs,
+          }));
         case "memory-stats":
           return Promise.all(
             request.input.map((input) => {
-              assertMarker(input);
+              const selectedTarget = assertMarker(input);
               return compute.execute({
                 type: "session.compute.usage.stats",
-                input: { ...target, request: {} },
+                input: { ...selectedTarget, request: {} },
               });
             }),
           );
         case "memory-cache":
-          return compute.execute({
-            type: "session.compute.usage.cache",
-            input: { ...target, request: { filePaths: request.input.filePaths ?? [filePath] } },
-          });
+          return compute.execute(
+            target
+              ? {
+                  type: "session.compute.usage.cache",
+                  input: {
+                    ...target,
+                    request: { filePaths: request.input.filePaths ?? filePaths },
+                  },
+                }
+              : {
+                  type: "session.compute.store.cache",
+                  input: { request: { filePaths: request.input.filePaths ?? filePaths } },
+                },
+          );
         case "memory-cache-body":
-          return compute.execute({
-            type: "session.compute.usage.cacheBody",
-            input: { ...target, request: request.input },
-          });
+          return compute.execute(
+            target
+              ? {
+                  type: "session.compute.usage.cacheBody",
+                  input: { ...target, request: request.input },
+                }
+              : { type: "session.compute.store.cacheBody", input: { request: request.input } },
+          );
         case "memory-transcript": {
-          assertMarker(request.input.marker);
+          const selectedTarget = assertMarker(request.input.marker);
           const key = JSON.stringify(request.input);
           let sourceId = sources.get(key);
           if (!sourceId) {
             sourceId = randomUUID();
             await compute.execute({
               type: "session.compute.source.open",
-              input: { ...target, sourceId, range: request.input },
+              input: { ...selectedTarget, sourceId, range: request.input },
             });
             sources.set(key, sourceId);
           }
           return compute.execute({
             type: "session.compute.source.read",
-            input: { ...target, sourceId },
+            input: { ...selectedTarget, sourceId },
           });
         }
         default:

@@ -1621,24 +1621,19 @@ describe("gateway session utils", () => {
     ).toBeNull();
   });
 
-  test.each([false])(
-    "resolveSessionStoreKey canonicalizes bare keys (explicit sole: %s)",
-    (explicitOwnership) => {
-      const cfg: OpenClawConfig = {
-        session: { mainKey: "main" },
-        agents: explicitOwnership
-          ? { ownership: "explicit", entries: { ops: {} } }
-          : { entries: { ops: {} } },
-      };
-      expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
-        "agent:ops:discord:group:123",
-      );
-      expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
-        "agent:alpha:main",
-      );
-      expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
-    },
-  );
+  test("resolveSessionStoreKey canonicalizes bare keys", () => {
+    const cfg: OpenClawConfig = {
+      session: { mainKey: "main" },
+      agents: { entries: { ops: {} } },
+    };
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
+      "agent:alpha:main",
+    );
+    expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
+  });
 
   test("resolveSessionStoreKey uses configured fixed-store ownership for bare keys", () => {
     const cfg = {
@@ -2323,7 +2318,7 @@ describe("gateway session utils", () => {
     if (kind === "data") {
       cfg.agents!.entries!.main!.identity!.avatar = dataUrl;
     }
-    const browser = await listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
+    const browser = await listAgentsForGateway(cfg, { httpAvatarBasePath: "/control" });
     expect(browser.agents[0]?.identity?.avatarUrl).toMatch(
       /^\/control\/avatar\/main\?v=[a-f0-9]+$/,
     );
@@ -2352,7 +2347,7 @@ describe("gateway session utils", () => {
       fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
       fs.mkdirSync(path.join(stateDir, "agents", "research"), { recursive: true });
 
-      const result = await listAgentsForGateway({}, undefined, { includeSystem: true });
+      const result = await listAgentsForGateway({}, { includeSystem: true });
 
       expect(result.agents.map(({ id, kind }) => ({ id, kind }))).toEqual([
         { id: "main", kind: "agent" },
@@ -2526,7 +2521,7 @@ describe("gateway session utils", () => {
     const disabledCatalog = [{ ...catalogEntry, reasoning: false }];
     const enabledCatalog = [{ ...catalogEntry, reasoning: true }];
 
-    const result = await listAgentsForGateway(cfg, disabledCatalog, {
+    const result = await listAgentsForGateway(cfg, {
       modelCatalogByAgentId: new Map([
         ["main", { entries: disabledCatalog }],
         ["work", { entries: enabledCatalog }],
@@ -2572,7 +2567,11 @@ describe("gateway session utils", () => {
         },
       ];
 
-      const agent = (await listAgentsForGateway(cfg, catalog)).agents[0];
+      const agent = (
+        await listAgentsForGateway(cfg, {
+          modelCatalogByAgentId: new Map([["main", { entries: catalog }]]),
+        })
+      ).agents[0];
 
       expect(agent).toMatchObject({
         model: {

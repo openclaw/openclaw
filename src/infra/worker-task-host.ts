@@ -24,6 +24,7 @@ export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): Wo
     ? (owner.nativeSource ?? captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }))
     : undefined;
   return {
+    requiresReady: owner.retainedTransport,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
       if (owner.retainedTransport) {
@@ -44,6 +45,10 @@ export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): Wo
         }
       }
       return { worker: createCpuTrackedWorker(url, workerOptions) };
+    },
+    serviceNativeWorkers(workers) {
+      // This factory binds every native worker in the pool to the same captured source.
+      workers[0]?.service();
     },
     prepareResources,
     async releaseTemporaryDirectory(directory) {

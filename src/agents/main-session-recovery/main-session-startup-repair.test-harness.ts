@@ -1,10 +1,11 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import { runStartupSessionMigration } from "../../gateway/server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "../../gateway/server-startup-session-migration.test-support.js";
 import {
   clearAgentRunContext,
   hasLiveAgentRunContext,
@@ -90,6 +91,7 @@ export function registerStartupSessionRepairCases(
         const archivedKeys = addRows("archived", 16, (index) => ({
           archivedAt: predecessorAt,
           abortedLastRun: true,
+          ...(index === 14 ? { startedAt: undefined } : {}),
           ...(index === 15
             ? { spawnDepth: 1, restartRecoveryForceSafeTools: true }
             : {
@@ -211,7 +213,7 @@ export function registerStartupSessionRepairCases(
               return { runId: request.idempotencyKey };
             });
             const log = { info: vi.fn(), warn: vi.fn() };
-            await runStartupSessionMigration({ cfg, log });
+            await runStartupSessionMaintenanceForTest({ cfg, log });
             const activeSessionIds = liveKeys.map((sessionKey) => fixture[sessionKey]!.sessionId);
             await markStartupOrphanedMainSessionsForRecovery({
               cfg,
@@ -239,6 +241,17 @@ export function registerStartupSessionRepairCases(
               expect(after[sessionKey]?.pendingFinalDelivery).toEqual(
                 before[sessionKey]?.pendingFinalDelivery,
               );
+              expect(after[sessionKey]?.startedAt).toBe(before[sessionKey]?.startedAt);
+              expect(after[sessionKey]?.runtimeMs).toBe(before[sessionKey]?.runtimeMs);
+              expect(after[sessionKey]?.lifecycleRunId).toBeUndefined();
+              expect(
+                await loadTranscriptEvents({
+                  agentId: "main",
+                  sessionKey,
+                  sessionId: fixture[sessionKey]!.sessionId,
+                  storePath,
+                }),
+              ).toEqual([]);
             }
             for (const sessionKey of spawnedKeys) {
               expect(after[sessionKey]).toMatchObject({

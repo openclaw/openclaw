@@ -61,7 +61,7 @@ function recordToolOutcome(
   // state without running a wrapped tool.
   const toolCallId = `${toolName}-${diagnosticState.toolCallHistory?.length ?? 0}`;
   const scope = runId ? { runId } : undefined;
-  recordToolCall(diagnosticState, toolName, toolParams, toolCallId, undefined, scope);
+  recordToolCall(diagnosticState, toolName, toolParams, toolCallId, scope);
   const outcome: Parameters<typeof recordToolCallOutcome>[1] = {
     toolName,
     toolParams,

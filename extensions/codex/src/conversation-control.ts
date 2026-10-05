@@ -25,7 +25,7 @@ import {
 import {
   resolveCodexAppServerRequestModelSelection,
   resolveCodexBindingModelProviderFallback,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {

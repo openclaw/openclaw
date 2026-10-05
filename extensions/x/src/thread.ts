@@ -108,7 +108,14 @@ export async function assembleXThread(options: {
   });
   const labelPost = root ?? selected[0] ?? options.mention;
   return {
-    bodyForAgent: `X thread context (oldest to newest):\n${lines.join("\n")}\n\nReply to the triggering mention.`,
+    bodyForAgent: `X thread context (oldest to newest):\n${lines
+      .map((line) =>
+        line
+          .split(/\r\n|[\r\n\u2028\u2029]/)
+          .map((part) => `> ${part}`)
+          .join("\n"),
+      )
+      .join("\n")}\n\nReply to the triggering mention.`,
     label: `${handle(labelPost)}: ${labelPost.text.replace(/\s+/g, " ").slice(0, 80)}`,
     posts: selected,
     users: [...users.values()],

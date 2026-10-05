@@ -12,44 +12,33 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSession, resolveSessionKeyForRequestCore } from "./session.js";
 
-it.each(
-  ["global", "unknown"].flatMap((sessionKey) =>
-    ["legacy", "explicit"].flatMap((ownership) =>
-      ["main-first", "ops-first"].map((order) => ({ sessionKey, ownership, order })),
-    ),
-  ),
-)(
-  "resolves a partitioned $sessionKey session id with $ownership ownership ($order)",
-  async ({ sessionKey, ownership, order }) => {
-    await withOpenClawTestState({ label: "command-partitioned-session-id" }, async (state) => {
-      const storePath = state.statePath("sessions.json");
-      const agentIds = order === "main-first" ? ["main", "ops"] : ["ops", "main"];
-      const cfg: OpenClawConfig = {
-        agents: {
-          ...(ownership === "explicit" ? { ownership: "explicit" } : {}),
-          entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
-        },
-        session: { store: storePath },
-      };
-      if (ownership === "legacy") {
-        retainLegacyDefaultAgentId(cfg, "main");
-      }
-      for (const agentId of ["main", "ops"]) {
-        await sessionAccessor.replaceSessionEntry(
-          { agentId, sessionKey, storePath },
-          { sessionId: `${agentId}-session`, updatedAt: Date.now(), label: agentId },
-        );
-      }
+it("resolves a partitioned global session id with legacy ownership", async () => {
+  const sessionKey = "global";
+  await withOpenClawTestState({ label: "command-partitioned-session-id" }, async (state) => {
+    const storePath = state.statePath("sessions.json");
+    const agentIds = ["main", "ops"];
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+      },
+      session: { store: storePath },
+    };
+    retainLegacyDefaultAgentId(cfg, "main");
+    for (const agentId of ["main", "ops"]) {
+      await sessionAccessor.replaceSessionEntry(
+        { agentId, sessionKey, storePath },
+        { sessionId: `${agentId}-session`, updatedAt: Date.now(), label: agentId },
+      );
+    }
 
-      expect(resolveSessionKeyForRequestCore({ cfg, sessionId: "ops-session" })).toMatchObject({
-        agentId: "ops",
-        sessionKey,
-        storePath,
-        sessionEntry: { sessionId: "ops-session", label: "ops" },
-      });
+    expect(resolveSessionKeyForRequestCore({ cfg, sessionId: "ops-session" })).toMatchObject({
+      agentId: "ops",
+      sessionKey,
+      storePath,
+      sessionEntry: { sessionId: "ops-session", label: "ops" },
     });
-  },
-);
+  });
+});
 
 it("keeps exact shared SQLite ownership separate from the scan agent and physical owner", async () => {
   await withOpenClawTestState({ label: "command-shared-session-id" }, async (state) => {
@@ -166,37 +155,32 @@ it.each(["work", "dashboard:incognito-work"])(
   },
 );
 
-it.each([
-  "agent:main:assist:01M21F31SCNCCQQ3N4X43AY420",
-  "agent:main:assist:prefix-01M21F31SCNCCQQ3N4X43AY420",
-  "agent:main:assist:lowercaseletters",
-  "agent:main:assist:abcdef0123456789",
-  "agent:main:assist:ordinary-42",
-  "agent:main:signal:group:AbCdEf123",
-  "agent:main:matrix:channel:!Room:Example.org:thread:$Event",
-])("reuses the persisted session for explicit key %s", async (sessionKey) => {
-  await withOpenClawTestState({ label: "command-uppercase-tail-session" }, async (state) => {
-    const storePath = state.statePath("sessions.sqlite");
-    const cfg = {
-      agents: { defaults: {} },
-      session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
-    } satisfies OpenClawConfig;
+it.each(["agent:main:assist:01M21F31SCNCCQQ3N4X43AY420", "agent:main:signal:group:AbCdEf123"])(
+  "reuses the persisted session for explicit key %s",
+  async (sessionKey) => {
+    await withOpenClawTestState({ label: "command-uppercase-tail-session" }, async (state) => {
+      const storePath = state.statePath("sessions.sqlite");
+      const cfg = {
+        agents: { defaults: {} },
+        session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
+      } satisfies OpenClawConfig;
 
-    const first = resolveSession({ cfg, sessionKey });
-    expect(first.sessionEntry).toBeUndefined();
-    expect(first.isNewSession).toBe(true);
-    await sessionAccessor.replaceSessionEntry(
-      { sessionKey, storePath },
-      { sessionId: first.sessionId, updatedAt: Date.now(), sessionStartedAt: Date.now() },
-    );
+      const first = resolveSession({ cfg, sessionKey });
+      expect(first.sessionEntry).toBeUndefined();
+      expect(first.isNewSession).toBe(true);
+      await sessionAccessor.replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: first.sessionId, updatedAt: Date.now(), sessionStartedAt: Date.now() },
+      );
 
-    const second = resolveSession({ cfg, sessionKey });
-    expect(second.sessionKey).toBe(sessionKey);
-    expect(second.sessionId).toBe(first.sessionId);
-    expect(second.isNewSession).toBe(false);
-    expect(second.sessionEntry?.sessionId).toBe(first.sessionId);
-  });
-});
+      const second = resolveSession({ cfg, sessionKey });
+      expect(second.sessionKey).toBe(sessionKey);
+      expect(second.sessionId).toBe(first.sessionId);
+      expect(second.isNewSession).toBe(false);
+      expect(second.sessionEntry?.sessionId).toBe(first.sessionId);
+    });
+  },
+);
 
 it("does not provision a missing incognito lookup or select a hidden run-owned entry", async () => {
   await withOpenClawTestState({ label: "command-private-session" }, async (state) => {

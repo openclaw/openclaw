@@ -78,7 +78,6 @@ it("reuses isolated retained threads until native skills change", async () => {
     appServer: {
       ...createAppServerOptions(),
       connectionClass: "local-loopback",
-      remoteAppsSubstrate: "preconfigured",
     },
     userMcpServersEnabled: false,
   };

@@ -54,7 +54,6 @@ describe("OutputAccumulator", () => {
     async ({ chunks, maxBytes, expected, lastLineBytes, totalLines, partial }) => {
       const accumulator = new OutputAccumulator({
         maxBytes,
-        tempFilePrefix: "openclaw-output-test",
       });
       const buffers = chunks.map((chunk) =>
         typeof chunk === "string" ? Buffer.from(chunk) : chunk,
@@ -64,7 +63,7 @@ describe("OutputAccumulator", () => {
         accumulator.append(data, "stdout");
       }
       accumulator.finish();
-      const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+      const snapshot = accumulator.snapshot();
       await accumulator.closeTempFile();
       try {
         expect(snapshot.content).toBe(expected);
@@ -106,13 +105,11 @@ describe("OutputAccumulator", () => {
   it("stores spilled full output in an owner-only temp file", async () => {
     const accumulator = new OutputAccumulator({
       maxBytes: 8,
-      maxLines: 10,
-      tempFilePrefix: "openclaw-output-test",
     });
 
     accumulator.append(Buffer.from("secret output"));
     accumulator.finish();
-    const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+    const snapshot = accumulator.snapshot();
     await accumulator.closeTempFile();
     await accumulator.closeTempFile();
 
@@ -154,7 +151,7 @@ describe("OutputAccumulator", () => {
          };
          syncBuiltinESMExports();
          try {
-           const output = new OutputAccumulator({ maxBytes: 8, tempFilePrefix: "openclaw-output-test" });
+           const output = new OutputAccumulator({ maxBytes: 8 });
            output.append(Buffer.from("output before finalization"), "stdout");
            const error = await failure;
            await setImmediate();
@@ -197,13 +194,11 @@ describe("OutputAccumulator", () => {
   it("keeps complete UTF-8 characters in a byte-bounded tail", async () => {
     const accumulator = new OutputAccumulator({
       maxBytes: 5,
-      maxLines: 10,
-      tempFilePrefix: "openclaw-output-test",
     });
 
     accumulator.append(Buffer.from("a🙂b"));
     accumulator.finish();
-    const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+    const snapshot = accumulator.snapshot();
     await accumulator.closeTempFile();
 
     expect(snapshot.content).toBe("🙂b");
@@ -229,15 +224,13 @@ describe("OutputAccumulator", () => {
   it("spills tagged streams in decoded delivery order", async () => {
     const accumulator = new OutputAccumulator({
       maxBytes: 1,
-      maxLines: 10,
-      tempFilePrefix: "openclaw-output-test",
     });
 
     accumulator.append(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
     accumulator.append(Buffer.from("E"), "stderr");
     accumulator.append(Buffer.from([0xa5]), "stdout");
     accumulator.finish();
-    const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+    const snapshot = accumulator.snapshot();
     await accumulator.closeTempFile();
 
     expect(snapshot.fullOutputPath).toBeDefined();

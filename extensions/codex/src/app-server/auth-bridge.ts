@@ -857,15 +857,45 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
       `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }
-  const loginParams = await resolveLoginParamsForCredential(profileId, credential, {
-    agentDir: params.agentDir,
-    store,
-    preferStoreCredential: Boolean(params.authProfileStore?.profiles[profileId]),
-    forceOAuthRefresh: params.forceOAuthRefresh === true,
-    authHandoff: params.authHandoff,
-    previousAccountId: params.previousAccountId,
-    config: params.config,
-  });
+  const preferStoreCredential = Boolean(params.authProfileStore?.profiles[profileId]);
+  let loginParams: CodexLoginAccountParams | undefined;
+  // Runtime honors the persisted type; credential-entry owners remediate legacy shapes.
+  if (credential.type === "api_key" || credential.type === "token") {
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.config,
+      store: preferStoreCredential
+        ? store
+        : ensureAuthProfileStore(params.agentDir, {
+            allowKeychainPrompt: false,
+            profileId,
+            config: params.config,
+          }),
+      profileId,
+      agentDir: params.agentDir,
+    });
+    const value = resolved?.apiKey?.trim();
+    if (value) {
+      loginParams =
+        credential.type === "api_key"
+          ? { type: "apiKey", apiKey: value }
+          : buildChatgptAuthTokensParams(profileId, credential, value);
+    }
+  } else {
+    const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(
+      profileId,
+      credential,
+      {
+        ...params,
+        store,
+        preferStoreCredential,
+        forceRefresh: params.forceOAuthRefresh === true,
+      },
+    );
+    const accessToken = resolvedCredential.access?.trim();
+    if (accessToken) {
+      loginParams = buildChatgptAuthTokensParams(profileId, resolvedCredential, accessToken);
+    }
+  }
   if (!loginParams) {
     throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" does not contain usable credentials. Repair or replace the selected OpenAI credential, then retry.`,
@@ -895,58 +925,6 @@ async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
     return undefined;
   }
   return { type: "apiKey", apiKey };
-}
-
-async function resolveLoginParamsForCredential(
-  profileId: string,
-  credential: AuthProfileCredential,
-  params: {
-    agentDir: string;
-    store: AuthProfileStore;
-    preferStoreCredential: boolean;
-    forceOAuthRefresh: boolean;
-    authHandoff?: CodexAppServerAuthHandoff;
-    previousAccountId?: string | null;
-    config?: AuthProfileOrderConfig;
-  },
-): Promise<CodexLoginAccountParams | undefined> {
-  // Runtime honors the persisted auth profile type. Shape-based remediation
-  // belongs at credential entry time so request handling does not preemptively
-  // reject opaque provider credentials.
-  if (credential.type === "api_key" || credential.type === "token") {
-    const resolved = await resolveApiKeyForProfile({
-      cfg: params.config,
-      store: params.preferStoreCredential
-        ? params.store
-        : ensureAuthProfileStore(params.agentDir, {
-            allowKeychainPrompt: false,
-            profileId,
-            config: params.config,
-          }),
-      profileId,
-      agentDir: params.agentDir,
-    });
-    const value = resolved?.apiKey?.trim();
-    if (!value) {
-      return undefined;
-    }
-    return credential.type === "api_key"
-      ? { type: "apiKey", apiKey: value }
-      : buildChatgptAuthTokensParams(profileId, credential, value);
-  }
-  const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
-    agentDir: params.agentDir,
-    store: params.store,
-    preferStoreCredential: params.preferStoreCredential,
-    forceRefresh: params.forceOAuthRefresh,
-    authHandoff: params.authHandoff,
-    previousAccountId: params.previousAccountId,
-    config: params.config,
-  });
-  const accessToken = resolvedCredential.access?.trim();
-  return accessToken
-    ? buildChatgptAuthTokensParams(profileId, resolvedCredential, accessToken)
-    : undefined;
 }
 
 async function resolveOAuthCredentialForCodexAppServer(

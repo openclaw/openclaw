@@ -17,7 +17,7 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import { runStartupSessionMigration } from "../../../gateway/server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "../../../gateway/server-startup-session-migration.test-support.js";
 import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
@@ -192,7 +192,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const log = { info: vi.fn(), warn: vi.fn() };
     try {
       await lock.run(async () => {
-        await runStartupSessionMigration({ cfg: { agents: { entries: { main: {} } } }, log });
+        await runStartupSessionMaintenanceForTest({
+          cfg: { agents: { entries: { main: {} } } },
+          log,
+        });
         await initSubagentRegistry();
         await activateGatewayRuntime();
         await testing.sweepOnceForTests();

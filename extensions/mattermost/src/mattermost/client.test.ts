@@ -1,6 +1,29 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
@@ -72,6 +95,68 @@ afterEach(() => {
 });
 
 describe("Mattermost request boundary", () => {
+  it.each([false, true])(
+    "rechecks custom message transports after effect preparation (retired=%s)",
+    async (retired) => {
+      const preparing = createDeferred();
+      const prepared = createDeferred();
+      const dispatched = createDeferred();
+      const response = createDeferred<Response>();
+      const caller = new AbortController();
+      const failure = new Error("Mattermost caller retired");
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const fetchImpl = vi.fn<typeof fetch>(() => {
+        dispatched.resolve();
+        return response.promise;
+      });
+      const client = createMattermostClient({
+        ...clientParams,
+        fetchImpl,
+        assertRequestCurrent: () => caller.signal.throwIfAborted(),
+      });
+      const sending = createMattermostPost(client, postParams).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          dispatched.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+        ]);
+        expect(fetchImpl).not.toHaveBeenCalled();
+        if (retired) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!retired) {
+          await dispatched.promise;
+          caller.abort(failure);
+        }
+        response.resolve(Response.json({ id: "post-1" }));
+        const outcome = await sending;
+        if (retired) {
+          expect(outcome).toMatchObject({ error: { cause: failure } });
+          expect("error" in outcome && outcome.error).toBeInstanceOf(
+            PlatformMessageNotDispatchedError,
+          );
+        } else {
+          expect(outcome).toEqual({ value: { id: "post-1" } });
+        }
+        expect(fetchImpl).toHaveBeenCalledTimes(retired ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ id: "post-1" }));
+        await sending;
+        effectGate.prepare = undefined;
+      }
+    },
+  );
+
   it("rejects an empty base URL", () => {
     expect(() => createMattermostClient({ baseUrl: "", botToken })).toThrow("baseUrl is required");
   });
