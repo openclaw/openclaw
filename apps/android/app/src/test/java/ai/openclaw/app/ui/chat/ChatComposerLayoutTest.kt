@@ -5640,11 +5640,30 @@ class ChatComposerLayoutTest {
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
       )
     }
-    composeRule.waitUntil {
+    // The controller publishes from IO, outside Compose's automatic synchronization.
+    val progressCardRefresh =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() =
+            controller.progressCard.value
+              ?.steps
+              ?.size == steps.size
+
+        override fun getDiagnosticMessageIfBusy(): String = "Progress card steps=${controller.progressCard.value?.steps?.size} expected=${steps.size}"
+      }
+    composeRule.registerIdlingResource(progressCardRefresh)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(progressCardRefresh)
+    }
+    assertEquals(
+      "The progress card must publish all fixture steps",
+      steps.size,
       controller.progressCard.value
         ?.steps
-        ?.size == steps.size
-    }
+        ?.size,
+    )
   }
 
   private fun assertPhysicalEnterDuringActiveRun(

@@ -1741,7 +1741,6 @@ src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	4
 src/cli/connect-cli.ts	1
 src/cli/cron-cli/list-jobs.ts	4
-src/cli/cron-cli/register.cron-add.ts	1
 src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
@@ -1759,7 +1758,7 @@ src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	2
-src/cli/nodes-cli/register.pairing.ts	4
+src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
@@ -1882,7 +1881,7 @@ src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
-src/commands/message-format.ts	17
+src/commands/message-format.ts	15
 src/commands/models/list.probe.ts	1
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3

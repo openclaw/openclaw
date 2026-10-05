@@ -48,15 +48,6 @@ export function buildColdStartStatusSummary() {
   };
 }
 
-function shouldSkipStatusScanNetworkChecks(params: {
-  coldStart: boolean;
-  hasConfiguredChannels: boolean;
-  all?: boolean;
-}): boolean {
-  // First-run users without channels should get instant status instead of waiting on network probes.
-  return params.coldStart && !params.hasConfiguredChannels && params.all !== true;
-}
-
 type StatusScanCoreBootstrapParams<TAgentStatus> = {
   coldStart: boolean;
   cfg: OpenClawConfig;
@@ -78,11 +69,9 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
 ) {
   const tailscaleMode = params.cfg.gateway?.tailscale?.mode ?? "off";
-  const skipColdStartNetworkChecks = shouldSkipStatusScanNetworkChecks({
-    coldStart: params.coldStart,
-    hasConfiguredChannels: params.hasConfiguredChannels,
-    all: params.opts.all,
-  });
+  // First-run users without channels should get instant status instead of waiting on network probes.
+  const skipColdStartNetworkChecks =
+    params.coldStart && !params.hasConfiguredChannels && params.opts.all !== true;
   const statusTimeoutMs = params.opts.timeoutMs ?? 10_000;
   const tailscaleTimeoutMs = Math.min(1200, statusTimeoutMs);
   const tailscaleDnsPromise =

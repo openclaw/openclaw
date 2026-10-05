@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { readSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
@@ -339,6 +340,31 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   describe("compact session currency facts", () => {
+    it("checks logical session currency without reading saved snapshots", () => {
+      database.db
+        .prepare(
+          "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, ?, ?)",
+        )
+        .run(
+          sessionKey,
+          "skillsSnapshot",
+          JSON.stringify({ prompt: "saved instructions".repeat(4096), skills: [] }),
+        );
+      const payloads = trackSqliteStatementExecutions(database.db, ["entry"], (sql) =>
+        sql.includes('from "session_nodes"') ? "entry" : null,
+      );
+      try {
+        expect(
+          readSessionEntryCurrentFactsInDatabase(database, sessionKey, "logical"),
+        ).toMatchObject({
+          sessionId: "session-1",
+        });
+        expect(payloads.textBytes.entry).toBeLessThan(2048);
+      } finally {
+        payloads.restore();
+      }
+    });
+
     it("discards facts first observed after a write in a rolled-back native transaction", () => {
       // A fresh admitted connection has never installed the lazy revision tracker.
       const connection = openNodeSqliteDatabase(database.path);

@@ -651,6 +651,9 @@ export class Agent {
     try {
       await executor(abortController.signal);
     } catch (error) {
+      if (this.runtime?.isLocalError?.(error)) {
+        throw error;
+      }
       await this.handleRunFailure(error, abortController.signal.aborted);
     } finally {
       this.finishRun();

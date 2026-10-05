@@ -252,9 +252,13 @@ vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
   findDoctorLegacyConfigIssues,
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  completePluginMetadataSnapshot: ({ snapshot }: { snapshot?: PluginMetadataSnapshot }) => snapshot,
+}));
+
+// mock-isolation: Exercise migration ordering with fixture-owned metadata, without discovery.
 vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
-  completeDoctorPluginMetadataSnapshot: ({ snapshot }: { snapshot?: PluginMetadataSnapshot }) =>
-    snapshot,
   createDoctorPluginMetadataSnapshotScope: (params: {
     getBaseSnapshot: () => PluginMetadataSnapshot | undefined;
   }) => ({

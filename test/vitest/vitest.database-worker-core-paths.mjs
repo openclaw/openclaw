@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/channels/inbound-event/envelope.worker.test.ts",
   "src/model-catalog/remote-refresh.test.ts",
   "src/model-catalog/remote-store.test.ts",
   "src/agents/subagents/spawn/acp-parent-stream-store.sqlite.test.ts",
@@ -515,6 +516,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/agent-session-models.admission.test.ts",
   "src/agents/session-tool-result-guard.transcript-events.test.ts",
   "src/agents/embedded-agent-runner/compact.delegate.test.ts",
+  "src/agents/embedded-agent-runner/compact.auth-preparation.test.ts",
   "src/agents/embedded-agent-runner/compact.delegate-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.foreground-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.hooks.test.ts",

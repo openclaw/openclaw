@@ -70,7 +70,7 @@ import type {
   SessionHistoryWorkerDatabase,
   SessionEntryListWorkerInput,
 } from "./session-transcript-worker.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
@@ -178,6 +178,12 @@ export function readSessionEntryReadOnlyInWorker(
     }
     return read.value;
   });
+}
+
+/** Envelope timestamps are descriptive reads; missing stores remain absent. */
+export async function readSessionUpdatedAtInWorker(input: SessionAccessScope) {
+  const entry = await readSessionEntryReadOnlyInWorker({ ...input, projection: "list" });
+  return entry?.updatedAt;
 }
 
 /** Diagnostic identities name the default agent store, not a logical store locator. */

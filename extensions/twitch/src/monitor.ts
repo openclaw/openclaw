@@ -1,5 +1,5 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
@@ -96,7 +96,7 @@ async function processTwitchMessage(params: {
       resolveTurn: async (input) => {
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
-        const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
+        const body = (await createChannelInboundEnvelopeBuilderAsync({ cfg, route }))({
           channel: "Twitch",
           from: fromLabel,
           timestamp: input.timestamp,

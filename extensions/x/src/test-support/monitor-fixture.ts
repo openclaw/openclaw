@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -11,6 +12,7 @@ import { getXApi } from "../client.js";
 import { startXAccount } from "../monitor.js";
 import { setXRuntime } from "../runtime.js";
 import { createKeyedState, createQueue } from "./monitor.js";
+import { createXTestSpend } from "./spend.js";
 
 export const client = { getXApi: vi.mocked(getXApi) };
 
@@ -72,6 +74,7 @@ export function fixture(options: {
   const cfg = options.cfg ?? config;
   const replies: Array<{ text: string; parent: string }> = [];
   const api = {
+    spend: createXTestSpend(),
     getMentions: vi.fn(async (_params: Parameters<XApiClient["getMentions"]>[0]) =>
       page(options.posts),
     ),
@@ -124,10 +127,11 @@ export function fixture(options: {
   });
   const queue = options.queue ?? createQueue<Payload>();
   // The host doubles expose only the runtime facilities this channel consumes.
+  const stateDir = `synthetic-x-monitor:${randomUUID()}`;
   const runtime = {
     state: {
       openKeyedStore,
-      resolveStateDir: () => "synthetic-x-monitor",
+      resolveStateDir: () => stateDir,
       openChannelIngressQueue: () => queue,
     },
     logging: { getChildLogger: () => logger },

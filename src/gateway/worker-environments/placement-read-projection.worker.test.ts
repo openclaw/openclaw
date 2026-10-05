@@ -14,6 +14,9 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -21,6 +24,7 @@ import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
+import { createWorkerEnvironmentStore } from "./store.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -58,6 +62,92 @@ async function activePlacement(
 }
 
 describe("worker placement read projection", () => {
+  it("publishes node retention without host SQL and refuses a drained placement on the next authority check", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-node-retention-"));
+    const database = openOpenClawStateDatabase();
+    const { store, placement, identity } = await activePlacement(database, "node-retention");
+    await store.claimTurn({
+      ...identity,
+      owner: placementTurnOwner(placement),
+      claimId: "retained-claim",
+      runId: "retained-run",
+    });
+    const environments = await createWorkerEnvironmentStore({ database });
+    const node = createNodeWorkerBundleTestNode();
+    const environment = environments.get(placement.environmentId!);
+    if (!environment) {
+      throw new Error("Expected the seeded worker environment");
+    }
+    const nodeEnvironment = {
+      ...environment,
+      nodeDeviceId: node.nodeId,
+      desktopAvailable: false,
+      desktopApps: [],
+      tunnelStatus: "connected" as const,
+    };
+    const entered = createDeferred<Parameters<NodeWorkerSupervisorTransport["invoke"]>[0]>();
+    const reply = createDeferred();
+    const warn = vi.fn();
+    const coordinator = createNodeWorkspaceRetainCoordinator({
+      gatewayNamespace: "gateway-retention",
+      placements: store,
+      environments: {
+        list: () => [nodeEnvironment],
+      },
+      warn,
+    });
+    coordinator.bindTransport({
+      getCurrentNode: async () => node,
+      listCurrentNodes: async () => [node],
+      hasCurrentRunner: () => true,
+      isCurrent: () => true,
+      invoke: async (request) => {
+        entered.resolve(request);
+        await reply.promise;
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+        };
+      },
+    });
+    const sql = observeMainThreadSql();
+    const startup = coordinator.start();
+    try {
+      const request = await awaitGateBeforeSettlement(
+        entered.promise,
+        startup,
+        "retention was not dispatched",
+      );
+      expect(request.params).toMatchObject({
+        retain: [expect.objectContaining({ manifestRefs: null })],
+      });
+      expect(request.isDispatchAuthorized()).toBe(true);
+      sql.expectIdle();
+      await store.startDispatch({
+        sessionId: "unrelated",
+        sessionKey: "agent:main:unrelated",
+        agentId: "main",
+      });
+      expect(request.isDispatchAuthorized()).toBe(true);
+      await store.startDrain({
+        sessionId: placement.sessionId,
+        environmentId: placement.environmentId!,
+        ownerEpoch: placement.activeOwnerEpoch!,
+        expectedGeneration: placement.generation,
+      });
+      sql.clear();
+      expect(request.isDispatchAuthorized()).toBe(false);
+      sql.expectIdle();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      reply.resolve();
+      await startup;
+      await coordinator.stop();
+      sql.restore();
+      await environments.close();
+    }
+  });
+
   it("refreshes admission facts when the preceding turn releases during its read", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-admission-refresh-"));
     const database = openOpenClawStateDatabase();

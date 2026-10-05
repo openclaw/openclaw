@@ -18,7 +18,8 @@ import {
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
-import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -155,10 +156,7 @@ function resolveMediatedNativeTools(
         .filter((name) => NATIVE_TOOL_EXCLUDE.has(name)),
     );
   }
-  if (
-    toolsAllow === undefined ||
-    toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
-  ) {
+  if (toolsAllow === undefined) {
     return new Set();
   }
   return new Set(
@@ -176,6 +174,7 @@ async function resolveNodeExecScope(
   const shouldResolveExec =
     !params.rootedExecution &&
     !params.context.trustedInternalHandoff &&
+    !toolPolicyRestrictsTools(pickSandboxToolPolicy(params.context.conversationToolPolicy)) &&
     params.context.nodeExecAllowed === true &&
     !params.defaultMediatedToolNames?.length &&
     resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
@@ -314,7 +313,9 @@ async function constructMcpLoopbackTools(
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
   const mediatedNativeTools =
-    params.rootedExecution || context.trustedInternalHandoff
+    params.rootedExecution ||
+    context.trustedInternalHandoff ||
+    toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy))
       ? new Set(NATIVE_TOOL_EXCLUDE)
       : resolveMediatedNativeTools(toolsAllow, mode);
   for (const toolName of params.defaultMediatedToolNames ?? []) {

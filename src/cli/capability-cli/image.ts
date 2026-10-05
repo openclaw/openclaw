@@ -304,13 +304,13 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
     imageCommand,
     "List image generation providers",
     async (cfg, agentId) => {
-      const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-        await import("./shared.js");
+      const { providerHasGenericConfig } = await import("./shared.js");
+      const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
       const { listRuntimeImageGenerationProviders } =
         await import("../../image-generation/runtime.js");
-      const selectedProvider = resolveSelectedProviderFromModelRef(
+      const selectedProvider = resolveModelRefOverride(
         resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
-      );
+      ).provider;
       return listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
         available: true,
         configured:

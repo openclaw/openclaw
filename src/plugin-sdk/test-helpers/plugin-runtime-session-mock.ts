@@ -10,6 +10,9 @@ export function createPluginSessionRuntimeMock() {
     readSessionUpdatedAt: vi.fn<PluginRuntime["channel"]["session"]["readSessionUpdatedAt"]>(
       () => undefined,
     ),
+    readSessionUpdatedAtAsync: vi.fn<
+      PluginRuntime["channel"]["session"]["readSessionUpdatedAtAsync"]
+    >(async () => undefined),
     recordSessionMetaFromInbound:
       vi.fn<PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"]>(),
     recordInboundSession: vi.fn<PluginRuntime["channel"]["session"]["recordInboundSession"]>(),

@@ -139,8 +139,8 @@ export const createTelegramMessageProcessor = (
             buildContext ?? telegramDeps.buildChannelInboundEventContext,
         }
       : {}),
-    ...(telegramDeps.readSessionUpdatedAt
-      ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
+    ...(telegramDeps.readSessionUpdatedAtAsync
+      ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
       : {}),
     ...(telegramDeps.readAmbientTranscriptWatermark
       ? { readAmbientTranscriptWatermark: telegramDeps.readAmbientTranscriptWatermark }

@@ -1,14 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient, type XPost, type XPostEnvelope } from "./api.js";
-import { runXEvents, type XEventStatus } from "./events.js";
-
-const post = (id: string): XPost => ({
-  id,
-  text: "@bot hello",
-  author_id: "7",
-  conversation_id: "1",
-  entities: { mentions: [{ id: "9", username: "bot" }] },
-});
+import { runXEvents, type XCursorState, type XEventStatus } from "./events.js";
+import { budgetApi, post } from "./test-support/events.js";
+import { createXTestSpend } from "./test-support/spend.js";
 
 function streamFixture() {
   const abort = new AbortController();
@@ -17,6 +11,7 @@ function streamFixture() {
   const warning = vi.fn();
   let stream!: ReadableStreamDefaultController<Uint8Array>;
   const api = createXApiClient({
+    spend: createXTestSpend(),
     clientId: "client",
     clientSecret: "secret",
     refreshToken: "refresh",
@@ -43,7 +38,7 @@ function streamFixture() {
     userId: "9",
     signal: abort.signal,
     bearerConfigured: true,
-    getCursor: async () => undefined,
+    getCursor: async () => ({}),
     setCursor: async () => {},
     onPost: async (envelope) => {
       admitted.push(envelope);
@@ -118,15 +113,100 @@ describe("X event transport", () => {
     }
   });
 
+  it.each([
+    { mode: "stale", tokens: [null], finalId: "11", continuation: null },
+    { mode: "rejected", tokens: ["saved", null], finalId: "50", continuation: null },
+    { mode: "forbidden", tokens: ["saved"], finalId: "10", continuation: "saved" },
+    { mode: "repeated", tokens: ["saved"], finalId: "10", continuation: null },
+    {
+      mode: "rejected-twice",
+      tokens: ["saved", null, "fresh"],
+      finalId: "10",
+      continuation: null,
+    },
+  ] as const)("recovers $mode backfill without an unbounded token retry", async (testCase) => {
+    vi.useFakeTimers();
+    const abort = new AbortController();
+    const settled = Promise.withResolvers<void>();
+    const tokens: (string | null)[] = [];
+    const admitted: string[] = [];
+    let cursor: XCursorState = {
+      sinceId: "10",
+      backfill: {
+        sinceId: testCase.mode === "stale" ? "9" : "10",
+        paginationToken: "saved",
+        newestId: "50",
+      },
+    };
+    const api = budgetApi(createXTestSpend(), (url) => {
+      expect(url.searchParams.get("since_id")).toBe("10");
+      const token = url.searchParams.get("pagination_token");
+      tokens.push(token);
+      if (testCase.mode === "forbidden") {
+        return new Response(null, { status: 403 });
+      }
+      if (token && (testCase.mode === "rejected" || testCase.mode === "rejected-twice")) {
+        return new Response(null, { status: 400 });
+      }
+      return Response.json({
+        data: [post("11")],
+        meta:
+          testCase.mode === "rejected-twice"
+            ? { next_token: "fresh" }
+            : testCase.mode === "repeated"
+              ? { next_token: "saved" }
+              : {},
+      });
+    });
+    const run = runXEvents({
+      api,
+      userId: "9",
+      signal: abort.signal,
+      bearerConfigured: false,
+      getCursor: async () => cursor,
+      setCursor: async (next) => {
+        cursor = next;
+      },
+      onPost: async ({ post: mention }) => {
+        admitted.push(mention.id);
+      },
+      onStatus: (value) => {
+        if (
+          value.cursor ||
+          value.message === "mentions poll failed; retrying after the poll interval"
+        ) {
+          settled.resolve();
+        }
+      },
+    });
+    try {
+      await settled.promise;
+      expect(tokens).toEqual(testCase.tokens);
+      expect(admitted).toEqual(testCase.mode === "forbidden" ? [] : ["11"]);
+      expect(cursor).toEqual({
+        sinceId: testCase.finalId,
+        ...(testCase.continuation
+          ? {
+              backfill: { sinceId: "10", paginationToken: testCase.continuation, newestId: "50" },
+            }
+          : {}),
+      });
+    } finally {
+      abort.abort();
+      await run;
+    }
+  });
+
   it("admits every page in order before advancing the cursor and retains it on admission failure", async () => {
     vi.useFakeTimers();
     const abort = new AbortController();
     const failed = Promise.withResolvers<void>();
     const completed = Promise.withResolvers<void>();
-    let cursor = "10";
+    let cursor: XCursorState = { sinceId: "10" };
     let fail = true;
     const order: string[] = [];
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "refresh",
@@ -150,9 +230,9 @@ describe("X event transport", () => {
       signal: abort.signal,
       bearerConfigured: false,
       getCursor: async () => cursor,
-      setCursor: async (id: string) => {
-        order.push(`cursor:${id}`);
-        cursor = id;
+      setCursor: async (next) => {
+        order.push(`cursor:${next.sinceId}`);
+        cursor = next;
       },
       onPost: async ({ post: mention }: { post: XPost }) => {
         order.push(`append:${mention.id}`);
@@ -171,7 +251,7 @@ describe("X event transport", () => {
     });
     try {
       await failed.promise;
-      expect(cursor).toBe("10");
+      expect(cursor).toEqual({ sinceId: "10" });
       expect(order).toEqual(["append:11", "append:12"]);
       fail = false;
       order.length = 0;
@@ -197,9 +277,10 @@ describe("X event transport", () => {
     const lookups: string[] = [];
     const backfills: (string | null)[] = [];
     const statuses: XEventStatus[] = [];
-    let cursor = "10";
+    let cursor: XCursorState = { sinceId: "10" };
     const encoder = new TextEncoder();
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "refresh",
@@ -291,7 +372,7 @@ describe("X event transport", () => {
       await firstAdmitted.promise;
       await vi.advanceTimersByTimeAsync(0);
       expect(admitted).toEqual(["20"]);
-      expect(cursor).toBe("10");
+      expect(cursor.sinceId).toBe("10");
       expect(lookups).toEqual(["50", "20"]);
       expect(envelopes[0]?.users).toEqual([
         { id: "7", username: "maintainer", name: "Maintainer" },
@@ -321,8 +402,9 @@ describe("X event transport", () => {
     const consumed = Promise.withResolvers<void>();
     const admitted: XPostEnvelope[] = [];
     const lookups: string[] = [];
-    let cursor: string | undefined;
+    let cursor: XCursorState = {};
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "seed",
@@ -374,7 +456,7 @@ describe("X event transport", () => {
     try {
       await consumed.promise;
       expect(admitted.map((envelope) => envelope.post.id)).toEqual(["20"]);
-      expect(cursor).toBeUndefined();
+      expect(cursor.sinceId).toBeUndefined();
       expect(lookups).toEqual(["20"]);
       expect(admitted[0]?.users).toEqual([{ id: "7", username: "maintainer" }]);
     } finally {
@@ -401,6 +483,7 @@ describe("X event transport", () => {
       const polled = Promise.withResolvers<void>();
       const statuses: XEventStatus[] = [];
       const api = createXApiClient({
+        spend: createXTestSpend(),
         clientId: "client",
         clientSecret: "test-client-secret",
         refreshToken: "test-refresh-token",
@@ -448,7 +531,7 @@ describe("X event transport", () => {
         mode,
         signal: abort.signal,
         bearerConfigured: true,
-        getCursor: async () => undefined,
+        getCursor: async () => ({}),
         setCursor: async () => {},
         onPost: async () => {},
         onStatus: (value) => statuses.push(value),
@@ -467,15 +550,13 @@ describe("X event transport", () => {
         abort.abort();
         await run;
       }
-      expect(statuses).toContainEqual(
-        expect.objectContaining({
-          eventMode: "poll",
-          message:
-            failure === "network"
-              ? "X API network request failed; polling"
-              : `X API /2/activity/${endpoint === "create" ? "subscriptions" : endpoint} failed (HTTP ${failure}): OauthAccessTokenRequired: OAuth user access token is required for this event type; polling`,
-        }),
-      );
+      expect(statuses.at(-1)).toMatchObject({
+        eventMode: "poll",
+        message:
+          failure === "network"
+            ? "X API network request failed; polling"
+            : `X API /2/activity/${endpoint === "create" ? "subscriptions" : endpoint} failed (HTTP ${failure}): OauthAccessTokenRequired: OAuth user access token is required for this event type; polling`,
+      });
     },
   );
 });

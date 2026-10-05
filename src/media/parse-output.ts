@@ -513,14 +513,37 @@ export function splitMediaOutput(
   // Line offsets and scanner spans advance in source order.
   let codeBlockIndex = 0;
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 2) {
-    const line = expectDefined(lines[lineIndex], "media output line");
+    let line = expectDefined(lines[lineIndex], "media output line");
     lineSeparator = lines[lineIndex + 1] ?? "";
-    const lineEnd = lineOffset + line.length;
+    let lineEnd = lineOffset + line.length;
+    const isMediaDirective = extractMediaDirectives && /^\s*MEDIA:/i.test(line);
     const lineImages: MarkdownImageMatch[] = [];
     for (; markdownImageIndex < markdownImages.length; markdownImageIndex += 1) {
       const match = expectDefined(markdownImages[markdownImageIndex], "Markdown image span");
       if (match.start >= lineEnd) {
         break;
+      }
+      if (
+        !isMediaDirective &&
+        match.start >= lineOffset &&
+        match.end > lineEnd &&
+        match.end - lineOffset <= MAX_MARKDOWN_IMAGE_LINE_LENGTH &&
+        lineImages.length < MAX_MARKDOWN_IMAGE_MATCHES_PER_LINE
+      ) {
+        // The Markdown scanner can span label, destination, and title lines. Project
+        // that complete source range together so extraction cannot split the image.
+        let endIndex = lineIndex;
+        let endOffset = lineEnd;
+        while (endOffset < match.end && endIndex + 2 < lines.length) {
+          endOffset += (lines[endIndex + 1]?.length ?? 0) + (lines[endIndex + 2]?.length ?? 0);
+          endIndex += 2;
+        }
+        if (endOffset - lineOffset <= MAX_MARKDOWN_IMAGE_LINE_LENGTH) {
+          lineIndex = endIndex;
+          lineEnd = endOffset;
+          line = trimmedRaw.slice(lineOffset, lineEnd);
+          lineSeparator = lines[lineIndex + 1] ?? "";
+        }
       }
       if (
         line.length <= MAX_MARKDOWN_IMAGE_LINE_LENGTH &&
@@ -548,8 +571,7 @@ export function splitMediaOutput(
       continue;
     }
 
-    const linePrefix = line.trimStart().slice(0, "MEDIA:".length);
-    if (!extractMediaDirectives || !linePrefix.toUpperCase().startsWith("MEDIA:")) {
+    if (!isMediaDirective) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({
             line,
