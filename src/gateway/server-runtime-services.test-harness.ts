@@ -21,6 +21,7 @@ const runtimeServiceMocks = vi.hoisted(() => {
   const stopSessionDeliveryRuntime = vi.fn(async () => {});
   return {
     heartbeatRunner,
+    warmGatewayDatabasePageCache: vi.fn(async () => {}),
     startHeartbeatRunner: vi.fn<StartHeartbeatRunner>(() => heartbeatRunner),
     runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
     startChannelHealthMonitor: vi.fn(() => ({
@@ -50,6 +51,11 @@ const runtimeServiceMocks = vi.hoisted(() => {
     assertQueuedConversationDeliveryAttemptAuthorized: vi.fn(),
   };
 });
+
+// mock-isolation: Scheduler tests do not inspect or warm host database files.
+vi.mock("./server-database-page-cache.js", () => ({
+  warmGatewayDatabasePageCache: runtimeServiceMocks.warmGatewayDatabasePageCache,
+}));
 
 vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
   startHeartbeatRunner: runtimeServiceMocks.startHeartbeatRunner,
@@ -175,6 +181,7 @@ export function createMaintenanceHandles() {
 }
 
 export function resetRuntimeServiceMocks() {
+  runtimeServiceMocks.warmGatewayDatabasePageCache.mockReset().mockResolvedValue(undefined);
   runtimeServiceMocks.heartbeatRunner.stop.mockClear();
   runtimeServiceMocks.heartbeatRunner.updateConfig.mockClear();
   runtimeServiceMocks.startHeartbeatRunner.mockClear();

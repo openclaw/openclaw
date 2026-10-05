@@ -3,7 +3,7 @@ import { resolveGlobalMap, resolveGlobalSingleton } from "openclaw/plugin-sdk/gl
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { XCostLimits } from "./cost-limits.js";
 
-export const X_STREAM_HEADROOM_MICRO_USD = 500_000;
+const X_STREAM_HEADROOM_MICRO_USD = 500_000;
 const MICRO_USD = 1_000_000;
 const RETENTION_MS = 70 * 24 * 60 * 60_000;
 

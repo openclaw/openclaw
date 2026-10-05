@@ -198,7 +198,7 @@ export function normalizeFallbackFailureReason(
 
 export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
-): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
+): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
   return {
     defaultCommandEnv,
@@ -207,10 +207,7 @@ export async function buildUpdateCommandRunner(
       (async (argv, options) =>
         await runCommandWithTimeout(argv, {
           ...options,
-          env:
-            defaultCommandEnv && options.env
-              ? { ...defaultCommandEnv, ...options.env }
-              : (defaultCommandEnv ?? options.env),
+          env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
           // Package-manager trees must not outlive a timed-out updater.
           killProcessTree: true,
         })),

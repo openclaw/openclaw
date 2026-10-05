@@ -37,8 +37,8 @@ import type {
   CompactionAppendPersistence,
   CompactionAppendPersistenceAsync,
 } from "./sessions/session-compaction-persistence.js";
+import { prepareSessionManagerSync } from "./sessions/session-manager-incognito-scope.js";
 import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./sessions/session-persistence-deprecation.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -608,7 +608,7 @@ export function installSessionToolResultGuard(
 
   // Retained third-party synchronous adapter; bundled runtime uses the awaited guard below.
   sessionManager.appendMessage = ((message, options) => {
-    warnSessionPersistenceDeprecation("SessionManager.appendMessage", "appendMessageAsync");
+    prepareSessionManagerSync("appendMessage", sessionManager.getSessionTarget(), sessionManager);
     return withCodeModeSourceAppend(message, options, (sourceAppend) =>
       runSync(guardedAppend(message, options, sourceAppend)),
     );

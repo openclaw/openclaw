@@ -1,8 +1,42 @@
 // Tests CLI entrypoint argument handling and startup behavior.
 import { describe, expect, it, vi } from "vitest";
 import { runWithPrecomputedHelpMocks } from "./cli/precomputed-help.test-helpers.js";
+import * as rootHelp from "./cli/program/root-help.js";
+import * as liveHelp from "./cli/root-help-live-config.js";
+import * as helpMetadata from "./cli/root-help-metadata.js";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 import { withEnvAsync } from "./test-utils/env.js";
+
+async function runRootHelp(
+  argv: string[],
+  setup: {
+    env?: NodeJS.ProcessEnv;
+    outputPrecomputedRootHelpText?: typeof helpMetadata.outputPrecomputedRootHelpText;
+    outputRootHelp?: typeof rootHelp.outputRootHelp;
+    loadRootHelpRenderOptionsForConfigSensitivePlugins?: typeof liveHelp.loadRootHelpRenderOptionsForConfigSensitivePlugins;
+  },
+) {
+  const spies = [
+    vi
+      .spyOn(helpMetadata, "outputPrecomputedRootHelpText")
+      .mockImplementation(setup.outputPrecomputedRootHelpText ?? (() => false)),
+    vi
+      .spyOn(rootHelp, "outputRootHelp")
+      .mockImplementation(setup.outputRootHelp ?? (async () => {})),
+    vi
+      .spyOn(liveHelp, "loadRootHelpRenderOptionsForConfigSensitivePlugins")
+      .mockImplementation(
+        setup.loadRootHelpRenderOptionsForConfigSensitivePlugins ?? (async () => null),
+      ),
+  ];
+  try {
+    return await withEnvAsync(setup.env ?? {}, () => tryHandleRootHelpFastPath(argv));
+  } finally {
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+  }
+}
 
 describe("entry root help fast path", () => {
   it("respects the startup help fast path kill switch", async () => {
@@ -12,7 +46,7 @@ describe("entry root help fast path", () => {
     const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => null);
 
     await expect(
-      tryHandleRootHelpFastPath(argv, {
+      runRootHelp(argv, {
         env: { OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" },
         outputPrecomputedRootHelpText,
         outputRootHelp,
@@ -32,7 +66,7 @@ describe("entry root help fast path", () => {
 
     await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
       await expect(
-        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+        runRootHelp(["node", "openclaw", "--help"], {
           outputPrecomputedRootHelpText,
           outputRootHelp,
           loadRootHelpRenderOptionsForConfigSensitivePlugins,
@@ -49,7 +83,7 @@ describe("entry root help fast path", () => {
     const outputPrecomputedRootHelpText = vi.fn(() => true);
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       env: {},
       outputPrecomputedRootHelpText,
       outputRootHelp,
@@ -64,7 +98,7 @@ describe("entry root help fast path", () => {
   it("renders root help without importing the full program", async () => {
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
@@ -88,7 +122,7 @@ describe("entry root help fast path", () => {
       env: {},
     };
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       env: {},
       outputPrecomputedRootHelpText: outputPrecomputedRootHelpText.mockReturnValue(true),
       outputRootHelp,
@@ -110,7 +144,7 @@ describe("entry root help fast path", () => {
 
     try {
       await expect(
-        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+        runRootHelp(["node", "openclaw", "--help"], {
           env: {},
           loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => ({
             config: {},
@@ -136,7 +170,7 @@ describe("entry root help fast path", () => {
   it("ignores non-root help invocations", async () => {
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "status", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "status", "--help"], {
       outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
@@ -149,14 +183,11 @@ describe("entry root help fast path", () => {
   it("skips the host help fast path when a container target is active", async () => {
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(
-      ["node", "openclaw", "--container", "demo", "--help"],
-      {
-        outputRootHelp,
-        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-        env: {},
-      },
-    );
+    const handled = await runRootHelp(["node", "openclaw", "--container", "demo", "--help"], {
+      outputRootHelp,
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
+      env: {},
+    });
 
     expect(handled).toBe(false);
     expect(outputRootHelp).not.toHaveBeenCalled();

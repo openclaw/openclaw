@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
+import { assertDaemonRuntimePinDefinition } from "./runtime-pin-state.js";
 import {
   buildHiddenLauncherScript,
   buildStartupLauncherScript,
@@ -11,6 +12,7 @@ import {
 } from "./schtasks-layout.js";
 import { isScheduledTaskEnabled, readScheduledTaskRuntime } from "./schtasks-runtime.js";
 import { readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
+import { hasGatewayServiceLauncherOverride } from "./service-types.js";
 
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 const spawnSync = vi.hoisted(() => vi.fn());
@@ -195,6 +197,84 @@ describe("readScheduledTaskCommand", () => {
       expect(captured.at(-1)).toContain("OtherInstall");
     },
   );
+
+  it.each([
+    { label: "canonical inherited cwd", nativeCwd: "C:\\Services\\Gateway", overridden: false },
+    { label: "canonical cwd spelling", nativeCwd: "c:/services/gateway", overridden: false },
+    {
+      label: "authored script cd",
+      nativeCwd: "C:\\Services\\Gateway",
+      scriptCwd: "D:\\Agent Workspace",
+      overridden: false,
+    },
+    { label: "operator inherited cwd", nativeCwd: "D:\\Operator", overridden: true },
+    {
+      label: "legacy action with native cwd",
+      nativeCwd: "C:\\Services\\Gateway",
+      directScript: true,
+      overridden: true,
+    },
+  ])("keeps runtime pins bound to the script with $label", async (scenario) => {
+    const scriptPath = "C:\\Services\\Gateway\\gateway.cmd";
+    const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
+    const action = {
+      type: 0,
+      path: scenario.directScript ? scriptPath : "C:\\Windows\\System32\\cmd.exe",
+      arguments: scenario.directScript ? "" : `/d /s /c ""${scriptPath}""`,
+      workingDirectory: scenario.nativeCwd,
+    };
+    spawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ taskPath: "\\OpenClaw Gateway", state: 4, actions: [action] }),
+    });
+    let script = [
+      "@echo off",
+      ...(scenario.scriptCwd ? [`cd /d "${scenario.scriptCwd}"`] : []),
+      '"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" gateway --port 18789 < NUL',
+    ].join("\r\n");
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathname !== scriptPath) {
+        throw new Error("Unexpected launcher read");
+      }
+      return Buffer.from(script);
+    });
+    const authored = await readScheduledTaskCommand(env, { requireEffective: true });
+    expect(authored).not.toBeNull();
+    if (!authored) {
+      throw new Error("Missing authored task command");
+    }
+    const effective = await readScheduledTaskCommand(env, {
+      requireEffective: true,
+      requireLoaded: true,
+    });
+    expect(effective?.workingDirectory).toBe(scenario.scriptCwd ?? scenario.nativeCwd);
+    expect(() => assertDaemonRuntimePinDefinition(authored, effective)).not.toThrow();
+    expect(hasGatewayServiceLauncherOverride(effective)).toBe(scenario.overridden);
+    if (scenario.scriptCwd) {
+      script = script.replace(scenario.scriptCwd, "D:\\Changed Workspace");
+      const changed = await readScheduledTaskCommand(env, {
+        requireEffective: true,
+        requireLoaded: true,
+      });
+      expect(() => assertDaemonRuntimePinDefinition(authored, changed)).toThrow("readback differs");
+    }
+    spawnSync
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: JSON.stringify({ taskPath: "\\OpenClaw Gateway", state: 4, actions: [action] }),
+      })
+      .mockReturnValue({
+        status: 0,
+        stdout: JSON.stringify({
+          taskPath: "\\OpenClaw Gateway",
+          state: 4,
+          actions: [{ ...action, workingDirectory: "D:\\Reassigned" }],
+        }),
+      });
+    await expect(
+      readScheduledTaskCommand(env, { requireEffective: true, requireLoaded: true }),
+    ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
+  });
 
   async function withScheduledTaskScript(
     options: {

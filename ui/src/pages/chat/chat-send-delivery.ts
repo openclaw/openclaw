@@ -8,7 +8,7 @@ import {
   sameQueuedDeliveryVersion,
 } from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
-import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { chatOutboxDeliveryKey, storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
@@ -77,6 +77,7 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -268,6 +269,7 @@ async function sendPreparedChatMessage(
   const isVisible = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
   const recoverNativeRuntime =
     allowNativeRecovery && isVisible() ? captureChatNativeRuntimeRecovery(host, route) : undefined;
+  let steerSubmission: ReturnType<ChatHost["chatSubmissions"]["retain"]>;
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
@@ -298,6 +300,43 @@ async function sendPreparedChatMessage(
     const deliveryLeafEntryId = prepared.intent
       ? prepared.expectedLeafEntryId
       : expectedLeafEntryId;
+    if (prepared.queueMode === "steer" && isVisible() && host.chatRunId) {
+      const steerTargetRunId = host.chatRunId;
+      const projectedMessage = buildLocalUserMessage(
+        {
+          ...prepared,
+          text: message,
+          mentions: submitted.mentions,
+          attachments,
+          createdAt: startedAt,
+          runId,
+          steerTargetRunId,
+        },
+        "complete",
+      );
+      if (projectedMessage) {
+        steerSubmission = host.chatSubmissions.retain({
+          kind: "delivered",
+          deliveryKey: chatOutboxDeliveryKey(host, scope, runId),
+          owner: host.client!,
+          sessionKey,
+          agentId: prepared.agentId,
+          sessionId: prepared.sessionId ?? host.currentSessionId ?? undefined,
+          pendingRunId: runId,
+          message: projectedMessage,
+        });
+        reduceChatSessionProjection(
+          host,
+          { type: "sendPending", runId, message: projectedMessage },
+          {
+            scope: readChatSessionProjectionScope(host, { sessionKey, agentId: prepared.agentId }),
+          },
+        );
+        // The dispatched steer owns one live boundary even while custody and its
+        // transcript receipt are in flight. A retry cannot close that interval again.
+        rolloverChatStream(host, { runId: steerTargetRunId, boundaryRunId: runId });
+      }
+    }
     const ack = await requestChatSend(host, {
       message,
       workContext: prepared.workContext,
@@ -329,6 +368,9 @@ async function sendPreparedChatMessage(
         return "pending";
       }
       const error = formatTerminalChatSendAckError(ack, "chat");
+      if (steerSubmission) {
+        steerSubmission.pending = false;
+      }
       // Release in-flight ownership before publishing Retry; an immediate click
       // must not see this completed send as the run that blocks its replacement.
       finishScopedChatSending(host, scope);
@@ -464,6 +506,19 @@ async function sendPreparedChatMessage(
   } catch (err) {
     if (!requestConnectionIsCurrent()) {
       return "pending";
+    }
+    if (steerSubmission) {
+      steerSubmission.pending = false;
+    }
+    if (prepared.queueMode === "steer" && isVisible()) {
+      // The retained outbox row owns Retry and uncertain-delivery feedback.
+      reduceChatSessionProjection(
+        host,
+        { type: "sendFailed", runId },
+        {
+          scope: readChatSessionProjectionScope(host, { sessionKey, agentId: prepared.agentId }),
+        },
+      );
     }
     const restriction =
       err instanceof GatewayRequestError

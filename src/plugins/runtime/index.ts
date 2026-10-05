@@ -214,6 +214,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
     version: VERSION,
+    capabilities: base.capabilities,
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),

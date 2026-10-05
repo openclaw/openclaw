@@ -1,6 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as safeCwd from "../infra/safe-cwd.js";
 import {
   readStartupMigrationWarning,
   recordStartupMigrationWarnings,
@@ -57,6 +60,10 @@ it("admits an unavailable plugin while leaving legacy state for Doctor", async (
       ]);
       expect(readStartupMigrationWarning()).toContain(`Plugin "${pluginId}"`);
       expect(readStartupMigrationWarning()).toContain("openclaw update repair");
+      expect(readStartupMigrationWarning()).toContain(
+        "Retired runtime state was left unchanged for Doctor; no import was attempted.",
+      );
+      expect(readStartupMigrationWarning()).toContain(sourcePath);
       expect(await fs.readFile(configPath, "utf8")).toBe(configBytes);
       expect(await fs.readFile(sourcePath, "utf8")).toBe(sourceBytes);
       expect(readConfigMachineState("voicewake.triggers")).toBeUndefined();
@@ -64,6 +71,77 @@ it("admits an unavailable plugin while leaving legacy state for Doctor", async (
     });
   });
 });
+
+it.each(["no-home", "EACCES"] as const)(
+  "continues prepared startup when retired-state inspection fails (%s)",
+  async (fault) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const stateDir = path.join(home, ".openclaw");
+        const configPath = path.join(stateDir, "openclaw.json");
+        const sourcePath = path.join(stateDir, "settings", "voicewake.json");
+        const config = {
+          gateway: { mode: "local" as const },
+          plugins: { enabled: false },
+          meta: { migrations: { webhookListeners: true as const } },
+        };
+        const configBytes = `${JSON.stringify(config)}\n`;
+        const sourceBytes = '{"triggers":["leave-for-doctor"]}\n';
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(configPath, configBytes);
+        await fs.writeFile(sourcePath, sourceBytes);
+        await seedInstalledPluginIndex({}, { config });
+
+        const lstat = fsSync.lstatSync;
+        try {
+          if (fault === "EACCES") {
+            vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+              if (args[0] === sourcePath) {
+                throw Object.assign(new Error(`EACCES: permission denied, lstat ${sourcePath}`), {
+                  code: "EACCES",
+                });
+              }
+              return lstat(...args);
+            });
+          }
+          const ready = await runStartupConfigPreflight({
+            gateway: fault === "EACCES",
+            observe: false,
+            ...(fault === "no-home"
+              ? {
+                  beforeStatePreparation: async () => {
+                    // Configuration is prepared; the service has only explicit state paths.
+                    for (const key of ["OPENCLAW_HOME", "HOME", "USERPROFILE", "PREFIX"]) {
+                      vi.stubEnv(key, undefined);
+                    }
+                    vi.spyOn(os, "homedir").mockReturnValue("");
+                    vi.spyOn(safeCwd, "tryProcessCwd").mockReturnValue(undefined);
+                    return true;
+                  },
+                }
+              : {}),
+          });
+
+          expect(ready.snapshot.valid).toBe(true);
+          expect(readStartupMigrationWarning()).toContain(
+            "Could not inspect retired runtime state:",
+          );
+          expect(readStartupMigrationWarning()).toContain("; run openclaw doctor");
+          expect(readStartupMigrationWarning()).toContain(
+            fault === "no-home"
+              ? "Unable to resolve an OpenClaw home"
+              : `EACCES: permission denied, lstat ${sourcePath}`,
+          );
+        } finally {
+          vi.restoreAllMocks();
+          vi.unstubAllEnvs();
+        }
+        expect(await fs.readFile(configPath, "utf8")).toBe(configBytes);
+        expect(await fs.readFile(sourcePath, "utf8")).toBe(sourceBytes);
+      });
+    });
+  },
+);
 
 it.each([false, true])(
   "loads plugin repair diagnostics only for invalid startup config (invalid: %s)",

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 // Route tests mock the public facade in shared workers; exercise the real owners here.
@@ -26,16 +27,12 @@ import {
   type ChromeMcpToolResult,
 } from "./chrome-mcp-contracts.js";
 import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
-import {
-  parseChromeMcpUnixProcessListForTest,
-  refreshChromeMcpCleanupProcess,
-} from "./chrome-mcp-process.js";
+import { refreshChromeMcpCleanupProcess } from "./chrome-mcp-process.js";
 import {
   closeChromeMcpSession,
   getChromeMcpPid,
   getChromeMcpSessionOwner,
   resetChromeMcpSessionsForTest,
-  setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp-session.js";
 import {
@@ -48,22 +45,19 @@ import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import {
   createFakeSession,
   createPageSession,
+  fakeListPagesResult,
   FAKE_TARGET_1,
   installChromeMcpSessionTestHooks,
   snapshotWithControls,
+  waitForChromeMcpState,
   type SessionPage,
   type ToolCall,
+  type ToolCallMock,
 } from "./chrome-mcp.test-support.js";
 
-type ToolCallMock = {
-  mock: {
-    calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
-  };
-};
-
-function waitForChromeMcpState<T>(assertion: () => T | Promise<T>): Promise<T> {
-  return vi.waitFor(assertion, { interval: 1 });
-}
+const { mockChromeMcpProcesses } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
 
 function createSdkTimeoutCallTool() {
   return vi.fn(
@@ -75,12 +69,6 @@ function createSdkTimeoutCallTool() {
         );
       }),
   );
-}
-
-function fakeListPagesResult() {
-  return {
-    content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-  };
 }
 
 type ChromeMcpSessionFactory = Exclude<
@@ -123,20 +111,27 @@ describe("chrome MCP page parsing", () => {
     },
   );
 
-  it("binds macOS ancestry, start time, and executable command in one snapshot row", () => {
-    expect(
-      parseChromeMcpUnixProcessListForTest(
+  it("binds macOS ancestry, start time, and executable command in one snapshot row", async () => {
+    mockChromeMcpProcesses({ platform: "darwin" });
+    vi.spyOn(processRuntime, "runExec").mockResolvedValue({
+      stdout:
         "  123   1 Fri Jul 11 15:00:00 2026 /Applications/Google Chrome --remote-debugging-port=0",
-        "darwin",
-      ),
-    ).toEqual([
-      {
-        pid: 123,
-        ppid: 1,
-        identity:
-          "darwin:Fri Jul 11 15:00:00 2026|/Applications/Google Chrome --remote-debugging-port=0",
+      stderr: "",
+    });
+    const session = createFakeSession();
+    session.processCleanup = { status: "open" };
+    await refreshChromeMcpCleanupProcess(session);
+    expect(session.processCleanup).toEqual({
+      status: "tracked",
+      target: {
+        root: {
+          pid: 123,
+          identity:
+            "darwin:Fri Jul 11 15:00:00 2026|/Applications/Google Chrome --remote-debugging-port=0",
+        },
+        descendants: [],
       },
-    ]);
+    });
   });
 
   it("closes the exact cached client before replacing a session whose process exited", async () => {
@@ -718,7 +713,7 @@ describe("chrome MCP page parsing", () => {
       let alive = true;
       let lateCleanup: Promise<void> | undefined;
       let replacement: typeof original | undefined;
-      setChromeMcpProcessCleanupDepsForTest({
+      mockChromeMcpProcesses({
         platform: "linux",
         listProcesses: async () => {
           if (++scans === 2) {
@@ -772,7 +767,7 @@ describe("chrome MCP page parsing", () => {
     session.client.close = closeMock as typeof session.client.close;
     const killCalls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const alive = new Set([123, 124, 125]);
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "linux",
       listProcesses: vi.fn(async () =>
         [
@@ -814,7 +809,7 @@ describe("chrome MCP page parsing", () => {
         alive.delete(pid);
       }
     });
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "linux",
       listProcesses: vi.fn(async () =>
         [
@@ -846,7 +841,7 @@ describe("chrome MCP page parsing", () => {
       (session.transport as { pid: number | null }).pid = null;
     });
     session.client.close = closeMock as typeof session.client.close;
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "linux",
       listProcesses,
       sleep: vi.fn().mockResolvedValue(undefined),
@@ -866,7 +861,7 @@ describe("chrome MCP page parsing", () => {
     (session.transport as { pid: number | null }).pid = 123;
     let alive = true;
     listProcesses.mockImplementation(async () => (alive ? [processSnapshot(123, 1)] : []));
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "linux",
       listProcesses,
       killProcess: (_pid, signal) => {
@@ -887,7 +882,7 @@ describe("chrome MCP page parsing", () => {
     session.client.close = vi.fn(async () => {
       closeOrder.push("client.close");
     }) as typeof session.client.close;
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "win32",
       listProcesses: vi.fn(async () => (alive ? [processSnapshot(123, 1)] : [])),
       taskkillProcessTree: vi.fn(async (pid) => {
@@ -910,7 +905,7 @@ describe("chrome MCP page parsing", () => {
       (session.transport as { pid: number | null }).pid = null;
     });
     session.client.close = closeMock as typeof session.client.close;
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "win32",
       listProcesses: vi.fn().mockResolvedValue([processSnapshot(123, 1)]),
       taskkillProcessTree: vi.fn().mockRejectedValue(new Error("taskkill failed")),
@@ -928,7 +923,7 @@ describe("chrome MCP page parsing", () => {
     const taskkillProcessTree = vi.fn(async () => {
       alive = false;
     });
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "win32",
       listProcesses: vi.fn(async () => (alive ? [processSnapshot(123, 1)] : [])),
       taskkillProcessTree,
@@ -947,7 +942,7 @@ describe("chrome MCP page parsing", () => {
     }) as typeof session.client.close;
     let identity = "start-123";
     const taskkillProcessTree = vi.fn().mockRejectedValue(new Error("taskkill failed"));
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "win32",
       listProcesses: vi.fn(async () => [processSnapshot(123, 1, identity)]),
       taskkillProcessTree,
@@ -970,10 +965,10 @@ describe("chrome MCP page parsing", () => {
       processCleanup: {
         status: "tracked",
         target: {
-          root: { pid: 123, identity: "start-123" },
+          root: { pid: 123, identity: "win32:start-123|fixture" },
           descendants: [
-            { pid: 124, identity: "start-124" },
-            { pid: 125, identity: "start-125" },
+            { pid: 124, identity: "win32:start-124|fixture" },
+            { pid: 125, identity: "win32:start-125|fixture" },
           ],
         },
       },
@@ -987,7 +982,7 @@ describe("chrome MCP page parsing", () => {
       firstDescendantAlive = false;
       secondDescendantIdentity = "start-reused";
     });
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "win32",
       listProcesses: async () => [
         processSnapshot(124, 1, secondDescendantIdentity),
@@ -1013,7 +1008,7 @@ describe("chrome MCP page parsing", () => {
     });
     session.client.close = closeMock as typeof session.client.close;
     const killProcess = vi.fn();
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "linux",
       listProcesses: vi.fn().mockResolvedValue([processSnapshot(123, 1)]),
       killProcess,
@@ -1029,7 +1024,7 @@ describe("chrome MCP page parsing", () => {
     expect(factory).toHaveBeenCalledOnce();
 
     let alive = true;
-    setChromeMcpProcessCleanupDepsForTest({
+    mockChromeMcpProcesses({
       platform: "linux",
       listProcesses: vi.fn(async () => (alive ? [processSnapshot(123, 1)] : [])),
       killProcess: (pid, signal) => {

@@ -256,5 +256,5 @@ export type CreatePluginRuntimeOptions = {
 /** Checked contract for both the path-loaded factory and its implementation. */
 export type PluginRuntimeFactory = (
   options?: CreatePluginRuntimeOptions,
-  base?: Pick<PluginRuntime, "config" | "state" | "system">,
+  base?: Pick<PluginRuntime, "capabilities" | "config" | "state" | "system">,
 ) => PluginRuntime;

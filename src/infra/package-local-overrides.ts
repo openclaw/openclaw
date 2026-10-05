@@ -507,9 +507,6 @@ export async function applyLocalPackageOverrides(params: {
       const backupPath = path.join(rollbackDir, change.path);
 
       if (change.kind === "deleted") {
-        if (!change.baseline) {
-          throw new Error(`missing local override baseline for ${change.path}`);
-        }
         const backupMode = await deleteLocalOverrideTarget({
           packageFs,
           runtimeUrls,
@@ -519,9 +516,6 @@ export async function applyLocalPackageOverrides(params: {
         });
         rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
-        if (!change.savedPath) {
-          throw new Error(`missing saved override payload for ${change.path}`);
-        }
         const appliedEntry = await buildLocalOverrideInventoryEntry({
           relativePath: change.path,
           sourcePath: change.savedPath,
