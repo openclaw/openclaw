@@ -336,11 +336,15 @@ class PersonReference extends OpenClawLightDomContentsElement {
         }
         this.portal.pointerInside = true;
         this.portal.clearClose();
-        this.portal.scheduleOpen(250, () => {
-          if (this.portal.held) {
-            this.open();
-          }
-        });
+        this.portal.scheduleOpen(
+          250,
+          () => {
+            if (this.portal.held) {
+              this.open();
+            }
+          },
+          this.trigger,
+        );
       }}
       @pointerleave=${() => this.portal.schedulePointerExit()}
       @pointercancel=${this.close}
