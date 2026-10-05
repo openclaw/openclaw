@@ -240,6 +240,26 @@ describe("ManagedWorktreeService branch discovery", () => {
     });
   });
 
+  it("rejects a missing HEAD object after a branch-list cache hit", async () => {
+    const first = await service.listRepositoryBranches(repo, { includeRepositoryStatus: true });
+    expect(first.repositoryStatus).toBe("git");
+    expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+      first,
+    );
+    const head = await git(repo, "rev-parse", "HEAD");
+    await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
+
+    await expect(
+      service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
+    ).resolves.toEqual({
+      branches: [],
+      repositoryStatus: "unavailable",
+    });
+    await expect(service.listRepositoryBranches(repo)).rejects.toThrow(
+      "Git metadata is unavailable",
+    );
+  });
+
   it("keeps large repositories usable with bounded suggestions and an explicit unlisted base", async () => {
     const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
     const commit = stdout.trim();
@@ -284,6 +304,14 @@ describe("ManagedWorktreeService branch discovery", () => {
         kind: "local",
       })),
     ]);
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+      result,
+    );
+    // Oversized inventories also reuse their bounded result; only admission runs again.
+    expect(run).toHaveBeenCalledTimes(1);
+    run.mockRestore();
+
     const baseRef = `origin/overflow-${String(2_999).padStart(80, "0")}`;
     expect(result.branches.some((branch) => branch.name === baseRef)).toBe(false);
     const worktree = await service.create({ repoRoot: repo, name: "unlisted-base", baseRef });
