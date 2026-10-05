@@ -451,6 +451,9 @@ it("keeps the live row for a step with a routine nested call until the run settl
     ]);
   render(renderActivityGroup([step("running")], liveOptions), container);
   expect(label()).toBe("Build the snake game…");
+  // Finishing mid-run keeps the live row; only settlement swaps in the step's own row.
+  render(renderActivityGroup([step("completed")], liveOptions), container);
+  expect(label()).toBe("Build the snake game");
   render(renderActivityGroup([step("completed")], { ...liveOptions, runActive: false }), container);
   expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
   expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
