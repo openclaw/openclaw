@@ -51,7 +51,6 @@ import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-devi
 import {
   authorizationStillOwned,
   configuredOAuthIdentities,
-  defaultGitAuthor,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   REFRESH_SKEW_MS,
@@ -205,7 +204,10 @@ export function createGitHubOAuthLifecycle(params: {
             kind: "oauth",
             gitAuthor: record.expectedIdentity?.gitAuthor
               ? structuredClone(record.expectedIdentity.gitAuthor)
-              : defaultGitAuthor(account),
+              : {
+                  name: account.login,
+                  email: `${account.accountId}+${account.login}@users.noreply.github.com`,
+                },
           };
           nextConfig = await updateGitHubToolIdentityConfig({
             scope: record.scope,
@@ -515,10 +517,7 @@ export function createGitHubOAuthLifecycle(params: {
     if (stopping && !maintenance) {
       return Promise.resolve();
     }
-    if (maintenance) {
-      return maintenance;
-    }
-    maintenance = runMaintenance()
+    maintenance ??= runMaintenance()
       .catch(warnMaintenanceError)
       .finally(() => {
         maintenance = undefined;

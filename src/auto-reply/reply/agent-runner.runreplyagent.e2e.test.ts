@@ -665,7 +665,7 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(parkedSteer.fallback).toHaveBeenCalledOnce();
     active.complete();
   });
 
