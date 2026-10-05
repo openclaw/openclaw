@@ -61,6 +61,8 @@ export { parseBrowserHttpUrl as parseHttpUrl };
 export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profiles"> & {
   headlessSource?: "config" | "default";
   profiles: Record<string, BrowserProfileConfig>;
+  /** Explicit policy, including {}, suppresses request-scoped preview defaults. */
+  ssrfPolicyConfigured?: boolean;
   /** Default loopback port for extension-driver relay servers. */
   extensionRelayDefaultPort: number;
   /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
@@ -326,6 +328,7 @@ export function resolveBrowserConfig(
     profiles,
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),
     ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
+    ssrfPolicyConfigured: cfg?.ssrfPolicy !== undefined,
     extraArgs,
     extensionRelayDefaultPort: controlPort + EXTENSION_RELAY_PORT_OFFSET,
     extensionRelayPorts: resolveExtensionRelayPorts(

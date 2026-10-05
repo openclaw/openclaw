@@ -1,3 +1,5 @@
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
+
 const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 
@@ -56,6 +58,16 @@ export type BrowserErrorPayload = WithBrowserErrorMetadata<{
   code?: BrowserActErrorCode;
   unrecognizedCode?: true;
 }>;
+
+/** Navigation-specific diagnostics; never exposes the URL path, query or resolved addresses. */
+export class BrowserNavigationBlockedError extends SsrFBlockedError {
+  constructor(hostname: string) {
+    super(
+      `Browser navigation blocked for host "${hostname}": browser.ssrfPolicy disallows this hostname or its private/internal/special-use address. Review browser.ssrfPolicy.allowedHostnames and browser.ssrfPolicy.blockedHostnames. Automatic loopback previews require an unrestricted local agent, an OpenClaw-owned local browser process, and no explicit browser.ssrfPolicy. Reachable external browsers or CDP tunnels do not qualify; stop the external browser yourself and let OpenClaw launch its managed profile, or configure an explicit allowedHostnames policy.`,
+    );
+    this.name = "BrowserNavigationBlockedError";
+  }
+}
 
 export class BrowserError extends Error {
   status: number;
@@ -161,6 +173,9 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
   }
   if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
     return { status: 409, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
+  }
+  if (err instanceof BrowserNavigationBlockedError) {
+    return { status: 400, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
   }
   if (err instanceof Error && err.name === "SsrFBlockedError") {
     // SsrFBlockedError from this point is from a navigation-target check

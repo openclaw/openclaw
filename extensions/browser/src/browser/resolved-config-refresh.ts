@@ -100,6 +100,7 @@ function applyResolvedConfig(
     enabled: previousResolved.enabled,
     evaluateEnabled: previousResolved.evaluateEnabled,
     ssrfPolicy: previousResolved.ssrfPolicy,
+    ssrfPolicyConfigured: previousResolved.ssrfPolicyConfigured,
     extensionRelay: previousResolved.extensionRelay,
     // Only an exact live relay owns its process-local CDP credential; stale
     // config snapshots must never resurrect closed or replaced credentials.

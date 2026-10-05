@@ -521,11 +521,13 @@ export async function createPageViaPlaywright(
   const assertCurrent = () => {
     opts.signal?.throwIfAborted();
     opts.assertCurrent?.();
+    opts.assertNavigationCurrent?.();
   };
   assertCurrent();
   const targetUrl = opts.url.trim() || "about:blank";
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    assertNavigationCurrent: opts.assertNavigationCurrent,
   });
   await assertBrowserNavigationAllowed({
     url: targetUrl,

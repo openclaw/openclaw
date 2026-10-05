@@ -27,6 +27,7 @@ Extension relay configuration still requires a Gateway restart.
     enabled: true, // default: true
     evaluateEnabled: true, // default: true; false disables act:evaluate (arbitrary JS)
     ssrfPolicy: {
+      // explicit policy: suppress automatic local-agent loopback previews
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowedHostnames: ["localhost"],
       // allowRfc2544BenchmarkRange: true, // trusted fake-IP proxy range
@@ -198,6 +199,19 @@ main model can read the screenshot directly.
 </Accordion>
 
 <Accordion title="SSRF policy">
+
+With `browser.ssrfPolicy` unset, unrestricted local agent requests receive a
+loopback-only preview default for `localhost`, `127.0.0.1`, and `::1` (all ports)
+in local managed browsers. Any explicit policy, including `{}`, suppresses it.
+Restricted agents and remote/attached browsers retain their configured policy.
+See [Local previews](/tools/browser/security#local-previews).
+
+Automatic previews require a live browser process launched and verified by the current
+OpenClaw control service. A reachable external browser, loopback CDP tunnel, or browser
+left running across a control-service restart does not qualify. Stop that browser
+yourself and let OpenClaw launch the managed profile again, or configure an explicit
+`browser.ssrfPolicy.allowedHostnames` policy. Automatic previews use Playwright-backed
+navigation so invocation and process ownership are rechecked before navigation dispatch.
 
 - Browser navigation and open-tab requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh OpenClaw-managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Playwright routing is still not a network firewall and does not intercept redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, or every background/subresource path. Complete egress isolation requires owner-side isolation or a policy-enforcing proxy.

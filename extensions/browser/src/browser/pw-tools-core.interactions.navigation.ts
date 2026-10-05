@@ -66,6 +66,7 @@ export function interactionNavigationPolicy(
 ): BrowserNavigationPolicyOptions {
   return withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    assertNavigationCurrent: opts.assertNavigationCurrent,
   });
 }
 
@@ -505,6 +506,7 @@ export async function awaitNavigationGuardedInteraction<T>(
                 }
               }
               throwIfInteractionAborted(signal);
+              navigationPolicy.assertNavigationCurrent?.();
               return await opts.action();
             } finally {
               actionSettledAtMs = Date.now();

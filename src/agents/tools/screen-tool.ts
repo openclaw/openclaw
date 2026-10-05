@@ -39,6 +39,11 @@ const ScreenToolSchema = Type.Object(
     dock: Type.Optional(
       Type.String({ enum: ["bottom", "right"], description: "Panel dock on show" }),
     ),
+    expanded: Type.Optional(
+      Type.Boolean({
+        description: "On show, fill the conversation pane; false restores split view",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -95,7 +100,12 @@ function commandForAction(
   ) {
     const open = action.endsWith("_show");
     const dock = open ? readDock(params) : undefined;
+    const expanded = open ? params.expanded : undefined;
+    if (expanded !== undefined && typeof expanded !== "boolean") {
+      throw new ToolInputError("expanded must be boolean");
+    }
     if (action.startsWith("desktop_") || action.startsWith("portal_")) {
+      const panelDock = dock ?? (expanded === undefined ? "right" : undefined);
       const environmentId = readToolStringParam(params, "environmentId");
       const target = readToolStringParam(
         params,
@@ -107,7 +117,8 @@ function commandForAction(
       return {
         kind: "panel",
         open,
-        ...(open ? { dock: dock ?? "right" } : {}),
+        ...(expanded !== undefined ? { expanded } : {}),
+        ...(open && panelDock ? { dock: panelDock } : {}),
         ...(action.startsWith("desktop_")
           ? { panel: "desktop", ...(target ? { environmentId: target } : {}) }
           : {
@@ -120,6 +131,7 @@ function commandForAction(
       kind: "panel",
       panel: action.startsWith("terminal_") ? "terminal" : "browser",
       open,
+      ...(expanded !== undefined ? { expanded } : {}),
       ...(dock ? { dock } : {}),
     };
   }
@@ -132,7 +144,7 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
     label: "Screen",
     name: "screen",
     description:
-      "Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input.",
+      "Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. Panel show actions accept expanded:true to fill the conversation pane, or expanded:false to restore split view. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input.",
     parameters: ScreenToolSchema,
     outputSchema: UiCommandResultSchema,
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],

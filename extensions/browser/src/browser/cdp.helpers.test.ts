@@ -285,7 +285,7 @@ describe("CDP reachability policy", () => {
     expect(policy).toStrictEqual({});
     await expect(
       assertBrowserNavigationAllowed({ url: "http://172.29.128.1/", ssrfPolicy: policy }),
-    ).rejects.toThrow(/private\/internal\/special-use ip address/i);
+    ).rejects.toThrow('Browser navigation blocked for host "172.29.128.1": browser.ssrfPolicy');
   });
 
   it("preserves a private-network policy that rejects the selected CDP host", () => {

@@ -249,11 +249,11 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       mapTabError: true,
       run: async (profileCtx, signal) => {
+        await profileCtx.ensureBrowserAvailable({ signal });
         await assertBrowserNavigationAllowed({
           url,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
-        await profileCtx.ensureBrowserAvailable({ signal });
         await req.assertCurrent?.(profileCtx.profile);
         const opened = await profileCtx.openTab(url, {
           label,

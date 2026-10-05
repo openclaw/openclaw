@@ -251,7 +251,7 @@ export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): Si
   // Restore split must reveal the side even when focus began with that panel closed.
   const next = structuredClone(layout);
   delete next.expandedSide;
-  return { ...next, expanded, ...(expanded ? { open: true } : {}) };
+  return { ...next, expanded, open: true };
 }
 
 /** Focus in place: restoring must not leave the main and side views swapped. */

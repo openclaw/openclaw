@@ -11,6 +11,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   activateChatHeaderPanelAction,
+  dockChatSidePanel,
   failNextDeviceIdentityMint,
   focusChatSidePanel,
 } from "./chat-side-panel.test-support.ts";
@@ -291,6 +292,65 @@ suite.define(() => {
           await page.locator('.side-panel__panel[data-panel-slot="workspace"]:visible').waitFor();
           await page.locator(".chat-side-panel-toggle").click();
           await expect.poll(() => picker.isVisible()).toBe(false);
+        },
+      );
+    },
+  );
+
+  it.each(["ltr", "rtl"] as const)(
+    "keeps in-place focused side tabs clear of collapsed shell controls in %s",
+    async (direction) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          await seedSettings(page, "dark");
+          await installMockGateway(page, scenario({ home: true }));
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await page.locator(".chat-group").first().waitFor();
+          await activateChatHeaderPanelAction(page, "Show session files");
+          await page.locator(".sidebar-brand__collapse").click();
+          await page.locator(".shell--nav-collapsed").waitFor();
+          const sideHeader = page.locator('[data-region-header="side"]');
+          for (const dock of ["right", "left", "bottom"] as const) {
+            await dockChatSidePanel(page, dock);
+            await sideHeader.locator(".side-panel__expand").click();
+            await page.locator(".sidebar-region--expanded-side").waitFor();
+            await page.evaluate((value) => {
+              document.documentElement.dir = value;
+            }, direction);
+            await waitForShellLayout(page);
+            const panelControls = sideHeader.locator(".tabstrip-tab:visible, button:visible");
+            const controls = await page
+              .locator(
+                ".shell-chrome-controls button:visible, .sidebar-attention--floating button:visible",
+              )
+              .evaluateAll((buttons) =>
+                buttons.map((button) => {
+                  const { left, right, top, bottom } = button.getBoundingClientRect();
+                  return { left, right, top, bottom };
+                }),
+              );
+            expect(controls.length).toBeGreaterThan(0);
+            expect(await panelControls.count()).toBeGreaterThan(0);
+            for (const panel of await panelControls.all()) {
+              const box = (await panel.boundingBox())!;
+              for (const control of controls) {
+                expect(
+                  box.x >= control.right + 4 ||
+                    box.x + box.width <= control.left - 4 ||
+                    box.y >= control.bottom + 4 ||
+                    box.y + box.height <= control.top - 4,
+                ).toBe(true);
+              }
+              await panel.click({ trial: true });
+            }
+            await capturePanel(page, `focused-side-${direction}-${dock}`);
+            await sideHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+            await page.locator(".sidebar-region__primary").waitFor();
+            await page.evaluate(() => {
+              document.documentElement.dir = "ltr";
+            });
+          }
         },
       );
     },

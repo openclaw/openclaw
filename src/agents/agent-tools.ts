@@ -1,6 +1,7 @@
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import type { PluginHookToolRequesterContext } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
@@ -15,6 +16,7 @@ import {
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
+import { resolveLocalBrowserLoopbackCapability } from "./agent-tools.execution-policy.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   assertMemoryFlushPersistenceToolAvailable,
@@ -93,6 +95,7 @@ function* assembleOpenClawCodingTools(
   skillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
+  execApprovals?: ExecApprovalsFile,
 ): Generator<OpenClawToolsOptions, AnyAgentTool[], AnyAgentTool[]> {
   const preparedTools = preparedSurface?.tools;
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -246,6 +249,14 @@ function* assembleOpenClawCodingTools(
     permissionPolicy: sessionPermissionPolicy,
     scheduledExecTarget,
   });
+  const allowLocalBrowserLoopback = resolveLocalBrowserLoopbackCapability({
+    options,
+    execApprovals,
+    capabilityProfile,
+    effectiveExecPolicy,
+    sandboxed: Boolean(sandbox),
+    workspaceOnly: coreToolPolicy.workspaceOnly,
+  });
   const coreTools =
     preparedTools === undefined
       ? createCoreCodingTools({
@@ -368,6 +379,7 @@ function* assembleOpenClawCodingTools(
     memoryFlush,
     sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
     allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
+    allowLocalBrowserLoopback,
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
@@ -646,11 +658,14 @@ export async function createOpenClawCodingToolsInternalAsync(
           : (options?.abortSignal ?? preparation.signal),
     },
     async (shared) => {
+      const execApprovals = await shared.loadExecApprovals();
+      shared.assertCurrent();
       const assembly = assembleOpenClawCodingTools(
         { ...options, config: shared.config },
         skillReadResources,
         onPolicyFilter,
         preparedSurface,
+        execApprovals,
       );
       let step = assembly.next();
       while (!step.done) {

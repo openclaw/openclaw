@@ -104,9 +104,9 @@ describe("plugin panel intent delivery", () => {
     (delivery) => {
       const f = fixture();
       const stop = f.controller.subscribe();
-      const send = (panelId: string, open: boolean) =>
+      const send = (panelId: string, open: boolean, expanded?: boolean) =>
         new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
-          detail: { pluginId: "review", panelId, sessionKey: "session-b", open },
+          detail: { pluginId: "review", panelId, sessionKey: "session-b", open, expanded },
         });
       try {
         const event = send("document", true);
@@ -128,6 +128,10 @@ describe("plugin panel intent delivery", () => {
         expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
         expect(f.pending.size).toBe(0);
         expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+        window.dispatchEvent(send("document", true, true));
+        expect(isSidebarSlotVisible(f.state.sidebarLayout, "conversation")).toBe(false);
+        window.dispatchEvent(send("document", true, false));
+        expect(isSidebarSlotVisible(f.state.sidebarLayout, "conversation")).toBe(true);
         window.dispatchEvent(send("document", false));
         expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
       } finally {

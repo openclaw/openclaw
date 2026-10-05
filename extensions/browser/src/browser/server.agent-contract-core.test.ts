@@ -29,8 +29,6 @@ import {
 } from "./server.control-server.test-harness.js";
 import { createBrowserTestClient, getBrowserTestFetch } from "./test-support/fetch.js";
 
-const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
-
 async function postActAndReadError(base: string, body?: unknown) {
   const response = await realFetch(`${base}/act`, {
     method: "POST",
@@ -280,7 +278,12 @@ describe("browser control server", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: BROWSER_NAVIGATION_BLOCKED_MESSAGE });
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining(
+        'Browser navigation blocked for host "127.0.0.1": browser.ssrfPolicy',
+      ),
+      reason: "navigation_blocked",
+    });
     expect(requirePwMock("getObservedBrowserStateViaPlaywright")).not.toHaveBeenCalled();
     expect(requirePwMock("snapshotRoleViaPlaywright")).not.toHaveBeenCalled();
   });
@@ -753,7 +756,12 @@ describe("browser control server", () => {
         body: body ? JSON.stringify(body) : undefined,
       });
       expect(res.status).toBe(400);
-      expect(await res.json()).toMatchObject({ error: BROWSER_NAVIGATION_BLOCKED_MESSAGE });
+      expect(await res.json()).toMatchObject({
+        error: expect.stringContaining(
+          'Browser navigation blocked for host "127.0.0.1": browser.ssrfPolicy',
+        ),
+        reason: "navigation_blocked",
+      });
       expect(requirePwMock(mockName)).not.toHaveBeenCalled();
     },
   );

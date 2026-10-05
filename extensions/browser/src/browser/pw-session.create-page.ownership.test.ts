@@ -13,6 +13,9 @@ function installBrowserMocks() {
   const sessionSend = vi.fn(async (_method: string) => targetInfo);
   const pageMock = {
     on: vi.fn(),
+    off: vi.fn(),
+    once: vi.fn(),
+    isClosed: () => false,
     context: () => context,
     goto: vi.fn(async () => null),
     close: vi.fn(async () => {
@@ -36,7 +39,12 @@ function installBrowserMocks() {
     close: vi.fn(async () => {
       openPages.length = 0;
     }),
-    newCDPSession: async () => ({ send: sessionSend, detach: async () => {} }),
+    newCDPSession: async () => ({
+      send: sessionSend,
+      detach: async () => {},
+      on: vi.fn(),
+      off: vi.fn(),
+    }),
   };
   const context = contextMock as unknown as BrowserContext;
   const browserMock = {
@@ -140,6 +148,40 @@ describe("Playwright created-page ownership", () => {
       expect(f.contextMock.close).toHaveBeenCalledTimes(stage === "connect" ? 0 : 1);
     },
   );
+  it("rechecks a scoped navigation grant after awaited route installation", async () => {
+    getChromeWebSocketUrlSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:18792/devtools/browser/authority-fixture",
+    });
+    const { entered, release, pause } = pauseAtBoundary();
+    f.pageMock.route.mockImplementationOnce(() => pause(undefined));
+    let current = true;
+    const creation = create({
+      url: "http://127.0.0.1:18793/preview",
+      ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+      assertNavigationCurrent: () => {
+        if (!current) {
+          throw new Error("preview invocation revoked");
+        }
+      },
+    });
+    const rejected = expect(creation).rejects.toThrow("preview invocation revoked");
+    try {
+      await Promise.race([
+        entered,
+        creation.then(() => {
+          throw new Error("Creation completed before route installation");
+        }),
+      ]);
+      current = false;
+      release();
+      await rejected;
+      expect(f.pageMock.goto).not.toHaveBeenCalled();
+      expect(f.pageMock.close).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await creation.catch(() => {});
+    }
+  });
   it("starts navigation in the same turn as its synchronous authority assertion", async () => {
     const { gotoPageWithNavigationGuard } = await import("./pw-session-navigation.js");
     let expired = false;

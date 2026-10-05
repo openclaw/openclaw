@@ -31,3 +31,30 @@ Remote CDP tips:
 - Avoid embedding long-lived tokens directly in config files.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
+
+## Local previews
+
+With `browser.ssrfPolicy` unset, an unrestricted agent can preview HTTP(S) apps
+at `localhost`, `127.0.0.1`, and `::1` in a local OpenClaw-managed browser. This
+covers all ports, including unrelated local services. Eligibility requires
+unrestricted local host execution without approval, no sandbox, and no workspace
+restriction; enabling the Browser tool alone is insufficient.
+
+Remote/node, attach-only, extension, and existing-session browsers do not receive
+this default. Neither do direct browser HTTP/RPC requests or standalone browser
+commands. Any explicit `browser.ssrfPolicy`, including `{}`, suppresses the
+exception. Use that existing setting to keep loopback blocked or to define your
+own narrow host exceptions. Other private networks and other tools are unchanged.
+
+Automatic previews require a live browser process launched and verified by the current
+OpenClaw control service. A reachable external browser, loopback CDP tunnel, or browser
+left running across a control-service restart does not qualify. Stop that browser
+yourself and let OpenClaw launch the managed profile again, or configure an explicit
+`browser.ssrfPolicy.allowedHostnames` policy. Automatic previews use Playwright-backed
+navigation so invocation and process ownership are rechecked before navigation dispatch.
+
+The default changes at the next run after upgrading; no config migration or
+persistent allowlist is written. Existing explicit policies retain their behavior.
+See [SSRF policy](/tools/browser/configuration) for navigation checks
+and [Security Policy](https://github.com/openclaw/openclaw/blob/main/SECURITY.md#local-browser-previews)
+for the trust model.

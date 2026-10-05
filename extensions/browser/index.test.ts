@@ -267,6 +267,7 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      allowLocalLoopback: false,
       sandboxBridgeUrl: "http://127.0.0.1:9999",
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
@@ -277,6 +278,17 @@ describe("browser plugin", () => {
       toolCapabilities: expect.any(Object),
     });
   });
+
+  it.each([true, false, undefined])(
+    "forwards the host-prepared loopback capability %s",
+    async (allowLocalLoopback) => {
+      const tool = createTool({ browser: { allowLocalLoopback } });
+      await tool.execute("call-1", { action: "status" });
+      expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith(
+        expect.objectContaining({ allowLocalLoopback: allowLocalLoopback === true }),
+      );
+    },
+  );
 
   it("passes runtime context needed for screenshot image understanding", async () => {
     const tool = createTool({
@@ -290,6 +302,7 @@ describe("browser plugin", () => {
 
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      allowLocalLoopback: false,
       agentSessionKey: "agent:main:webchat:direct:123",
       agentId: "main",
       agentDir: "/tmp/agent",
@@ -353,6 +366,7 @@ describe("browser plugin", () => {
 
     await tool.execute("call-1", { action: "snapshot" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      allowLocalLoopback: false,
       runToolBinding: {
         kind: "tab",
         tabId: 7,
@@ -418,6 +432,7 @@ describe("browser plugin", () => {
 
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      allowLocalLoopback: false,
       agentSessionKey: "agent:main:telegram:group:chat-123",
       mediaScope: {
         sessionKey: "agent:main:telegram:group:chat-123",

@@ -265,15 +265,12 @@ export class ShellGatewayOwner {
                   agentId: commandParams.agentId,
                 }
               : {}),
-            ...(sessionKey ? { sessionKey } : {}),
-            ...(command.dock ? { dock: command.dock } : {}),
-            ...(command.panel === "terminal" && command.terminalSessionId
-              ? { terminalSessionId: command.terminalSessionId }
-              : {}),
-            ...("environmentId" in command && command.environmentId
-              ? { environmentId: command.environmentId }
-              : {}),
-            ...("portalId" in command && command.portalId ? { portalId: command.portalId } : {}),
+            sessionKey,
+            dock: command.dock,
+            expanded: command.expanded,
+            terminalSessionId: command.panel === "terminal" ? command.terminalSessionId : undefined,
+            environmentId: "environmentId" in command ? command.environmentId : undefined,
+            portalId: "portalId" in command ? command.portalId : undefined,
           },
         },
       );

@@ -1,7 +1,10 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
+import {
+  UiCommandParamsSchema,
+  UiCommandResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/ui-command.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { createScreenTool } from "./screen-tool.js";
@@ -86,6 +89,27 @@ describe("screen tool", () => {
       ],
     ]);
   });
+
+  it.each(["terminal", "browser", "desktop", "portal"])(
+    "passes explicit expand and restore requests for %s through the wire contract",
+    async (panel) => {
+      const { callGateway, calls } = createGatewayRecorder();
+      const tool = createScreenTool({ agentSessionKey: "agent:main:current", callGateway });
+
+      for (const expanded of [true, false]) {
+        const args = { action: `${panel}_show`, expanded };
+        expect(Value.Check(tool.parameters, args)).toBe(true);
+        await tool.execute("presentation", args);
+
+        const payload = calls.at(-1)?.[1];
+        expect(Value.Check(UiCommandParamsSchema, payload)).toBe(true);
+        expect(payload).toMatchObject({
+          command: { kind: "panel", panel, open: true, expanded },
+          sessionKey: "agent:main:current",
+        });
+      }
+    },
+  );
 
   it.each([
     ["desktop_show", "environmentId", "desktop"],

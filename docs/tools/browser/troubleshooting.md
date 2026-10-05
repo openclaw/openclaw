@@ -67,7 +67,7 @@ How to read the results:
 
 Important behavior details:
 
-- Browser config defaults to a fail-closed SSRF policy object even when you do not configure `browser.ssrfPolicy`.
+- With `browser.ssrfPolicy` unset, unrestricted local agent requests can preview `localhost`, `127.0.0.1`, and `::1` in a local managed browser. Other contexts retain the fail-closed default; see [Local previews](/tools/browser/security#local-previews).
 - For the local loopback `openclaw` managed profile, CDP health checks intentionally skip browser SSRF reachability enforcement for OpenClaw's own local control plane.
 - After launching a local managed browser, readiness probes allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays. The readiness retry window is eight seconds; probes near its end use shorter timeouts.
 - Later operations use the same readiness allowance for an owned managed browser before deciding it needs a restart. Stopping a profile aborts its pending discovery and readiness probes; canceling one caller waiting for a shared start does not stop that shared launch.
@@ -82,6 +82,6 @@ starting the browser also preserves that locked profile's preferences.
 
 Security guidance:
 
-- Do **not** relax browser SSRF policy by default.
+- To suppress automatic local previews, configure `browser.ssrfPolicy: {}`. Explicit policies always take precedence.
 - Prefer narrow exact-hostname `allowedHostnames` exceptions over broad private-network access.
 - Use `dangerouslyAllowPrivateNetwork: true` only in intentionally trusted environments where private-network browser access is required and reviewed.

@@ -84,10 +84,18 @@ function installBrowserMocks() {
       openPages.push(page);
       return page;
     }),
-    newCDPSession: vi.fn(async () => ({ send: sessionSend, detach: vi.fn(async () => {}) })),
+    newCDPSession: vi.fn(async () =>
+      Object.assign(new EventEmitter(), {
+        send: sessionSend,
+        detach: vi.fn(async () => {}),
+      }),
+    ),
   } as unknown as import("playwright-core").BrowserContext;
   const page = {
     on: vi.fn(),
+    off: vi.fn(),
+    once: vi.fn(),
+    isClosed: () => false,
     context: () => context,
     goto: pageGoto,
     title: vi.fn(async () => ""),
@@ -562,42 +570,46 @@ describe("pw-session selected-page interaction request guard", () => {
     await denied(guarded);
     expect(events).toEqual(["detected", "handled:true"]);
   });
-  it("waits for in-flight policy work before returning", async () => {
-    const pending = createDeferred<void>();
-    const validation = vi
-      .spyOn(navigationGuardModule, "assertBrowserNavigationAllowed")
-      .mockImplementationOnce(async () => await pending.promise);
-    const route = createMockRoute();
-    let settled = false;
-    let dispatched: Promise<void> | undefined;
-    let observedPolicyCheck: Promise<void> | undefined;
-    try {
-      const guarded = guard(
-        async () => {
-          dispatched = dispatch({ route });
-          return "ok";
-        },
-        {
-          onPolicyCheckStarted: (check) => {
-            observedPolicyCheck = check;
+  it.each([false, true])(
+    "removes route admission before draining pending policy (scoped=%s)",
+    async (scoped) => {
+      const pending = createDeferred<void>();
+      const validation = vi
+        .spyOn(navigationGuardModule, "assertBrowserNavigationAllowed")
+        .mockImplementationOnce(async () => await pending.promise);
+      const route = createMockRoute();
+      let settled = false;
+      let dispatched: Promise<void> | undefined;
+      let observedPolicyCheck: Promise<void> | undefined;
+      try {
+        const guarded = guard(
+          async () => {
+            dispatched = dispatch({ route });
+            return "ok";
           },
-        },
-      ).then((result) => {
-        settled = true;
-        return result;
-      });
-      await vi.waitFor(() => expect(validation).toHaveBeenCalledTimes(1));
-      expect(observedPolicyCheck).toBeInstanceOf(Promise);
-      expect(f.pageUnroute).toHaveBeenCalledTimes(1);
-      expect(settled).toBe(false);
-      pending.resolve();
-      await expect(guarded).resolves.toBe("ok");
-      await dispatched;
-      expect(route.fallback).toHaveBeenCalledTimes(1);
-    } finally {
-      validation.mockRestore();
-    }
-  });
+          {
+            assertNavigationCurrent: scoped ? () => {} : undefined,
+            onPolicyCheckStarted: (check) => {
+              observedPolicyCheck = check;
+            },
+          },
+        ).then((result) => {
+          settled = true;
+          return result;
+        });
+        await vi.waitFor(() => expect(validation).toHaveBeenCalledTimes(1));
+        expect(observedPolicyCheck).toBeInstanceOf(Promise);
+        expect(f.pageUnroute).toHaveBeenCalledTimes(1);
+        expect(settled).toBe(false);
+        pending.resolve();
+        await expect(guarded).resolves.toBe("ok");
+        await dispatched;
+        expect(route.fallback).toHaveBeenCalledTimes(1);
+      } finally {
+        validation.mockRestore();
+      }
+    },
+  );
   it("does not claim source preservation when 204 fulfillment falls back to abort", async () => {
     const route = createMockRoute({
       fulfill: vi.fn(async () => {

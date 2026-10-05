@@ -152,7 +152,9 @@ describe("agent act hook current URL guard", () => {
 
       expect(response.statusCode).toBe(400);
       expect(response.body).toEqual({
-        error: "browser navigation blocked by policy",
+        error: expect.stringContaining(
+          'Browser navigation blocked for host "127.0.0.1": browser.ssrfPolicy',
+        ),
         reason: "navigation_blocked",
       });
       expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();

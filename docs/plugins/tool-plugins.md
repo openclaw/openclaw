@@ -185,6 +185,15 @@ in the captured lineage changes incarnation or lifecycle.
 plugin lifetime. Use a version 2 tool context when the tool depends on these live
 authority checks.
 
+`toolContext.browser?.allowLocalLoopback` is a host-prepared, per-run policy fact
+for the Browser plugin, not standalone invocation authority. It is true only
+when the run has unrestricted local execution, no sandbox or workspace-only
+restriction, and no execution approval requirement. The Browser plugin must
+still enforce the invocation lifetime, an OpenClaw-managed browser on the same
+host, and explicit operator network policy. Missing or false values do not grant
+loopback access; never forward this fact as model input or across a browser
+HTTP, Gateway, or node transport.
+
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
 tool, that tool uses the core runtime signature

@@ -6,6 +6,7 @@
  */
 import { isIP } from "node:net";
 import {
+  SsrFBlockedError,
   isPrivateNetworkAllowedByPolicy,
   matchesHostnameAllowlist,
   normalizeHostname,
@@ -13,6 +14,7 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/security-runtime";
+import { BrowserNavigationBlockedError } from "./errors.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
@@ -55,6 +57,8 @@ export function parseBrowserNavigationUrl(url: string): URL {
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
+  /** Revalidate the owner-held authority behind a request-scoped policy exception. */
+  assertNavigationCurrent?: () => void;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -69,10 +73,13 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: { browserProxyMode?: BrowserNavigationProxyMode },
+  opts?: Pick<BrowserNavigationPolicyOptions, "browserProxyMode" | "assertNavigationCurrent">,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.assertNavigationCurrent
+      ? { assertNavigationCurrent: opts.assertNavigationCurrent }
+      : {}),
     ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
       ? { browserProxyMode: opts.browserProxyMode }
       : {}),
@@ -118,6 +125,7 @@ export async function assertBrowserNavigationAllowed(
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   opts.signal?.throwIfAborted();
+  opts.assertNavigationCurrent?.();
   const parsed = parseBrowserNavigationUrl(opts.url);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
@@ -157,11 +165,19 @@ export async function assertBrowserNavigationAllowed(
     );
   }
 
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    lookupFn: opts.lookupFn,
-    policy: opts.ssrfPolicy,
-    signal: opts.signal,
-  });
+  try {
+    await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+      lookupFn: opts.lookupFn,
+      policy: opts.ssrfPolicy,
+      signal: opts.signal,
+    });
+    opts.assertNavigationCurrent?.();
+  } catch (err) {
+    if (!(err instanceof SsrFBlockedError)) {
+      throw err;
+    }
+    throw new BrowserNavigationBlockedError(parsed.hostname);
+  }
 }
 
 /**

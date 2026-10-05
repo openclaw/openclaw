@@ -927,6 +927,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
           panel: "terminal",
           open: true,
           dock: "right",
+          expanded: true,
           terminalSessionId: "terminal-agent-1",
         },
       },
@@ -952,7 +953,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(update).toHaveBeenCalledWith({ navCollapsed: true });
     expect(panelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        detail: { open: true, dock: "right", terminalSessionId: "terminal-agent-1" },
+        detail: {
+          open: true,
+          dock: "right",
+          expanded: true,
+          terminalSessionId: "terminal-agent-1",
+        },
       }),
     );
     expect(setSessionKey).toHaveBeenCalledWith(

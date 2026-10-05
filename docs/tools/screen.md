@@ -49,6 +49,18 @@ port, then use `portal_show` with the returned `portalId`. The selected view ope
 in that conversation's side panel. Hiding a view does not stop its application,
 close the portal, or release the environment.
 
+Pass `expanded: true` with any panel show action to fill the conversation pane
+with that view. For example:
+
+```json
+{ "action": "portal_show", "portalId": "<portal-id>", "expanded": true }
+```
+
+Pass `expanded: false` to restore the split view, or use the panel's restore
+button. Expansion preserves the tabs, dock, and saved panel dimensions. It is
+in-tab presentation, not browser fullscreen: the app navigation stays available,
+and it does not start media playback or change autoplay permissions.
+
 The desktop panel and computer tools address the same environment. `screen`
 only presents it; computer tools perform clicks, typing, and screenshots.
 

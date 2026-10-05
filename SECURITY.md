@@ -264,6 +264,42 @@ OpenClaw separates routing from execution, but both remain inside the same opera
 - Example report pattern considered out of scope: "attacker writes malicious content into `memory/*.md`, then `memory_search` returns it."
 - If you need isolation between mutually untrusted users, split by OS user or host and run separate gateways.
 
+### Local Browser Previews
+
+The Browser tool allows HTTP(S) previews at `localhost`, `127.0.0.1`, and `::1`
+by default **only for an unrestricted agent using an OpenClaw-managed browser on
+that same host**, and only when `browser.ssrfPolicy` is unset. The runtime must
+allow local host execution without approval and without sandbox or workspace
+restrictions. A browser tool call cannot grant itself this capability.
+
+This is an intentional trusted-operator tradeoff: the agent already has
+unrestricted access to that host. The exception covers **all ports** on those
+three hosts, including local services that rely on loopback reachability for
+protection; it is not limited to apps started by OpenClaw. Do not treat the local
+browser as an isolation boundary from such services.
+
+- Any explicit `browser.ssrfPolicy`, including `{}`, suppresses the automatic
+  exception. Existing allow and deny settings remain authoritative.
+- Sandboxed, workspace-limited, approval-gated, and otherwise restricted agents
+  do not receive the default. Neither do remote/node, attach-only, extension, or
+  existing-session browsers. A loopback CDP tunnel does not establish locality.
+  A reachable browser without a current OpenClaw-owned process (including after
+  a control-service restart) does not receive the exception. Stop that browser
+  yourself and let OpenClaw launch the managed profile again, or configure an
+  explicit allowlist.
+- The capability stays in the local in-process agent request. It is not forwarded
+  over browser HTTP, Gateway RPC, or node transports. Standalone browser commands
+  and direct operator control requests retain their configured policy.
+- Other loopback addresses, LAN/private networks, link-local addresses, and cloud
+  metadata remain blocked by default. This does not change `web_fetch`, webhooks,
+  or other tools' network policies.
+
+Browser navigation checks are not a network firewall; see
+[Browser configuration](https://docs.openclaw.ai/tools/browser/configuration)
+for their scope and owner-side isolation requirements. Access inside this
+explicitly documented local-preview boundary is expected behavior; bypasses of
+sandbox, configured policy, or remote-host boundaries remain security-relevant.
+
 ### Plugin Trust Boundary
 
 Plugins/extensions are loaded **in-process** with the Gateway and are treated as trusted code.

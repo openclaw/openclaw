@@ -348,7 +348,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ? await pw.snapshotRoleViaPlaywright({
                   cdpUrl,
                   targetId: tab.targetId,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
                   timeoutMs,
                   signal,
                 })
@@ -513,7 +513,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .getObservedBrowserStateViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                ...browserNavigationPolicyForProfile(ctx, profileCtx),
               })
               .catch(() => undefined);
           }
@@ -594,7 +594,7 @@ export function registerBrowserAgentSnapshotRoutes(
               selector: plan.selectorValue,
               frameSelector: plan.frameSelectorValue,
               refsMode: plan.refsMode,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               urls: plan.urls,
               timeoutMs: plan.timeoutMs,
               maxChars: plan.resolvedMaxChars,
@@ -652,7 +652,7 @@ export function registerBrowserAgentSnapshotRoutes(
                     cdpUrl: profileCtx.profile.cdpUrl,
                     targetId: tab.targetId,
                     refsMode: "aria",
-                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                    ...browserNavigationPolicyForProfile(ctx, profileCtx),
                     urls: plan.urls,
                     timeoutMs: plan.timeoutMs,
                     signal,
@@ -717,7 +717,7 @@ export function registerBrowserAgentSnapshotRoutes(
               targetId: tab.targetId,
               limit: plan.limit,
               timeoutMs: plan.timeoutMs,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               signal,
             });
           } else {

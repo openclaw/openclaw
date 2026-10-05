@@ -5,7 +5,12 @@ import { DEFAULT_TRACE_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveProfileContext, withPlaywrightRouteContext } from "./agent.shared.js";
+import {
+  browserNavigationPolicyForProfile,
+  readBody,
+  resolveProfileContext,
+  withPlaywrightRouteContext,
+} from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
@@ -14,7 +19,9 @@ import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 type DebugCollector = (
   pw: PwAiModule,
-  target: { cdpUrl: string; targetId: string; signal: AbortSignal },
+  target: { cdpUrl: string; targetId: string; signal: AbortSignal } & ReturnType<
+    typeof browserNavigationPolicyForProfile
+  >,
 ) => Promise<object | null>;
 
 export function registerBrowserAgentDebugRoutes(
@@ -56,7 +63,12 @@ export function registerBrowserAgentDebugRoutes(
         feature,
         enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw, resolveTabUrl, signal }) => {
-          const result = await collect(pw, { cdpUrl, targetId: tab.targetId, signal });
+          const result = await collect(pw, {
+            cdpUrl,
+            targetId: tab.targetId,
+            signal,
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
+          });
           if (result === null) {
             return;
           }
@@ -111,12 +123,8 @@ export function registerBrowserAgentDebugRoutes(
     EXISTING_SESSION_LIMITS.text,
   );
 
-  register("get", "/dialogs", "dialog state", () => async (pw, { cdpUrl, targetId }) => ({
-    browserState: await pw.getObservedBrowserStateViaPlaywright({
-      cdpUrl,
-      targetId,
-      ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-    }),
+  register("get", "/dialogs", "dialog state", () => async (pw, target) => ({
+    browserState: await pw.getObservedBrowserStateViaPlaywright(target),
   }));
 
   register("post", "/trace/start", "trace start", (input) => {

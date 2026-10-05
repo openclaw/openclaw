@@ -786,7 +786,7 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
 }
 
 /* Only the physical top-left header needs window-control clearance. A left
-   dock puts the side tabs there; mobile has a separate topbar row. */
+   dock or side focus puts the tabs there; mobile has a separate topbar row. */
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
@@ -800,8 +800,11 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
-    .sidebar-region--narrow
+  .sidebar-region:is(
+    .sidebar-region--expanded-side,
+    .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+        .sidebar-region--narrow
+      )
   )
   [data-region-header="side"] {
   padding-left: var(--shell-titlebar-inset);
