@@ -244,6 +244,7 @@ class TalkModeManager internal constructor(
     private const val pushToTalkReleaseGraceMs = 5_000L
     private const val pushToTalkReleaseDrainTimeoutMs = 6_000L
     private const val pushToTalkRestartDelayMs = 200L
+    private const val nativeTalkSegmentedMinLifetimeMs = 1_500L
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -327,14 +328,19 @@ class TalkModeManager internal constructor(
   private var pttAutoStopEnabled = false
   private var pttTimeoutJob: Job? = null
   private var pttCompletion: CompletableDeferred<TalkPttStopPayload>? = null
+
+  // Rung and segment state are shared with continuous native Talk; one mode owns the recognizer at a time.
   private var pttRecognitionRung: PushToTalkRecognitionRung? = null
   private var pttReleaseCompletion: CompletableDeferred<Unit>? = null
   private val pttFinalSegments = mutableListOf<String>()
   private var pttLivePartial = ""
 
+  // A rung whose session closes before hearing anything is unsupported by this recognition service.
+  private var nativeTalkFirstCandidate: PushToTalkRecognitionCandidate? = null
+  private var nativeTalkSessionStartedAtMs = 0L
+
   private var silenceJob: Job? = null
   private val silenceWindowMs get() = configCache.get().value.silenceTimeoutMs
-  private var lastTranscript: String = ""
   private var lastHeardAtMs: Long? = null
   private var lastSpokenText: String? = null
 
@@ -621,11 +627,9 @@ class TalkModeManager internal constructor(
             _isListening.value = false
             stopRequested = false
             retireRecognizer()
-            closePushToTalkRung()
             pttReleaseCompletion = null
             pttFinalSegments.clear()
             pttLivePartial = ""
-            lastTranscript = ""
             lastHeardAtMs = null
             activePttCaptureId = captureId
             pttCompletion = completion
@@ -1044,10 +1048,8 @@ class TalkModeManager internal constructor(
         pttTimeoutJob = null
         restartJob = null
         silenceJob = null
-        closePushToTalkRung()
         pttFinalSegments.clear()
         pttLivePartial = ""
-        lastTranscript = ""
         lastHeardAtMs = null
         _isListening.value = false
         setStatus(nativeText("Off"), state = TalkStatusState.Off)
@@ -1067,8 +1069,10 @@ class TalkModeManager internal constructor(
     systemSpeech.shutdown()
   }
 
+  // Retiring recognition also releases the app-owned microphone before playback or a new owner.
   private fun retireRecognizer() =
     synchronized(realtimeCapturePauseLock) {
+      closePushToTalkRung()
       val retired = recognizer ?: return@synchronized
       recognizer = null
       val completion = CompletableDeferred<Unit>()
@@ -2172,6 +2176,15 @@ class TalkModeManager internal constructor(
   ) = synchronized(realtimeCapturePauseLock) {
     if (activePttCaptureId != captureId || pttReleaseCompletion != null || stopRequested) return@synchronized
     val recognizerInstance = recognizer ?: error("Speech recognizer unavailable")
+    startRecognitionLadder(recognizerInstance, firstCandidate)
+    _isListening.value = true
+    setStatus(nativeText("Listening (PTT)"))
+  }
+
+  private fun startRecognitionLadder(
+    recognizerInstance: SpeechRecognizer,
+    firstCandidate: PushToTalkRecognitionCandidate?,
+  ): PushToTalkRecognitionRung {
     var lastFailure: Throwable? = null
     // API 33 adds segmented callbacks and caller-owned audio; older devices retain the restarting rung.
     val candidates =
@@ -2197,13 +2210,11 @@ class TalkModeManager internal constructor(
           }
         pttRecognitionRung = rung
         recognizerInstance.startListening(recognizerIntent(rung))
-        _isListening.value = true
-        setStatus(nativeText("Listening (PTT)"))
-        return@synchronized
+        return rung
       } catch (err: Throwable) {
         lastFailure = err
         closePushToTalkRung()
-        Log.w(tag, "PTT recognizer rung failed captureId=$captureId rung=$candidate: ${err.message}")
+        Log.w(tag, "recognizer rung failed rung=$candidate: ${err.message}")
       }
     }
     throw lastFailure ?: IllegalStateException("Speech recognizer unavailable")
@@ -2367,14 +2378,32 @@ class TalkModeManager internal constructor(
     pttLivePartial = ""
   }
 
-  private fun startListeningInternal(markListening: Boolean) {
-    val r = recognizer ?: return
-    val intent = recognizerIntent()
-    if (markListening) {
+  // Locked so a concurrent stop cannot retire the recognizer while this opens an AudioRecord.
+  private fun startListeningInternal(markListening: Boolean) =
+    synchronized(realtimeCapturePauseLock) {
+      val r = recognizer ?: return@synchronized
+      closePushToTalkRung()
+      if (!markListening) {
+        // The speech-interrupt listener during playback stays a plain session.
+        r.startListening(recognizerIntent())
+        return@synchronized
+      }
       setStatus(nativeText("Listening"))
       _isListening.value = true
+      // Every service start plays its start earcon, so continuous listening climbs the PTT ladder:
+      // on API 33+ one segmented session spans silence instead of restarting each no-speech timeout.
+      commitPushToTalkLivePartial()
+      nativeTalkSessionStartedAtMs = SystemClock.elapsedRealtime()
+      nativeTalkFirstCandidate = startRecognitionLadder(r, nativeTalkFirstCandidate).candidate
     }
-    r.startListening(intent)
+
+  private fun demoteNativeTalkRungIfUnheard() {
+    val candidate = pttRecognitionRung?.candidate ?: return
+    if (candidate == PushToTalkRecognitionCandidate.RestartingSingleSession) return
+    if ((lastHeardAtMs ?: Long.MIN_VALUE) >= nativeTalkSessionStartedAtMs) return
+    if (SystemClock.elapsedRealtime() - nativeTalkSessionStartedAtMs >= nativeTalkSegmentedMinLifetimeMs) return
+    nativeTalkFirstCandidate = pushToTalkCandidates(candidate).getOrNull(1)
+    Log.d(tag, "native Talk rung $candidate closed unheard; next $nativeTalkFirstCandidate")
   }
 
   private fun scheduleRestart(delayMs: Long = 350) {
@@ -2403,38 +2432,24 @@ class TalkModeManager internal constructor(
     isFinal: Boolean,
   ) {
     val trimmed = text.trim()
-    if (activePttCaptureId != null) {
-      if (trimmed.isNotEmpty()) {
-        if (isFinal) {
-          pttFinalSegments += trimmed
-          pttLivePartial = ""
-        } else {
-          pttLivePartial = trimmed
+    if (activePttCaptureId == null) {
+      if (_isSpeaking.value && interruptOnSpeech) {
+        if (shouldInterrupt(trimmed)) {
+          cancelActivePlayback()
         }
-        lastHeardAtMs = SystemClock.elapsedRealtime()
+        return
       }
-      return
+      if (!_isListening.value) return
     }
-    if (_isSpeaking.value && interruptOnSpeech) {
-      if (shouldInterrupt(trimmed)) {
-        cancelActivePlayback()
-      }
-      return
-    }
-
-    if (!_isListening.value) return
-
-    if (trimmed.isNotEmpty()) {
-      lastTranscript = trimmed
-      lastHeardAtMs = SystemClock.elapsedRealtime()
-    }
-
+    // Finals accumulate as segments; the silence monitor, not a final, ends the turn.
+    if (trimmed.isEmpty()) return
     if (isFinal) {
-      lastTranscript = trimmed
-      // Don't finalize immediately — let the silence monitor trigger after
-      // silenceWindowMs. This allows the recognizer to fire onResults and
-      // still give the user a natural pause before we send.
+      pttFinalSegments += trimmed
+      pttLivePartial = ""
+    } else {
+      pttLivePartial = trimmed
     }
+    lastHeardAtMs = SystemClock.elapsedRealtime()
   }
 
   private fun startSilenceMonitor(captureId: String? = null) {
@@ -2451,12 +2466,7 @@ class TalkModeManager internal constructor(
   private suspend fun checkSilence(captureId: String?) {
     if (activePttCaptureId != captureId) return
     if (!_isListening.value) return
-    val transcript =
-      if (activePttCaptureId != null) {
-        PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
-      } else {
-        lastTranscript.trim()
-      }
+    val transcript = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
     if (transcript.isEmpty()) return
     val lastHeard = lastHeardAtMs ?: return
     val elapsed = SystemClock.elapsedRealtime() - lastHeard
@@ -2476,7 +2486,8 @@ class TalkModeManager internal constructor(
     listeningMode = false
     _isListening.value = false
     setStatus(nativeText("Thinking…"), awaitingAgent = true)
-    lastTranscript = ""
+    pttFinalSegments.clear()
+    pttLivePartial = ""
     lastHeardAtMs = null
     // Do not start synthesis while native recognition is still queued for teardown on Main.
     retireRecognizer()
@@ -2609,10 +2620,8 @@ class TalkModeManager internal constructor(
         _isListening.value = false
         listeningMode = false
         retireRecognizer()
-        closePushToTalkRung()
         pttFinalSegments.clear()
         pttLivePartial = ""
-        lastTranscript = ""
         lastHeardAtMs = null
         ClearedPushToTalkCapture(transcript = transcript, completion = completion) to release
       }
@@ -3193,6 +3202,7 @@ class TalkModeManager internal constructor(
             )
             return@withCurrentRecognition
           }
+          demoteNativeTalkRungIfUnheard()
           scheduleRestart(delayMs = 600)
         }
 
@@ -3223,14 +3233,17 @@ class TalkModeManager internal constructor(
 
       override fun onSegmentResults(segmentResults: Bundle) =
         withCurrentRecognition(owner, captureId) {
-          if (activePttCaptureId == null) return@withCurrentRecognition
           val list = segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
           list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
         }
 
       override fun onEndOfSegmentedSession() =
         withCurrentRecognition(owner, captureId) {
-          if (activePttCaptureId == null) return@withCurrentRecognition
+          if (activePttCaptureId == null) {
+            demoteNativeTalkRungIfUnheard()
+            scheduleRestart(delayMs = 180)
+            return@withCurrentRecognition
+          }
           _isListening.value = false
           pttReleaseCompletion?.let {
             it.complete(Unit)
