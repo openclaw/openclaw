@@ -52,7 +52,7 @@ extension OpenClawChatViewModel {
             self.refreshAgentsIfRequested()
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-            Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
+            return Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
         case let .sessionsChanged(change):
             return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
@@ -69,7 +69,7 @@ extension OpenClawChatViewModel {
         case let .sessionReaction(event):
             self.handleSessionReactionEvent(event)
         case let .progressCardChanged(event):
-            self.handleProgressCardChanged(event)
+            return self.handleProgressCardChanged(event)
         case .questionRequested, .questionResolved:
             return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
@@ -492,9 +492,7 @@ extension OpenClawChatViewModel {
                 agentId: chat.agentId,
                 current: self.sessionKey)
         } ?? true
-        if !matchesCurrentSession, !isOurRun {
-            return nil
-        }
+        guard matchesCurrentSession || isOurRun else { return nil }
         if chat.state == "delta", let runID = explicitRunID {
             guard self.pendingRuns.isEmpty || self.pendingRuns.contains(runID) else { return nil }
             self.invalidateRunSnapshots()

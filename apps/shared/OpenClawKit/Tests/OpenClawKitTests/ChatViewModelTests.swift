@@ -1724,9 +1724,7 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
             progressCardStoreAvailable: false)
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("progress card capability resolves unavailable") {
-            await MainActor.run { vm.progressCardStoreAvailable == false }
-        }
+        await waitForObservedState { vm.progressCardStoreAvailable == false }
 
         await MainActor.run {
             vm.handleTransportEvent(legacyPlanEvent(
@@ -1767,9 +1765,7 @@ struct ChatViewModelTests {
                 return true
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("progress card capability resolves unavailable") {
-            await MainActor.run { vm.progressCardStoreAvailable == false }
-        }
+        await waitForObservedState { vm.progressCardStoreAvailable == false }
         await MainActor.run {
             vm.handleTransportEvent(legacyPlanEvent(
                 steps: [legacyPlanStep("Old gateway step", status: "in_progress")]))
@@ -1799,9 +1795,7 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
             progressCardStoreAvailable: true)
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("progress card capability resolves available") {
-            await MainActor.run { vm.progressCardStoreAvailable == true }
-        }
+        await waitForObservedState { vm.progressCardStoreAvailable == true }
 
         await MainActor.run {
             vm.handleTransportEvent(legacyPlanEvent(
@@ -1836,19 +1830,16 @@ struct ChatViewModelTests {
             },
             progressCardStoreAvailable: false)
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("progress card capability resolves unavailable") {
-            await MainActor.run { vm.progressCardStoreAvailable == false }
-        }
+        await waitForObservedState { vm.progressCardStoreAvailable == false }
 
-        await MainActor.run {
+        let refresh = await MainActor.run {
             vm.progressCardStoreAvailable = nil
-            vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+            return vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
                 sessionkey: "main",
                 revision: AnyCodable(1))))
         }
-        try await waitUntil("progress card change rechecks unavailable capability") {
-            await MainActor.run { vm.progressCardStoreAvailable == false }
-        }
+        await refresh?.value
+        #expect(await MainActor.run { vm.progressCardStoreAvailable == false })
 
         #expect(await fetchCalls.current() == 0)
         #expect(await MainActor.run { vm.progressCard == nil })
@@ -1859,9 +1850,7 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
             progressCardStoreAvailable: false)
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("progress card capability resolves unavailable") {
-            await MainActor.run { vm.progressCardStoreAvailable == false }
-        }
+        await waitForObservedState { vm.progressCardStoreAvailable == false }
         await MainActor.run {
             vm.handleTransportEvent(legacyPlanEvent(
                 steps: [legacyPlanStep("Existing", status: "in_progress")]))
@@ -1880,9 +1869,7 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
             progressCardStoreAvailable: false)
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("progress card capability resolves unavailable") {
-            await MainActor.run { vm.progressCardStoreAvailable == false }
-        }
+        await waitForObservedState { vm.progressCardStoreAvailable == false }
 
         await MainActor.run {
             vm.handleTransportEvent(legacyPlanEvent(
@@ -1907,20 +1894,22 @@ struct ChatViewModelTests {
         let card = progressCard(
             revision: 1,
             steps: [ProgressCardStep(step: "Implement", status: .inProgress)])
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
             fetchProgressCardHook: { _, _ in
                 await fetchCalls.increment() == 1 ? nil : card
             })
 
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial progress card fetch") { await fetchCalls.current() == 1 }
-        transport.emit(.progressCardChanged(ProgressCardChangedEvent(
-            sessionkey: "agent:main:main",
-            revision: AnyCodable(1))))
-        try await waitUntil("changed progress card applies") {
-            await MainActor.run { vm.progressCard?.revision == 1 }
+        await fetchCalls.wait { $0 >= 1 }
+        #expect(await fetchCalls.current() == 1)
+        let refresh = await MainActor.run {
+            vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+                sessionkey: "agent:main:main",
+                revision: AnyCodable(1))))
         }
+        await refresh?.value
+        #expect(await MainActor.run { vm.progressCard?.revision == 1 })
 
         await MainActor.run {
             vm.pendingRuns = ["run-1"]
@@ -1938,21 +1927,17 @@ struct ChatViewModelTests {
                 await fetchCalls.increment() == 1 ? progressCard(revision: 3, markdown: "Working") : nil
             })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial progress card applies") {
-            await MainActor.run { vm.progressCard?.revision == 3 }
-        }
+        await waitForObservedState { vm.progressCard?.revision == 3 }
 
-        await MainActor.run {
+        let refresh = await MainActor.run {
             vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
                 sessionkey: "agent:main:main",
                 revision: AnyCodable(NSNull()))))
         }
 
-        try await waitUntil("authoritative clear completes") {
-            let completed = await fetchCalls.current() == 2
-            let cleared = await MainActor.run { vm.progressCard == nil }
-            return completed && cleared
-        }
+        await refresh?.value
+        #expect(await fetchCalls.current() == 2)
+        #expect(await MainActor.run { vm.progressCard == nil })
     }
 
     @Test func `unchanged progress card revision refreshes its target`() async throws {
@@ -1964,17 +1949,16 @@ struct ChatViewModelTests {
                 return progressCard(revision: 4, markdown: "Still working")
             })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial progress card applies") {
-            await MainActor.run { vm.progressCard?.revision == 4 }
-        }
+        await waitForObservedState { vm.progressCard?.revision == 4 }
 
-        await MainActor.run {
+        let refresh = await MainActor.run {
             vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
                 sessionkey: "main",
                 revision: AnyCodable(4))))
         }
 
-        try await waitUntil("equal revision refresh completes") { await fetchCalls.current() == 2 }
+        await refresh?.value
+        #expect(await fetchCalls.current() == 2)
         #expect(await MainActor.run { vm.progressCard?.revision } == 4)
     }
 
@@ -1987,9 +1971,7 @@ struct ChatViewModelTests {
                 return progressCard(revision: 5, markdown: "Current")
             })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial progress card applies") {
-            await MainActor.run { vm.progressCard?.revision == 5 }
-        }
+        await waitForObservedState { vm.progressCard?.revision == 5 }
 
         await MainActor.run {
             vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
@@ -2020,15 +2002,12 @@ struct ChatViewModelTests {
                 return progressCard(sessionKey: "agent:main:other", revision: 2, markdown: "New")
             })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("old session progress fetch starts") {
-            await fetchedSessions.current() == ["agent:main:main"]
-        }
+        await fetchedSessions.wait { $0.count >= 1 }
+        #expect(await fetchedSessions.current() == ["agent:main:main"])
 
         await MainActor.run { vm.switchSession(to: "other") }
         #expect(await MainActor.run { vm.progressCard == nil })
-        try await waitUntil("new session progress card applies") {
-            await MainActor.run { vm.progressCard?.revision == 2 }
-        }
+        await waitForObservedState { vm.progressCard?.revision == 2 }
         await oldFetchGate.open()
         try await Task.sleep(for: .milliseconds(50))
 
@@ -2046,9 +2025,8 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("failed progress card fetch returns") {
-            await fetchCalls.current() == 1
-        }
+        await fetchCalls.wait { $0 >= 1 }
+        #expect(await fetchCalls.current() == 1)
 
         #expect(await MainActor.run { vm.progressCard == nil })
         #expect(await MainActor.run { vm.errorText == nil })
@@ -2057,7 +2035,7 @@ struct ChatViewModelTests {
     @Test(arguments: [false, true])
     func `failed progress refresh evicts only denied cards`(denied: Bool) async throws {
         let fetchCalls = AsyncCounter()
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
             fetchProgressCardHook: { _, _ in
                 let call = await fetchCalls.increment()
@@ -2068,30 +2046,26 @@ struct ChatViewModelTests {
                 throw CancellationError()
             })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial progress card applies") {
-            await MainActor.run { vm.progressCard?.revision == 3 }
-        }
+        await waitForObservedState { vm.progressCard?.revision == 3 }
 
-        transport.emit(.progressCardChanged(ProgressCardChangedEvent(
-            sessionkey: "agent:main:main",
-            revision: AnyCodable(4))))
-        try await waitUntil("failed progress refresh applies its denial outcome") {
-            let fetched = await fetchCalls.current() == 2
-            let expectedCard = await MainActor.run {
-                denied ? vm.progressCard == nil : vm.progressCard?.revision == 3
-            }
-            return fetched && expectedCard
+        let failedRefresh = await MainActor.run {
+            vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+                sessionkey: "agent:main:main",
+                revision: AnyCodable(4))))
         }
+        await failedRefresh?.value
+        #expect(await fetchCalls.current() == 2)
 
         #expect(await MainActor.run { vm.progressCard?.revision } == (denied ? nil : 3))
         #expect(await MainActor.run { vm.errorText == nil })
 
-        transport.emit(.progressCardChanged(ProgressCardChangedEvent(
-            sessionkey: "agent:main:main",
-            revision: AnyCodable(5))))
-        try await waitUntil("next authorized progress refresh restores the card") {
-            await MainActor.run { vm.progressCard?.revision == 4 }
+        let restoredRefresh = await MainActor.run {
+            vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+                sessionkey: "agent:main:main",
+                revision: AnyCodable(5))))
         }
+        await restoredRefresh?.value
+        #expect(await MainActor.run { vm.progressCard?.revision == 4 })
     }
 
     @Test @MainActor func `progress upgrade hint survives bootstrap and clears only its own error`() async throws {
@@ -2127,18 +2101,14 @@ struct ChatViewModelTests {
         #expect(vm.progressCard?.markdown == "Retained")
         #expect(vm.errorText == OpenClawChatTransportUpgradeMessage.progressCardAgentScope)
 
-        vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
-            sessionkey: "agent:research:global", revision: AnyCodable(2))))
-        try await waitUntil("supported progress response applies") {
-            await MainActor.run { vm.progressCard?.revision == 2 }
-        }
+        await vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+            sessionkey: "agent:research:global", revision: AnyCodable(2))))?.value
+        #expect(vm.progressCard?.revision == 2)
         #expect(vm.errorText == nil)
         vm.errorText = "Unrelated chat action failed"
-        vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
-            sessionkey: "agent:research:global", revision: AnyCodable(3))))
-        try await waitUntil("another supported progress response applies") {
-            await MainActor.run { vm.progressCard?.revision == 3 }
-        }
+        await vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+            sessionkey: "agent:research:global", revision: AnyCodable(3))))?.value
+        #expect(vm.progressCard?.revision == 3)
         #expect(vm.errorText == "Unrelated chat action failed")
     }
 
@@ -2157,9 +2127,7 @@ struct ChatViewModelTests {
             },
             progressCardStoreAvailable: true)
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("canonical history progress fetch completes") {
-            await MainActor.run { vm.progressCard != nil }
-        }
+        await waitForObservedState { vm.progressCard != nil }
         #expect(await requests.current() == ["research|global"])
     }
 
@@ -2193,14 +2161,13 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.health(ok: true))
         await capabilityGate.waitUntilBlocked()
         await capabilityGate.release()
-        try await waitUntil("health capability reply completed") { await capabilityReturned.current() == 1 }
+        await capabilityReturned.wait { $0 >= 1 }
+        #expect(await capabilityReturned.current() == 1)
         await Task { @MainActor in }.value
         #expect(await requests.current().isEmpty)
         #expect(vm.progressCard?.markdown == "Retained")
         await historyGate.release()
-        try await waitUntil("successful history owns progress refresh") {
-            await MainActor.run { vm.progressCard?.markdown == "Research" }
-        }
+        await waitForObservedState { vm.progressCard?.markdown == "Research" }
         #expect(await requests.current() == ["research|global"])
     }
 
@@ -2285,9 +2252,7 @@ struct ChatViewModelTests {
             },
             progressCardStoreAvailable: true)
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("retained global card is fetched") {
-            await MainActor.run { vm.progressCard != nil }
-        }
+        await waitForObservedState { vm.progressCard != nil }
         #expect(vm.sessionKey == "global")
         #expect(vm.progressCard?.markdown == "research raw global")
     }
@@ -2305,15 +2270,14 @@ struct ChatViewModelTests {
             },
             progressCardStoreAvailable: true)
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("retained raw global card applies") {
-            await MainActor.run { vm.progressCard?.markdown == "Retained raw global" }
-        }
+        await waitForObservedState { vm.progressCard?.markdown == "Retained raw global" }
         let before = await calls.current()
         // A different ordinary row has the same wire key and can emit this clear.
-        vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+        let refresh = vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
             sessionkey: "agent:main:global", revision: AnyCodable(NSNull()))))
         _ = try #require(vm.progressCard)
-        try await waitUntil("ambiguous poke refreshes the captured row") { await calls.current() == before + 1 }
+        await refresh?.value
+        #expect(await calls.current() == before + 1)
         #expect(vm.progressCard?.markdown == "Retained raw global")
     }
 
@@ -2334,17 +2298,13 @@ struct ChatViewModelTests {
             },
             progressCardStoreAvailable: true)
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("selected global progress card fetch completes") {
-            await MainActor.run { vm.progressCard != nil }
-        }
+        await waitForObservedState { vm.progressCard != nil }
         #expect(vm.sessionKey == "global")
         #expect(vm.progressCard?.markdown == "research")
         #expect(await fetchedSessions.current() == ["research|global"])
         vm.syncActiveAgentId("main")
         #expect(vm.progressCard == nil)
-        try await waitUntil("same global key switches progress owner") {
-            await MainActor.run { vm.progressCard?.markdown == "main" }
-        }
+        await waitForObservedState { vm.progressCard?.markdown == "main" }
         #expect(await fetchedSessions.current() == ["research|global", "main|global"])
     }
 
@@ -2366,26 +2326,20 @@ struct ChatViewModelTests {
             },
             progressCardStoreAvailable: true)
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial alias progress card") {
-            await MainActor.run { vm.progressCard?.revision == 1 }
-        }
+        await waitForObservedState { vm.progressCard?.revision == 1 }
         #expect(vm.sessionKey == "agent:research:workbench")
         for owner in ["main", "research"] {
-            vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
-                sessionkey: "agent:\(owner):global", revision: AnyCodable(2))))
+            await vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+                sessionkey: "agent:\(owner):global", revision: AnyCodable(2))))?.value
         }
-        try await waitUntil("owned canonical poke refreshes selected alias") {
-            await MainActor.run { vm.progressCard?.revision == 2 }
-        }
+        #expect(vm.progressCard?.revision == 2)
         #expect(await calls.current() == 2)
         vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
             sessionkey: "agent:main:global", revision: AnyCodable(NSNull()))))
         #expect(vm.progressCard?.revision == 2)
-        vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
-            sessionkey: "agent:research:global", revision: AnyCodable(NSNull()))))
-        try await waitUntil("null poke refreshes its owned target") {
-            await MainActor.run { vm.progressCard?.revision == 3 }
-        }
+        await vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+            sessionkey: "agent:research:global", revision: AnyCodable(NSNull()))))?.value
+        #expect(vm.progressCard?.revision == 3)
     }
 
     @Test @MainActor func `global progress card capability cannot cross a gateway route change`() async throws {
@@ -2416,12 +2370,11 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.health(ok: false))
         vm.handleTransportEvent(.routeChanged)
         vm.handleTransportEvent(.health(ok: true))
-        try await waitUntil("new gateway progress capability applies") {
-            await MainActor.run { vm.progressCard?.markdown == "Current gateway" }
-        }
+        await waitForObservedState { vm.progressCard?.markdown == "Current gateway" }
         #expect(vm.progressCardStoreAvailable == true)
         await oldCapability.release()
-        try await waitUntil("old capability reply is ready") { await oldReplyReady.current() == 1 }
+        await oldReplyReady.wait { $0 >= 1 }
+        #expect(await oldReplyReady.current() == 1)
         await Task { @MainActor in }.value
         #expect(vm.progressCardStoreAvailable == true)
     }
@@ -2436,9 +2389,7 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("history-triggered progress card applies") {
-            await MainActor.run { vm.progressCard?.revision == 7 }
-        }
+        await waitForObservedState { vm.progressCard?.revision == 7 }
 
         #expect(await fetchedSessions.current() == ["agent:main:main"])
     }
@@ -2500,9 +2451,8 @@ struct ChatViewModelTests {
         #expect(viewModel.swarmEnabled)
         #expect(viewModel.swarmSessions.map(\.key) == ["agent:main:child"])
 
-        try await waitUntil("Swarm capability retry applies explicit false") {
-            await MainActor.run { !viewModel.swarmEnabled && viewModel.swarmSessions.isEmpty }
-        }
+        await viewModel.swarmRefreshTask?.value
+        #expect(!viewModel.swarmEnabled && viewModel.swarmSessions.isEmpty)
     }
 
     @Test @MainActor func `metadata changes enable and disable Swarm progress without reconnecting`() async throws {
@@ -2521,15 +2471,11 @@ struct ChatViewModelTests {
         await viewModel.refreshSwarmCapability()
         #expect(viewModel.activeSwarmGroups.isEmpty)
 
-        viewModel.handleTransportEvent(.chatMetadataChanged)
-        try await waitUntil("Swarm becomes visible after enabling") {
-            await MainActor.run { !viewModel.activeSwarmGroups.isEmpty }
-        }
+        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        #expect(!viewModel.activeSwarmGroups.isEmpty)
 
-        viewModel.handleTransportEvent(.chatMetadataChanged)
-        try await waitUntil("Swarm clears after disabling") {
-            await MainActor.run { viewModel.activeSwarmGroups.isEmpty }
-        }
+        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        #expect(viewModel.activeSwarmGroups.isEmpty)
     }
 
     @Test @MainActor func `older Swarm capability completion cannot undo a newer disable`() async {
@@ -2598,9 +2544,8 @@ struct ChatViewModelTests {
         viewModel.handleTransportEvent(.routeChanged)
         #expect(!viewModel.swarmEnabled)
         #expect(viewModel.swarmSessions.isEmpty)
-        try await waitUntil("Swarm revalidates on the new route") {
-            await MainActor.run { viewModel.swarmEnabled && !viewModel.swarmSessions.isEmpty }
-        }
+        await waitForObservedState { !viewModel.swarmSessions.isEmpty }
+        #expect(viewModel.swarmEnabled && !viewModel.swarmSessions.isEmpty)
     }
 
     @Test @MainActor func `Swarm child lifecycle event still triggers canonical session refresh`() async {
@@ -2983,7 +2928,8 @@ struct ChatViewModelTests {
         viewModel.upsertQuestion(chatQuestionRecord(id: "ask_retry"))
 
         await viewModel.refreshQuestions()
-        try await waitUntil("question refresh retry") { await getCalls.current() == 1 }
+        await viewModel.questionRefreshRetryTask?.value
+        #expect(await getCalls.current() == 1)
 
         #expect(await listCalls.current() == 2)
         #expect(viewModel.questionCards[0].status() == .cancelled)
@@ -3075,11 +3021,10 @@ struct ChatViewModelTests {
         viewModel.upsertQuestion(recovering)
 
         await viewModel.refreshQuestions()
-        try await waitUntil("question retry after partial progress") {
-            await MainActor.run {
-                viewModel.questionCards.first { $0.id == recovering.id }?.status() == .cancelled
-            }
+        for _ in 0..<2 {
+            await viewModel.questionRefreshRetryTask?.value
         }
+        #expect(viewModel.questionCards.first { $0.id == recovering.id }?.status() == .cancelled)
 
         #expect(await listCalls.current() == 3)
         #expect(await recoveringCalls.current() == 2)
@@ -3108,9 +3053,10 @@ struct ChatViewModelTests {
 
         await viewModel.refreshQuestions()
         viewModel.resolveQuestionEvent(.init(id: question.id, status: .cancelled))
-        try await waitUntil("question retry budget reset after backoff mutation") {
-            await listCalls.current() == 3
+        for _ in 0..<2 {
+            await viewModel.questionRefreshRetryTask?.value
         }
+        #expect(await listCalls.current() == 3)
 
         #expect(viewModel.questionCards[0].status() == .cancelled)
     }
@@ -3131,8 +3077,9 @@ struct ChatViewModelTests {
         viewModel.questionRefreshRetryDelaysMs = [0, 0, 0]
 
         await viewModel.refreshQuestions()
-        try await waitUntil("bounded question refresh retries") { await listCalls.current() >= 4 }
-        try await Task.sleep(for: .milliseconds(25))
+        for _ in viewModel.questionRefreshRetryDelaysMs {
+            await viewModel.questionRefreshRetryTask?.value
+        }
 
         #expect(await listCalls.current() == 4)
         #expect(viewModel.questionRefreshRetryTask == nil)
@@ -3667,7 +3614,7 @@ struct ChatViewModelTests {
         #expect(payload.agentId == "work")
     }
 
-    @Test func `bootstrap adopts active history run and consumes live events`() async throws {
+    @Test @MainActor func `bootstrap adopts active history run and consumes live events`() async throws {
         let completion = AsyncCounter()
         let activeHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "keep working", timestamp: 1)],
@@ -3691,19 +3638,18 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.streamingAssistantText } == "partial reply")
 
         emitAssistantText(transport: transport, runId: "run-active", text: "newer partial")
-        try await waitUntil("adopted run consumes live delta") {
-            await MainActor.run { vm.streamingAssistantText == "newer partial" }
-        }
+        await waitForObservedState { vm.streamingAssistantText == "newer partial" }
 
         _ = await completion.increment()
-        emitExternalFinal(transport: transport, runId: "run-active")
-        try await waitUntil("adopted run completes") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.streamingAssistantText == nil &&
-                    vm.messages.contains { $0.content.contains { $0.text == "finished reply" } }
-            }
-        }
+        await vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: "run-active",
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))?.value
+        #expect(vm.pendingRunCount == 0 &&
+            vm.streamingAssistantText == nil &&
+            vm.messages.contains { $0.content.contains { $0.text == "finished reply" } })
     }
 
     @Test func `adopts Codex history run without buffered text`() async throws {
@@ -3733,7 +3679,7 @@ struct ChatViewModelTests {
         #expect(viewModel.pendingRunCount == 1)
     }
 
-    @Test func `foreground history refreshes adopted run snapshot`() async throws {
+    @Test @MainActor func `foreground history refreshes adopted run snapshot`() async throws {
         let firstHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "first partial"))
         let resumedHistory = historyPayload(
@@ -3743,26 +3689,24 @@ struct ChatViewModelTests {
             historyResponses: [firstHistory, resumedHistory],
             requestHistoryHook: { _ in _ = await historyCalls.increment() })
 
-        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
-        try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial in-flight snapshot applied") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "first partial"
-            }
-        }
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("foreground history requested") {
-            await historyCalls.current() == 2
-        }
+        vm.load()
+        await waitForObservedState { vm.pendingRunOwnerArmIDs["run-active"] != nil }
+        // Isolate the foreground/event flow from periodic fallback history refreshes.
+        let pendingOwner = try #require(vm.pendingRunOwnerTasks["run-active"])
+        pendingOwner.cancel()
+        await pendingOwner.value
+        await vm.bootstrapTask?.value
+        #expect(!vm.isLoading)
+        #expect(vm.healthOK)
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "first partial")
+        await vm.resumeFromForeground().value
+        #expect(await historyCalls.current() == 2)
 
-        try await waitUntil("foreground snapshot applied") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "resumed partial"
-            }
-        }
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "resumed partial")
     }
 
-    @Test func `active history retains repeated optimistic user when new row is absent`() async throws {
+    @Test @MainActor func `active history retains repeated optimistic user when new row is absent`() async throws {
+        let sendGate = SessionSubscribeGate()
         let now = Date().timeIntervalSince1970 * 1000
         let olderUser = chatTextMessage(
             role: "user",
@@ -3783,26 +3727,28 @@ struct ChatViewModelTests {
                     messages: [olderUser, olderAssistant],
                     inFlightRun: OpenClawChatInFlightRun(runId: runId, text: "working"))
             },
-            sendMessageStatus: "pending")
+            sendMessageHook: { runId in
+                await sendGate.wait()
+                return OpenClawChatSendResponse(runId: runId, status: "pending")
+            })
         try await loadAndWaitBootstrap(vm: vm)
 
-        await sendUserMessage(vm, text: "repeat request")
+        let send = await sendUserMessage(vm, text: "repeat request")
+        await sendGate.waitUntilBlocked()
         let optimisticID = try await MainActor.run {
             try #require(vm.messages.last(where: { $0.role == "user" })?.id)
         }
 
-        try await waitUntil("repeated optimistic user survives incomplete active history") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 &&
-                    vm.messages.count(where: {
-                        $0.role == "user" && $0.content.first?.text == "repeat request"
-                    }) == 2 &&
-                    vm.messages.contains(where: { $0.id == optimisticID })
-            }
-        }
+        await sendGate.release()
+        await send?.value
+        #expect(vm.pendingRunCount == 1 &&
+            vm.messages.count(where: {
+                $0.role == "user" && $0.content.first?.text == "repeat request"
+            }) == 2 &&
+            vm.messages.contains(where: { $0.id == optimisticID }))
     }
 
-    @Test func `foreground discovers run started without local ownership`() async throws {
+    @Test @MainActor func `foreground discovers run started without local ownership`() async throws {
         let idleHistory = historyPayload()
         let activeHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-external", text: "external partial"))
@@ -3810,16 +3756,12 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm)
         #expect(await MainActor.run { vm.pendingRunCount } == 0)
-        await MainActor.run { vm.resumeFromForeground() }
+        await vm.resumeFromForeground().value
 
-        try await waitUntil("foreground external run discovered") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "external partial"
-            }
-        }
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "external partial")
     }
 
-    @Test func `foreground keeps active run with intermediate assistant history`() async throws {
+    @Test @MainActor func `foreground keeps active run with intermediate assistant history`() async throws {
         let idleHistory = historyPayload()
         let activeHistory = historyPayload(
             messages: [
@@ -3830,13 +3772,9 @@ struct ChatViewModelTests {
         let (_, vm) = await makeViewModel(historyResponses: [idleHistory, activeHistory])
 
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
+        await vm.resumeFromForeground().value
 
-        try await waitUntil("foreground tool run discovered") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "still working"
-            }
-        }
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "still working")
         #expect(await MainActor.run { !vm.canSend })
     }
 
@@ -3860,7 +3798,7 @@ struct ChatViewModelTests {
         await historyCalls.wait { $0 >= 3 }
         #expect(await historyCalls.current() >= 3)
         #expect(await MainActor.run { vm.pendingRunCount == 1 })
-        await MainActor.run { vm.resumeFromForeground() }
+        await MainActor.run { _ = vm.resumeFromForeground() }
         await historyCalls.wait { $0 >= 4 }
         #expect(await historyCalls.current() >= 4)
         #expect(await MainActor.run { vm.pendingRunCount == 1 })
@@ -3880,37 +3818,33 @@ struct ChatViewModelTests {
         })
     }
 
-    @Test func `foreground synthesizes activity when no run snapshot or local run exists`() async throws {
+    @Test @MainActor func `foreground synthesizes activity when no run snapshot or local run exists`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let historyCalls = AsyncCounter()
         let userOnlyHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: now)],
             hasActiveRun: true)
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [userOnlyHistory, userOnlyHistory],
             requestHistoryHook: { _ in _ = await historyCalls.increment() })
 
         try await loadAndWaitBootstrap(vm: vm)
         #expect(await MainActor.run { vm.pendingRunCount == 0 })
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("foreground history applies") {
-            await historyCalls.current() == 2
-        }
+        await vm.resumeFromForeground().value
+        #expect(await historyCalls.current() == 2)
         #expect(await MainActor.run { vm.hasActiveSessionRunWithoutChatSnapshot })
 
-        transport.emit(
+        await vm.handleTransportEvent(
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "main",
                     message: cacheMessage(role: "assistant", text: "done", timestamp: now + 1),
                     messageId: "msg-done",
-                    messageSeq: 2)))
-        try await waitUntil("assistant session message clears activity indicator") {
-            await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot }
-        }
+                    messageSeq: 2)))?.value
+        #expect(!vm.hasActiveSessionRunWithoutChatSnapshot)
     }
 
-    @Test func `session switch clears active session activity indicator`() async throws {
+    @Test @MainActor func `session switch clears active session activity indicator`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let historyCalls = AsyncCounter()
         let userOnlyHistory = historyPayload(
@@ -3921,22 +3855,19 @@ struct ChatViewModelTests {
             requestHistoryHook: { _ in _ = await historyCalls.increment() })
 
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("foreground history applies") {
-            await historyCalls.current() == 2
-        }
+        await vm.resumeFromForeground().value
+        #expect(await historyCalls.current() == 2)
         #expect(await MainActor.run { vm.hasActiveSessionRunWithoutChatSnapshot })
 
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other session bootstrap applies") {
-            await historyCalls.current() == 3
-        }
+        await vm.bootstrapTask?.value
+        #expect(await historyCalls.current() == 3)
         await MainActor.run { vm.input = "new task" }
         #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
         #expect(await MainActor.run { vm.canSend })
     }
 
-    @Test func `foreground clears completed run without assistant output`() async throws {
+    @Test @MainActor func `foreground clears completed run without assistant output`() async throws {
         let activeHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: 1)],
             inFlightRun: OpenClawChatInFlightRun(
@@ -3949,14 +3880,12 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm)
         #expect(await MainActor.run { vm.pendingRunCount == 1 })
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("silent completed run clears") {
-            await MainActor.run { vm.pendingRunCount == 0 }
-        }
+        await vm.resumeFromForeground().value
+        #expect(vm.pendingRunCount == 0)
         #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
     }
 
-    @Test func `foreground active session with answered chat does not show activity indicator`() async throws {
+    @Test @MainActor func `foreground active session with answered chat does not show activity indicator`() async throws {
         let answeredHistory = historyPayload(
             messages: [
                 chatTextMessage(role: "user", text: "done", timestamp: 1),
@@ -3966,17 +3895,15 @@ struct ChatViewModelTests {
         let (_, vm) = await makeViewModel(historyResponses: [historyPayload(), answeredHistory])
 
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("answered history applies") {
-            await MainActor.run { vm.messages.count == 2 }
-        }
+        await vm.resumeFromForeground().value
+        #expect(vm.messages.count == 2)
 
         #expect(await MainActor.run { vm.pendingRunCount == 0 })
         #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
     }
 
-    @Test func `foreground missing snapshot does not clear an in-flight send`() async throws {
-        let sendGate = AsyncGate()
+    @Test @MainActor func `foreground missing snapshot does not clear an in-flight send`() async throws {
+        let sendGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let activeHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "accepted"))
@@ -3989,23 +3916,19 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm)
-        await sendUserMessage(vm, text: "send while resuming")
-        try await waitUntil("send request is in flight") {
-            await MainActor.run { vm.isSending && vm.pendingRunCount == 1 }
-        }
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("foreground history applies") { await historyCalls.current() == 2 }
+        let send = await sendUserMessage(vm, text: "send while resuming")
+        await sendGate.waitUntilBlocked()
+        #expect(vm.isSending && vm.pendingRunCount == 1)
+        await vm.resumeFromForeground().value
+        #expect(await historyCalls.current() == 2)
         #expect(await MainActor.run { vm.pendingRunCount == 1 })
 
-        await sendGate.open()
-        try await waitUntil("accepted run snapshot applies") {
-            await MainActor.run {
-                !vm.isSending && vm.pendingRunCount == 1 && vm.streamingAssistantText == "accepted"
-            }
-        }
+        await sendGate.release()
+        await send?.value
+        #expect(!vm.isSending && vm.pendingRunCount == 1 && vm.streamingAssistantText == "accepted")
     }
 
-    @Test func `post-send history keeps active run with intermediate assistant output`() async throws {
+    @Test @MainActor func `post-send history keeps active run with intermediate assistant output`() async throws {
         let activeHistory = historyPayload(
             messages: [chatTextMessage(role: "assistant", text: "intermediate", timestamp: 2)],
             inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "working"))
@@ -4016,15 +3939,12 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm)
-        await sendUserMessage(vm, text: "do work")
-        try await waitUntil("post-send active run remains pending") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "working"
-            }
-        }
+        let send = await sendUserMessage(vm, text: "do work")
+        await send?.value
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "working")
     }
 
-    @Test func `legacy history omission does not clear pending run`() async throws {
+    @Test @MainActor func `legacy history omission does not clear pending run`() async throws {
         let legacyHistory = historyPayload(supportsActiveRunState: false)
         let fallbackHistory = historyPayload(
             sessionId: "sess-main-fallback",
@@ -4035,13 +3955,10 @@ struct ChatViewModelTests {
         await MainActor.run { vm.pendingRunRefreshDelaysMs = [20, 60000] }
 
         try await loadAndWaitBootstrap(vm: vm)
-        await sendUserMessage(vm, text: "legacy gateway")
-        try await waitUntil("legacy send remains pending") {
-            await MainActor.run { !vm.isSending && vm.pendingRunCount == 1 }
-        }
-        try await waitUntil("legacy fallback history applies") {
-            await MainActor.run { vm.sessionId == "sess-main-fallback" }
-        }
+        let send = await sendUserMessage(vm, text: "legacy gateway")
+        await send?.value
+        #expect(!vm.isSending && vm.pendingRunCount == 1)
+        await waitForObservedState { vm.sessionId == "sess-main-fallback" }
         #expect(await MainActor.run { vm.pendingRunCount == 1 })
     }
 
@@ -4070,7 +3987,7 @@ struct ChatViewModelTests {
         await waitForObservedState { vm.streamingAssistantText == "local output" }
     }
 
-    @Test func `live chat delta owns run while bootstrap history is pending`() async throws {
+    @Test @MainActor func `live chat delta owns run while bootstrap history is pending`() async throws {
         let historyGate = AsyncGate()
         let historyCalls = AsyncCounter()
         let staleHistory = historyPayload(
@@ -4080,7 +3997,7 @@ struct ChatViewModelTests {
                 chatTextMessage(role: "user", text: "current", timestamp: 3),
             ],
             inFlightRun: OpenClawChatInFlightRun(runId: "run-stale", text: "stale partial"))
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [staleHistory],
             requestHistoryHook: { _ in
                 _ = await historyCalls.increment()
@@ -4088,8 +4005,9 @@ struct ChatViewModelTests {
             })
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history starts") { await historyCalls.current() == 1 }
-        transport.emit(
+        await historyCalls.wait { $0 >= 1 }
+        #expect(await historyCalls.current() == 1)
+        await vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-live",
@@ -4099,32 +4017,31 @@ struct ChatViewModelTests {
                         role: "assistant",
                         text: "live partial",
                         timestamp: 1),
-                    errorMessage: nil)))
+                    errorMessage: nil)))?.value
 
-        try await waitUntil("live delta owns run") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "live partial"
-            }
-        }
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "live partial")
+        // Isolate the bootstrap/event flow from periodic fallback history refreshes.
+        let pendingOwner = try #require(vm.pendingRunOwnerTasks["run-live"])
+        pendingOwner.cancel()
+        await pendingOwner.value
         await historyGate.open()
-        try await waitUntil("bootstrap completes") { await MainActor.run { vm.healthOK } }
+        await vm.bootstrapTask?.value
+        #expect(vm.healthOK)
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.streamingAssistantText } == "live partial")
 
-        transport.emit(
+        await vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-live",
                     sessionKey: "main",
                     state: "final",
                     message: chatTextMessage(role: "assistant", text: "same reply", timestamp: 4),
-                    errorMessage: nil)))
-        try await waitUntil("live final remains scoped to current user") {
-            await MainActor.run { vm.messages.count { $0.content.first?.text == "same reply" } == 2 }
-        }
+                    errorMessage: nil)))?.value
+        #expect(vm.messages.count { $0.content.first?.text == "same reply" } == 2)
     }
 
-    @Test func `global chat delta adopts only selected agent run`() async throws {
+    @Test @MainActor func `global chat delta adopts only selected agent run`() async throws {
         let bareGlobalMatches = await MainActor.run {
             (
                 OpenClawChatViewModel.matchesCurrentSessionKey(
@@ -4195,13 +4112,13 @@ struct ChatViewModelTests {
                 mainSessionKey: "main")
         })
 
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             sessionKey: "global",
             activeAgentId: "work",
             historyResponses: [historyPayload(sessionKey: "global")])
         try await loadAndWaitBootstrap(vm: vm)
 
-        transport.emit(
+        await vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-other",
@@ -4209,11 +4126,10 @@ struct ChatViewModelTests {
                     agentId: "main",
                     state: "delta",
                     message: chatTextMessage(role: "assistant", text: "wrong agent", timestamp: 1),
-                    errorMessage: nil)))
-        try await Task.sleep(for: .milliseconds(50))
+                    errorMessage: nil)))?.value
         #expect(await MainActor.run { vm.pendingRunCount } == 0)
 
-        transport.emit(
+        await vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-work",
@@ -4221,18 +4137,14 @@ struct ChatViewModelTests {
                     agentId: "work",
                     state: "delta",
                     message: chatTextMessage(role: "assistant", text: "selected agent", timestamp: 2),
-                    errorMessage: nil)))
-        try await waitUntil("selected global run adopted") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "selected agent"
-            }
-        }
+                    errorMessage: nil)))?.value
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "selected agent")
 
-        let (lateTransport, lateVM) = await makeViewModel(
+        let (_, lateVM) = await makeViewModel(
             sessionKey: "global",
             historyResponses: [historyPayload(sessionKey: "global")])
         try await loadAndWaitBootstrap(vm: lateVM)
-        lateTransport.emit(
+        await lateVM.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-late",
@@ -4240,11 +4152,10 @@ struct ChatViewModelTests {
                     agentId: "work",
                     state: "delta",
                     message: chatTextMessage(role: "assistant", text: "late identity", timestamp: 3),
-                    errorMessage: nil)))
-        try await Task.sleep(for: .milliseconds(50))
+                    errorMessage: nil)))?.value
         #expect(await MainActor.run { lateVM.pendingRunCount == 0 })
         await MainActor.run { lateVM.syncActiveAgentId("work") }
-        lateTransport.emit(
+        await lateVM.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-late",
@@ -4252,10 +4163,8 @@ struct ChatViewModelTests {
                     agentId: "work",
                     state: "delta",
                     message: chatTextMessage(role: "assistant", text: "late identity", timestamp: 3),
-                    errorMessage: nil)))
-        try await waitUntil("late global agent identity adopts run") {
-            await MainActor.run { lateVM.pendingRunCount == 1 }
-        }
+                    errorMessage: nil)))?.value
+        #expect(lateVM.pendingRunCount == 1)
     }
 
     @Test @MainActor func `global session changes reconcile nested digest ownership`() async {
@@ -4315,8 +4224,8 @@ struct ChatViewModelTests {
         #expect(vm.sessions[0].updatedAt == 1000)
     }
 
-    @Test func `global agent switch clears previous run ownership`() async throws {
-        let (transport, vm) = await makeViewModel(
+    @Test @MainActor func `global agent switch clears previous run ownership`() async throws {
+        let (_, vm) = await makeViewModel(
             sessionKey: "global",
             activeAgentId: "main",
             historyResponses: [
@@ -4325,7 +4234,7 @@ struct ChatViewModelTests {
             ])
         try await loadAndWaitBootstrap(vm: vm)
 
-        transport.emit(
+        await vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-main",
@@ -4333,12 +4242,8 @@ struct ChatViewModelTests {
                     agentId: "main",
                     state: "delta",
                     message: chatTextMessage(role: "assistant", text: "old partial", timestamp: 1),
-                    errorMessage: nil)))
-        try await waitUntil("main run becomes pending") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "old partial"
-            }
-        }
+                    errorMessage: nil)))?.value
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "old partial")
 
         await MainActor.run { vm.syncActiveAgentId("work") }
 
@@ -4362,7 +4267,7 @@ struct ChatViewModelTests {
         #expect(await transport.sentRoutingContracts() == [contract])
     }
 
-    @Test func `alias routing contract change restarts bootstrap`() async throws {
+    @Test @MainActor func `alias routing contract change restarts bootstrap`() async throws {
         let historyCalls = AsyncCounter()
         let oldHistory = historyPayload(messages: [
             chatTextMessage(role: "assistant", text: "old route", timestamp: 1),
@@ -4375,9 +4280,7 @@ struct ChatViewModelTests {
             historyResponses: [oldHistory, newHistory],
             requestHistoryHook: { _ in _ = await historyCalls.increment() })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial route history") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "old route" }
-        }
+        #expect(vm.messages.first?.content.first?.text == "old route")
 
         await MainActor.run {
             vm.syncDeliveryIdentity(
@@ -4385,13 +4288,12 @@ struct ChatViewModelTests {
                 sessionRoutingContract: "per-sender|work-main|work")
         }
 
-        try await waitUntil("replacement route history") {
-            guard await historyCalls.current() == 2 else { return false }
-            return await MainActor.run { vm.messages.first?.content.first?.text == "new route" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await historyCalls.current() == 2)
+        #expect(vm.messages.first?.content.first?.text == "new route")
     }
 
-    @Test func `custom main routing contract change restarts bootstrap`() async throws {
+    @Test @MainActor func `custom main routing contract change restarts bootstrap`() async throws {
         let historyCalls = AsyncCounter()
         let oldHistory = historyPayload(
             sessionKey: "agent:ops:work",
@@ -4406,22 +4308,19 @@ struct ChatViewModelTests {
             sessionRoutingContract: "global|work|ops",
             requestHistoryHook: { _ in _ = await historyCalls.increment() })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial custom main history") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "old scope" }
-        }
+        #expect(vm.messages.first?.content.first?.text == "old scope")
 
         await MainActor.run {
             vm.syncSessionRoutingContract("per-sender|work|ops")
         }
 
-        try await waitUntil("replacement custom main history") {
-            guard await historyCalls.current() == 2 else { return false }
-            return await MainActor.run { vm.messages.first?.content.first?.text == "new scope" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await historyCalls.current() == 2)
+        #expect(vm.messages.first?.content.first?.text == "new scope")
     }
 
-    @Test func `unscoped agent update replaces an active bootstrap`() async throws {
-        let firstHistoryGate = AsyncGate()
+    @Test @MainActor func `unscoped agent update replaces an active bootstrap`() async throws {
+        let firstHistoryGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let firstHistory = historyPayload(
             sessionKey: "Matrix:!Room:example.org",
@@ -4439,26 +4338,25 @@ struct ChatViewModelTests {
                 }
             })
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("first unscoped bootstrap") { await historyCalls.current() == 1 }
+        vm.load()
+        let firstBootstrap = vm.bootstrapTask
+        await firstHistoryGate.waitUntilBlocked()
+        #expect(await historyCalls.current() == 1)
         await MainActor.run { vm.syncActiveAgentId("work") }
-        try await waitUntil("replacement unscoped bootstrap") {
-            guard await historyCalls.current() == 2 else { return false }
-            return await MainActor.run {
-                !vm.isLoading && vm.messages.first?.content.first?.text == "new agent"
-            }
-        }
-        await firstHistoryGate.open()
-        try await Task.sleep(for: .milliseconds(25))
+        await vm.bootstrapTask?.value
+        #expect(await historyCalls.current() == 2)
+        #expect(!vm.isLoading && vm.messages.first?.content.first?.text == "new agent")
+        await firstHistoryGate.release()
+        await firstBootstrap?.value
         #expect(await MainActor.run { vm.messages.first?.content.first?.text } == "new agent")
     }
 
-    @Test func `intermediate session message preserves pending recovery snapshot`() async throws {
+    @Test @MainActor func `intermediate session message preserves pending recovery snapshot`() async throws {
         let historyGate = AsyncGate()
         let historyCalls = AsyncCounter()
         let activeHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "active partial"))
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [activeHistory],
             requestHistoryHook: { _ in
                 _ = await historyCalls.increment()
@@ -4466,8 +4364,9 @@ struct ChatViewModelTests {
             })
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history starts") { await historyCalls.current() == 1 }
-        transport.emit(
+        await historyCalls.wait { $0 >= 1 }
+        #expect(await historyCalls.current() == 1)
+        await vm.handleTransportEvent(
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "main",
@@ -4476,22 +4375,17 @@ struct ChatViewModelTests {
                         text: "intermediate output",
                         timestamp: 1),
                     messageId: "msg-intermediate",
-                    messageSeq: 1)))
-        try await waitUntil("intermediate assistant message applies") {
-            await MainActor.run { vm.messages.contains { $0.content.first?.text == "intermediate output" } }
-        }
+                    messageSeq: 1)))?.value
+        #expect(vm.messages.contains { $0.content.first?.text == "intermediate output" })
 
         await historyGate.open()
-        try await waitUntil("bootstrap active run adopted") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 &&
-                    vm.streamingAssistantText == "active partial" &&
-                    vm.messages.contains { $0.content.first?.text == "intermediate output" }
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.pendingRunCount == 1 &&
+            vm.streamingAssistantText == "active partial" &&
+            vm.messages.contains { $0.content.first?.text == "intermediate output" })
     }
 
-    @Test func `manual refresh re-adopts active run after clearing local ownership`() async throws {
+    @Test @MainActor func `manual refresh re-adopts active run after clearing local ownership`() async throws {
         let firstHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "first partial"))
         let refreshedHistory = historyPayload(
@@ -4501,14 +4395,11 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.refresh() }
 
-        try await waitUntil("manual refresh snapshot applied") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "refreshed partial"
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "refreshed partial")
     }
 
-    @Test func `older history cannot replace newer run snapshot`() async throws {
+    @Test @MainActor func `older history cannot replace newer run snapshot`() async throws {
         let olderGate = SessionSubscribeGate()
         let olderCompletions = AsyncCounter()
         let initialHistory = historyPayload(
@@ -4531,21 +4422,20 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
+        let olderRefresh = vm.resumeFromForeground()
         await olderGate.waitUntilBlocked()
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("newer run snapshot applies") {
-            await MainActor.run { vm.streamingAssistantText == "newer" }
-        }
+        await vm.resumeFromForeground().value
+        #expect(vm.streamingAssistantText == "newer")
 
         await olderGate.release()
-        try await waitUntil("older foreground history completes") { await olderCompletions.current() == 1 }
+        await olderRefresh.value
+        #expect(await olderCompletions.current() == 1)
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.streamingAssistantText } == "newer")
     }
 
-    @Test func `delayed history cannot overwrite newer live run text`() async throws {
-        let staleGate = AsyncGate()
+    @Test @MainActor func `delayed history cannot overwrite newer live run text`() async throws {
+        let staleGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let staleCompletions = AsyncCounter()
         let activeHistory = historyPayload(
@@ -4563,22 +4453,22 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
+        let staleRefresh = vm.resumeFromForeground()
+        await staleGate.waitUntilBlocked()
+        #expect(await historyCalls.current() == 2)
 
         emitAssistantText(transport: transport, runId: "run-active", text: "live newer")
-        try await waitUntil("newer live run text applies") {
-            await MainActor.run { vm.streamingAssistantText == "live newer" }
-        }
+        await waitForObservedState { vm.streamingAssistantText == "live newer" }
 
-        await staleGate.open()
-        try await waitUntil("stale foreground history completes") { await staleCompletions.current() == 1 }
+        await staleGate.release()
+        await staleRefresh.value
+        #expect(await staleCompletions.current() == 1)
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.streamingAssistantText } == "live newer")
     }
 
-    @Test func `stale foreground completion cannot clear newer live run`() async throws {
-        let staleGate = AsyncGate()
+    @Test @MainActor func `stale foreground completion cannot clear newer live run`() async throws {
+        let staleGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let activeHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "keep going", timestamp: 1)],
@@ -4597,32 +4487,37 @@ struct ChatViewModelTests {
                 return staleCompletedHistory
             })
 
-        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
-        try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
+        vm.load()
+        await waitForObservedState { vm.pendingRunOwnerArmIDs["run-active"] != nil }
+        // Isolate the foreground/event flow from periodic fallback history refreshes.
+        let pendingOwner = try #require(vm.pendingRunOwnerTasks["run-active"])
+        pendingOwner.cancel()
+        await pendingOwner.value
+        await vm.bootstrapTask?.value
+        #expect(!vm.isLoading)
+        #expect(vm.healthOK)
+        let staleRefresh = vm.resumeFromForeground()
+        await staleGate.waitUntilBlocked()
+        #expect(await historyCalls.current() == 2)
         emitAssistantText(transport: transport, runId: "run-active", text: "live newer")
-        try await waitUntil("newer live run text applies") {
-            await MainActor.run { vm.streamingAssistantText == "live newer" }
-        }
+        await waitForObservedState { vm.streamingAssistantText == "live newer" }
 
-        await staleGate.open()
-        try await waitUntil("stale history transcript applies") {
-            await MainActor.run { vm.messages.contains { $0.content.first?.text == "stale completion" } }
-        }
+        await staleGate.release()
+        await staleRefresh.value
+        #expect(vm.messages.contains { $0.content.first?.text == "stale completion" })
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.streamingAssistantText } == "live newer")
     }
 
-    @Test func `terminal event invalidates delayed active run snapshot`() async throws {
-        let staleGate = AsyncGate()
+    @Test @MainActor func `terminal event invalidates delayed active run snapshot`() async throws {
+        let staleGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let staleCompletions = AsyncCounter()
         let activeHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "working"))
         let completedHistory = historyPayload(
             messages: [chatTextMessage(role: "assistant", text: "done", timestamp: 2)])
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [activeHistory],
             requestHistoryHook: { _ in _ = await historyCalls.increment() },
             historyResponseHook: { _, index, _ in
@@ -4636,24 +4531,27 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
+        let staleRefresh = vm.resumeFromForeground()
+        await staleGate.waitUntilBlocked()
+        #expect(await historyCalls.current() == 2)
 
-        emitExternalFinal(transport: transport, runId: "run-active")
-        try await waitUntil("terminal history applies") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 && vm.messages.contains { $0.content.contains { $0.text == "done" } }
-            }
-        }
+        await vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: "run-active",
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))?.value
+        #expect(vm.pendingRunCount == 0 && vm.messages.contains { $0.content.contains { $0.text == "done" } })
 
-        await staleGate.open()
-        try await waitUntil("stale foreground history completes") { await staleCompletions.current() == 1 }
+        await staleGate.release()
+        await staleRefresh.value
+        #expect(await staleCompletions.current() == 1)
         #expect(await MainActor.run { vm.pendingRunCount } == 0)
         #expect(await MainActor.run { vm.streamingAssistantText } == nil)
     }
 
-    @Test func `delayed history cannot erase terminal event message`() async throws {
-        let staleGate = AsyncGate()
+    @Test @MainActor func `delayed history cannot erase terminal event message`() async throws {
+        let staleGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let staleCompletions = AsyncCounter()
         let activeHistory = historyPayload(
@@ -4663,7 +4561,7 @@ struct ChatViewModelTests {
                 chatTextMessage(role: "user", text: "finish this", timestamp: 1),
             ],
             inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "working"))
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [activeHistory],
             requestHistoryHook: { _ in _ = await historyCalls.increment() },
             historyResponseHook: { _, index, _ in
@@ -4684,32 +4582,39 @@ struct ChatViewModelTests {
                 return nil
             })
 
-        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
-        try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
+        vm.load()
+        await waitForObservedState { vm.pendingRunOwnerArmIDs["run-active"] != nil }
+        // Isolate the foreground/event flow from periodic fallback history refreshes.
+        let pendingOwner = try #require(vm.pendingRunOwnerTasks["run-active"])
+        pendingOwner.cancel()
+        await pendingOwner.value
+        await vm.bootstrapTask?.value
+        #expect(!vm.isLoading)
+        #expect(vm.healthOK)
+        let staleRefresh = vm.resumeFromForeground()
+        await staleGate.waitUntilBlocked()
+        #expect(await historyCalls.current() == 2)
 
-        transport.emit(
+        await vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-active",
                     sessionKey: "main",
                     state: "final",
                     message: chatTextMessage(role: "assistant", text: "live final", timestamp: 2),
-                    errorMessage: nil)))
-        try await waitUntil("terminal event message appears") {
-            await MainActor.run { vm.messages.count { $0.content.first?.text == "live final" } == 2 }
-        }
-        try await waitUntil("terminal refresh attempted") { await historyCalls.current() == 3 }
+                    errorMessage: nil)))?.value
+        #expect(vm.messages.count { $0.content.first?.text == "live final" } == 2)
+        #expect(await historyCalls.current() == 3)
 
-        await staleGate.open()
-        try await waitUntil("stale foreground history completes") { await staleCompletions.current() == 1 }
+        await staleGate.release()
+        await staleRefresh.value
+        #expect(await staleCompletions.current() == 1)
         #expect(await MainActor.run { vm.messages.count { $0.content.first?.text == "live final" } == 2 })
         #expect(await MainActor.run { vm.pendingRunCount } == 0)
     }
 
-    @Test func `external terminal event protects current run from delayed snapshot`() async throws {
-        let staleGate = AsyncGate()
+    @Test @MainActor func `external terminal event protects current run from delayed snapshot`() async throws {
+        let staleGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let staleCompletions = AsyncCounter()
         let currentHistory = historyPayload(
@@ -4730,37 +4635,45 @@ struct ChatViewModelTests {
                 return nil
             })
 
-        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
-        try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run { vm.resumeFromForeground() }
-        try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
+        vm.load()
+        await waitForObservedState { vm.pendingRunOwnerArmIDs["run-current"] != nil }
+        // Isolate the foreground/event flow from periodic fallback history refreshes.
+        let pendingOwner = try #require(vm.pendingRunOwnerTasks["run-current"])
+        pendingOwner.cancel()
+        await pendingOwner.value
+        await vm.bootstrapTask?.value
+        #expect(!vm.isLoading)
+        #expect(vm.healthOK)
+        let staleRefresh = vm.resumeFromForeground()
+        await staleGate.waitUntilBlocked()
+        #expect(await historyCalls.current() == 2)
 
-        emitExternalFinal(transport: transport, runId: "run-finished")
-        try await waitUntil("terminal refresh attempted") { await historyCalls.current() == 3 }
-        await staleGate.open()
-        try await waitUntil("stale foreground history completes") { await staleCompletions.current() == 1 }
+        await vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: "run-finished",
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))?.value
+        #expect(await historyCalls.current() == 3)
+        await staleGate.release()
+        await staleRefresh.value
+        #expect(await staleCompletions.current() == 1)
 
         emitAssistantText(transport: transport, runId: "run-current", text: "current live")
-        try await waitUntil("current run still owns live events") {
-            await MainActor.run { vm.streamingAssistantText == "current live" }
-        }
+        await waitForObservedState { vm.streamingAssistantText == "current live" }
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
     }
 
-    @Test func `sequence gap re-adopts active run from history`() async throws {
+    @Test @MainActor func `sequence gap re-adopts active run from history`() async throws {
         let initialHistory = historyPayload()
         let recoveredHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-recovered", text: "recovered partial"))
-        let (transport, vm) = await makeViewModel(historyResponses: [initialHistory, recoveredHistory])
+        let (_, vm) = await makeViewModel(historyResponses: [initialHistory, recoveredHistory])
 
         try await loadAndWaitBootstrap(vm: vm)
-        transport.emit(.seqGap)
+        await vm.handleTransportEvent(.seqGap)?.value
 
-        try await waitUntil("sequence gap run recovered") {
-            await MainActor.run {
-                vm.pendingRunCount == 1 && vm.streamingAssistantText == "recovered partial"
-            }
-        }
+        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "recovered partial")
     }
 
     @Test func `keeps distinct idempotent user turns with identical timestamps and content`() async throws {
@@ -4797,7 +4710,7 @@ struct ChatViewModelTests {
         #expect(after > before)
     }
 
-    @Test func `timeline revision ignores identical history refresh`() async throws {
+    @Test @MainActor func `timeline revision ignores identical history refresh`() async throws {
         let message = chatTextMessage(role: "user", text: "hello", timestamp: 1)
         let firstHistory = historyPayload(sessionId: "revision-session-1", messages: [message])
         let secondHistory = historyPayload(sessionId: "revision-session-2", messages: [message])
@@ -4806,9 +4719,8 @@ struct ChatViewModelTests {
         let before = await MainActor.run { vm.timelineRevision }
 
         await MainActor.run { vm.refresh() }
-        try await waitUntil("identical history refresh") {
-            await MainActor.run { vm.sessionId == "revision-session-2" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionId == "revision-session-2")
 
         let after = await MainActor.run { vm.timelineRevision }
         #expect(after == before)
@@ -5617,7 +5529,8 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm)
         let refresh = Task { await vm.refreshHistoryAfterRun() }
-        try await waitUntil("history starts before detachment") { await historyStarted.current() == 1 }
+        await historyStarted.wait { $0 >= 1 }
+        #expect(await historyStarted.current() == 1)
         vm.detachTransport()
         vm.detachTransport()
         let lateEvent = OpenClawChatTransportEvent.chat(OpenClawChatEventPayload(
@@ -5703,17 +5616,17 @@ struct ChatViewModelTests {
         }
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "hello")
-        try await waitUntil("terminal observation retries failed history") {
-            let waits = await transport.waitCompletionRunIds()
-            return await MainActor.run {
-                waits.count >= 2 &&
-                    vm.pendingRunCount == 0 &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "recovered after history failure" }
-                    }
-            }
-        }
+        await sendUserMessage(vm, text: "hello")?.value
+        let runId = try #require(await transport.lastSentRunId())
+        let owner = await MainActor.run { vm.pendingRunOwnerTasks[runId] }
+        await owner?.value
+        #expect(await transport.waitCompletionRunIds().count >= 2)
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.messages.contains { message in
+                    message.content.contains { $0.text == "recovered after history failure" }
+                }
+        })
         #expect(await MainActor.run { vm.errorText == nil })
     }
 
@@ -5734,13 +5647,14 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "hello")
-        try await waitUntil("terminal failure clears pending run") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.errorText == "Provider rejected the request"
-            }
-        }
+        await sendUserMessage(vm, text: "hello")?.value
+        let runId = try #require(await transport.lastSentRunId())
+        let owner = await MainActor.run { vm.pendingRunOwnerTasks[runId] }
+        await owner?.value
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.errorText == "Provider rejected the request"
+        })
         #expect(await !(transport.waitCompletionRunIds()).isEmpty)
     }
 
@@ -5766,19 +5680,18 @@ struct ChatViewModelTests {
         }
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "hello")
-        try await waitUntil("second terminal observation starts after retained ownership") {
-            await waitCalls.current() == 2
-        }
+        await sendUserMessage(vm, text: "hello")?.value
+        await waitCalls.wait { $0 >= 2 }
+        #expect(await waitCalls.current() == 2)
         let runId = try #require(await transport.lastSentRunId())
+        let owner = try #require(await MainActor.run { vm.pendingRunOwnerTasks[runId] })
         await MainActor.run {
             #expect(vm.pendingRunCount == 1)
             vm.pendingRunTerminalHistoryGraceMs = 0
         }
         await secondWaitGate.open()
-        try await waitUntil("confirmed no-output completion clears pending run") {
-            await MainActor.run { vm.pendingRunCount == 0 && vm.errorText == nil }
-        }
+        await owner.value
+        #expect(await MainActor.run { vm.pendingRunCount == 0 && vm.errorText == nil })
         #expect(await transport.waitCompletionRunIds() == [runId, runId])
     }
 
@@ -5821,7 +5734,7 @@ struct ChatViewModelTests {
     }
 
     @Test(arguments: ["final", "aborted", "error"])
-    func `terminal event for another run preserves active streaming and tools`(state: String) async throws {
+    @MainActor func `terminal event for another run preserves active streaming and tools`(state: String) async throws {
         let activeRunId = "active-run"
         let initialHistory = historyPayload()
         let activeHistory = historyPayload(
@@ -5835,20 +5748,17 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
-        await sendUserMessage(vm, text: "keep active stream")
-        try await waitUntil("remote run is adopted") {
-            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
-        }
+        await sendUserMessage(vm, text: "keep active stream")?.value
+        #expect(await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending })
         emitAssistantText(transport: transport, runId: activeRunId, text: "Still working")
         emitToolStart(transport: transport, runId: activeRunId)
-        try await waitUntil("active run owns streaming and tools") {
-            await MainActor.run {
-                vm.streamingAssistantText == "Still working" &&
-                    vm.pendingToolCalls.count == 1
-            }
+        await waitForObservedState {
+            vm.streamingAssistantText == "Still working" &&
+                vm.pendingToolCalls.count >= 1
         }
+        #expect(await MainActor.run { vm.pendingToolCalls.count == 1 })
 
-        transport.emit(
+        let finalRefresh = vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "older-run",
@@ -5857,7 +5767,7 @@ struct ChatViewModelTests {
                     message: nil,
                     errorMessage: state == "error" ? "Other run failed" : nil)))
 
-        try await Task.sleep(for: .milliseconds(100))
+        await finalRefresh?.value
 
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.streamingAssistantText } == "Still working")
@@ -5871,21 +5781,19 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "cached")
-        try await waitUntil("terminal ok ack clears pending run") {
-            await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending }
-        }
+        await sendUserMessage(vm, text: "cached")?.value
+        #expect(await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending })
 
         #expect(await MainActor.run { vm.errorText } == nil)
         #expect(await transport.waitCompletionRunIds().isEmpty)
         #expect(await MainActor.run { vm.messages.containsUserText("cached") })
     }
 
-    @Test func `rekeys optimistic user message when gateway reuses active run`() async throws {
+    @Test @MainActor func `rekeys optimistic user message when gateway reuses active run`() async throws {
         let sessionId = "sess-main"
         let remoteRunId = "existing-active-run"
         let now = Date().timeIntervalSince1970 * 1000
-        let responseGate = AsyncGate()
+        let responseGate = SessionSubscribeGate()
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload(sessionId: sessionId)],
             historyResponseHook: { _, index, _ in
@@ -5906,30 +5814,30 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
+        let send = try #require(await sendUserMessage(vm, text: "same active request"))
+        await responseGate.waitUntilBlocked()
         let optimisticID = try await MainActor.run {
             try #require(vm.messages.last(where: { $0.role == "user" })?.id)
         }
-        await responseGate.open()
+        await responseGate.release()
+        await send.value
 
-        try await waitUntil("reused run adopts one canonical user row") {
-            await MainActor.run {
-                vm.messages.count(where: { $0.role == "user" }) == 1 &&
-                    vm.messages.contains(where: { message in
-                        message.id == optimisticID &&
-                            message.timestamp == now + 5000 &&
-                            message.idempotencyKey == "\(remoteRunId):user"
-                    })
-            }
-        }
+        #expect(await MainActor.run {
+            vm.messages.count(where: { $0.role == "user" }) == 1 &&
+                vm.messages.contains(where: { message in
+                    message.id == optimisticID &&
+                        message.timestamp == now + 5000 &&
+                        message.idempotencyKey == "\(remoteRunId):user"
+                })
+        })
     }
 
-    @Test func `reused run preserves canonical event received before acknowledgement`() async throws {
+    @Test @MainActor func `reused run preserves canonical event received before acknowledgement`() async throws {
         let sessionId = "sess-main"
         let remoteRunId = "existing-active-run"
         let now = Date().timeIntervalSince1970 * 1000
-        let responseGate = AsyncGate()
-        let (transport, vm) = await makeViewModel(
+        let responseGate = SessionSubscribeGate()
+        let (_, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionId: sessionId),
                 historyPayload(sessionId: sessionId, messages: []),
@@ -5940,12 +5848,13 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
+        let send = try #require(await sendUserMessage(vm, text: "same active request"))
+        await responseGate.waitUntilBlocked()
         let optimisticID = try await MainActor.run {
             try #require(vm.messages.last(where: { $0.role == "user" })?.id)
         }
         let canonicalTimestamp = now + 5000
-        transport.emit(
+        vm.handleTransportEvent(
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
@@ -5956,25 +5865,22 @@ struct ChatViewModelTests {
                         idempotencyKey: "\(remoteRunId):user"),
                     messageId: "srv-reused-run-user",
                     messageSeq: 1)))
-        try await waitUntil("canonical event arrives before send acknowledgement") {
-            await MainActor.run { vm.messages.count(where: { $0.role == "user" }) == 2 }
-        }
-        await responseGate.open()
+        #expect(await MainActor.run { vm.messages.count(where: { $0.role == "user" }) == 2 })
+        await responseGate.release()
+        await send.value
 
-        try await waitUntil("reused run preserves canonical event data") {
-            await MainActor.run {
-                vm.messages.count(where: { $0.role == "user" }) == 1 &&
-                    vm.messages.contains(where: { message in
-                        message.id == optimisticID &&
-                            message.content.first?.text == "canonical active request" &&
-                            message.timestamp == canonicalTimestamp &&
-                            message.idempotencyKey == "\(remoteRunId):user"
-                    })
-            }
-        }
+        #expect(await MainActor.run {
+            vm.messages.count(where: { $0.role == "user" }) == 1 &&
+                vm.messages.contains(where: { message in
+                    message.id == optimisticID &&
+                        message.content.first?.text == "canonical active request" &&
+                        message.timestamp == canonicalTimestamp &&
+                        message.idempotencyKey == "\(remoteRunId):user"
+                })
+        })
     }
 
-    @Test func `reused run final stays scoped to surviving canonical user turn`() async throws {
+    @Test @MainActor func `reused run final stays scoped to surviving canonical user turn`() async throws {
         let sessionId = "sess-main"
         let remoteRunId = "existing-active-run"
         let now = Date().timeIntervalSince1970 * 1000
@@ -5997,8 +5903,8 @@ struct ChatViewModelTests {
         let canonicalHistory = historyPayload(
             sessionId: sessionId,
             messages: [activeUser, activeReply, newerUser])
-        let responseGate = AsyncGate()
-        let (transport, vm) = await makeViewModel(
+        let responseGate = SessionSubscribeGate()
+        let (_, vm) = await makeViewModel(
             historyResponses: [initialHistory, canonicalHistory, canonicalHistory],
             sendMessageHook: { _ in
                 await responseGate.wait()
@@ -6006,8 +5912,9 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
-        transport.emit(
+        let send = try #require(await sendUserMessage(vm, text: "same active request"))
+        await responseGate.waitUntilBlocked()
+        vm.handleTransportEvent(
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
@@ -6018,7 +5925,7 @@ struct ChatViewModelTests {
                         idempotencyKey: remoteRunId),
                     messageId: "srv-active-reply",
                     messageSeq: 2)))
-        transport.emit(
+        vm.handleTransportEvent(
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
@@ -6029,17 +5936,14 @@ struct ChatViewModelTests {
                         idempotencyKey: "other-client-run:user"),
                     messageId: "srv-newer-user",
                     messageSeq: 3)))
-        try await waitUntil("newer user arrives before reused-run acknowledgement") {
-            await MainActor.run { vm.messages.containsUserText("newer request from another client") }
-        }
-        await responseGate.open()
-        try await waitUntil("reused run collapses onto earlier canonical user") {
-            await MainActor.run {
-                vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 1
-            }
-        }
+        #expect(await MainActor.run { vm.messages.containsUserText("newer request from another client") })
+        await responseGate.release()
+        await send.value
+        #expect(await MainActor.run {
+            vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 1
+        })
 
-        transport.emit(
+        let finalRefresh = vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: remoteRunId,
@@ -6048,20 +5952,19 @@ struct ChatViewModelTests {
                     message: activeReply,
                     errorMessage: nil)))
 
-        try await waitUntil("reused final does not duplicate earlier canonical reply") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.messages
-                    .count(where: { $0.role == "assistant" && $0.content.first?.text == "active reply" }) == 1
-            }
-        }
+        await finalRefresh?.value
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.messages
+                .count(where: { $0.role == "assistant" && $0.content.first?.text == "active reply" }) == 1
+        })
     }
 
-    @Test func `newer identical reply does not suppress reused run final`() async throws {
+    @Test @MainActor func `newer identical reply does not suppress reused run final`() async throws {
         let sessionId = "sess-main"
         let remoteRunId = "existing-active-run"
         let now = Date().timeIntervalSince1970 * 1000
-        let responseGate = AsyncGate()
+        let responseGate = SessionSubscribeGate()
         let finalRefreshGate = SessionSubscribeGate()
         let historyCount = AsyncCounter()
         let history = historyPayload(
@@ -6082,7 +5985,7 @@ struct ChatViewModelTests {
                     text: "OK",
                     timestamp: now - 1000),
             ])
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [history, history],
             requestHistoryHook: { _ in
                 let count = await historyCount.increment()
@@ -6096,23 +5999,21 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
-        try await waitUntil("duplicate request is optimistic") {
-            await MainActor.run {
-                vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 2
-            }
-        }
-        await responseGate.open()
-        try await waitUntil("duplicate request collapses onto older active user") {
-            guard await historyCount.current() >= 2 else { return false }
-            return await MainActor.run {
-                vm.messages.count(where: {
-                    $0.role == "user" && $0.content.first?.text == "same active request"
-                }) == 1
-            }
-        }
+        let send = try #require(await sendUserMessage(vm, text: "same active request"))
+        await responseGate.waitUntilBlocked()
+        #expect(await MainActor.run {
+            vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 2
+        })
+        await responseGate.release()
+        await send.value
+        #expect(await historyCount.current() >= 2)
+        #expect(await MainActor.run {
+            vm.messages.count(where: {
+                $0.role == "user" && $0.content.first?.text == "same active request"
+            }) == 1
+        })
 
-        transport.emit(
+        let finalRefresh = vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: remoteRunId,
@@ -6125,20 +6026,20 @@ struct ChatViewModelTests {
                         idempotencyKey: remoteRunId),
                     errorMessage: nil)))
 
-        try await waitUntil("reused final remains distinct from newer turn reply") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.messages.count(where: { $0.role == "assistant" && $0.content.first?.text == "OK" }) == 2
-            }
-        }
+        await finalRefreshGate.waitUntilBlocked()
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.messages.count(where: { $0.role == "assistant" && $0.content.first?.text == "OK" }) == 2
+        })
         await finalRefreshGate.release()
+        await finalRefresh?.value
     }
 
-    @Test func `correlated reply after metadata free steering suppresses reused final duplicate`() async throws {
+    @Test @MainActor func `correlated reply after metadata free steering suppresses reused final duplicate`() async throws {
         let sessionId = "sess-main"
         let remoteRunId = "existing-active-run"
         let now = Date().timeIntervalSince1970 * 1000
-        let responseGate = AsyncGate()
+        let responseGate = SessionSubscribeGate()
         let history = historyPayload(
             sessionId: sessionId,
             messages: [
@@ -6157,7 +6058,7 @@ struct ChatViewModelTests {
                     timestamp: now - 1000,
                     idempotencyKey: remoteRunId),
             ])
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [history, history],
             sendMessageHook: { _ in
                 await responseGate.wait()
@@ -6165,22 +6066,20 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
-        try await waitUntil("steered duplicate request is optimistic") {
-            await MainActor.run {
-                vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 2
-            }
-        }
-        await responseGate.open()
-        try await waitUntil("steered duplicate request collapses onto active user") {
-            await MainActor.run {
-                vm.messages.count(where: {
-                    $0.role == "user" && $0.content.first?.text == "same active request"
-                }) == 1
-            }
-        }
+        let send = try #require(await sendUserMessage(vm, text: "same active request"))
+        await responseGate.waitUntilBlocked()
+        #expect(await MainActor.run {
+            vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 2
+        })
+        await responseGate.release()
+        await send.value
+        #expect(await MainActor.run {
+            vm.messages.count(where: {
+                $0.role == "user" && $0.content.first?.text == "same active request"
+            }) == 1
+        })
 
-        transport.emit(
+        let finalRefresh = vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: remoteRunId,
@@ -6193,14 +6092,13 @@ struct ChatViewModelTests {
                         idempotencyKey: remoteRunId),
                     errorMessage: nil)))
 
-        try await waitUntil("steering row remains inside reused run scope") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.messages.count(where: {
-                        $0.role == "assistant" && $0.content.first?.text == "steered reply"
-                    }) == 1
-            }
-        }
+        await finalRefresh?.value
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.messages.count(where: {
+                    $0.role == "assistant" && $0.content.first?.text == "steered reply"
+                }) == 1
+        })
     }
 
     @Test func `canonical projected reply after steering adopts reused provisional final`() async throws {
