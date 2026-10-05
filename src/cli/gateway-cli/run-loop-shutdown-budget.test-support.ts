@@ -3,7 +3,6 @@ import { expect, it, vi, type Mock } from "vitest";
 import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import { runGatewayCloseSteps } from "../../gateway/server-shutdown.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -113,6 +112,8 @@ export function registerShutdownBudgetTests({
           }
         });
         const close = vi.fn<GatewayServer["close"]>(async () => {
+          // The run-loop fixture reloads its module generation before every invocation.
+          const { runGatewayCloseSteps } = await import("../../gateway/server-shutdown.js");
           await runGatewayCloseSteps({
             owner: {
               connectionWork,

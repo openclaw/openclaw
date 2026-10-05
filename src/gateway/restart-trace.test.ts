@@ -10,6 +10,7 @@ import {
   finishGatewayRestartTrace,
   formatGatewayPendingCloseSteps,
   measureGatewayCloseStep,
+  recordGatewayRestartTraceSpan,
   startGatewayRestartTrace,
 } from "./restart-trace.js";
 
@@ -81,6 +82,23 @@ describe("gateway shutdown diagnostics", () => {
       second.resolve();
       await Promise.allSettled([closingFirst, closingSecond]);
     }
+  });
+
+  it("keeps the parent ready duration when recording child spans", () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_RESTART_TRACE", "1");
+    startGatewayRestartTrace("restart.signal.received");
+    clock = 20;
+    recordGatewayRestartTraceSpan("restart.ready.runtime.post-attach", 12, 40, [
+      ["eventLoopMax", "1.0ms"],
+    ]);
+    clock = 40;
+    finishGatewayRestartTrace("restart.ready");
+    expect(logInfo.mock.calls.map(([message]) => String(message))).toEqual(
+      expect.arrayContaining([
+        "restart trace: restart.ready.runtime.post-attach 12.0ms total=40.0ms eventLoopMax=1.0ms",
+        "restart trace: restart.ready 40.0ms total=40.0ms",
+      ]),
+    );
   });
 
   it("bounds pending diagnostics and keeps step names on one line", async () => {

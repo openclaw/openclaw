@@ -154,12 +154,8 @@ const createGatewayCloseHandler = createGatewayCloseTestHandlerFactory(
   await import("./server-close.js"),
 );
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
-const {
-  finishGatewayRestartTrace,
-  formatGatewayPendingCloseSteps,
-  recordGatewayRestartTraceSpan,
-  startGatewayRestartTrace,
-} = await import("./restart-trace.js");
+const { finishGatewayRestartTrace, formatGatewayPendingCloseSteps, startGatewayRestartTrace } =
+  await import("./restart-trace.js");
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
   GatewayCloseParams["markMainSessionsAbortedForRestart"]
@@ -1252,39 +1248,6 @@ describe("createGatewayCloseHandler", () => {
           message.includes("rssMb="),
       ),
     ).toBe(true);
-  });
-
-  it("emits restart ready child spans without shortening the parent ready span", async () => {
-    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
-
-    startGatewayRestartTrace("restart.signal.received", [["reason", "test restart"]]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    recordGatewayRestartTraceSpan("restart.ready.runtime.post-attach", 12, 40, [
-      ["eventLoopMax", "1.0ms"],
-    ]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    finishGatewayRestartTrace("restart.ready");
-
-    const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
-    expect(messages).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(
-          /^restart trace: restart\.ready\.runtime\.post-attach 12\.0ms total=40\.0ms eventLoopMax=1\.0ms$/u,
-        ),
-      ]),
-    );
-    const parentReadyLine = messages.find((message) =>
-      /^restart trace: restart\.ready [0-9.]+ms total=[0-9.]+ms$/u.test(message),
-    );
-    expect(parentReadyLine).toBeDefined();
-    const parentDuration = Number(
-      /^restart trace: restart\.ready ([0-9.]+)ms/u.exec(parentReadyLine ?? "")?.[1],
-    );
-    expect(parentDuration).toBeGreaterThan(30);
   });
 
   it.each([
