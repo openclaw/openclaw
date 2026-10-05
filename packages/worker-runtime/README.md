@@ -50,6 +50,17 @@ unadmitted data. Losing the task channel is a transport
 failure, never an execution or cleanup receipt. Ordinary SDK workers keep their
 parent-port transport.
 
+Private served transports declare `requiresReady` on the host and acknowledge
+readiness only after the task server installs its message listener. A native
+failure before that acknowledgment stops further worker construction for the
+pool generation. Healthy ready siblings keep serving queued work; if none
+remain, queued and subsequent submissions fail without repeated startup
+attempts. A successful `rotate()` joins the old generation and clears this
+failure, as does creating a new pool. Input preparation and serialization errors
+and ordinary failures from ready workers do not latch startup failure. Arbitrary
+SDK Workers have no readiness requirement and retain their existing recovery
+behavior.
+
 ## Results and settlement
 
 A task result, an execution receipt, and resource release are distinct facts.

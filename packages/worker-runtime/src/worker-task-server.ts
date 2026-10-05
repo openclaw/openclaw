@@ -28,6 +28,7 @@ export type WorkerTaskChannel = {
 export type WorkerTaskServerHost<TaskContext> = {
   selectStartupPort?: (message: unknown) => MessagePort | undefined;
   initialize: (port: MessagePort) => void;
+  onReady?: () => void;
   onMessage: (sampleMemory: boolean) => void;
   installTaskContext: (context: TaskContext) => void;
   onIdle: () => void;
@@ -79,6 +80,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
           port = taskPort;
           host.initialize(port);
           port.on("message", receive);
+          host.onReady?.();
           return;
         }
       }
@@ -242,4 +244,5 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
         .finally(() => host.onIdle());
     },
   );
+  host.onReady?.();
 }

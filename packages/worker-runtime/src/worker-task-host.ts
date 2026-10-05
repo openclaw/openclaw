@@ -18,6 +18,8 @@ export type ResourceOwningPool = {
 
 /** Host facts and resource owners are supplied once, before a pool admits work. */
 export type WorkerTaskHost = {
+  /** Internal served workers acknowledge initialization; arbitrary SDK Workers do not. */
+  requiresReady?: true;
   createWorker(
     url: URL,
     options: Omit<WorkerOptions, "eval">,

@@ -139,6 +139,7 @@ packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-native-sections.ts
+packages/worker-runtime/src/worker-task-pool-bootstrap.ts
 packages/worker-runtime/src/worker-task-pool-completion.ts
 packages/worker-runtime/src/worker-task-pool-core.ts
 packages/worker-runtime/src/worker-task-pool-owned.ts
