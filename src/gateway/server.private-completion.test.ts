@@ -50,8 +50,12 @@ import { refusePendingInputCommit } from "./pending-input-commit.test-support.js
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
-import { registerSessionsSendPrivateCompletionTests } from "./server.private-completion.sessions-send.test-support.js";
+import {
+  readPrivateCompletionRecorder,
+  registerSessionsSendPrivateCompletionTests,
+} from "./server.private-completion.sessions-send.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
 import {
   agentCommandMock,
@@ -142,16 +146,7 @@ describe("private subagent completion processing receipts", () => {
     await prepareGatewayReplyRuntimeForTest({ force: true });
     expect(kernel.gatewayRequestContext.dedupe).not.toBe(previousDedupe);
   }
-  function recorder(input: unknown) {
-    const command = input as AgentCommandOpts;
-    expect(command.deliver).toBe(false);
-    expect(command.privateCompletion).toBe(true);
-    expect(command.sessionId).toBe(sessionId);
-    return expectDefined(
-      command.userTurnTranscriptRecorder,
-      "Expected real private input recorder",
-    );
-  }
+  const recorder = (input: unknown) => readPrivateCompletionRecorder(input, sessionId);
 
   registerSessionsSendPrivateCompletionTests(() => ({
     context: kernel.gatewayRequestContext,
@@ -922,18 +917,19 @@ describe("private subagent completion processing receipts", () => {
       );
       expect(active.executionStarted).toBe(true);
       const releaseTerminalWrite = createDeferred();
+      const terminalWrites = createPreparedLifecycleWriteTracker();
       let terminalWrite: Promise<void> | undefined;
-      const persistLifecycle = lifecycleState.persistGatewaySessionLifecycleEvent;
+      const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
       const delayedTerminalWrite =
         kind === "abandoned"
           ? vi
-              .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+              .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
               .mockImplementation((params) => {
+                const persist = prepareLifecycle(params);
                 if (params.event.runId !== runId) {
-                  return persistLifecycle(params);
+                  return persist;
                 }
-                terminalWrite = releaseTerminalWrite.promise.then(() => persistLifecycle(params));
-                return terminalWrite;
+                return terminalWrites.track(() => releaseTerminalWrite.promise.then(persist));
               })
           : undefined;
       active.expiresAtMs = Date.now() - 1;
@@ -959,6 +955,8 @@ describe("private subagent completion processing receipts", () => {
         expect(completions()).toEqual([]);
         if (kind === "abandoned") {
           // Keep the real terminal write and raw execution pending through timeout settlement.
+          await terminalWrites.accepted;
+          terminalWrite = active.projectSessionTerminalPersistence;
           expect(terminalWrite).toBeInstanceOf(Promise);
           await clock.advanceBy(60_000);
           await awaitGateBeforeSettlement(
@@ -982,7 +980,7 @@ describe("private subagent completion processing receipts", () => {
         releaseTerminalWrite.resolve();
         release.resolve();
         try {
-          await terminalWrite;
+          await terminalWrites.drain(...(terminalWrite ? [terminalWrite] : []));
         } finally {
           delayedTerminalWrite?.mockRestore();
         }

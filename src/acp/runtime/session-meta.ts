@@ -130,9 +130,6 @@ export function readAcpSessionEntry(params: {
     return null;
   }
   const storeEntry = readSessionEntryFromStore(params);
-  if (!storeEntry.storePath) {
-    return null;
-  }
   const acp = readAcpSessionMetaForEntry({
     sessionKey: storeEntry.storeSessionKey,
     agentId: storeEntry.agentId,

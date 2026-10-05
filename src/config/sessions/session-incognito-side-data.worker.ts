@@ -3,22 +3,36 @@ import { mutateAcpSessionEntryInWorker } from "../../acp/runtime/session-meta-en
 import type { BoardWriteOperations } from "../../boards/sqlite-board-operations.js";
 import {
   readBoardSnapshotWithHtmlViewMetadata,
+  readBoardSessionKeys,
   readBoardWidgetDocument,
 } from "../../boards/sqlite-board-store.kernel.js";
+import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-transcript-title-reader.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
+import type { ProgressCardWorkerOperations } from "../../session-cards/progress-card-store.worker.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { createAgentDatabaseDomainOwner } from "../../state/openclaw-agent-execution-domain.js";
 import { loadAgentReactionOperations } from "../../state/openclaw-agent-execution-operations.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import {
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../../state/openclaw-state-worker-error.js";
 import { createWorkerOperationRegistry } from "../../state/worker-operation-registry.js";
+import { readSessionTerminalFallbackModel } from "../../status/session-fallback-model.js";
+import { readSessionActivitySummary } from "./activity-summary.js";
 import { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
+import {
+  readExactSessionEntryRow,
+  readSessionChildEntriesInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
+import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
 import { readSessionMembershipRowsInDatabase } from "./session-membership-facts.js";
@@ -29,6 +43,7 @@ import { listSessionSuggestionsInDatabase } from "./session-suggestion-store.ker
 
 type DomainOperations = SessionSharingWorkerOperations &
   HeartbeatOutcomeWorkerOperations &
+  ProgressCardWorkerOperations &
   BoardWriteOperations;
 type Command = SqliteWorkerCommand<IncognitoSideDataOperations>;
 
@@ -85,7 +100,9 @@ export function createIncognitoSideDataWorker(
                 command.type === "session.boards.putWidget" ||
                 command.type === "session.boards.grant"
               ? runtimeProcessEntrypoints.boardStore
-              : undefined;
+              : command.type === "session.progressCard.put"
+                ? runtimeProcessEntrypoints.progressCardStore
+                : undefined;
       if (module) {
         binding = {
           id: randomUUID(),
@@ -120,6 +137,15 @@ export function createIncognitoSideDataWorker(
         }
         return withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.progressCard.put": {
+              const receipt = executeDomain({ type: "put", input: command.input }).value;
+              if (!receipt.ok) {
+                const error = new Error("Progress-card transaction failed");
+                retainOpenClawStateWorkerErrorPayload(error, receipt.error);
+                throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+              }
+              return result(receipt.value);
+            }
             case "session.boards.applyOps":
               return executeDomain({ type: "boards.applyOps", input: command.input });
             case "session.boards.putWidget":
@@ -139,6 +165,33 @@ export function createIncognitoSideDataWorker(
                   command.input.contentKind,
                 ),
               );
+            case "session.row.read": {
+              const { sessionKey } = command.input;
+              const entry = readExactSessionEntryRow(database, sessionKey, "list")?.entry;
+              return result(
+                entry
+                  ? {
+                      row: {
+                        sessionKey,
+                        entry,
+                        hasBoard: readBoardSessionKeys(database, [sessionKey]).has(sessionKey),
+                        activitySummaryWatermark: readSessionActivitySummary(entry)
+                          ? readSessionTranscriptWatermarkInDatabase(database, entry.sessionId)
+                          : undefined,
+                      },
+                      children: readSessionChildEntriesInDatabase(database, sessionKey, "list"),
+                      titleFields: readSessionTitleFieldsFromTranscript(
+                        { ...scope(sessionKey), sessionId: entry.sessionId, sessionEntry: entry },
+                        { readOnly: true },
+                      ),
+                      terminalModel: readSessionTerminalFallbackModel({
+                        sessionEntry: entry,
+                        sessionScope: scope(sessionKey),
+                      }),
+                    }
+                  : undefined,
+              );
+            }
             case "session.acp.source":
               return result(
                 readLegacyAcpMigrationContextInDatabase(database, command.input.sessionKey),

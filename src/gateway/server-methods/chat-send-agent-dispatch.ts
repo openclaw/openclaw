@@ -371,7 +371,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     ? { expectedExistingSessionId: entry.sessionId }
                     : {}),
                 resumeRequestedSession: reconnectResumeRequested,
-                onSessionPrepared: admission.onSessionPrepared,
+                onSessionPrepared: (binding) => {
+                  admission.onSessionPrepared(binding);
+                  replyDispatch.notePreparedSession(binding);
+                },
                 abortSignal: activeRunAbort.controller.signal,
                 getProviderLoginConfig: context.getRuntimeConfig,
                 assertProviderLoginAuthority: () => {

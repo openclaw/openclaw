@@ -501,6 +501,7 @@ function runCheckShardFixture(options: {
   task?: "guards" | "npm-lock" | "prod-types" | "test-types";
   earlyGuards?: boolean;
   madgeImportCycles?: boolean;
+  kyselyGuardrails?: boolean;
   failPackageScript?: string;
   checkoutBase?: string;
   types?: {
@@ -632,6 +633,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
       run_pr_madge_import_cycles: String(options.madgeImportCycles ?? false),
+      run_pr_kysely_guardrails: String(options.kyselyGuardrails ?? false),
       changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
       narrow_check_paths_json:
         options.types?.narrowPathsJson ?? (options.earlyGuards ? '["src/shared/runtime.ts"]' : ""),
@@ -706,6 +708,9 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
           TASK: options.task ?? "guards",
           RUN_PR_MADGE_IMPORT_CYCLES: String(
             resolveValue(row.step.env?.RUN_PR_MADGE_IMPORT_CYCLES) ?? "",
+          ),
+          RUN_PR_KYSELY_GUARDRAILS: String(
+            resolveValue(row.step.env?.RUN_PR_KYSELY_GUARDRAILS) ?? "",
           ),
           ...(typeCheck || options.earlyGuards
             ? {
@@ -6668,22 +6673,25 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.each([
-    { earlyGuards: false, selected: false, failure: "" },
-    { earlyGuards: true, selected: false, failure: "" },
-    { earlyGuards: false, selected: true, failure: "" },
-    { earlyGuards: true, selected: true, failure: "" },
-    { earlyGuards: false, selected: true, failure: "check:import-cycles" },
-    { earlyGuards: true, selected: true, failure: "check:import-cycles" },
-    { earlyGuards: false, selected: true, failure: "check:madge-import-cycles" },
-    { earlyGuards: true, selected: true, failure: "check:madge-import-cycles" },
-  ])(
-    "keeps cycle checks blocking in the existing guard row ($earlyGuards, $selected, $failure)",
-    ({ earlyGuards, selected, failure }) => {
+  it.each(
+    [false, true].flatMap((earlyGuards) =>
+      [
+        { selected: false, kysely: false, failure: "" },
+        { selected: true, kysely: false, failure: "" },
+        { selected: true, kysely: true, failure: "" },
+        { selected: true, kysely: true, failure: "check:import-cycles" },
+        { selected: true, kysely: true, failure: "check:madge-import-cycles" },
+        { selected: true, kysely: true, failure: "lint:kysely" },
+      ].map(({ selected, kysely, failure }) => ({ selected, kysely, failure, earlyGuards })),
+    ),
+  )(
+    "keeps cycle and Kysely checks blocking in the existing guard row ($earlyGuards, $selected, $kysely, $failure)",
+    ({ earlyGuards, selected, kysely, failure }) => {
       const result = runCheckShardFixture({
         frozenTarget: false,
         earlyGuards,
         madgeImportCycles: selected,
+        kyselyGuardrails: kysely,
         failPackageScript: failure,
         scripts: [
           "check:doctor-deprecation-registry",
@@ -6698,7 +6706,19 @@ describe("ci workflow guards", () => {
           ? ["check:import-cycles", "check:madge-import-cycles"]
           : ["check:import-cycles"],
       );
-      expect(result.calls).not.toContain("check:architecture");
+      expect(result.calls.includes("lint:kysely")).toBe(
+        kysely && (failure === "" || failure === "lint:kysely"),
+      );
+      for (const deferred of [
+        "check:architecture",
+        "check:deprecated-api-usage",
+        "check:wrapper-shadowing",
+        "check:deprecated-jsdoc",
+        "db:kysely:check",
+        "check:database-first-legacy-stores",
+      ]) {
+        expect(result.calls).not.toContain(deferred);
+      }
     },
   );
 

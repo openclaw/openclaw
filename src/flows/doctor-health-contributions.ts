@@ -39,10 +39,6 @@ import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
-const loadCommandFormatModule = async () => await import("../cli/command-format.js");
-const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
-const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
-const loadSecretTypesModule = async () => await import("../config/types.secrets.js");
 const MAX_DEFERRED_LEGACY_STATE_DETAILS = 20;
 
 async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -66,7 +62,7 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
   if (pendingDetails.length === 0) {
     return;
   }
-  const { note } = await loadNoteModule();
+  const { note } = await import("../../packages/terminal-core/src/note.js");
   const displayedDetails = pendingDetails.slice(0, MAX_DEFERRED_LEGACY_STATE_DETAILS);
   const omittedDetailCount = pendingDetails.length - displayedDetails.length;
   const remediation =
@@ -90,9 +86,9 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
 }
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { formatCliCommand } = await loadCommandFormatModule();
+  const { formatCliCommand } = await import("../cli/command-format.js");
   const { hasAmbiguousGatewayAuthModeConfig } = await import("../gateway/auth-mode-policy.js");
-  const { note } = await loadNoteModule();
+  const { note } = await import("../../packages/terminal-core/src/note.js");
   if (!ctx.cfg.gateway?.mode) {
     const lines = [
       "gateway.mode is unset; gateway start will be blocked.",
@@ -127,8 +123,8 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     env: ctx.env,
     allowExecSecretRefs: ctx.options.allowExec,
   });
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { note } = await loadNoteModule();
+  const { resolveSecretInputRef } = await import("../config/types.secrets.js");
+  const { note } = await import("../../packages/terminal-core/src/note.js");
   const gatewayTokenRef = resolveSecretInputRef({
     value: ctx.cfg.gateway?.auth?.token,
     defaults: ctx.cfg.secrets?.defaults,
@@ -161,7 +157,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../state/openclaw-state-db.paths.js");
-      const { randomToken } = await loadOnboardHelpersModule();
+      const { randomToken } = await import("../commands/onboard-helpers.js");
       const database = { env: ctx.env ?? process.env };
       const entry = { scope: { kind: "team" as const }, name: gatewayTokenRef.id, database };
       let rollback: (() => Promise<boolean>) | undefined;
@@ -232,7 +228,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!shouldSetToken) {
     return;
   }
-  const { randomToken } = await loadOnboardHelpersModule();
+  const { randomToken } = await import("../commands/onboard-helpers.js");
   const nextToken = randomToken();
   ctx.cfg = {
     ...ctx.cfg,
@@ -251,7 +247,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../infra/state-migrations.doctor.js");
-  const { note } = await loadNoteModule();
+  const { note } = await import("../../packages/terminal-core/src/note.js");
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
   await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
@@ -346,7 +342,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
-  const { note } = await loadNoteModule();
+  const { note } = await import("../../packages/terminal-core/src/note.js");
   const service = resolveGatewayService();
   const state = await readGatewayServiceState(service, { env: process.env });
   if (state.loadState.status !== "loaded") {
@@ -419,7 +415,7 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { note } = await loadNoteModule();
+  const { note } = await import("../../packages/terminal-core/src/note.js");
   if (ctx.gatewayMaintenanceActive) {
     note("Gateway health will be checked after Doctor repair.", "Gateway");
     ctx.gatewayHealthSkipped = true;
@@ -526,7 +522,7 @@ async function runDoctorHealthContributionList(
     ? contributions.filter((contribution) => contribution.updateWork?.kind === "standalone")
     : [];
   if (deferred.length > 0) {
-    const { note } = await loadNoteModule();
+    const { note } = await import("../../packages/terminal-core/src/note.js");
     note(
       `Omitted during update: ${deferred.map((contribution) => contribution.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
       "Update Doctor scope",
@@ -601,7 +597,7 @@ async function runDoctorHealthContributionList(
         ) {
           throw error;
         }
-        const { note } = await loadNoteModule();
+        const { note } = await import("../../packages/terminal-core/src/note.js");
         const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
         note(message, "Doctor warnings");
         recordDoctorHealthWarnings(ctx, [], [message]);

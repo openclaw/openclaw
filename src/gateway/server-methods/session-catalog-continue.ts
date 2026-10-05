@@ -4,7 +4,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { copySessionCatalogToGateway } from "./session-catalog-gateway-copy.js";
 import type { CatalogRegistrationSnapshot } from "./session-catalog-provider-access.js";
@@ -79,14 +79,18 @@ export async function continueAuthorizedSessionCatalog(params: {
       marker: result.upstream.marker,
     });
   }
-  recordSessionStateEvent({
-    sessionKey: result.sessionKey,
-    agentId,
-    kind: "adopted",
-    actorType: "human",
-    dedupeKey: `adopted:${result.sessionKey}`,
-    summary: `adopted from ${params.request.catalogId}`,
-    payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
-  });
+  await recordSessionStateEventAsync(
+    {
+      sessionKey: result.sessionKey,
+      agentId,
+      kind: "adopted",
+      actorType: "human",
+      dedupeKey: `adopted:${result.sessionKey}`,
+      summary: `adopted from ${params.request.catalogId}`,
+      payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
+    },
+    { assertCurrent: params.commitGuard },
+  );
+  params.commitGuard?.();
   return { ok: true, sessionKey: result.sessionKey };
 }

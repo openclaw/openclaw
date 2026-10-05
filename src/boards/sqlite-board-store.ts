@@ -207,36 +207,42 @@ export class SqliteBoardStore implements BoardStore {
           throw restoreBoardError(error);
         }
       };
-      if (!prepare) {
-        return execute(currentAuthority);
-      }
-      return actor.sessions.withSharedState(async () => {
-        const source = await actor.sessions.read(currentAuthority, {
-          sessionKey: resolved.sessionKey,
+      return actor.sessions
+        .withSharedState(async () => {
+          if (!prepare) {
+            return execute(currentAuthority);
+          }
+          const source = await actor.sessions.read(currentAuthority, {
+            sessionKey: resolved.sessionKey,
+          });
+          if (!source.entry) {
+            throw new BoardValidationError(
+              "not_found",
+              `board session not found: ${resolved.sessionKey}`,
+            );
+          }
+          await prepare();
+          source.claim.assertCurrent();
+          const expected = source.entry;
+          const writeAuthority: IncognitoSessionAuthority = {
+            ...currentAuthority,
+            authorize(stage, facts) {
+              if (
+                facts.sharing?.entry?.sessionId !== expected.sessionId ||
+                facts.sharing.entry.lifecycleRevision !== expected.lifecycleRevision
+              ) {
+                throw new BoardValidationError("invalid_operation", "board session changed; retry");
+              }
+              return currentAuthority.authorize?.(stage, facts);
+            },
+          };
+          return execute(writeAuthority);
+        })
+        .then((result) => {
+          currentAuthority.assertCurrent();
+          actor.assertReadable();
+          return result;
         });
-        if (!source.entry) {
-          throw new BoardValidationError(
-            "not_found",
-            `board session not found: ${resolved.sessionKey}`,
-          );
-        }
-        await prepare();
-        source.claim.assertCurrent();
-        const expected = source.entry;
-        const writeAuthority: IncognitoSessionAuthority = {
-          ...currentAuthority,
-          authorize(stage, facts) {
-            if (
-              facts.sharing?.entry?.sessionId !== expected.sessionId ||
-              facts.sharing.entry.lifecycleRevision !== expected.lifecycleRevision
-            ) {
-              throw new BoardValidationError("invalid_operation", "board session changed; retry");
-            }
-            return currentAuthority.authorize?.(stage, facts);
-          },
-        };
-        return execute(writeAuthority);
-      });
     }
     const assertOpenCurrent = () => {
       assertCurrent();
@@ -397,13 +403,21 @@ export class SqliteBoardStore implements BoardStore {
         },
         authorize: (stage, facts) => authority.authorize?.(stage, facts),
       };
-      try {
-        const value = await actorRead(actor, currentAuthority, captured.sessionKey);
-        currentAuthority.assertCurrent();
-        return await accept(value).value;
-      } catch (error) {
-        throw restoreBoardError(error);
-      }
+      const result = await actor.sessions.withSharedState(async () => {
+        // Retain the composition for dependent writes, outside the reader's FIFO grant.
+        const runInRetainedContext = AsyncLocalStorage.snapshot();
+        try {
+          const value = await actorRead(actor, currentAuthority, captured.sessionKey);
+          currentAuthority.assertCurrent();
+          actor.assertReadable();
+          return await runInRetainedContext(consume, value, captured.sessionKey);
+        } catch (error) {
+          throw restoreBoardError(error);
+        }
+      });
+      currentAuthority.assertCurrent();
+      actor.assertReadable();
+      return result;
     }
     if (isIncognitoOpenClawAgentSqlitePath(captured.path, captured)) {
       // The excluded process-held owner cannot be reopened by a durable worker.

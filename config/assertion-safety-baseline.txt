@@ -2371,7 +2371,7 @@ src/mcp/plugin-tools-handlers.ts	2
 src/media-generation/provider-registry.ts	1
 src/media-understanding/entry-capabilities.ts	1
 src/media-understanding/image-model-runtime.ts	3
-src/media-understanding/runner.entries.ts	4
+src/media-understanding/runner.entries.ts	1
 src/media-understanding/shared.ts	1
 src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
@@ -2698,7 +2698,7 @@ src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
 src/trajectory/export.ts	8
 src/trajectory/runtime-store.sqlite.ts	1
-src/trajectory/runtime.ts	4
+src/trajectory/runtime.ts	3
 src/transcripts/config.ts	2
 src/transcripts/store-export-ownership.ts	2
 src/transcripts/store-sqlite.ts	2
@@ -2707,7 +2707,7 @@ src/tts/status-config.ts	1
 src/tts/tts-config.ts	5
 src/tts/tts-core.ts	1
 src/tts/tts-payload.ts	1
-src/tts/tts-provider-resolution.ts	2
+src/tts/tts-provider-resolution.ts	1
 src/tts/tts-request.ts	1
 src/tts/tts-settings.ts	3
 src/tts/tts-telephony.ts	1

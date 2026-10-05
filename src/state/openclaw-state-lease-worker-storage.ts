@@ -202,9 +202,7 @@ export function createOpenClawStateLeaseWorkerStorage(
       const timer = startOpenClawStateLeaseTimer({
         observation: params.observation,
         heartbeatMs: params.heartbeatMs,
-        async renew() {
-          await renew();
-        },
+        renew,
         onRenewError(error) {
           try {
             owner.rethrowIfUncertain(error, undefined);

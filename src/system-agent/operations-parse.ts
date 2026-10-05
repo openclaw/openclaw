@@ -259,7 +259,7 @@ function parseConfigSetRefCommand(input: string): SystemAgentOperation | undefin
       | "file"
       | "exec"
       | "store";
-    const id = args.groups.id.trim();
+    const id = args.groups.id;
     const provider = args.groups.provider ?? DEFAULT_SECRET_PROVIDER_ALIAS;
     if (!isValidSecretRef({ source, provider, id })) {
       return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
@@ -328,11 +328,11 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     return { kind: "plugin-search", query: pluginSearchMatch.groups.query.trim() };
   }
   const pluginInstallMatch = trimmed.match(PLUGIN_INSTALL_RE);
-  if (pluginInstallMatch?.groups?.spec?.trim()) {
-    const spec = normalizePluginInstallSpec(
-      pluginInstallMatch.groups.spec.trim(),
-      pluginInstallMatch.groups.source,
-    );
+  if (pluginInstallMatch?.groups?.spec) {
+    const rawSpec = pluginInstallMatch.groups.spec;
+    const source = pluginInstallMatch.groups.source?.toLowerCase();
+    const spec =
+      source && !rawSpec.toLowerCase().startsWith(`${source}:`) ? `${source}:${rawSpec}` : rawSpec;
     const validationError = validateSystemAgentPluginInstallSpec(spec);
     if (validationError) {
       return { kind: "none", message: validationError };
@@ -340,8 +340,8 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     return { kind: "plugin-install", spec };
   }
   const pluginUninstallMatch = trimmed.match(PLUGIN_UNINSTALL_RE);
-  if (pluginUninstallMatch?.groups?.pluginId?.trim()) {
-    return { kind: "plugin-uninstall", pluginId: pluginUninstallMatch.groups.pluginId.trim() };
+  if (pluginUninstallMatch?.groups?.pluginId) {
+    return { kind: "plugin-uninstall", pluginId: pluginUninstallMatch.groups.pluginId };
   }
   const channelInfoMatch = trimmed.match(CHANNEL_INFO_RE);
   const channelInfo = channelInfoMatch?.groups?.channel ?? channelInfoMatch?.groups?.aboutChannel;
@@ -439,7 +439,7 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   const setModelMatch = trimmed.match(SET_MODEL_RE);
   if (setModelMatch?.groups?.model) {
-    const agent = setModelMatch.groups.agent?.trim();
+    const agent = setModelMatch.groups.agent;
     return {
       kind: "set-default-model",
       model: setModelMatch.groups.model,
@@ -459,18 +459,6 @@ function trimShellishToken(value: string | undefined): string | undefined {
     (trimmed.startsWith("'") && trimmed.endsWith("'"))
   ) {
     return trimmed.slice(1, -1).trim() || undefined;
-  }
-  return trimmed;
-}
-
-function normalizePluginInstallSpec(spec: string, source: string | undefined): string {
-  const trimmed = spec.trim();
-  const normalizedSource = source?.toLowerCase();
-  if (
-    (normalizedSource === "npm" || normalizedSource === "clawhub") &&
-    !trimmed.toLowerCase().startsWith(`${normalizedSource}:`)
-  ) {
-    return `${normalizedSource}:${trimmed}`;
   }
   return trimmed;
 }

@@ -356,6 +356,9 @@ export async function prepareVisitorPublicationFixture(f: {
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },
+    async withSessionReadScope() {
+      throw new Error("Unexpected session read scope");
+    },
     subscribeSessionChanges() {
       throw new Error("Unexpected session changes subscription");
     },

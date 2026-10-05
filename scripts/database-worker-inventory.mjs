@@ -516,8 +516,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence:
-          "session-state-events.worker.ts and session-upstream-links.worker.ts; event/head SQL retains native adopted-event callers",
+        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -527,20 +526,19 @@ const reviewedOperations = new Map([
           "pruneSessionStateEventsInDatabase.stampPrunedWatermarks",
         ],
         evidence:
-          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune; adopted-event/native-binding producers remain native",
+          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune",
       },
       {
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch calls only in session-state-events.worker.ts:40,58,95; event cursor paths gated by NOTIFY_BY_KIND at kernel:367,386; native producers are non-notifying",
+          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventInDatabase"],
-        binding: "registeredWatcherKeys",
         evidence:
-          "Only the registeredWatcherKeys initializer at kernel:354 is notifying-only; worker record at session-state-events.worker.ts:158 / subagent-registry.store.worker.ts:65; other event sites remain T1",
+          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },
     ],
   ],

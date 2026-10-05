@@ -155,11 +155,9 @@ that Region. See
 
   </Accordion>
   <Accordion title="Legacy config migrations">
-    Run `openclaw doctor --fix` to rewrite these legacy keys to the canonical
-    shape. The Voice Call plugin owns the migration; runtime config parsing
-    accepts only the current keys. When both old and current settings exist,
-    Doctor keeps the current setting, removes the legacy key, and reports which
-    destination it retained. Legacy values fill only missing current fields:
+    Voice Call accepts the current config shape. Migrations for shapes retired
+    before July 2026 are no longer included. Update older configs manually using
+    these replacements, keeping any existing current values:
 
     - `provider: "log"` → `provider: "mock"`
     - `twilio.from` → `fromNumber`

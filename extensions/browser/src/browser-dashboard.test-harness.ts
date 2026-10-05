@@ -50,6 +50,9 @@ export function useBrowserDashboardTestHarness(
         async readSessionFacts() {
           throw new Error("Unexpected session facts request");
         },
+        async withSessionReadScope() {
+          throw new Error("Unexpected session read scope");
+        },
         async openPluginPanel() {
           throw new Error("Unexpected plugin panel request");
         },

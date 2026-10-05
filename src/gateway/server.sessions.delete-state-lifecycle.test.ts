@@ -696,6 +696,8 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
     await active.catch(() => undefined);
     expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   } finally {
+    service.dispose();
+    companions.delete(service);
     pending.resolve("Late answer from the deleted session.");
     await active.catch(() => undefined);
   }

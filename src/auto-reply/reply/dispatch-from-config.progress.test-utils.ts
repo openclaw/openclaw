@@ -971,7 +971,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+    expect(firstMockArg(sessionStoreMocks.loadSessionStoreEntry, "session")).toMatchObject({
       agentId: "main",
       storePath: "/tmp/mock-sessions.json",
       sessionKey: "agent:main:main",

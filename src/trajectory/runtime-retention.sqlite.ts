@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { readSqliteDataVersion } from "../infra/sqlite-schema-facts.js";
@@ -113,7 +117,13 @@ export function prepareTrajectoryRuntimeRetention(
 }
 
 function changes(database: DatabaseSync): number {
-  return Number(database.prepare("SELECT total_changes() AS changes").get()!.changes);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    getNodeSqliteKysely(database).selectNoFrom((eb) =>
+      eb.fn<number>("total_changes", []).as("changes"),
+    ),
+  );
+  return row!.changes;
 }
 
 /** The shared lease is revoked by the coordinator before releasing its native owner. */

@@ -189,7 +189,7 @@ async function runConfiguredSystemAgentText(params: {
     if (terminalError) {
       throw new SystemAgentInferenceUnavailableError("planner", [new Error(terminalError)]);
     }
-    text = extractAgentRunText(result)?.trim();
+    text = extractAgentRunText(result);
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;

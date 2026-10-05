@@ -640,7 +640,7 @@ export async function prepareModelsListResult(
       }
       return () => {
         const evaluation = evaluateNative(entry, host);
-        evaluations.set(resolveModelCatalogIdentityKey(entry), evaluation);
+        evaluations.set(key, evaluation);
         const routeManaged = evaluation.routeResolution !== null;
         const syntheticLocal =
           !routeManaged &&

@@ -15,6 +15,7 @@ import {
   extractLastUserText,
   extractToolOutput,
   hasToolOutput,
+  splitMockConversationContext,
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
 
@@ -42,6 +43,12 @@ async function startAutomationProvider() {
   const requests = new Map<string, Record<string, unknown>>();
   const results = new Map<string, string>();
   const toolAvailability = new Map<string, boolean>();
+  const observations: {
+    marker: string | null;
+    currentMarker: string | null;
+    hasOutput: boolean;
+    toolAvailable: boolean;
+  }[] = [];
   const server = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
@@ -57,11 +64,23 @@ async function startAutomationProvider() {
         throw new Error("Expected a Responses request");
       }
       const input = body.input.filter(isRecord);
-      const marker = /\[automation-proof:([a-z-]+)\]/u.exec(extractLastUserText(input))?.[1];
+      const userText = extractLastUserText(input);
+      const markerPattern = /\[automation-proof:([a-z-]+)\]/u;
+      const marker = markerPattern.exec(userText)?.[1];
+      const currentMarker = markerPattern.exec(splitMockConversationContext(userText).current)?.[1];
       const args = marker ? requests.get(marker) : undefined;
       const output = extractToolOutput(input);
       const hasOutput = hasToolOutput(input);
       const toolAvailable = hasToolDefinition(body, "automations");
+      observations.push({
+        marker: marker && requests.has(marker) ? marker : null,
+        currentMarker: currentMarker && requests.has(currentMarker) ? currentMarker : null,
+        hasOutput,
+        toolAvailable,
+      });
+      if (observations.length > 16) {
+        observations.shift();
+      }
       if (marker && args && !hasOutput) {
         // A retry must not erase an earlier exposure of an owner-only tool.
         toolAvailability.set(marker, toolAvailability.get(marker) === true || toolAvailable);
@@ -102,6 +121,7 @@ async function startAutomationProvider() {
     requests,
     results,
     toolAvailability,
+    observations,
     async stop() {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
@@ -323,7 +343,21 @@ suite.define(() => {
                 await page.screenshot({ path: path.join(proofDir, `${marker}-request.png`) });
               }
               await page.getByRole("button", { name: "Send message" }).click();
-              await expect.poll(() => provider.results.has(marker), { timeout: 60_000 }).toBe(true);
+              try {
+                await expect
+                  .poll(() => provider.results.has(marker), { timeout: 60_000 })
+                  .toBe(true);
+              } catch (error) {
+                throw new Error(
+                  `Automation ${marker} did not complete: ${JSON.stringify({
+                    completed: Object.keys(adminResults),
+                    toolAvailability: [...provider.toolAvailability],
+                    results: [...provider.results.keys()],
+                    observations: provider.observations,
+                  })}`,
+                  { cause: error },
+                );
+              }
               const result = readResult(provider.results.get(marker) ?? "null");
               if (action === "list") {
                 expect(result.jobs).toEqual(

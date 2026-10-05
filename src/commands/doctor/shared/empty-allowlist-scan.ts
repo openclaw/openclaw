@@ -44,31 +44,24 @@ export async function scanEmptyAllowlistPolicyWarnings(
     options: { suppressGroupAllowlistWarning?: boolean } = {},
   ) => {
     const { dmPolicy, effectiveAllowFrom } = resolveDoctorAccountDmAccess(account, parent);
+    const context = {
+      account,
+      channelName,
+      dmPolicy,
+      effectiveAllowFrom: effectiveAllowFrom ?? undefined,
+      parent,
+      prefix,
+    };
     warnings.push(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
-        account,
-        channelName,
-        cfg,
+        ...context,
         doctorFixCommand: params.doctorFixCommand,
-        parent,
-        prefix,
-        shouldSkipDefaultEmptyGroupAllowlistWarning: (context) =>
+        shouldSkipDefaultEmptyGroupAllowlistWarning: (accountContext) =>
           options.suppressGroupAllowlistWarning ||
-          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(context)),
+          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(accountContext)),
       }),
     );
-    if (params.extraWarningsForAccount) {
-      warnings.push(
-        ...params.extraWarningsForAccount({
-          account,
-          channelName,
-          dmPolicy,
-          effectiveAllowFrom: effectiveAllowFrom ?? undefined,
-          parent,
-          prefix,
-        }),
-      );
-    }
+    warnings.push(...(params.extraWarningsForAccount?.(context) ?? []));
   };
 
   for (const [channelName, channelConfig] of Object.entries(

@@ -476,7 +476,7 @@ export function forwardSecretEgressRequest(
       release();
     }
   });
-  if (!releaseBudget || length > MAX_BUFFERED_REQUEST_BODY_BYTES) {
+  if (!releaseBudget) {
     refuse(
       "upload-capacity",
       503,

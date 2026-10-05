@@ -10,7 +10,7 @@ import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { drainSystemEventEntries, peekSystemEvents } from "../infra/system-events.js";
 import {
   acknowledgeSessionStateNotices,
-  recordSessionStateEvent,
+  recordSessionStateEventAsync,
   registerSessionStateWatch,
 } from "../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -124,7 +124,7 @@ test.each(["source", "source-and-acp", "acp", "committed-callback"])(
     const unsubscribeReset = onGatewaySessionReset(notified);
     const rollback = vi.fn(async () => {});
     const recordChildActivity = () =>
-      recordSessionStateEvent({
+      recordSessionStateEventAsync({
         sessionKey: childKey,
         agentId: "main",
         kind: "human_direct_message",
@@ -137,7 +137,7 @@ test.each(["source", "source-and-acp", "acp", "committed-callback"])(
         targetSessionKey: childKey,
       }),
     ).toBe(true);
-    recordChildActivity();
+    await recordChildActivity();
     const drained = drainSystemEventEntries(sessionKey);
     expect(drained).toHaveLength(1);
     await acknowledgeSessionStateNotices(sessionKey, [
@@ -203,7 +203,7 @@ test.each(["source", "source-and-acp", "acp", "committed-callback"])(
     }
 
     expect(notified).toHaveBeenCalledExactlyOnceWith(sessionKey, "main");
-    recordChildActivity();
+    await recordChildActivity();
     expect(peekSystemEvents(sessionKey)).toEqual([]);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledExactlyOnceWith({
       targetSessionKey: sessionKey,

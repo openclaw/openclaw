@@ -100,9 +100,7 @@ export async function ensureManagerRuntimeHandle(
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
   const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
-  const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
-  const model = normalizeText(runtimeOptions.model);
-  const thinking = normalizeText(runtimeOptions.thinking);
+  const { cwd, model, thinking } = runtimeOptions;
   const configuredBackend = (
     params.selectedBackend ||
     params.meta.backend ||

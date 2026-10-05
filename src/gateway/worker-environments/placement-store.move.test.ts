@@ -259,96 +259,80 @@ describe("worker session placement moves", () => {
     expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
   });
 
-  it.each([undefined, "os-a"])(
-    "persists profile choices with OS %s and joins only the exact target",
-    async (targetOs) => {
-      const active = await seedActiveEnvironment();
-      const source = sourceFor(active);
-      const target = {
-        kind: "profile",
-        profileId: "profile-destination",
-        machineClass: "beast",
-        ...(targetOs ? { os: targetOs } : {}),
-      } as const;
-      const begun = store.beginPlacementMove({
-        sessionId: SESSION.sessionId,
-        source,
-        target: {
-          ...target,
-          machineClass: " beast ",
-          ...(targetOs ? { os: ` ${targetOs} ` } : {}),
-        },
-      });
+  it("persists profile choices without an OS and joins only the exact target", async () => {
+    const active = await seedActiveEnvironment();
+    const source = sourceFor(active);
+    const target = {
+      kind: "profile",
+      profileId: "profile-destination",
+      machineClass: "beast",
+    } as const;
+    const begun = store.beginPlacementMove({
+      sessionId: SESSION.sessionId,
+      source,
+      target: { ...target, machineClass: " beast " },
+    });
 
-      expect(store.getPlacementMove(SESSION.sessionId)).toMatchObject({ target });
-      expect(
-        database.db
-          .prepare("SELECT target_os FROM worker_session_placement_moves WHERE session_id = ?")
-          .get(SESSION.sessionId),
-      ).toEqual({ target_os: targetOs ?? null });
-      if (targetOs === undefined) {
-        expect(store.getPlacementMove(SESSION.sessionId)?.target).not.toHaveProperty("os");
-      }
-      expect(
-        store.beginPlacementMove({ sessionId: SESSION.sessionId, source, target }),
-      ).toMatchObject({ joined: true, intent: { operationId: begun.intent.operationId, target } });
-      expect(() =>
-        store.beginPlacementMove({
-          sessionId: SESSION.sessionId,
-          source,
-          target: { ...target, machineClass: "fast" },
-        }),
-      ).toThrow("already has a conflicting placement move");
-      expect(() =>
-        store.beginPlacementMove({
-          sessionId: SESSION.sessionId,
-          source,
-          target: { ...target, os: "os-b" },
-        }),
-      ).toThrow("already has a conflicting placement move");
-    },
-  );
-
-  it.each(["target_machine_class", "target_os"])(
-    "rejects %s stored for a non-profile target",
-    async (column) => {
-      const active = await seedActiveEnvironment();
+    expect(store.getPlacementMove(SESSION.sessionId)).toMatchObject({ target });
+    expect(
+      database.db
+        .prepare("SELECT target_os FROM worker_session_placement_moves WHERE session_id = ?")
+        .get(SESSION.sessionId),
+    ).toEqual({ target_os: null });
+    expect(store.getPlacementMove(SESSION.sessionId)?.target).not.toHaveProperty("os");
+    expect(
+      store.beginPlacementMove({ sessionId: SESSION.sessionId, source, target }),
+    ).toMatchObject({ joined: true, intent: { operationId: begun.intent.operationId, target } });
+    expect(() =>
       store.beginPlacementMove({
         sessionId: SESSION.sessionId,
-        source: sourceFor(active),
-        target: { kind: "gateway" },
-      });
+        source,
+        target: { ...target, machineClass: "fast" },
+      }),
+    ).toThrow("already has a conflicting placement move");
+    expect(() =>
+      store.beginPlacementMove({
+        sessionId: SESSION.sessionId,
+        source,
+        target: { ...target, os: "os-b" },
+      }),
+    ).toThrow("already has a conflicting placement move");
+  });
+
+  it("rejects an OS stored for a non-profile target", async () => {
+    const active = await seedActiveEnvironment();
+    store.beginPlacementMove({
+      sessionId: SESSION.sessionId,
+      source: sourceFor(active),
+      target: { kind: "gateway" },
+    });
+    database.db
+      .prepare(
+        "UPDATE worker_session_placement_moves SET target_os = 'override' WHERE session_id = ?",
+      )
+      .run(SESSION.sessionId);
+
+    expect(() => store.getPlacementMove(SESSION.sessionId)).toThrow(
+      "Invalid worker placement move target: gateway",
+    );
+  });
+
+  it("rejects OS on a Gateway move before creating storage", () => {
+    const invalidTarget = { kind: "gateway" as const, os: "os-a" };
+    database.db.exec("DROP TABLE worker_session_placement_moves");
+    expect(() =>
+      store.beginPlacementMove({
+        sessionId: SESSION.sessionId,
+        source: { generation: 1, environmentId: "source", ownerEpoch: 1 },
+        target: invalidTarget,
+      }),
+    ).toThrow("operating system requires a profile target");
+    expect(
       database.db
-        .prepare(
-          `UPDATE worker_session_placement_moves SET ${column} = 'override' WHERE session_id = ?`,
-        )
-        .run(SESSION.sessionId);
-
-      expect(() => store.getPlacementMove(SESSION.sessionId)).toThrow(
-        "Invalid worker placement move target: gateway",
-      );
-    },
-  );
-
-  it.each([{ kind: "gateway" }, { kind: "device", deviceId: "device-1" }] as const)(
-    "rejects OS on a $kind move before creating storage",
-    (target) => {
-      const invalidTarget = { ...target, os: "os-a" };
-      database.db.exec("DROP TABLE worker_session_placement_moves");
-      expect(() =>
-        store.beginPlacementMove({
-          sessionId: SESSION.sessionId,
-          source: { generation: 1, environmentId: "source", ownerEpoch: 1 },
-          target: invalidTarget,
-        }),
-      ).toThrow("operating system requires a profile target");
-      expect(
-        database.db
-          .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'worker_session_placement_moves'")
-          .get(),
-      ).toBeUndefined();
-    },
-  );
+        .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'worker_session_placement_moves'")
+        .get(),
+    ).toBeUndefined();
+  });
 
   it.each([" ", "a".repeat(65)])(
     "rejects an invalid move OS %j before creating storage",

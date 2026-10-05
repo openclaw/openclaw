@@ -24,7 +24,13 @@ export async function readIncognitoSessionHistory<Key extends keyof IncognitoHis
   signal?: AbortSignal,
 ): Promise<IncognitoHistoryOperations[Key]["output"]> {
   const prepared = prepareIncognitoSessionHistoryRead(binding, scope, signal);
-  return prepared.actor.sessions.history(prepared.authority, command(prepared.target), signal);
+  const result = await prepared.actor.sessions.history(
+    prepared.authority,
+    command(prepared.target),
+    signal,
+  );
+  prepared.authority.assertCurrent();
+  return result;
 }
 
 /** Inactive until atomic activation supplies the original actor instead of native routing. */
@@ -55,9 +61,9 @@ export function prepareIncognitoSessionHistoryRead(
   const claim = actor.sessions.captureCurrent(target.sessionKey);
   const assertCurrent = () => {
     signal?.throwIfAborted();
-    actor.assertCurrent();
     authority.assertCurrent();
     claim.assertCurrent();
+    actor.assertReadable();
   };
   assertCurrent();
   return {
