@@ -99,6 +99,7 @@ async function receiveExecutedFailure(retire: boolean) {
   const rejected = createDeferredCore<unknown>();
   const events: string[] = [];
   const job: Job = {
+    observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
     nativeDispatched: true,

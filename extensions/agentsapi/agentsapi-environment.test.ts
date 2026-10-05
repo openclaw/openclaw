@@ -122,7 +122,10 @@ vi.mock("./agentsapi-files.js", async (importOriginal) => ({
   uploadInputs: mocks.uploadInputs,
   collectOutputs: mocks.collectOutputs,
 }));
-vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiNativeToolTranscript: vi.fn() }));
+vi.mock("./agentsapi-transcript.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agentsapi-transcript.js")>()),
+  recordAgentsApiNativeToolTranscript: vi.fn(),
+}));
 vi.mock("./agentsapi-messages.js", () => ({
   AgentsApiMessageProjection: class {
     reply = {};

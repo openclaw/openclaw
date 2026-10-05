@@ -386,7 +386,7 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
     TranscriptMessageAppendOptions<unknown>,
     "prepareMessageAfterIdempotencyCheck" | "beforeFreshMessageCommit"
   > & {
-    /** Requires expectedSessionId; awaited outside the transaction after the worker's duplicate check. */
+    /** Requires expectedSessionId and one message without transaction predicates; awaited after duplicate detection. */
     prepareMessageAfterIdempotencyCheckAsync?: (message: unknown) => Promise<unknown>;
   };
   predicate?:

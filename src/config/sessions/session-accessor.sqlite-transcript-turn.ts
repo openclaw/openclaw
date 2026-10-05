@@ -53,6 +53,18 @@ export async function appendExpectedSessionTranscriptTurn(
   options: SqliteSessionTurnOptions,
   nativeReservation?: true,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  if (
+    options.messages.some(
+      (message) => message.workerPreparation?.prepareMessageAfterIdempotencyCheckAsync,
+    ) &&
+    (options.messages.length !== 1 ||
+      options.messages.some((message) => message.predicate || message.shouldAppendInTransaction))
+  ) {
+    // Compound callbacks depend on earlier transaction writes for their replay decisions.
+    throw new Error(
+      "Awaited transcript preparation requires one message without transaction predicates",
+    );
+  }
   const resolved = captureLifecycleDatabaseScope(
     resolveSqliteTranscriptScope({
       ...scope,

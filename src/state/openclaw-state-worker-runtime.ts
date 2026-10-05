@@ -272,6 +272,7 @@ export function executeSharedStateCommand(
   }
   if (
     command.type === "sessionState.sweep" ||
+    command.type === "sessionState.cleanup" ||
     command.type === "sessionState.record" ||
     command.type === "sessionState.prune" ||
     command.type === "sessionState.registerWatch" ||

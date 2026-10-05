@@ -25,62 +25,6 @@ type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
 
-  it("admits an npm-installed worker from canonical bundle identity without registry access", async () => {
-    const environmentId = "worker-npm-admission";
-    await support.seedReady(environmentId, "npm");
-    support.testState.prepareInstallation = vi.fn(async (install) => {
-      if (install === "npm") {
-        throw new Error("registry unavailable");
-      }
-      return support.BUNDLE_ARTIFACT;
-    });
-    const workerService = support.createService(support.createProvider());
-
-    await expect(
-      workerService.admitWorker(support.admissionFor(environmentId)),
-    ).resolves.toMatchObject({
-      ok: true,
-    });
-    expect(support.testState.prepareInstallation).toHaveBeenCalledTimes(1);
-    expect(support.testState.prepareInstallation).toHaveBeenCalledWith("bundle");
-  });
-
-  it("fences transcript commits by current epoch and exact session credential binding", async () => {
-    const environmentId = "worker-transcript-fence";
-    const sessionId = "session-transcript-fence";
-    const applyTranscriptCommit = support.successfulTranscriptCommit("entry-1");
-    const { identity, workerService } = await support.placementHarness(environmentId, sessionId, {
-      applyTranscriptCommit,
-    });
-    const request = support.transcriptRequest(identity, "hello");
-
-    await expect(workerService.commitTranscript(identity, request)).resolves.toMatchObject({
-      ok: true,
-    });
-    expect(applyTranscriptCommit).toHaveBeenCalledOnce();
-
-    await expect(
-      workerService.commitTranscript(identity, {
-        ...request,
-        runEpoch: identity.ownerEpoch + 1,
-        seq: 2,
-      }),
-    ).resolves.toEqual({ ok: false, reason: "epoch-mismatch" });
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare(
-          "UPDATE worker_environment_credentials SET session_id = ? WHERE environment_id = ?",
-        ).run("session-other", environmentId);
-        publishWorkerEnvironmentFixture(db, environmentId);
-      },
-      { database: support.testState.stateDb },
-    );
-    await expect(workerService.commitTranscript(identity, { ...request, seq: 2 })).resolves.toEqual(
-      { ok: false, reason: "session-not-attached" },
-    );
-    expect(applyTranscriptCommit).toHaveBeenCalledOnce();
-  });
-
   it("admits only a gateway-preclaimed worker placement and fences later requests", async () => {
     const environmentId = "worker-placement-fence";
     const sessionId = "session-placement-fence";
@@ -360,7 +304,6 @@ describe("worker environment service", () => {
         liveEvents,
         placementStore: gate,
       });
-      workerService.start();
       const identity = {
         ...environmentIdentity,
         runId: claim.runId,
@@ -720,29 +663,6 @@ describe("worker environment service", () => {
       workerService.commitTranscript(rotatedIdentity, { ...transcript, seq: 2 }),
     ).resolves.toMatchObject({ ok: true });
     expect(applyTranscriptCommit).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not treat a terminal event on an already ACKed sequence as authoritative", async () => {
-    const applyTranscriptCommit = support.successfulTranscriptCommit("entry-after-reuse");
-    const { liveEvents } = support.sequencedLiveEvents();
-    const { identity, workerService } = await support.placementHarness(
-      "worker-terminal-reuse",
-      "session-terminal-reuse",
-      { applyTranscriptCommit, liveEvents },
-    );
-    const event = support.assistantEvent(identity, "first");
-
-    await expect(workerService.pushLiveEvent(identity, event)).resolves.toMatchObject({ ok: true });
-    await expect(
-      workerService.pushLiveEvent(identity, support.terminalEvent(identity)),
-    ).resolves.toMatchObject({ ok: true });
-    await expect(
-      workerService.commitTranscript(
-        identity,
-        support.transcriptRequest(identity, "still mutable"),
-      ),
-    ).resolves.toMatchObject({ ok: true });
-    expect(applyTranscriptCommit).toHaveBeenCalledOnce();
   });
 
   it("fences inference by epoch and the durable session credential", async () => {

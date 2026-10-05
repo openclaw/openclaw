@@ -8,6 +8,10 @@ import { refreshRemoteModelCatalog } from "../model-catalog/remote-refresh.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  handleSessionStateSessionDeleted,
+  handleSessionStateSessionReset,
+} from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -111,7 +115,7 @@ it("settles an accepted catalog refresh before Gateway close retires its state w
   }
 });
 
-it("joins accepted startup notice persistence after the Gateway close prelude aborts", async ({
+it("joins accepted notice persistence and signal cleanup after the Gateway close prelude aborts", async ({
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-notice-sweep-close");
@@ -119,6 +123,7 @@ it("joins accepted startup notice persistence after the Gateway close prelude ab
   const release = createDeferredCore();
   const parentClosed = createDeferredCore();
   let sweeping: Promise<void> | undefined;
+  let cleaning: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   try {
     const port = await fixture.reservePort();
@@ -192,6 +197,24 @@ it("joins accepted startup notice persistence after the Gateway close prelude ab
       ),
       signal,
     );
+    const resetWatcher = `${watcher}-reset`;
+    const deletedTarget = `${target}-deleted`;
+    shared
+      .prepare(
+        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
+      )
+      .run(resetWatcher, target, Date.now());
+    shared
+      .prepare(
+        "INSERT INTO session_state_events (session_key, agent_id, kind, actor_type, occurred_at, summary) VALUES (?, 'main', 'adopted', 'human', ?, 'accepted deletion')",
+      )
+      .run(deletedTarget, Date.now());
+    let cleanupSettled = false;
+    cleaning = kernel.connectionWork.track(async () => {
+      await handleSessionStateSessionReset(resetWatcher, options);
+      await handleSessionStateSessionDeleted(deletedTarget, "main", options);
+      cleanupSettled = true;
+    });
     kernel.connectionWork.signal.addEventListener("abort", () => parentClosed.resolve(), {
       once: true,
     });
@@ -199,8 +222,9 @@ it("joins accepted startup notice persistence after the Gateway close prelude ab
     await withinTest(parentClosed.promise, signal);
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(shared.isOpen).toBe(true);
+    expect(cleanupSettled).toBe(false);
     release.resolve();
-    await sweeping;
+    await Promise.all([sweeping, cleaning]);
     await closing;
     expect(shared.isOpen).toBe(false);
     expect(
@@ -210,9 +234,20 @@ it("joins accepted startup notice persistence after the Gateway close prelude ab
         )
         .get(watcher, target),
     ).toEqual({ notified_sequence: 3 });
+    const reopened = openOpenClawStateDatabase(options).db;
+    expect(
+      reopened
+        .prepare("SELECT 1 FROM session_watch_cursors WHERE watcher_session_key = ?")
+        .get(resetWatcher),
+    ).toBeUndefined();
+    expect(
+      reopened
+        .prepare("SELECT 1 FROM session_state_events WHERE session_key = ?")
+        .get(deletedTarget),
+    ).toBeUndefined();
   } finally {
     release.resolve();
-    await Promise.allSettled([sweeping, closing]);
+    await Promise.allSettled([sweeping, cleaning, closing]);
     vi.restoreAllMocks();
     await fixture.cleanup();
   }

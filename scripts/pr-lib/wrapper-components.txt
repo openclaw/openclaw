@@ -139,6 +139,7 @@ packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-context.ts
+packages/worker-runtime/src/worker-task-error.ts
 packages/worker-runtime/src/worker-task-host.ts
 packages/worker-runtime/src/worker-task-native-sections.ts
 packages/worker-runtime/src/worker-task-pool-bootstrap.ts
@@ -1130,6 +1131,7 @@ src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
+src/infra/worker-request-diagnostics.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts

@@ -7,10 +7,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
-import {
-  appendTranscriptMessageSnapshotSync,
-  replaceTranscriptEventsSync,
-} from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSnapshotSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -54,6 +51,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("rejects compound async preparation before invoking any preparer", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const f = await seed(env);
+    const prepare = vi.fn(async (message: unknown) => message);
+    for (const keys of [
+      ["same", "same"],
+      ["first", "second"],
+    ]) {
+      await expect(
+        appendExpectedSessionTranscriptTurn(f.scope, {
+          expectedSessionId: f.scope.sessionId,
+          sessionFile: "synthetic-session.jsonl",
+          messages: keys.map((idempotencyKey) => ({
+            message: { role: "assistant", content: idempotencyKey, idempotencyKey },
+            workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
+          })),
+        }),
+      ).rejects.toThrow(
+        "Awaited transcript preparation requires one message without transaction predicates",
+      );
+    }
+    expect(prepare).not.toHaveBeenCalled();
+    expect(f.events()).toEqual([]);
+  });
+});
+
 it("retains synchronous same-store SDK guards in the native adapter", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const f = await seed(env);
@@ -73,7 +96,7 @@ it("retains synchronous same-store SDK guards in the native adapter", async () =
   });
 });
 
-it("prepares each message once when a later authority selects the native adapter", async () => {
+it("prepares a message once when its authority selects the native adapter", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const f = await seed(env);
     let preparations = 0;
@@ -91,54 +114,17 @@ it("prepares each message once when a later authority selects the native adapter
         messages: [
           {
             message: first,
-            workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
-          },
-          {
-            message: { role: "assistant", content: "native" },
-            workerPreparation: { beforeFreshMessageCommit: nativeSource },
-          },
-        ],
-      }),
-    ).resolves.toMatchObject({
-      appendedMessages: [
-        { message: { content: "prepared 1" } },
-        { message: { content: "native" } },
-      ],
-    });
-    expect(prepare).toHaveBeenCalledOnce();
-  });
-});
-
-it("refuses a native replay that becomes fresh after skipping async preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const f = await seed(env);
-    const message = { role: "assistant", content: "original", idempotencyKey: "replay" };
-    expect(appendTranscriptMessageSnapshotSync(f.scope, { message }).ok).toBe(true);
-    const skipped = vi.fn(async () => ({ ...message, content: "prepared" }));
-    await expect(
-      appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
-        messages: [
-          {
-            message,
-            beforeFreshMessageCommit() {},
-            workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: skipped },
-          },
-          {
-            message: { role: "assistant", content: "suppressed" },
             workerPreparation: {
-              prepareMessageAfterIdempotencyCheckAsync: async () => {
-                expect(replaceTranscriptEventsSync(f.scope, [])).toBe(true);
-                return undefined;
-              },
+              prepareMessageAfterIdempotencyCheckAsync: prepare,
+              beforeFreshMessageCommit: nativeSource,
             },
           },
         ],
       }),
-    ).rejects.toThrow("SQLite transcript changed while preparing rewrite");
-    expect(skipped).not.toHaveBeenCalled();
-    expect(f.events()).toEqual([]);
+    ).resolves.toMatchObject({
+      appendedMessages: [{ message: { content: "prepared 1" } }],
+    });
+    expect(prepare).toHaveBeenCalledOnce();
   });
 });
 
@@ -271,7 +257,7 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "commits an async prepared group against its transaction-entry version (foreignWrite=%s)",
+  "commits an async prepared message against its transaction-entry version (foreignWrite=%s)",
   async (foreignWrite) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const f = await seed(env);
@@ -289,11 +275,13 @@ it.each([false, true])(
       const appending = appendExpectedSessionTranscriptTurn(f.scope, {
         expectedSessionId: f.scope.sessionId,
         sessionFile: "synthetic-session.jsonl",
-        messages: ["first", "second"].map((id) => ({
-          eventId: id,
-          message: { role: "assistant", content: id, idempotencyKey: id },
-          workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
-        })),
+        messages: [
+          {
+            eventId: "prepared",
+            message: { role: "assistant", content: "prepared", idempotencyKey: "prepared" },
+            workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
+          },
+        ],
       });
       if (foreignWrite) {
         await expect(appending).rejects.toThrow(
@@ -301,10 +289,7 @@ it.each([false, true])(
         );
       } else {
         await expect(appending).resolves.toMatchObject({
-          appendedMessages: [
-            { appended: true, messageId: "first" },
-            { appended: true, messageId: "second" },
-          ],
+          appendedMessages: [{ appended: true, messageId: "prepared" }],
         });
       }
       expect(
@@ -312,7 +297,7 @@ it.each([false, true])(
           .events()
           .filter((event) => event.type === "message")
           .map((event) => event.id),
-      ).toEqual(foreignWrite ? ["foreign"] : ["first", "second"]);
+      ).toEqual(foreignWrite ? ["foreign"] : ["prepared"]);
     });
   },
 );

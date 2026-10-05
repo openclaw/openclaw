@@ -325,6 +325,7 @@ export async function withGatewaySessionStoreTarget<T>(
     relatedTargets: readonly GatewaySessionStoreTargetWithStore[],
   ) => T,
 ): Promise<T> {
+  const ordered = params.ordered || params.includeMembership;
   const normalized = {
     ...params,
     key: normalizeOptionalString(params.key) ?? "",
@@ -489,8 +490,8 @@ export async function withGatewaySessionStoreTarget<T>(
               );
             },
             {
-              ordered: params.ordered || params.includeMembership,
-              onReadAdmitted: params.includeMembership
+              ordered,
+              onReadAdmitted: ordered
                 ? () => {
                     assertDiscoveryCurrent();
                     // The ordered snapshot includes writes that settled before FIFO admission.
