@@ -1,7 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { parseConcreteConfigPathWithProvenance } from "../shared/dot-path.js";
 import {
   assertNonDestructiveReplacement,
+  isConfigSchemaPath,
   mergeAtPath,
   parseConfigSetPath,
   parseConfigSetValue,
@@ -252,5 +254,235 @@ describe("replacement guard advice", () => {
     expect(posix).toBe(`'models.providers["it\u2018s"].models'`);
     expect(powershell).toBe(`'models.providers["it\u2018\u2018s"].models'`);
     expect(parseConfigSetPath(readShellArgument(posix ?? ""))).toEqual(path);
+  });
+});
+
+// extensions/imap/openclaw.plugin.json ships this shape: an account map whose values, and whose
+// values' own blocks, are $defs entries. Bundled manifests keep those refs when merged.
+const refBackedPluginSchema = {
+  $defs: {
+    watch: {
+      type: "object",
+      additionalProperties: false,
+      properties: { pollSeconds: { type: "integer", minimum: 15 } },
+    },
+    senderAuth: {
+      type: "object",
+      additionalProperties: false,
+      properties: { min: { type: "string", enum: ["verified", "unverified"] } },
+    },
+    secretRef: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        source: { type: "string" },
+        provider: { type: "string" },
+        id: { type: "string" },
+      },
+      required: ["source", "provider", "id"],
+    },
+    secretInput: {
+      anyOf: [{ type: "string", minLength: 1 }, { $ref: "#/$defs/secretRef" }],
+    },
+    addressToken: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        token: { type: "string" },
+        senders: { type: "array", items: { type: "string" } },
+      },
+      required: ["token", "senders"],
+    },
+    account: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        host: { type: "string", minLength: 1 },
+        watch: { $ref: "#/$defs/watch" },
+        senderAuth: { $ref: "#/$defs/senderAuth" },
+        password: { $ref: "#/$defs/secretInput" },
+        addressTokens: { type: "array", items: { $ref: "#/$defs/addressToken" } },
+      },
+      required: ["host"],
+    },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    accounts: {
+      type: "object",
+      propertyNames: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+      additionalProperties: { $ref: "#/$defs/account" },
+    },
+  },
+};
+
+describe("isConfigSchemaPath", () => {
+  it.each([
+    "accounts.main.host",
+    "accounts.main.watch.pollSeconds",
+    "accounts.main.senderAuth.min",
+    "accounts.main.addressTokens[0].token",
+    "accounts.main.password.source",
+  ])("accepts the $defs-backed path %s", (rawPath) => {
+    expect(isConfigSchemaPath(refBackedPluginSchema, parseConfigSetPath(rawPath))).toBe(true);
+  });
+
+  it.each([
+    "accounts.main.notAField",
+    "accounts.main.watch.notAField",
+    "accounts.main.host.nested",
+  ])("keeps rejecting %s", (rawPath) => {
+    expect(isConfigSchemaPath(refBackedPluginSchema, parseConfigSetPath(rawPath))).toBe(false);
+  });
+
+  it("follows refs the schema builder mounts below the document root", async () => {
+    const { buildConfigSchemaCore } = await import("../config/schema.js");
+    const { schema } = buildConfigSchemaCore({
+      plugins: [{ id: "imap", configSchema: refBackedPluginSchema }],
+    });
+    expect(
+      isConfigSchemaPath(
+        schema,
+        parseConfigSetPath("plugins.entries.imap.config.accounts.main.watch.pollSeconds"),
+      ),
+    ).toBe(true);
+    expect(
+      isConfigSchemaPath(
+        schema,
+        parseConfigSetPath("plugins.entries.imap.config.accounts.main.notAField"),
+      ),
+    ).toBe(false);
+  });
+});
+
+// A nested `$defs` is not a new JSON Schema resource, so `#/$defs/List` inside `block` names the
+// root definition; the local `List` on `block` must not shadow it.
+const shadowedRefSchema = {
+  $defs: {
+    List: { type: "array", items: { type: "string" } },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    block: {
+      $defs: {
+        List: {
+          type: "object",
+          additionalProperties: false,
+          properties: { note: { type: "string" } },
+        },
+      },
+      type: "object",
+      additionalProperties: false,
+      properties: { values: { $ref: "#/$defs/List" } },
+    },
+  },
+};
+
+describe("local refs below a nested $defs block", () => {
+  it("resolves #/$defs/List against the outer definitions owner", () => {
+    expect(isConfigSchemaPath(shadowedRefSchema, parseConfigSetPath("block.values[0]"))).toBe(true);
+    expect(isConfigSchemaPath(shadowedRefSchema, parseConfigSetPath("block.values.note"))).toBe(
+      false,
+    );
+  });
+
+  it("builds the array the referenced definition asks for", () => {
+    const root: Record<string, unknown> = {};
+    setAtPath(root, parseConfigSetPath("block.values[0]"), "first", {
+      schema: shadowedRefSchema,
+    });
+    expect(root).toEqual({ block: { values: ["first"] } });
+  });
+});
+
+// `$id` opens a new resource, so the inner `List` owns `block.values` even though the root defines
+// the same name. src/plugins/schema-validator.test.ts:673 pins that contract for validation.
+const idScopedRefSchema = {
+  $defs: {
+    List: {
+      type: "object",
+      additionalProperties: false,
+      properties: { note: { type: "string" } },
+    },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    block: {
+      $id: "block",
+      $defs: { List: { type: "array", items: { type: "string" } } },
+      type: "object",
+      additionalProperties: false,
+      properties: { values: { $ref: "#/$defs/List" } },
+    },
+  },
+};
+
+describe("local refs across a nested $id resource boundary", () => {
+  it("resolves #/$defs/List against the inner $id resource", () => {
+    expect(isConfigSchemaPath(idScopedRefSchema, parseConfigSetPath("block.values[0]"))).toBe(true);
+    expect(isConfigSchemaPath(idScopedRefSchema, parseConfigSetPath("block.values.note"))).toBe(
+      false,
+    );
+  });
+
+  it.each(["block.values[0]", "block.values.0"])("builds an array for the %s write", (rawPath) => {
+    const root: Record<string, unknown> = {};
+    setAtPath(root, parseConfigSetPath(rawPath), "first", { schema: idScopedRefSchema });
+    expect(root).toEqual({ block: { values: ["first"] } });
+  });
+});
+
+// A `$defs.Map` is a record, so a dotted numeric segment below it names a key, not an array slot.
+// The walker has to resolve the `$ref` before it can tell: an unresolved `{$ref}` schema yields no
+// candidate, and the fallback builds an array, which rewrites a map-shaped setting on `config set`.
+// Explicit `values[0]` is a different contract: the runner forwards the parser's numeric token, so
+// `shouldCreateArrayForMissingPathSegment` picks array before it consults the schema.
+const objectMapRefSchema = {
+  $defs: {
+    Map: { type: "object", additionalProperties: { type: "string" } },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    block: {
+      type: "object",
+      additionalProperties: false,
+      properties: { values: { $ref: "#/$defs/Map" } },
+    },
+  },
+};
+
+/**
+ * Mirrors production write provenance: the input parser keeps the bracket token numeric
+ * (`config-cli-input.ts:310-314`) and the runner forwards it (`config-cli-runner.ts:415-418`).
+ */
+function productionWritePath(rawPath: string) {
+  const { tokens, quotedNumericSegments } = parseConcreteConfigPathWithProvenance(rawPath);
+  return { path: tokens.map(String), options: { pathTokens: tokens, quotedNumericSegments } };
+}
+
+describe("local refs to an object-shaped definition", () => {
+  it("builds an object for the dotted numeric write", () => {
+    const { path, options } = productionWritePath("block.values.0");
+    const root: Record<string, unknown> = {};
+    setAtPath(root, path, "first", { ...options, schema: objectMapRefSchema });
+    expect(root).toEqual({ block: { values: { 0: "first" } } });
+  });
+
+  it("keeps the explicit bracket index as an array", () => {
+    const { path, options } = productionWritePath("block.values[0]");
+    const root: Record<string, unknown> = {};
+    setAtPath(root, path, "first", { ...options, schema: objectMapRefSchema });
+    expect(root).toEqual({ block: { values: ["first"] } });
+  });
+
+  it("keeps an authored map when a dotted numeric key is added to it", () => {
+    const { path, options } = productionWritePath("block.values.0");
+    const root: Record<string, unknown> = { block: { values: { note: "keep" } } };
+    setAtPath(root, path, "first", { ...options, schema: objectMapRefSchema });
+    expect(root).toEqual({ block: { values: { note: "keep", 0: "first" } } });
   });
 });
