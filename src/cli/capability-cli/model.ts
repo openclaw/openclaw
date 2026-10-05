@@ -456,7 +456,6 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
-          supported: ["local", "gateway"],
           defaultTransport: "local",
         });
         return runModelRun({

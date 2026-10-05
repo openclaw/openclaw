@@ -1,4 +1,4 @@
-import { parseCustomId } from "./components.js";
+import { parseCustomId } from "./components.base.js";
 
 export class ComponentRegistry<
   T extends { customId: string; customIdParser?: typeof parseCustomId; type?: number },

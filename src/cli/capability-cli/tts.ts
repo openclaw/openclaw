@@ -19,7 +19,6 @@ function registerTransportTtsCommand<T>(
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
-          supported: ["local", "gateway"],
           defaultTransport,
         });
         return run(opts, transport);

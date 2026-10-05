@@ -1764,7 +1764,7 @@ src/cli/gateway-cli/run.ts	5
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
-src/cli/models-cli.ts	17
+src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	2
 src/cli/nodes-cli/format.ts	1
 src/cli/nodes-cli/register.pairing.ts	4
@@ -1784,12 +1784,11 @@ src/cli/program/message/register.permissions-search.ts	2
 src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register.agent-turn.ts	1
-src/cli/program/register.audit.ts	12
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	7
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
-src/cli/program/register.status-health-sessions.ts	29
+src/cli/program/register.status-health-sessions.ts	18
 src/cli/run-main.ts	1
 src/cli/secrets-cli.ts	2
 src/cli/secrets-store-cli.ts	1
