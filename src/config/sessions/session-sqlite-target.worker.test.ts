@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { getForeignLiveSessionPendingInputEntries } from "./session-accessor.pending-inputs.js";
 import { prepareSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 
@@ -51,6 +52,15 @@ it.each([
       });
       expect(resolved).toMatchObject({ agentId: fixture.logicalAgent, path: databasePath });
       expect(resolved.databaseAgentId ?? resolved.agentId).toBe("ops");
+      expect(
+        await getForeignLiveSessionPendingInputEntries({
+          agentId: fixture.logicalAgent,
+          ...(fixture.registry ? {} : { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+          sessionKey: `agent:${fixture.logicalAgent}:main`,
+          sessionId: "physical-target",
+          storePath: path.join(state.root, fixture.locator),
+        }),
+      ).toEqual(new Map());
       expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
       if (!fixture.registry) {
         expect(resolved.databaseAgentId).toBe("ops");

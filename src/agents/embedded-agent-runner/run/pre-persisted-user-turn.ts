@@ -1,12 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import {
-  type SessionTranscriptRuntimeTarget,
   loadSessionEntry,
   loadTranscriptHeaderSync,
   type SessionTranscriptWriteScope,
 } from "../../../config/sessions/session-accessor.js";
-import { getForeignLiveSessionPendingInputEntries } from "../../../config/sessions/session-accessor.pending-inputs.js";
 import { validateSessionTranscriptContextVersion } from "../../../config/sessions/session-accessor.sqlite-model-context.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -208,7 +206,7 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
 /** Keep live foreign turns durable while excluding them from this attempt and context rebuilds. */
 export function reconcileForeignPendingUserTurns(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
-  target: SessionTranscriptRuntimeTarget | undefined;
+  entries: ReadonlyMap<string, string> | undefined;
   currentUserIdempotencyKey: string | undefined;
 }):
   | {
@@ -216,11 +214,8 @@ export function reconcileForeignPendingUserTurns(params: {
       omitInput: (messages: AgentMessage[]) => AgentMessage[];
     }
   | undefined {
-  if (!params.target) {
-    return undefined;
-  }
-  const entries = getForeignLiveSessionPendingInputEntries(params.target);
-  if (entries.size === 0) {
+  const { entries } = params;
+  if (!entries?.size) {
     return undefined;
   }
   // Keep the declared current prompt visible before receipt scope entry, while its row stays protected.

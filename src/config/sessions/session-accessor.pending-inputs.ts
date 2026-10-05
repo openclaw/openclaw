@@ -39,8 +39,9 @@ import {
   type SessionPendingInputState,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import {
+  assertSqliteTranscriptWriteIdentity,
+  prepareSqliteTranscriptReadScope,
   resolveSqliteSessionKey,
-  resolveSqliteTranscriptScope,
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -53,11 +54,23 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 
 export { withSessionPendingInputRelocation };
 
-/** Inspect live custody without reopening storage or relying on consumed pending rows. */
-export function getForeignLiveSessionPendingInputEntries(
+/** Prepare physical ownership off-thread, then inspect live custody rather than consumed rows. */
+export async function getForeignLiveSessionPendingInputEntries(
   scope: SessionAccessScope & { sessionId: string },
-): ReadonlyMap<string, string> {
-  return getForeignLiveSessionPendingInputEntriesInScope(resolveSqliteTranscriptScope(scope));
+  signal?: AbortSignal,
+): Promise<ReadonlyMap<string, string>> {
+  signal?.throwIfAborted();
+  assertSqliteTranscriptWriteIdentity(scope);
+  const captured = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
+  signal?.throwIfAborted();
+  return getForeignLiveSessionPendingInputEntriesInScope({
+    ...resolved,
+    sessionKey: resolveSqliteSessionKey(captured.sessionKey, resolved.agentId),
+  });
 }
 export type { SessionPendingInput, SessionPendingInputPage };
 type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
