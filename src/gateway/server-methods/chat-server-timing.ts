@@ -1,19 +1,14 @@
 import { performance } from "node:perf_hooks";
+import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import type { AdmittedChatSend } from "./chat-send-admission.js";
-import type { NormalizedChatSendRequest } from "./chat-send-request.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type ChatSendTimingContext = {
   client?: GatewayClient | null;
-  request: Pick<NormalizedChatSendRequest, "chatSendReceivedAtMs" | "clientInfo">;
-  session: Pick<
-    PreparedChatSendSession,
-    "clientRunId" | "sessionKey" | "agentId" | "sessionLoadMs"
-  >;
+  request: { chatSendReceivedAtMs: number; clientInfo?: GatewayClientInfo };
+  session: { clientRunId: string; sessionKey: string; agentId: string; sessionLoadMs: number };
 };
 
 type ChatSendAckServerTiming = {
@@ -57,7 +52,9 @@ export function prepareChatSendAckTiming({
   chatSendTraceAttributes,
 }: ChatSendTimingContext & {
   prepareAttachmentsMs?: number;
-  chatSendTraceAttributes: AdmittedChatSend["chatSendTraceAttributes"];
+  chatSendTraceAttributes: NonNullable<
+    Parameters<typeof emitDiagnosticsTimelineEvent>[0]["attributes"]
+  >;
 }) {
   const serverTiming = isOperatorUiClient(clientInfo)
     ? {
