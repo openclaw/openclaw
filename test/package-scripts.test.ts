@@ -196,7 +196,7 @@ describe("package scripts", () => {
       expect(check).toBeGreaterThanOrEqual(0);
       for (const prerequisite of [
         "scripts/runtime-postbuild.mts",
-        "scripts/write-plugin-sdk-entry-dts.ts",
+        "scripts/write-unified-entry-dts.ts",
       ]) {
         const publication = targets.indexOf(prerequisite);
         expect(publication, prerequisite).toBeGreaterThanOrEqual(0);
