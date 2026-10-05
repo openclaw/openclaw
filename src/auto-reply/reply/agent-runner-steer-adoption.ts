@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -26,6 +27,10 @@ import {
   replyRunRegistry,
 } from "./reply-run-registry.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
+import {
+  resolveFollowupRunToolAuthorityFingerprint,
+  resolveFollowupRunToolAuthorityFingerprintAsync,
+} from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -186,17 +191,38 @@ export async function runActiveReplySteer(
     if (!isCurrentFallback()) {
       return await fallback("automatic model fallback changed during steering admission");
     }
-    const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
+    const assertSourceCurrent = () => {
+      resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
+      followupRun.operatorAuthority?.assertCurrent();
+      if (!isCurrentFallback()) {
+        throw new Error("Automatic model fallback changed during steering admission");
+      }
+    };
+    const assertPolicy = (fingerprint: string) => {
+      assertSourceCurrent();
+      if (fingerprint !== params.toolAuthorityFingerprint) {
+        throw new Error("Steering tool authority changed");
+      }
+    };
+    const text = followupRun.prompt;
+    const compatAssertCurrent = () =>
+      assertPolicy(resolveFollowupRunToolAuthorityFingerprint(followupRun, automaticFallbackRoute));
+    const injectionAttempt = await beginReplyMessageInjectionTarget(injectionTarget, text, {
       currentInboundContext: followupRun.currentInboundContext,
       inboundAudio: followupRun.currentInboundAudio === true,
-      assertCurrent: automaticFallbackRoute
-        ? () => {
-            followupRun.operatorAuthority?.assertCurrent();
-            if (!isCurrentFallback()) {
-              throw new Error("Automatic model fallback changed during steering admission");
-            }
-          }
-        : followupRun.operatorAuthority?.assertCurrent,
+      assertCurrent: assertSourceCurrent,
+      toolAuthorityPreparation: bindWorkerToolPreparation({
+        assertCurrent: assertSourceCurrent,
+        compatAssertCurrent,
+        prepareCurrent: async () =>
+          assertPolicy(
+            await resolveFollowupRunToolAuthorityFingerprintAsync(
+              followupRun,
+              automaticFallbackRoute,
+              assertSourceCurrent,
+            ),
+          ),
+      }),
       steeringMode: "all",
       isInboundUserMessage:
         followupRun.currentInboundEventKind !== "room_event" &&

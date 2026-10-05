@@ -55,13 +55,15 @@ it("keeps cross-profile question answers out of a backend restricted to its turn
     operation.setPhase("running");
     try {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-      const answer = (operatorAuthority: typeof owner) =>
-        beginReplyMessageInjectionTarget(target, "Green", {
-          isInboundUserMessage: true,
-          toolAuthorityFingerprint: "other-route",
-          pendingInputAuthorityFingerprint: "same-owner",
-          personalToolParticipant: { operatorAuthority },
-        }).outcome;
+      const answer = async (operatorAuthority: typeof owner) =>
+        (
+          await beginReplyMessageInjectionTarget(target, "Green", {
+            isInboundUserMessage: true,
+            toolAuthorityFingerprint: "other-route",
+            pendingInputAuthorityFingerprint: "same-owner",
+            personalToolParticipant: { operatorAuthority },
+          })
+        ).outcome;
       await expect(answer(other)).resolves.toMatchObject(
         supportsCrossProfileSteering === false
           ? { status: "rejected", reason: "tool_authority_mismatch" }
@@ -111,10 +113,12 @@ it("leaves new human input for a visible followup instead of a hidden coordinati
       runId,
     });
     await expect(
-      beginReplyMessageInjectionTarget(target, "What is the status?", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: "same-owner",
-      }).outcome,
+      (
+        await beginReplyMessageInjectionTarget(target, "What is the status?", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: "same-owner",
+        })
+      ).outcome,
     ).resolves.toMatchObject({ status: "rejected", reason: "input_visibility_mismatch" });
     expect(queueMessage).not.toHaveBeenCalled();
   } finally {
@@ -191,7 +195,7 @@ it.each([
     },
     async (operation) => {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-      const attempt = beginReplyMessageInjectionTarget(target, "Keep this input", {
+      const attempt = await beginReplyMessageInjectionTarget(target, "Keep this input", {
         isInboundUserMessage: true,
         toolAuthorityFingerprint: "same-owner",
         ...(sink === "image"
@@ -244,12 +248,14 @@ it.each([
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
       expect(target).toBeDefined();
       const onQueueSettled = vi.fn();
-      const result = await beginReplyMessageInjectionTarget(target!, "Green", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: testCase.fingerprint,
-        pendingInputAuthorityFingerprint: testCase.pending,
-        onQueueSettled,
-      }).outcome;
+      const result = await (
+        await beginReplyMessageInjectionTarget(target!, "Green", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: testCase.fingerprint,
+          pendingInputAuthorityFingerprint: testCase.pending,
+          onQueueSettled,
+        })
+      ).outcome;
       const authorized = testCase.fingerprint === "same-owner" || testCase.pending === "same-owner";
       expect(result.status).toBe(authorized && testCase.claimed ? "accepted" : "rejected");
       expect(onQueueSettled).toHaveBeenCalledTimes(authorized && testCase.claimed ? 1 : 0);
@@ -284,7 +290,7 @@ it.each(["source", "backend"] as const)(
       async (operation) => {
         const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
         expect(target).toBeDefined();
-        const attempt = beginReplyMessageInjectionTarget(target!, "Green", {
+        const attempt = await beginReplyMessageInjectionTarget(target!, "Green", {
           isInboundUserMessage: true,
           toolAuthorityFingerprint: "same-owner",
           assertCurrent: () => {
@@ -343,12 +349,14 @@ it.each(["same-owner", "other-owner"])(
         const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
         expect(target).toBeDefined();
         await expect(
-          beginReplyMessageInjectionTarget(target!, "Use this image", {
-            isInboundUserMessage: true,
-            toolAuthorityFingerprint: fingerprint,
-            images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
-            assertCurrent: () => operation.abortSignal.throwIfAborted(),
-          }).outcome,
+          (
+            await beginReplyMessageInjectionTarget(target!, "Use this image", {
+              isInboundUserMessage: true,
+              toolAuthorityFingerprint: fingerprint,
+              images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+              assertCurrent: () => operation.abortSignal.throwIfAborted(),
+            })
+          ).outcome,
         ).resolves.toMatchObject({ status: "rejected", reason: "input_visibility_mismatch" });
         expect(cancelPendingUserInput).toHaveBeenCalledTimes(fingerprint === "same-owner" ? 1 : 0);
         expect(claimPendingUserInputAnswer).not.toHaveBeenCalled();
@@ -385,12 +393,14 @@ it.each(["same-owner", "different-owner"])(
     });
     operation.setPhase("running");
     const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const result = await beginReplyMessageInjectionTarget(target, "Refresh the card", {
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint: fingerprint,
-      allowPendingUserInputAnswer: false,
-      assertCurrent: () => operation.abortSignal.throwIfAborted(),
-    }).outcome;
+    const result = await (
+      await beginReplyMessageInjectionTarget(target, "Refresh the card", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: fingerprint,
+        allowPendingUserInputAnswer: false,
+        assertCurrent: () => operation.abortSignal.throwIfAborted(),
+      })
+    ).outcome;
     expect(result.status).toBe(fingerprint === "same-owner" ? "accepted" : "rejected");
     expect(queueMessage).toHaveBeenCalledTimes(fingerprint === "same-owner" ? 1 : 0);
     expect(claim).not.toHaveBeenCalled();
@@ -416,7 +426,7 @@ it.each([false, true])(
     });
     operation.setPhase("running");
     const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const attempt = beginReplyMessageInjectionTarget(target, "Queued guidance");
+    const attempt = await beginReplyMessageInjectionTarget(target, "Queued guidance");
     const result = await finalizeReplyMessageInjectionAttempt({
       attempt,
       target,

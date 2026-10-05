@@ -288,7 +288,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             const replyContextFields = await replyContextFieldsPromise;
             assertWorkspaceRunOwnership?.();
             applyChatSendReplyContextFields(ctx, replyContextFields);
-            messageInjectionAttempt = beginCapturedMessageInjection();
+            messageInjectionAttempt = await beginCapturedMessageInjection();
           }
           if (messageInjectionAttempt) {
             const injected = await finalizeAcceptedChatSendMessageInjection({

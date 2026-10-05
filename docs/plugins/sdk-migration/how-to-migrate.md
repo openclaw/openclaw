@@ -95,6 +95,51 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await reply tool authority
+
+Harness attempt parameters from `openclaw/plugin-sdk/agent-harness-runtime`
+expose an optional `replyOperation`. Await its `bindToolAuthoritySnapshotAsync`,
+`projectToolAuthorityFingerprintAsync`, and `bindToolAuthorityRouteAsync` methods.
+They preserve the existing inputs and resolve to `void`, `string | undefined`,
+and `string`, respectively. Preparation checks current session policy and then
+revalidates the original operation and concrete backend route.
+
+Tool-authority snapshot providers can implement optional `fingerprintAsync` and
+`projectAsync` companions while keeping their released synchronous methods.
+Legacy two-method snapshot objects remain accepted. Do not use an earlier hash
+as permission after an await: each action needs fresh preparation and current
+owner authority.
+
+V2 injection backends can add `queueMessageAsync`. It keeps the existing arguments,
+replacing the synchronous assertion argument with
+`{ prepareCurrent(): Promise<void>; assertCurrent(): void; compatAssertCurrent(): void }`. Await
+`prepareCurrent()` after asynchronous backend preparation, then call
+`assertCurrent()` synchronously immediately before accepting the input. Repeat
+preparation after any further wait before that effect. The host selects the
+awaited companion when supplied; legacy external V2 implementations retain the
+native synchronous authority assertion.
+
+Native harness backends that await session-lineage admission can use the optional
+`NativeSessionBindingAuthority.withPreparedCurrent(consume, preparations)` companion.
+It reads tool policy and lineage together through the existing session reader,
+then invokes the synchronous `consume` callback while that admission is current.
+Use `withCurrent` for effects without tool-policy preparation; its signature is
+unchanged. Unknown or partly supported preparation providers keep their full
+`compatAssertCurrent` check at the final boundary. An optional per-item
+`onRefused(error)` callback may return `"discarded"` only after rejecting that item;
+otherwise the entire admission fails. A late compatibility refusal rejects the
+entire undispatched batch, without repeating native checks or settlement callbacks.
+
+Pending-question claims and cancellation retain their synchronous contracts.
+If queueing may answer or cancel a pending question, pass `compatAssertCurrent`
+to that path so its final check still reads current policy. Ordinary steering
+uses awaited preparation followed by the synchronous owner assertion.
+
+The synchronous fingerprint, projection, binding, and queue methods are deprecated under
+`reply-tool-authority-sync-preparation`, with removal gated on the next Plugin
+SDK major and explicit breaking-release approval. No runtime warning, schema
+change, retention change, or update migration is introduced.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from

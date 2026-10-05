@@ -1,3 +1,4 @@
+import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
   captureNativeSessionEntryCurrentRead,
@@ -13,12 +14,22 @@ import {
   withSessionEntriesFromStoresInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "../../../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "../../../config/sessions/session-store-target-inventory.js";
+import {
   collectSessionEntryLookupKeys,
   normalizeStoreSessionKey,
   resolveSessionEntryCandidates,
 } from "../../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import {
+  capturePreparedToolAuthorityReads,
+  type PreparedToolAuthorityRead,
+} from "../host-private-capabilities.js";
 
 export type NativeSessionBindingRead = {
   agentId: string;
@@ -36,6 +47,13 @@ export type NativeSessionBindingLineage = {
 
 /** A fresh lineage read owns custody only through the synchronous effect admission. */
 export type NativeSessionBindingWithCurrent = <T>(consume: () => T) => Promise<T>;
+type NativePreparedPolicy = ReplyToolAuthorityPreparation & {
+  onRefused?: (error: unknown) => "discarded";
+};
+type CapturedNativePolicy = {
+  preparation: NativePreparedPolicy;
+  reads: PreparedToolAuthorityRead[];
+};
 export type NativeSessionBindingAuthority = {
   readonly lineage: readonly NativeSessionBindingLineage[];
   /** Cancellation and lifecycle only; durable authority is acquired through withCurrent. */
@@ -43,6 +61,10 @@ export type NativeSessionBindingAuthority = {
   /** For shipped synchronous capabilities that cannot await worker admission. */
   assertLegacyCurrent: () => void;
   withCurrent: NativeSessionBindingWithCurrent;
+  withPreparedCurrent?: <T>(
+    consume: () => T,
+    preparations: readonly NativePreparedPolicy[],
+  ) => Promise<T>;
   prepareMutation: () => Promise<{
     assertCurrent: () => void;
     sessionEntryCurrent?: SessionEntriesCurrentCheck;
@@ -54,6 +76,7 @@ export function readNativeSessionBindingEntries<T>(
   consume: (
     entries: readonly (Pick<SessionEntry, "sessionId" | "previousSessionId"> | undefined)[],
   ) => T,
+  policies: readonly CapturedNativePolicy[] = [],
 ): Promise<T> {
   const sameRead = (left: NativeSessionBindingRead, right: NativeSessionBindingRead) =>
     left.agentId === right.agentId &&
@@ -71,17 +94,21 @@ export function readNativeSessionBindingEntries<T>(
       .map((read) => [read, captureNativeSessionEntryCurrentRead(read)] as const),
   );
   const durable = unique.filter((read) => !native.has(read));
+  const inputs = durable.map((read) => ({
+    ...read,
+    snapshotFields: [],
+    sessionKeys: [
+      ...new Set([
+        normalizeStoreSessionKey(read.sessionKey),
+        ...collectSessionEntryLookupKeys(read.sessionKey),
+      ]),
+    ],
+  }));
   return withSessionEntriesFromStoresInWorker(
-    durable.map((read) => ({
-      ...read,
-      snapshotFields: [],
-      sessionKeys: [
-        ...new Set([
-          normalizeStoreSessionKey(read.sessionKey),
-          ...collectSessionEntryLookupKeys(read.sessionKey),
-        ]),
-      ],
-    })),
+    [
+      ...inputs,
+      ...policies.flatMap(({ reads: policyReads }) => policyReads.flatMap((read) => read.reads)),
+    ],
     (prepared) => {
       const entries = unique.map((read) => {
         const index = durable.indexOf(read);
@@ -93,6 +120,43 @@ export function readNativeSessionBindingEntries<T>(
               canonicalKeys: true,
             }).existing?.entry;
       });
+      for (const read of prepared) {
+        read.assertCurrent();
+      }
+      let offset = durable.length;
+      const finalPolicyChecks: Array<() => void> = [];
+      for (const { preparation, reads: policyReads } of policies) {
+        const start = offset;
+        offset += policyReads.reduce((count, read) => count + read.reads.length, 0);
+        const assertPolicyCurrent = () => {
+          let currentOffset = start;
+          preparation.assertCurrent();
+          for (const read of policyReads) {
+            read.assertPrepared(prepared.slice(currentOffset, currentOffset + read.reads.length));
+            currentOffset += read.reads.length;
+          }
+          if (!policyReads.length) {
+            preparation.compatAssertCurrent();
+          }
+          preparation.assertCurrent();
+        };
+        try {
+          if (policyReads.length) {
+            assertPolicyCurrent();
+          } else {
+            preparation.assertCurrent();
+          }
+          finalPolicyChecks.push(assertPolicyCurrent);
+        } catch (error) {
+          if (preparation.onRefused?.(error) !== "discarded") {
+            throw error;
+          }
+        }
+      }
+      // Refusal callbacks can revoke earlier survivors; legacy SQL runs only in this final pass.
+      for (const assertPolicyCurrent of finalPolicyChecks) {
+        assertPolicyCurrent();
+      }
       for (const read of prepared) {
         read.assertCurrent();
       }
@@ -135,6 +199,60 @@ export function createNativeSessionBindingAuthority(
           lineage.forEach((expected, index) => assertEntry(expected, entries[index]));
           return consume();
         },
+      );
+    },
+    withPreparedCurrent: async (consume, preparations) => {
+      assertCurrent();
+      const sources = lineage.map(({ read }) => {
+        if (isIncognitoSessionKey(read.sessionKey)) {
+          return captureNativeSessionEntryCurrentRead(read).assertSourceCurrent;
+        }
+        const candidates = captureSessionStoreReadCandidates(read.storePath);
+        const identities = captureSessionStoreCandidateIdentities(candidates);
+        return () => {
+          for (const candidate of candidates) {
+            assertSessionStoreReadCandidate(candidate.path, candidates);
+          }
+          for (const [path, expected] of identities) {
+            const current = readDatabasePathIdentitySync(path);
+            if (
+              current.key !== expected.key ||
+              current.canonicalPath !== expected.canonicalPath ||
+              current.birthtime !== expected.birthtime
+            ) {
+              throw new Error("Native session lineage source changed during tool preparation");
+            }
+          }
+        };
+      });
+      const policies: CapturedNativePolicy[] = [];
+      for (const preparation of preparations) {
+        assertCurrent();
+        try {
+          policies.push({
+            preparation,
+            reads: await capturePreparedToolAuthorityReads(preparation),
+          });
+        } catch (error) {
+          if (preparation.onRefused?.(error) !== "discarded") {
+            throw error;
+          }
+        }
+      }
+      for (const check of sources) {
+        check();
+      }
+      return readNativeSessionBindingEntries(
+        lineage.map(({ read }) => read),
+        (entries) => {
+          assertCurrent();
+          for (const check of sources) {
+            check();
+          }
+          lineage.forEach((expected, index) => assertEntry(expected, entries[index]));
+          return consume();
+        },
+        policies,
       );
     },
     prepareMutation: async () => {

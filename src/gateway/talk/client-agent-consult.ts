@@ -540,16 +540,23 @@ export function createTalkClientAgentConsultRunner(params: {
         if (!registration) {
           throw new Error("The active Talk consult backend is no longer current");
         }
-        const overlay = prepareTalkClientControlAuthority({
+        return prepareTalkClientControlAuthority({
           config: params.config,
           sessionTarget: params.sessionTarget,
           authority,
           source: registration.toolAuthority.source,
           agentRuntime: getAgentRuntime(),
         });
-        const projected = registration.toolAuthority.project(overlay);
+      },
+      prepareToolAuthorityOverlay: async (overlay) => {
+        const registration = completionClaim.resolveCurrentRegistration();
+        if (!registration) {
+          throw new Error("The active Talk consult backend is no longer current");
+        }
+        const projected = await registration.toolAuthority.projectAsync(overlay);
         if (
           !projected ||
+          !isOwnerCurrent(owner, identity.sessionId) ||
           completionClaim.resolveCurrentRegistration()?.toolAuthority !== registration.toolAuthority
         ) {
           throw new Error("The active Talk consult caller authority no longer matches");
@@ -563,7 +570,6 @@ export function createTalkClientAgentConsultRunner(params: {
             confirmationRetryContext = grant.retryContext;
           }
         }
-        return overlay;
       },
       text: prompt,
       getSteeringContext: () => confirmationRetryContext,

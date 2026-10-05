@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
+import { MessageInjectionAuthorityError } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyMessageInjectionOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
@@ -54,6 +54,12 @@ import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-disp
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
+  bindEmbeddedMessageInjection,
+  createEmbeddedMessageInjectionQueue,
+  prepareEmbeddedInjectionAuthority,
+  type EmbeddedInjectionPreparation,
+} from "./message-injection-target.js";
+import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
@@ -72,13 +78,13 @@ import {
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
-  type EmbeddedAgentQueueMessageOptions,
   type EmbeddedRunCompletionClaim,
   type EmbeddedRunCompletionRegistration,
   type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
   type EmbeddedAgentQueueFailureReason,
   type EmbeddedAgentQueueMessageOutcome,
+  type PreparedEmbeddedAgentQueueMessage,
 } from "./run-state.js";
 import {
   canSteerEmbeddedRunDuringCompaction,
@@ -96,22 +102,6 @@ export type EmbeddedRunTimeoutRecoveryMarker = {
   sessionId: string;
   recoveryToken: symbol;
 };
-
-type PreparedEmbeddedAgentQueueMessage =
-  | {
-      kind: "complete";
-      outcome: EmbeddedAgentQueueMessageOutcome;
-      pendingInput?: Pick<
-        EmbeddedAgentQueueHandle,
-        "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-      >;
-    }
-  | {
-      kind: "embedded_run";
-      runId?: string;
-      queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
-      options: EmbeddedAgentQueueMessageOptions;
-    };
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -389,6 +379,8 @@ function resolveEmbeddedInjection(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
   sourceCanInject?: () => boolean,
+  preparation?: EmbeddedInjectionPreparation,
+  injectionOptions?: ReplyMessageInjectionOptions,
 ):
   | Pick<
       EmbeddedAgentQueueHandle,
@@ -398,38 +390,14 @@ function resolveEmbeddedInjection(
   try {
     const guarded = handle.messageInjectionV2;
     if (guarded?.version === 2) {
-      const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
-      const operation = resolveActiveReplyOperationForSessionId(sessionId);
-      const ownedOperation =
-        operation && getAttachedBackend(operation) === handle ? operation : undefined;
-      const assertCurrent = createMessageInjectionAuthority(() => {
-        if (sourceCanInject && !sourceCanInject()) {
-          return false;
-        }
-        registration?.toolAuthority?.assertActive();
-        return (
-          ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
-          ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
-          (!ownedOperation ||
-            (resolveActiveReplyOperationForSessionId(sessionId) === ownedOperation &&
-              getAttachedBackend(ownedOperation) === handle))
-        );
-      });
-      const authorityKind = sourceCanInject ? "source-bound" : "run";
-      return guarded.isAvailable()
-        ? {
-            queueMessage: (text, options) =>
-              guarded.queueMessage(text, options, assertCurrent, authorityKind),
-            claimPendingUserInputAnswer: guarded.claimPendingUserInputAnswer
-              ? (text, options) =>
-                  guarded.claimPendingUserInputAnswer!(text, options, assertCurrent, authorityKind)
-              : undefined,
-            cancelPendingUserInput: guarded.cancelPendingUserInput
-              ? (resolvedBy) =>
-                  guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind)
-              : undefined,
-          }
-        : undefined;
+      return bindEmbeddedMessageInjection(
+        sessionId,
+        handle,
+        guarded,
+        sourceCanInject,
+        preparation,
+        injectionOptions,
+      );
     }
     // Shipped v2026.8.1 sinks have no source-lifetime enforcement contract.
     if (sourceCanInject) {
@@ -575,11 +543,12 @@ export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
   text: string,
   options: ReplyMessageInjectionOptions | undefined,
   canInject: () => boolean,
+  sourcePreparation?: EmbeddedInjectionPreparation,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   const onQueueSettled = options?.onQueueSettled;
   if (!handle || !onQueueSettled) {
-    return queueEmbeddedAgentMessageAsync(sessionId, text, options, canInject);
+    return queueEmbeddedAgentMessageAsync(sessionId, text, options, canInject, sourcePreparation);
   }
   // Bind custody before dispatch: a backend can accept synchronously, then end
   // without reporting per-input settlement. Never follow a same-session successor.
@@ -616,6 +585,7 @@ export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
       text,
       { ...options, onQueueSettled: settle },
       canInject,
+      sourcePreparation,
     );
     if (!outcome.queued) {
       // Admission can retry without transcript waiting; rejection never owns custody.
@@ -628,13 +598,26 @@ export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
   }
 }
 
-async function queueEmbeddedAgentMessageAsync(
-  sessionId: string,
-  text: string,
-  options?: ReplyMessageInjectionOptions,
-  canInject?: () => boolean,
-): Promise<EmbeddedAgentQueueMessageOutcome> {
-  const prepared = prepareEmbeddedAgentQueueMessage(sessionId, options, canInject);
+const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async (...args) => {
+  const [sessionId, input, options, canInject, sourcePreparation, release, assertCurrent] = args;
+  let text = input;
+  let prepared: PreparedEmbeddedAgentQueueMessage;
+  try {
+    assertCurrent();
+    text = (await sourcePreparation?.prepareMessage?.()) ?? text;
+    assertCurrent();
+    const authority =
+      options?.toolAuthorityOverlay || sourcePreparation
+        ? await prepareEmbeddedInjectionAuthority(sessionId, options, canInject, sourcePreparation)
+        : undefined;
+    assertCurrent();
+    prepared = prepareEmbeddedAgentQueueMessage(sessionId, options, canInject, authority);
+  } catch (error) {
+    if (error instanceof MessageInjectionAuthorityError) {
+      return createQueueFailureOutcome(sessionId, "tool_authority_mismatch");
+    }
+    return createQueueFailureOutcome(sessionId, "runtime_rejected", formatErrorMessage(error));
+  }
   const enqueuedAtMs = Date.now();
   const unconfirmed = (errorMessage: string): EmbeddedAgentQueueMessageOutcome => {
     diag.warn(
@@ -669,7 +652,9 @@ async function queueEmbeddedAgentMessageAsync(
       if (hasPromptImageInput(options)) {
         if (authorityMismatch || outcome.reason === "image_input_unsupported") {
           try {
-            await pendingInput.cancelPendingUserInput?.("image-reply");
+            const cancellation = pendingInput.cancelPendingUserInput?.("image-reply");
+            release();
+            await cancellation;
           } catch (err) {
             diag.warn(
               `failed to cancel pending user input before queued image fallback: sessionId=${sessionId} err=${formatErrorMessage(err)}`,
@@ -679,7 +664,9 @@ async function queueEmbeddedAgentMessageAsync(
       } else if (authorityMismatch && pendingInput.claimPendingUserInputAnswer) {
         const claimPendingUserInputAnswer = pendingInput.claimPendingUserInputAnswer;
         try {
-          if (await claimPendingUserInputAnswer(text, options)) {
+          const claim = claimPendingUserInputAnswer(text, options);
+          release();
+          if (await claim) {
             options.onQueueAccepted?.(true);
             options.onQueueSettled?.();
             logActiveRunMessageAccepted(sessionId);
@@ -699,7 +686,9 @@ async function queueEmbeddedAgentMessageAsync(
     return outcome;
   }
   try {
-    const queueResult = await prepared.queueMessage(text, prepared.options);
+    const delivery = prepared.queueMessage(text, prepared.options);
+    release();
+    const queueResult = await delivery;
     if (queueResult?.transcriptCommit === "unconfirmed") {
       return unconfirmed(queueResult.errorMessage);
     }
@@ -717,13 +706,15 @@ async function queueEmbeddedAgentMessageAsync(
   } catch (err) {
     return failed(err);
   }
-}
+});
 
 function prepareEmbeddedAgentQueueMessage(
   sessionId: string,
   options?: ReplyMessageInjectionOptions,
   sourceCanInject?: () => boolean,
+  prepared?: { fingerprint?: string; preparation: EmbeddedInjectionPreparation },
 ): PreparedEmbeddedAgentQueueMessage {
+  prepared?.preparation.assertCurrent();
   const reject = (reason: EmbeddedAgentQueueFailureReason): PreparedEmbeddedAgentQueueMessage => ({
     kind: "complete",
     outcome: createQueueFailureOutcome(sessionId, reason),
@@ -749,7 +740,13 @@ function prepareEmbeddedAgentQueueMessage(
   if (sourceCanInject && handle.messageInjectionV2?.version !== 2) {
     return reject("guarded_injection_unsupported");
   }
-  const injection = resolveEmbeddedInjection(sessionId, handle, sourceCanInject);
+  const injection = resolveEmbeddedInjection(
+    sessionId,
+    handle,
+    sourceCanInject,
+    prepared?.preparation,
+    options,
+  );
   if (!injection) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
     return reject("not_streaming");
@@ -784,9 +781,11 @@ function prepareEmbeddedAgentQueueMessage(
   if (toolAuthorityOverlay) {
     // An overlay is caller evidence; a supplied raw hash cannot override it.
     try {
-      backendOptions.toolAuthorityFingerprint = registration?.toolAuthority
-        ? registration.toolAuthority.project(toolAuthorityOverlay)
-        : ownedOperation?.projectToolAuthorityFingerprint(toolAuthorityOverlay);
+      backendOptions.toolAuthorityFingerprint = prepared
+        ? prepared.fingerprint
+        : registration?.toolAuthority
+          ? registration.toolAuthority.project(toolAuthorityOverlay)
+          : ownedOperation?.projectToolAuthorityFingerprint(toolAuthorityOverlay);
     } catch {
       backendOptions.toolAuthorityFingerprint = undefined;
     }

@@ -104,6 +104,26 @@ export function createReplyOperation(params: {
   const toolAuthority = createReplyOperationToolAuthority({
     isOpen: () => result === null,
     ownsRunSlot: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
+    captureCurrent: () => {
+      const key = currentSessionKey;
+      const id = currentSessionId;
+      const backend = getAttachedBackend(operation);
+      const assertCurrent = () => {
+        if (
+          result ||
+          controller.signal.aborted ||
+          currentSessionKey !== key ||
+          currentSessionId !== id ||
+          getAttachedBackend(operation) !== backend ||
+          replyRunState.activeRunsByKey.get(key) !== operation ||
+          getAgentEventLifecycleGeneration() !== lifecycleGeneration
+        ) {
+          throw new Error("Reply operation tool authority is no longer active");
+        }
+      };
+      assertCurrent();
+      return assertCurrent;
+    },
   });
   const ownerSettlement = createDeferredCore();
   const producerCompletion = createDeferredCore();
@@ -343,8 +363,11 @@ export function createReplyOperation(params: {
       sourceReplyDelivered = true;
     },
     bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
+    bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
     projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
+    projectToolAuthorityFingerprintAsync: toolAuthority.projectToolAuthorityFingerprintAsync,
     bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
+    bindToolAuthorityRouteAsync: toolAuthority.bindToolAuthorityRouteAsync,
     updateSessionId(nextSessionId) {
       if (result) {
         return;

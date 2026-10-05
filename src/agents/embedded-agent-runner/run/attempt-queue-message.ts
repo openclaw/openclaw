@@ -98,6 +98,7 @@ async function steerWithTranscriptLifecycle(
   text: string,
   options: EmbeddedAgentQueueMessageOptions,
   canInject?: () => boolean,
+  prepareInjection?: () => Promise<void>,
 ): Promise<void> {
   const {
     abortSignal,
@@ -219,6 +220,7 @@ async function steerWithTranscriptLifecycle(
       queueIdentity,
       () => acceptanceOpen && (canInject?.() ?? true),
       currentInboundContext,
+      prepareInjection,
     );
     void steer.then(
       () => {
@@ -282,6 +284,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   sessionKey?: string,
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
+  prepareInjection?: () => Promise<void>,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !hasPromptImageInput(options);
@@ -324,6 +327,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         options?.queueIdentity,
         canInject,
         options?.currentInboundContext,
+        prepareInjection,
       );
       options?.onQueueAccepted?.(true);
     } catch (error) {
@@ -333,7 +337,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   try {
-    await steerWithTranscriptLifecycle(activeSession, text, options, canInject);
+    await steerWithTranscriptLifecycle(activeSession, text, options, canInject, prepareInjection);
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {
       return { transcriptCommit: "unconfirmed", errorMessage: error.message };

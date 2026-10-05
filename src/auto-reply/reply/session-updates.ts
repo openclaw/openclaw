@@ -6,6 +6,7 @@ import {
   resolveNodeExecEligibility,
   resolvePreparedExecDefaultsAsync,
 } from "../../agents/exec-defaults.js";
+import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   patchSessionEntryCore,
@@ -13,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -54,7 +56,9 @@ async function persistSkillSnapshot(params: {
   currentEntry: SessionEntry;
   skillsSnapshot: SessionEntry["skillsSnapshot"];
   isFirstTurnInSession: boolean;
+  assertCurrent?: () => void;
 }): Promise<{ entry: SessionEntry | undefined; updated: boolean }> {
+  params.assertCurrent?.();
   const updates = {
     sessionId: params.sessionId ?? params.currentEntry.sessionId,
     updatedAt: Date.now(),
@@ -84,12 +88,14 @@ async function persistSkillSnapshot(params: {
       sessionKey: params.sessionKey,
     },
     (entry) => {
+      params.assertCurrent?.();
       updated =
         entry.sessionId === params.expectedSession?.sessionId &&
         entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
       return updated ? updates : null;
     },
   );
+  params.assertCurrent?.();
   publishSessionEntry(params, persistedEntry ?? undefined);
   return { entry: persistedEntry ?? undefined, updated: Boolean(persistedEntry) && updated };
 }
@@ -111,6 +117,7 @@ export async function ensureSkillSnapshot(params: {
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
+  assertCurrent?: () => void;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
@@ -140,6 +147,10 @@ export async function ensureSkillSnapshot(params: {
     skillFilter,
     skillOverrides,
   } = params;
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
+  const cwd = process.cwd();
+  const assertCurrent = params.assertCurrent ?? (() => {});
+  assertCurrent();
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   const expectedSession = nextEntry && {
@@ -154,29 +165,35 @@ export async function ensureSkillSnapshot(params: {
     agentId,
     execOverrides: params.execOverrides,
   };
-  const execDefaults = await resolvePreparedExecDefaultsAsync(
-    prepareExecDefaults(execParams),
-    loadExecApprovalsReadOnlyAsync,
-  );
-  const nodeSkillsEligibility = resolveNodeExecEligibility(execParams, execDefaults);
   const existingSnapshot = nextEntry?.skillsSnapshot;
   const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
-    resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      ...resolveSessionSkillExecutionWorkspace(
-        nextEntry?.worktree?.canonicalWorkspaceDir,
-        params.executionWorkspaceDir,
-      ),
-      config: cfg,
-      agentId,
-      skillFilter,
-      skillOverrides,
-      resolveEligibility: () => ({
-        nodeSkills: nodeSkillsEligibility,
-        remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
-      }),
-      existingSnapshot: snapshot,
-      librarySelections: nextEntry?.skillLibrarySelections,
+    withSandboxRuntimeStatusInWorker(execParams, { env, cwd, assertCurrent }, async (sandbox) => {
+      const execDefaults = await resolvePreparedExecDefaultsAsync(
+        prepareExecDefaults(execParams, sandbox),
+        () => loadExecApprovalsReadOnlyAsync({ env }),
+      );
+      assertCurrent();
+      const nodeSkillsEligibility = resolveNodeExecEligibility(execParams, execDefaults);
+      const result = await resolveReusableWorkspaceSkillSnapshot({
+        assertCurrent,
+        workspaceDir,
+        ...resolveSessionSkillExecutionWorkspace(
+          nextEntry?.worktree?.canonicalWorkspaceDir,
+          params.executionWorkspaceDir,
+        ),
+        config: cfg,
+        agentId,
+        skillFilter,
+        skillOverrides,
+        resolveEligibility: () => ({
+          nodeSkills: nodeSkillsEligibility,
+          remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
+        }),
+        existingSnapshot: snapshot,
+        librarySelections: nextEntry?.skillLibrarySelections,
+      });
+      assertCurrent();
+      return result;
     });
   const initialSnapshotState = await resolveSnapshot(existingSnapshot);
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;
@@ -247,10 +264,11 @@ export async function ensureSkillSnapshot(params: {
     // Even a reusable snapshot crosses an await. Return the current row so the
     // reply caller cannot restore stale metadata or a retired session generation.
     const current = storePath
-      ? await readSessionEntryInWorker({ storePath, sessionKey })
+      ? await readSessionEntryInWorker({ storePath, sessionKey, env }, assertCurrent)
       : sessionEntryHandle
         ? sessionEntryHandle.get(sessionKey)
         : sessionStore?.[sessionKey];
+    assertCurrent();
     if (storePath) {
       publishSessionEntry(params, current);
     }

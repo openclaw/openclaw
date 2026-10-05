@@ -223,7 +223,19 @@ export async function runReplyAgent(
   const activeReplyOperation = sessionKey
     ? (replyRunRegistry.get(sessionKey) ?? providedReplyOperation)
     : providedReplyOperation;
-  const steeringAuthority = resolveReplySteeringAuthority(followupRun, activeReplyOperation);
+  let steeringAuthority: Awaited<ReturnType<typeof resolveReplySteeringAuthority>>;
+  try {
+    steeringAuthority = await resolveReplySteeringAuthority(
+      followupRun,
+      activeReplyOperation,
+      assertReadCurrent,
+    );
+    opts?.abortSignal?.throwIfAborted();
+  } catch (error) {
+    releaseAdmissionTicket();
+    typing.cleanup();
+    throw error;
+  }
   const shouldQueueAuthorityMismatch =
     effectiveShouldSteer && isActive && steeringAuthority.shouldQueueAuthorityMismatch;
   if (shouldQueueAuthorityMismatch) {
@@ -581,7 +593,6 @@ export async function runReplyAgent(
       }
     }
   }
-  replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
@@ -625,6 +636,7 @@ export async function runReplyAgent(
     storePath,
   });
   try {
+    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     return await executePreparedReplyAgentRun({
       ...params,
       activeSessionStore,

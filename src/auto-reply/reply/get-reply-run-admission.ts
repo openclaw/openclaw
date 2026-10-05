@@ -222,6 +222,14 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
           skillOverrides: opts?.skillOverrides,
+          assertCurrent: () => {
+            opts?.abortSignal?.throwIfAborted();
+            opts?.replyOperation?.abortSignal.throwIfAborted();
+            opts?.operatorAuthority?.assertCurrent();
+            if (opts?.replyOperation?.result) {
+              throw new Error("Reply operation ended while preparing skills");
+            }
+          },
         });
       });
   sessionEntry = skillResult.sessionEntry;

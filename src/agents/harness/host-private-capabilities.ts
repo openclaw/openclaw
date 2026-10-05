@@ -1,5 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRoute,
+  ReplyToolAuthorityPreparation,
+} from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type {
+  PreparedSessionEntryWorkerRead,
+  SessionEntryWorkerRead,
+} from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -15,6 +23,86 @@ export type AgentHarnessTtsProvenanceTransfer = <T extends object>(
   attemptResult: T,
   eligibleMediaUrls: readonly string[],
 ) => T;
+
+type CallerReadPreparer = (
+  caller: ReplyToolAuthorityOverlay | undefined,
+  fingerprint: string,
+  route: ReplyToolAuthorityRoute | undefined,
+  assertCurrent: () => void,
+) => Promise<Pick<ReplyToolAuthorityPreparation, "prepareCurrent"> | undefined>;
+const callerReadPreparers = new WeakMap<object, CallerReadPreparer>();
+
+export type PreparedToolAuthorityRead = {
+  reads: readonly SessionEntryWorkerRead[];
+  assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
+};
+const toolAuthorityReadScope = new AsyncLocalStorage<{
+  reads: PreparedToolAuthorityRead[];
+  complete: boolean;
+}>();
+const workerToolPreparations = new WeakSet<() => Promise<void>>();
+
+export function bindWorkerToolPreparation<
+  T extends Pick<ReplyToolAuthorityPreparation, "prepareCurrent">,
+>(
+  preparation: T,
+  dependencies: readonly Pick<ReplyToolAuthorityPreparation, "prepareCurrent">[] = [],
+): T {
+  if (dependencies.every((dependency) => workerToolPreparations.has(dependency.prepareCurrent))) {
+    workerToolPreparations.add(preparation.prepareCurrent);
+  }
+  return preparation;
+}
+
+export function isToolAuthorityReadCaptureActive(): boolean {
+  return toolAuthorityReadScope.getStore() !== undefined;
+}
+
+export function recordPreparedToolAuthorityRead(read: PreparedToolAuthorityRead): void {
+  toolAuthorityReadScope.getStore()?.reads.push(read);
+}
+
+export async function capturePreparedToolAuthorityReads(
+  preparation: ReplyToolAuthorityPreparation,
+) {
+  const scope: { reads: PreparedToolAuthorityRead[]; complete: boolean } = {
+    reads: [],
+    complete: true,
+  };
+  if (workerToolPreparations.has(preparation.prepareCurrent)) {
+    await toolAuthorityReadScope.run(scope, preparation.prepareCurrent);
+  } else {
+    await preparation.prepareCurrent();
+  }
+  preparation.assertCurrent();
+  return scope.complete ? scope.reads : [];
+}
+
+export function bindReplyToolAuthorityCallerRead(
+  projector: object,
+  prepare: CallerReadPreparer,
+): void {
+  callerReadPreparers.set(projector, prepare);
+}
+
+export async function prepareReplyToolAuthorityCallerRead(
+  projector: object | undefined,
+  caller: ReplyToolAuthorityOverlay | undefined,
+  fingerprint: string | undefined,
+  route: ReplyToolAuthorityRoute | undefined,
+  assertCurrent: () => void,
+) {
+  assertCurrent();
+  const prepared =
+    projector && fingerprint
+      ? await callerReadPreparers.get(projector)?.(caller, fingerprint, route, assertCurrent)
+      : undefined;
+  const scope = toolAuthorityReadScope.getStore();
+  if (scope && !prepared) {
+    scope.complete = false;
+  }
+  return prepared;
+}
 
 export type PreparedQuestionAnswerAuthority = Readonly<{
   sessionKey: string;

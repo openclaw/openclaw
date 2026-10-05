@@ -8042,7 +8042,6 @@
 ["src/gateway/server-methods/sessions-provider-review.test.ts","./chat-send-handler.js","8d41ba18fc9e800cca5a090e51ac439aa420f312478903269bd14e562c0f02f6",1]
 ["src/gateway/server-methods/sessions-reactions.test.ts","../../infra/outbound/message-action-runner.js","fe374d70895120858573458c2b805d4a9177ca777078097694a9032c37821675",1]
 ["src/gateway/server-methods/sessions-rewind.test.ts","../../agents/model-thinking-default.js","e34ced72b3eaa3d40fc95214354f783872ec37bda3fb273ae7d9daceaffbdf17",1]
-["src/gateway/server-methods/sessions-rewind.test.ts","../../auto-reply/reply/queue/delivery-context.js","ffd53660a2d1232c80bae0eac937bc55a90de52aadcc071d1cc4849c89eaf301",1]
 ["src/gateway/server-methods/sessions-rewind.test.ts","../../auto-reply/reply/queue/drain.js","902dfb43c4c14d61589baffe9dac2e7100ca039f8ef1859d561503816354b265",1]
 ["src/gateway/server-methods/sessions-rewind.test.ts","../../auto-reply/thinking.js","df44e163d959bd214cc018b8d5e8d9f19407fc2064f3088da43cce02fa3d54d7",1]
 ["src/gateway/server-methods/sessions-search.test.ts","../../config/sessions/session-transcript-search.js","a52fcd6a81ad13ac86e1e6c5e9ff5ad356c9bd7ef4e12b459cdda58efbd99343",1]

@@ -8,6 +8,7 @@ import type {
   ActiveEmbeddedRunOwner,
   EmbeddedAgentQueueMessageOutcome,
 } from "../agents/embedded-agent-runner/runs.js";
+import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -88,6 +89,7 @@ export async function controlRealtimeVoiceAgentRun(
     } | null;
     text: string;
     getToolAuthorityOverlay?: () => ReplyToolAuthorityOverlay;
+    prepareToolAuthorityOverlay?: (overlay: ReplyToolAuthorityOverlay) => Promise<void>;
     /** Host context prepared by the validated authority callback, never provider text. */
     getSteeringContext?: () => string | undefined;
     createUserTurnTranscriptRecorder?: (text: string) => UserTurnTranscriptRecorder;
@@ -192,6 +194,9 @@ export async function controlRealtimeVoiceAgentRun(
     return noActiveRun();
   }
   const toolAuthorityOverlay = params.getToolAuthorityOverlay?.();
+  if (toolAuthorityOverlay && (mode === "cancel" || (!target && !legacyOwner))) {
+    await params.prepareToolAuthorityOverlay?.(toolAuthorityOverlay);
+  }
   const preparedOwner = resolveCurrentRun();
   if (
     preparedOwner.sessionId !== sessionId ||
@@ -222,18 +227,33 @@ export async function controlRealtimeVoiceAgentRun(
 
   // Steering and follow-up both enqueue to the active run; follow-up is wrapped
   // so the runner treats it as deferred context instead of an immediate pivot.
-  const steeringText = [params.getSteeringContext?.(), text].filter(Boolean).join("\n\n");
-  const steerText =
-    mode === "followup" ? buildRealtimeVoiceAgentFollowupSteeringText(steeringText) : steeringText;
-  const options = {
+  const prepareMessage = () => {
+    const steeringText = [params.getSteeringContext?.(), text].filter(Boolean).join("\n\n");
+    const steerText =
+      mode === "followup"
+        ? buildRealtimeVoiceAgentFollowupSteeringText(steeringText)
+        : steeringText;
+    options.userTurnTranscriptRecorder = params.createUserTurnTranscriptRecorder?.(steerText);
+    return steerText;
+  };
+  const options: NonNullable<
+    Parameters<RealtimeVoiceAgentControlDeps["queueEmbeddedAgentMessageWithOutcomeAsync"]>[2]
+  > = {
     steeringMode: "all" as const,
     debounceMs: 0,
     isInboundUserMessage: true,
     toolAuthorityOverlay,
-    userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder?.(steerText),
     // Talk cannot present task suggestions, so spoken user input must not inherit
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,
+  };
+  const steerText = target || legacyOwner ? text : prepareMessage();
+  const prepareCurrent = async () => {
+    const overlay = params.getToolAuthorityOverlay?.();
+    if (overlay) {
+      await params.prepareToolAuthorityOverlay?.(overlay);
+    }
+    options.toolAuthorityOverlay = overlay;
   };
   const outcome: EmbeddedAgentQueueMessageOutcome =
     target || legacyOwner
@@ -243,15 +263,32 @@ export async function controlRealtimeVoiceAgentRun(
             steerText,
             options,
             () => {
+              const currentOverlay = params.getToolAuthorityOverlay?.();
+              options.toolAuthorityOverlay = currentOverlay;
               if (target) {
                 return !target.signal.aborted && target.isCurrent(sessionId);
               }
-              const currentOverlay = params.getToolAuthorityOverlay?.();
               return Boolean(
                 legacyOwner?.isCurrent() &&
                 (!currentOverlay || legacyOwner.matchesCaller(currentOverlay)),
               );
             },
+            bindWorkerToolPreparation({
+              assertCurrent: () => {
+                if (
+                  target
+                    ? target.signal.aborted || !target.isCurrent(sessionId)
+                    : !legacyOwner?.isCurrent()
+                ) {
+                  throw new Error("The original Talk run is no longer current");
+                }
+              },
+              prepareCurrent,
+              prepareMessage: async () => {
+                await prepareCurrent();
+                return prepareMessage();
+              },
+            }),
           )
         : {
             queued: false,

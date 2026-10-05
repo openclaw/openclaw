@@ -9,12 +9,14 @@ import {
   QuestionDispatchRefusedError,
   QuestionDispatchUnsupportedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
+import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createMessageInjectionAuthority,
+  enqueueMessageInjection,
   MessageInjectionAuthorityError,
 } from "./message-injection-authority.js";
 import {
@@ -31,6 +33,7 @@ import {
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
   type ReplyTurnParticipants,
+  type ReplyToolAuthorityPreparation,
 } from "./reply-run-registry.contracts.js";
 import {
   getAttachedBackend,
@@ -97,6 +100,7 @@ function resolveReplyBackendMessageInjection(
   backend: ReplyBackendHandle,
   canInject: () => boolean,
   sourceBound: boolean,
+  preparation?: ReplyToolAuthorityPreparation,
 ):
   | (ReplyBackendMessageInjection &
       Pick<ReplyBackendHandle, "claimPendingUserInputAnswer" | "cancelPendingUserInput">)
@@ -108,7 +112,14 @@ function resolveReplyBackendMessageInjection(
     return {
       isAvailable: () => guarded.isAvailable(),
       queueMessage: (text, options) =>
-        guarded.queueMessage(text, options, assertCurrent, authorityKind),
+        preparation && guarded.queueMessageAsync
+          ? guarded.queueMessageAsync(
+              text,
+              options,
+              { ...preparation, compatAssertCurrent: assertCurrent },
+              authorityKind,
+            )
+          : guarded.queueMessage(text, options, assertCurrent, authorityKind),
       claimPendingUserInputAnswer: guarded.claimPendingUserInputAnswer
         ? (text, options) =>
             guarded.claimPendingUserInputAnswer!(text, options, assertCurrent, authorityKind)
@@ -154,6 +165,7 @@ export function resolveReplyMessageInjectionRejection(params: {
   personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
+  preparation?: ReplyToolAuthorityPreparation;
 }): ReplyMessageInjectionResolution {
   const { operation } = params;
   if (!operation || replyRunState.activeRunsByKey.get(operation.key) !== operation) {
@@ -192,14 +204,28 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   personalToolParticipants?: ReplyTurnParticipants;
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
+  preparation?: ReplyToolAuthorityPreparation;
 }): ReplyMessageInjectionResolution {
   const { backend } = params;
   const canInject = () => {
+    params.preparation?.compatAssertCurrent();
     params.assertCurrent?.();
     return params.canInject();
   };
   const injection = backend
-    ? resolveReplyBackendMessageInjection(backend, canInject, params.assertCurrent !== undefined)
+    ? resolveReplyBackendMessageInjection(
+        backend,
+        canInject,
+        params.assertCurrent !== undefined,
+        params.preparation && {
+          ...params.preparation,
+          assertCurrent: createMessageInjectionAuthority(() => {
+            params.preparation!.assertCurrent();
+            params.assertCurrent?.();
+            return params.canInject();
+          }),
+        },
+      )
     : undefined;
   if (!backend || !injection) {
     return { reason: "injection_unavailable" };
@@ -332,19 +358,48 @@ export function beginReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
   options?: ReplyMessageInjectionOptions,
-): ReplyMessageInjectionAttempt {
+): Promise<ReplyMessageInjectionAttempt> {
+  return enqueueMessageInjection(target[replyMessageInjectionTargetOwner].backendIdentity, () =>
+    beginPreparedReplyMessageInjectionTarget(target, text, options),
+  );
+}
+
+async function beginPreparedReplyMessageInjectionTarget(
+  target: ReplyMessageInjectionTarget,
+  text: string,
+  options?: ReplyMessageInjectionOptions,
+): Promise<ReplyMessageInjectionAttempt> {
   const owner = target[replyMessageInjectionTargetOwner];
   const {
+    canAdmit,
     toolAuthorityOverlay,
+    toolAuthorityPreparation,
     personalToolParticipant,
     assertCurrent,
     allowPendingUserInputAnswer,
     inboundAudio,
     ...backendOptions
   } = options ?? {};
+  if (toolAuthorityPreparation) {
+    await toolAuthorityPreparation.prepareCurrent();
+  }
   const projectedToolAuthorityFingerprint = toolAuthorityOverlay
-    ? owner.projectToolAuthorityFingerprint(toolAuthorityOverlay)
+    ? await owner.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay)
     : backendOptions.toolAuthorityFingerprint;
+  const assertSourceCurrent =
+    toolAuthorityPreparation || assertCurrent
+      ? () => {
+          toolAuthorityPreparation?.assertCurrent();
+          assertCurrent?.();
+        }
+      : undefined;
+  assertSourceCurrent?.();
+  const assertPolicy = (projected: string | undefined) => {
+    assertSourceCurrent?.();
+    if (!projected || projected !== projectedToolAuthorityFingerprint) {
+      throw new MessageInjectionAuthorityError();
+    }
+  };
   const queueOptions: ReplyBackendQueueMessageOptions | undefined = options
     ? {
         ...backendOptions,
@@ -353,13 +408,35 @@ export function beginReplyMessageInjectionTarget(
           : {}),
       }
     : undefined;
-  const resolved = owner.resolve({
-    options: queueOptions,
-    personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
-    inboundAudio,
-    allowPendingUserInputAnswer,
-    assertCurrent,
-  });
+  const resolved: ReplyMessageInjectionResolution =
+    canAdmit?.() === false
+      ? { reason: "injection_unavailable" }
+      : owner.resolve({
+          options: queueOptions,
+          personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
+          inboundAudio,
+          allowPendingUserInputAnswer,
+          // An overlay alone does not add a caller lifetime binding to legacy input.
+          assertCurrent: toolAuthorityPreparation ? assertSourceCurrent : assertCurrent,
+          preparation: toolAuthorityOverlay
+            ? bindWorkerToolPreparation(
+                {
+                  assertCurrent: () => assertSourceCurrent?.(),
+                  compatAssertCurrent: () => {
+                    toolAuthorityPreparation?.compatAssertCurrent();
+                    assertPolicy(owner.projectToolAuthorityFingerprint(toolAuthorityOverlay));
+                  },
+                  prepareCurrent: async () => {
+                    await toolAuthorityPreparation?.prepareCurrent();
+                    assertPolicy(
+                      await owner.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay),
+                    );
+                  },
+                },
+                toolAuthorityPreparation ? [toolAuthorityPreparation] : [],
+              )
+            : toolAuthorityPreparation,
+        });
   if (!("injection" in resolved)) {
     const immediateRejection = {
       status: "rejected" as const,
@@ -378,7 +455,7 @@ export function beginReplyMessageInjectionTarget(
     if (cancelPendingImage) {
       const onCancellationError = (error: unknown): ReplyMessageInjectionOutcome => {
         const failure = resolveReplyMessageInjectionFailure(error, {
-          assertCurrent,
+          assertCurrent: assertSourceCurrent,
           accepted: false,
         });
         if (!failure) {
@@ -447,7 +524,7 @@ export function beginReplyMessageInjectionTarget(
   };
   const failed = (error: unknown): ReplyMessageInjectionOutcome => {
     const outcome: ReplyMessageInjectionOutcome = resolveReplyMessageInjectionFailure(error, {
-      assertCurrent,
+      assertCurrent: assertSourceCurrent,
       accepted: acceptanceSettled,
     }) ?? { status: "rejected", reason: "runtime_rejected", errorMessage: String(error) };
     settleAcceptance(outcome.status === "indeterminate");

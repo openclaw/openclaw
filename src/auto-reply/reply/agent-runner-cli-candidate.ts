@@ -144,7 +144,8 @@ export async function runCliFallbackCandidate(
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
-  const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
+  const toolAuthorityFingerprint =
+    await turn.replyOperation?.bindToolAuthorityRouteAsync(toolAuthorityRoute);
   return params.timing.measure("cli_run", () =>
     withAdmittedCliCandidate(
       {

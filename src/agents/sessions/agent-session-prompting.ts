@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { enqueueMessageInjection } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -449,20 +450,50 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     queueIdentity?: string,
     canInject?: () => boolean,
     currentInboundContext?: CurrentInboundPromptContext,
+    prepareInjection?: () => Promise<void>,
   ): Promise<void> {
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
     }
 
     const expandedText = this.expandPrompt(text);
+    return enqueueMessageInjection(this, () =>
+      this.prepareSteer(
+        expandedText,
+        images,
+        userTurnTranscriptRecorder,
+        media,
+        imageOrder,
+        queueIdentity,
+        canInject,
+        currentInboundContext,
+        prepareInjection,
+      ),
+    );
+  }
+
+  private async prepareSteer(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
+    queueIdentity?: string,
+    canInject?: () => boolean,
+    currentInboundContext?: CurrentInboundPromptContext,
+    prepareInjection?: () => Promise<void>,
+  ): Promise<void> {
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    if (prepareInjection) {
+      await prepareInjection();
+    }
     // Transcript preparation may outlive the captured attempt. Recheck its owner
     // fence immediately before enqueue so a successor cannot inherit this steer.
     if (canInject && !canInject()) {
       throw new Error("active session is finalizing");
     }
     await this.queueSteer(
-      expandedText,
+      text,
       images,
       preparedMessage && userTurnTranscriptRecorder
         ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }

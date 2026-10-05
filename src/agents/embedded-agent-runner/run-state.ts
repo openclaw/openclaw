@@ -118,6 +118,22 @@ export type EmbeddedAgentQueueFailureReason =
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 
+export type PreparedEmbeddedAgentQueueMessage =
+  | {
+      kind: "complete";
+      outcome: EmbeddedAgentQueueMessageOutcome;
+      pendingInput?: Pick<
+        EmbeddedAgentQueueHandle,
+        "claimPendingUserInputAnswer" | "cancelPendingUserInput"
+      >;
+    }
+  | {
+      kind: "embedded_run";
+      runId?: string;
+      queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
+      options: EmbeddedAgentQueueMessageOptions;
+    };
+
 export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
 
 export type ActiveEmbeddedRunSnapshot = {
@@ -137,6 +153,7 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   source: "reply" | "attempt";
   sourceTurnId?: string;
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
+  projectAsync: (overlay: ReplyToolAuthorityOverlay) => Promise<string | undefined>;
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
 };

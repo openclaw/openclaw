@@ -514,7 +514,7 @@ async function handleChatSendWithOptions(
     }
     assertInputAdmissionCurrent();
     let messageInjectionAttempt =
-      !p.replyToId || preAckReplyContextPromise ? beginCapturedMessageInjection() : undefined;
+      !p.replyToId || preAckReplyContextPromise ? await beginCapturedMessageInjection() : undefined;
     const preAckInjection = await settleChatSendPreAckMessageInjection({
       attempt: messageInjectionAttempt,
       isAborted: () => activeRunAbort.controller.signal.aborted,

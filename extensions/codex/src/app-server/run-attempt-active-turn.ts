@@ -18,6 +18,7 @@ import {
   CodexSteeringAcceptedUnconfirmedError,
   createCodexSteeringQueue,
   type CodexSteeringQueueOptions,
+  type CodexSteeringPreparation,
 } from "./attempt-steering.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
@@ -344,6 +345,7 @@ export function activateCodexAttemptTurn(
     signal: runAbortController.signal,
     assertActive: assertSteeringActive,
     withCurrent: connection.withCurrent,
+    withPreparedCurrent: connection.authority.withPreparedCurrent,
     prepareMessage: async (text, options, assertMessageCurrent) => {
       const attachmentNote = await connection.prepareInputAttachments({
         maxChars: Math.max(0, CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - text.length - 2),
@@ -490,9 +492,11 @@ export function activateCodexAttemptTurn(
     optionsLocal?: CodexSteeringQueueOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: CodexSteeringPreparation,
   ) => {
-    const canClaim = injectionGuard(assertCurrent);
-    if (await claimPendingUserInputAnswer(text, optionsLocal, assertCurrent, authorityKind)) {
+    const questionGuard = preparation?.compatAssertCurrent ?? assertCurrent;
+    const canClaim = injectionGuard(questionGuard);
+    if (await claimPendingUserInputAnswer(text, optionsLocal, questionGuard, authorityKind)) {
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
@@ -502,7 +506,7 @@ export function activateCodexAttemptTurn(
     if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
       assertSteeringActive();
       try {
-        await cancelPendingUserInput("image-reply", assertCurrent, authorityKind);
+        await cancelPendingUserInput("image-reply", questionGuard, authorityKind);
       } catch (error) {
         canClaim();
         if (error instanceof Error && error.name === "QuestionDispatchRefusedError") {
@@ -515,7 +519,12 @@ export function activateCodexAttemptTurn(
       }
     }
     try {
-      await activeSteeringQueue.queue(text, optionsLocal, injectionGuard(assertCurrent));
+      await activeSteeringQueue.queue(
+        text,
+        optionsLocal,
+        injectionGuard(assertCurrent),
+        preparation,
+      );
     } catch (error) {
       if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
         return {
@@ -536,6 +545,16 @@ export function activateCodexAttemptTurn(
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
+    ...(connection.authority.withPreparedCurrent
+      ? {
+          queueMessageAsync: (
+            text: string,
+            options: CodexSteeringQueueOptions | undefined,
+            preparation: CodexSteeringPreparation,
+            kind: InputAuthority["kind"],
+          ) => queueMessage(text, options, preparation.assertCurrent, kind, preparation),
+        }
+      : {}),
   };
   const handle = {
     kind: "embedded" as const,

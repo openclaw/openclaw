@@ -67,75 +67,79 @@ export function createChatSendMessageInjectionStarter(params: {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
-  const assertCurrent =
-    params.assertCurrent || params.operatorAuthority
-      ? () => {
-          params.assertCurrent?.();
-          params.operatorAuthority?.assertCurrent();
-        }
-      : undefined;
-  return (): ReplyMessageInjectionAttempt | undefined => {
-    if (!params.target || isInternalTextSlashCommandTurn) {
+  const assertCurrent = () => {
+    params.abortSignal.throwIfAborted();
+    params.assertCurrent?.();
+    params.operatorAuthority?.assertCurrent();
+  };
+  return async (): Promise<ReplyMessageInjectionAttempt | undefined> => {
+    const target = params.target;
+    if (!target || isInternalTextSlashCommandTurn) {
       return undefined;
     }
-    assertCurrent?.();
-    // Preparation can outlive terminal delivery. Recheck before the backend
-    // takes this input; an unreadable receipt cannot authorize steering.
-    let fenceEntry = entry;
-    if (sessionKey) {
-      try {
-        fenceEntry =
-          loadSessionEntry({
+    assertCurrent();
+    let admissionRefused = false;
+    const canAdmit = () => {
+      assertCurrent();
+      // Preparation can outlive terminal delivery. Recheck before the backend
+      // takes this input; an unreadable receipt cannot authorize steering.
+      let fenceEntry = entry;
+      if (sessionKey) {
+        try {
+          fenceEntry =
+            loadSessionEntry({
+              sessionKey,
+              storePath,
+              readConsistency: "latest",
+            }) ?? entry;
+        } catch (error: unknown) {
+          params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+            reason: "session-entry-unavailable",
+            runId: clientRunId,
+            activeRunId: target.runId,
             sessionKey,
-            storePath,
-            readConsistency: "latest",
-          }) ?? entry;
-      } catch (error: unknown) {
-        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
-          reason: "session-entry-unavailable",
-          runId: clientRunId,
-          activeRunId: params.target.runId,
-          sessionKey,
-          error: String(error),
-        });
-        return undefined;
+            error: String(error),
+          });
+          return false;
+        }
       }
-    }
-    // Terminal run ids are accumulated session history; compare the fence
-    // against the active source-turn identity (carried on the injection target
-    // by the owning registry, falling back to the entry's own claim source) so
-    // an unrelated earlier tombstone does not force a safe steer into
-    // follow-up mode.
-    const activeSourceTurnId =
-      normalizeOptionalString(params.target?.sourceTurnId) ??
-      normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
-      "";
-    const blockReason = fenceEntry
-      ? resolveRestartRecoverySteeringBlockReason(
-          fenceEntry,
-          fenceEntry.sessionId,
-          activeSourceTurnId,
-        )
-      : undefined;
-    if (blockReason) {
-      params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
-        reason: blockReason,
-        runId: clientRunId,
-        activeRunId: params.target.runId,
-        sourceTurnId: activeSourceTurnId || undefined,
-        sourceTurnIdOrigin: params.target.sourceTurnId
-          ? "active-run"
-          : activeSourceTurnId
-            ? "recovery-claim"
-            : "unknown",
-        sessionKey,
-        sessionId: fenceEntry?.sessionId,
-        sessionStatus: fenceEntry?.status,
-        recoveryRunId: fenceEntry?.restartRecoveryDeliveryRunId,
-        recoverySourceTurnId: fenceEntry?.restartRecoveryDeliverySourceRunId,
-      });
-      return undefined;
-    }
+      // Terminal run ids are accumulated session history; compare the fence
+      // against the active source-turn identity (carried on the injection target
+      // by the owning registry, falling back to the entry's own claim source) so
+      // an unrelated earlier tombstone does not force a safe steer into
+      // follow-up mode.
+      const activeSourceTurnId =
+        normalizeOptionalString(target.sourceTurnId) ??
+        normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
+        "";
+      const blockReason = fenceEntry
+        ? resolveRestartRecoverySteeringBlockReason(
+            fenceEntry,
+            fenceEntry.sessionId,
+            activeSourceTurnId,
+          )
+        : undefined;
+      if (blockReason) {
+        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+          reason: blockReason,
+          runId: clientRunId,
+          activeRunId: target.runId,
+          sourceTurnId: activeSourceTurnId || undefined,
+          sourceTurnIdOrigin: target.sourceTurnId
+            ? "active-run"
+            : activeSourceTurnId
+              ? "recovery-claim"
+              : "unknown",
+          sessionKey,
+          sessionId: fenceEntry?.sessionId,
+          sessionStatus: fenceEntry?.status,
+          recoveryRunId: fenceEntry?.restartRecoveryDeliveryRunId,
+          recoverySourceTurnId: fenceEntry?.restartRecoveryDeliverySourceRunId,
+        });
+        return false;
+      }
+      return true;
+    };
     const { debounceMs } = resolveQueueSettings({
       cfg,
       channel: ctx.Provider,
@@ -173,8 +177,8 @@ export function createChatSendMessageInjectionStarter(params: {
       cfg,
       commandAuthorized: ctx.CommandAuthorized === true,
     });
-    return beginReplyMessageInjectionTarget(
-      params.target,
+    const attempt = await beginReplyMessageInjectionTarget(
+      target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
         : text,
@@ -185,6 +189,10 @@ export function createChatSendMessageInjectionStarter(params: {
           : {
               text: buildInboundUserContextPrefix(ctx, resolveEnvelopeFormatOptions(cfg), entry),
             },
+        canAdmit: () => {
+          admissionRefused = !canAdmit();
+          return !admissionRefused;
+        },
         assertCurrent,
         inboundAudio: hasInboundAudio(ctx),
         steeringMode: "all",
@@ -215,6 +223,7 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
+    return admissionRefused ? undefined : attempt;
   };
 }
 
