@@ -240,12 +240,7 @@ describe("session transcript runtime SDK", () => {
   });
 
   it("serializes caller-checked idempotency inside scoped locked appends", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "caller-checked-lock-session",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
+    const scope = await createScope("caller-checked-lock-session");
     const steps: string[] = [];
     const firstRead = createDeferredCore();
     const releaseFirst = createDeferredCore();

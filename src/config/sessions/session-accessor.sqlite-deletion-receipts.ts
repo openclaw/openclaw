@@ -53,23 +53,25 @@ export async function prepareSqliteSessionReceiptDeletions(
   },
 ): Promise<() => Promise<void>> {
   const { env, assertCurrent, assertRepositoryCurrent } = options;
-  const receiptOnlyDeletions = new Map<
-    string,
+  const receiptOnlyDeletions: Array<
     Awaited<ReturnType<typeof preparePersonalGitHubSessionReceiptDeletion>>
-  >();
+  > = [];
+  const targetsByAgent = new Map<string, AgentHarnessSessionDeletionTarget[]>();
   for (const target of receiptOnlyTargets) {
-    receiptOnlyDeletions.set(
-      target.sessionKey,
+    const targets = targetsByAgent.get(target.agentId) ?? [];
+    targets.push(target);
+    targetsByAgent.set(target.agentId, targets);
+  }
+  for (const [agentId, targets] of targetsByAgent) {
+    receiptOnlyDeletions.push(
       await preparePersonalGitHubSessionReceiptDeletion({
-        agentId: target.agentId,
+        agentId,
         env,
-        generations: [
-          {
-            sessionKey: target.sessionKey,
-            sessionId: target.sessionId,
-            lifecycleRevision: target.lifecycleRevision ?? null,
-          },
-        ],
+        generations: targets.map((target) => ({
+          sessionKey: target.sessionKey,
+          sessionId: target.sessionId,
+          lifecycleRevision: target.lifecycleRevision ?? null,
+        })),
         assertCurrent,
       }),
     );
@@ -83,46 +85,55 @@ export async function prepareSqliteSessionReceiptDeletions(
       assertExistingDatabaseIdentity(database.canonicalPath, database.key, database.birthtime);
     }
   };
-  const isPresent = async (sessionKey: string): Promise<boolean> => {
+  const sessionKeys = receiptOnlyTargets.map((target) => target.sessionKey);
+  const readPresentKeys = async (): Promise<Set<string>> => {
     if ("actor" in source) {
-      return source.actor.sessions.readSharing(sessionKey)?.entry !== undefined;
+      return new Set(
+        sessionKeys.filter((sessionKey) => source.actor.sessions.readSharing(sessionKey)?.entry),
+      );
     }
     const { databaseOptions, database } = source;
-    const { withSessionEntryReadOnlyInWorker } = await import("./session-entry-read-runtime.js");
+    const { withSessionStoreReaderInWorker } = await import("./session-entry-read-runtime.js");
     // Read the database this deletion wrote; legacy rows can carry another agent's key.
     const readScope = {
       agentId: databaseOptions.agentId,
       defaultAgentId: databaseOptions.agentId,
       storePath: database.canonicalPath,
-      sessionKey,
       env,
     };
-    return await withSessionEntryReadOnlyInWorker(
+    return await withSessionStoreReaderInWorker(
       readScope,
-      assertSourceCurrent,
-      async (read, owner) => {
-        if (!read.ok) {
-          throw read.error;
-        }
+      async (owner) => {
         if (
-          owner.kind !== "file" ||
-          owner.selectedStore?.physicalPath !== database.canonicalPath ||
-          owner.scope?.databaseAgentId !== databaseOptions.agentId
+          owner.selectedStore.physicalPath !== database.canonicalPath ||
+          owner.database.agentId !== databaseOptions.agentId
         ) {
           throw new Error("Receipt cleanup lost its pinned session database");
         }
-        return read.value !== undefined;
+        owner.assertCurrent();
+        const read = await owner.reader.readExactEntries({
+          env: owner.database.env,
+          sessionKeys,
+          projection: "exact",
+          snapshotFields: [],
+          continuation: owner.continuation,
+        });
+        owner.assertCurrent();
+        return new Set(read.entries.map((entry) => entry.sessionKey));
       },
+      { logical: { assertCurrent: assertSourceCurrent }, dataOnly: true },
     );
   };
   return async () => {
     // Receipt selection is generation-precise; unlike workspaces, it needs no source binding
     // or transaction-held session absence admission after the post-run presence check.
-    for (const target of receiptOnlyTargets) {
-      assertSourceCurrent();
-      if (!(await isPresent(target.sessionKey))) {
-        await receiptOnlyDeletions.get(target.sessionKey)!(assertSourceCurrent);
-      }
+    assertSourceCurrent();
+    const present = await readPresentKeys();
+    for (const settle of receiptOnlyDeletions) {
+      await settle({
+        assertCurrent: assertSourceCurrent,
+        retainedSessionKeys: present,
+      });
     }
   };
 }

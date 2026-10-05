@@ -363,6 +363,9 @@ export function readExactSessionEntriesWithLifecycle(
         ),
       { ...request.database, env: request.env },
     );
+    if (!read.found && read.reason !== "database-missing") {
+      throw new SessionMetadataUnavailableError(read.reason);
+    }
     return {
       kind: "session-exact-entries",
       entries: read.found ? read.value : [],
