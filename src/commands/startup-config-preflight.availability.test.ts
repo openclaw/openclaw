@@ -57,6 +57,10 @@ it("admits an unavailable plugin while leaving legacy state for Doctor", async (
       ]);
       expect(readStartupMigrationWarning()).toContain(`Plugin "${pluginId}"`);
       expect(readStartupMigrationWarning()).toContain("openclaw update repair");
+      expect(readStartupMigrationWarning()).toContain(
+        "Retired runtime state was left unchanged for Doctor; no import was attempted.",
+      );
+      expect(readStartupMigrationWarning()).toContain(sourcePath);
       expect(await fs.readFile(configPath, "utf8")).toBe(configBytes);
       expect(await fs.readFile(sourcePath, "utf8")).toBe(sourceBytes);
       expect(readConfigMachineState("voicewake.triggers")).toBeUndefined();
