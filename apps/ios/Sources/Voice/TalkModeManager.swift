@@ -82,8 +82,6 @@ private final class TranscriptStreamingOwner {
         text: String,
         phase: TalkPhase,
         watchPresentation: TalkWatchPresentation)?
-    /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
-    var completionEvents: AsyncStream<EventFrame>?
 }
 
 private enum PushToTalkGatewayContext {
@@ -121,7 +119,7 @@ private final class TalkPushToTalkOnceOperation {
 // swiftlint:disable type_body_length file_length
 @MainActor
 @Observable
-final class TalkModeManager: NSObject {
+final class TalkModeManager {
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultRealtimeModelIdFallback = "gpt-realtime-2"
     private static let defaultTalkProvider = "elevenlabs"
@@ -254,10 +252,9 @@ final class TalkModeManager: NSObject {
     private var defaultVoiceId: String?
     private var currentVoiceId: String?
     private var defaultModelId: String?
-    private var currentModelId: String?
+    private var modelOverride: String?
     private var configuredProviderModelId: String?
     private var voiceOverrideActive = false
-    private var modelOverrideActive = false
     private var defaultOutputFormat: String?
     private var runtimeRoute: TalkModeRuntimeRoute = .localElevenLabs
     private var realtimeProvider: String?
@@ -293,7 +290,6 @@ final class TalkModeManager: NSObject {
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
     private var noiseFloor: Double?
-    private var noiseFloorReady: Bool = false
 
     private var incrementalSpeechQueue: [String] = []
     private var incrementalSpeechTask: Task<Void, Never>?
@@ -305,7 +301,6 @@ final class TalkModeManager: NSObject {
         systemVoice: nil)
     private var incrementalSpeechBuffer = IncrementalSpeechBuffer()
     private var incrementalSpeechContext: IncrementalSpeechContext?
-    private var incrementalSpeechDirective: TalkDirective?
     private var incrementalSpeechPrefetch: IncrementalSpeechPrefetchState?
     private var incrementalSpeechPrefetchMonitorTask: Task<Void, Never>?
 
@@ -453,7 +448,6 @@ final class TalkModeManager: NSObject {
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
         self.preferredInputDeviceID = UserDefaults.standard.string(
             forKey: Self.preferredInputDeviceIDKey)
-        super.init()
     }
 
     func selectInputDevice(_ deviceID: String?) {
@@ -1447,7 +1441,7 @@ final class TalkModeManager: NSObject {
         self.micLevel = (self.micLevel * 0.80) + (raw * 0.20)
         self.updateNoiseFloorIfNeeded(raw)
 
-        let threshold: Double = if let floor = noiseFloor, noiseFloorReady {
+        let threshold: Double = if let floor = noiseFloor {
             min(0.35, max(0.12, floor + 0.10))
         } else {
             0.18
@@ -1458,7 +1452,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func updateNoiseFloorIfNeeded(_ raw: Double) {
-        guard self.isListening, !self.isSpeaking, !self.noiseFloorReady else { return }
+        guard self.isListening, !self.isSpeaking, self.noiseFloor == nil else { return }
         self.noiseFloorSamples.append(raw)
         guard self.noiseFloorSamples.count >= 22 else { return }
 
@@ -1466,7 +1460,6 @@ final class TalkModeManager: NSObject {
         let slice = sorted.prefix(max(6, sorted.count / 2))
         let average = slice.reduce(0.0, +) / Double(slice.count)
         self.noiseFloor = average
-        self.noiseFloorReady = true
         self.noiseFloorSamples.removeAll(keepingCapacity: true)
         let threshold = min(0.35, max(0.12, average + 0.10))
         GatewayDiagnostics.log(
@@ -1600,7 +1593,6 @@ final class TalkModeManager: NSObject {
         self.lastAudioActivity = nil
         self.noiseFloorSamples.removeAll(keepingCapacity: true)
         self.noiseFloor = nil
-        self.noiseFloorReady = false
         if self.inputTapInstalled {
             self.audioEngine.inputNode.removeTap(onBus: 0)
             self.inputTapInstalled = false
@@ -1668,7 +1660,7 @@ final class TalkModeManager: NSObject {
                 return
             }
             if self.captureMode == .continuous, !self.isSpeechOutputActive {
-                await self.processTranscript(trimmed, restartAfter: true)
+                await self.processContinuousTranscript(trimmed)
             }
         }
     }
@@ -1706,7 +1698,7 @@ final class TalkModeManager: NSObject {
             return
         }
         if self.captureMode == .continuous {
-            await self.processTranscript(transcript, restartAfter: true)
+            await self.processContinuousTranscript(transcript)
         } else if let pttCaptureId {
             _ = self.endPushToTalk(captureId: pttCaptureId)
         } else {
@@ -1741,11 +1733,9 @@ final class TalkModeManager: NSObject {
         self.pttOnceOperations[payload.captureId]?.finish(payload)
     }
 
-    private func processTranscript(_ transcript: String, restartAfter: Bool) async {
+    private func processContinuousTranscript(_ transcript: String) async {
         let generation = self.beginTranscriptProcessing()
-        if restartAfter {
-            self.continuousTranscriptProcessingGeneration = generation
-        }
+        self.continuousTranscriptProcessingGeneration = generation
         defer {
             if self.continuousTranscriptProcessingGeneration == generation {
                 self.continuousTranscriptProcessingGeneration = nil
@@ -1753,7 +1743,7 @@ final class TalkModeManager: NSObject {
         }
         guard let gateway else {
             self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
-            self.scheduleContinuousResume(restartAfter)
+            self.scheduleContinuousResume(true)
             return
         }
         let sessionKey = self.mainSessionKey
@@ -1764,7 +1754,7 @@ final class TalkModeManager: NSObject {
         else { return }
         await self.processTranscript(
             transcript,
-            restartAfter: restartAfter,
+            restartAfter: true,
             gateway: gateway,
             gatewayRoute: gatewayRoute,
             sessionKey: sessionKey,
@@ -1851,7 +1841,6 @@ final class TalkModeManager: NSObject {
             let completionEvents = completionSubscription.events
             guard await gateway.currentRoute() == gatewayRoute else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
-            streamingOwner.completionEvents = completionEvents
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
@@ -1896,6 +1885,7 @@ final class TalkModeManager: NSObject {
                 gatewayRoute: gatewayRoute,
                 sessionKey: sessionKey,
                 generation: generation,
+                completionEvents: completionEvents,
                 streamingOwner: streamingOwner)
             else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
@@ -1922,6 +1912,7 @@ final class TalkModeManager: NSObject {
         gatewayRoute: GatewayNodeSessionRoute,
         sessionKey: String,
         generation: UInt64,
+        completionEvents: AsyncStream<EventFrame>,
         streamingOwner: TranscriptStreamingOwner) async throws -> Bool?
     {
         let runId = acknowledgement.runId
@@ -1947,7 +1938,6 @@ final class TalkModeManager: NSObject {
                         transcriptProcessingGeneration: generation)
                 }
             }
-            guard let completionEvents = streamingOwner.completionEvents else { return nil }
             completion = await self.waitForChatCompletion(
                 runId: runId,
                 gateway: gateway,
@@ -2384,7 +2374,7 @@ final class TalkModeManager: NSObject {
                 let data = try JSONEncoder().encode(params)
                 let response = try await gateway.request(
                     method: "talk.voice.complete",
-                    paramsJSON: String(bytes: data, encoding: .utf8),
+                    paramsJSON: String(decoding: data, as: UTF8.self),
                     timeoutSeconds: 70,
                     ifCurrentRoute: route)
                 guard try JSONDecoder().decode(TalkClientMutationResult.self, from: response).ok else {
@@ -2620,7 +2610,7 @@ final class TalkModeManager: NSObject {
             voice: voice,
             capabilities: supportsVoiceSelection ? ["voice-transcript", "voice-selection"] : ["voice-transcript"])
         let data = try JSONEncoder().encode(params)
-        let json = String(data: data, encoding: .utf8)
+        let json = String(decoding: data, as: UTF8.self)
         let res = try await gateway.request(
             method: "talk.client.create",
             paramsJSON: json,
@@ -2759,7 +2749,7 @@ final class TalkModeManager: NSObject {
             let params = TalkClientCloseParams(
                 sessionkey: sessionKey,
                 voicesessionid: voiceSessionId)
-            let json = try String(bytes: JSONEncoder().encode(params), encoding: .utf8)!
+            let json = try String(decoding: JSONEncoder().encode(params), as: UTF8.self)
             #if DEBUG
             if let testRealtimeVoiceSessionCloseRequest = self.testRealtimeVoiceSessionCloseRequest {
                 try await testRealtimeVoiceSessionCloseRequest("talk.client.close", json)
@@ -3018,7 +3008,7 @@ final class TalkModeManager: NSObject {
 
             if canUseElevenLabs, let voiceId, let apiKey {
                 GatewayDiagnostics.log("talk tts: provider=elevenlabs voiceId=\(voiceId)")
-                let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
+                let modelId = directive?.modelId ?? self.modelOverride ?? self.defaultModelId
                 let outputFormat = self.resolvedElevenLabsOutputFormat(directive?.outputFormat)
 
                 if let modelId {
@@ -3090,9 +3080,7 @@ final class TalkModeManager: NSObject {
         let voiceId = requestedVoice?.isEmpty == false
             ? requestedVoice
             : (self.currentVoiceId ?? self.defaultVoiceId)
-        let modelId = directive?.modelId ?? (self.modelOverrideActive
-            ? self.currentModelId
-            : self.configuredProviderModelId)
+        let modelId = directive?.modelId ?? self.modelOverride ?? self.configuredProviderModelId
         let outputFormat = directive?.outputFormat ?? self.defaultOutputFormat
         let audio = try await synthesizer.synthesize(TalkGatewaySpeechRequest(
             text: text,
@@ -3280,8 +3268,7 @@ final class TalkModeManager: NSObject {
             self.voiceOverrideActive = true
         }
         if let model = directive?.modelId {
-            self.currentModelId = model
-            self.modelOverrideActive = true
+            self.modelOverride = model
         }
     }
 
@@ -3296,7 +3283,6 @@ final class TalkModeManager: NSObject {
         self.incrementalSpeechLanguages = self.resolvedSpeechLanguages(directiveLanguage: nil)
         self.incrementalSpeechBuffer = IncrementalSpeechBuffer()
         self.incrementalSpeechContext = nil
-        self.incrementalSpeechDirective = nil
     }
 
     private func cancelIncrementalSpeech() {
@@ -3306,7 +3292,6 @@ final class TalkModeManager: NSObject {
         self.cancelIncrementalPrefetch()
         self.incrementalSpeechActive = false
         self.incrementalSpeechContext = nil
-        self.incrementalSpeechDirective = nil
     }
 
     private func enqueueIncrementalSpeech(_ text: String) {
@@ -3571,7 +3556,7 @@ final class TalkModeManager: NSObject {
     private func updateIncrementalContextIfNeeded(speechGeneration: Int) async -> Bool {
         guard self.isCurrentSpeechGeneration(speechGeneration) else { return false }
         let directive = self.incrementalSpeechBuffer.directive
-        if var existing = incrementalSpeechContext, directive == incrementalSpeechDirective {
+        if var existing = incrementalSpeechContext, directive == existing.directive {
             if existing.language != self.incrementalSpeechLanguages.provider {
                 existing.language = self.incrementalSpeechLanguages.provider
                 self.incrementalSpeechContext = existing
@@ -3583,7 +3568,6 @@ final class TalkModeManager: NSObject {
             speechGeneration: speechGeneration)
         guard self.isCurrentSpeechGeneration(speechGeneration) else { return false }
         self.incrementalSpeechContext = context
-        self.incrementalSpeechDirective = directive
         return true
     }
 
@@ -3593,7 +3577,7 @@ final class TalkModeManager: NSObject {
     {
         let resolvedVoice = self.resolveElevenLabsVoiceAlias(directive?.voiceId)
         let preferredVoice = resolvedVoice ?? self.currentVoiceId ?? self.defaultVoiceId
-        let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
+        let modelId = directive?.modelId ?? self.modelOverride ?? self.defaultModelId
         let outputFormat = self.resolvedElevenLabsOutputFormat(directive?.outputFormat)
 
         let apiKey = self.resolvedElevenLabsAPIKey()
@@ -3682,7 +3666,7 @@ final class TalkModeManager: NSObject {
             modelId: context.modelId,
             outputFormat: context.outputFormat,
             language: context.language)
-        let rawStream: AsyncThrowingStream<Data, Error> = if let prefetchedAudio, !prefetchedAudio.chunks.isEmpty {
+        let rawStream: AsyncThrowingStream<Data, Error> = if let prefetchedAudio {
             Self.makeBufferedAudioStream(chunks: prefetchedAudio.chunks)
         } else {
             client.streamSynthesize(voiceId: voiceId, request: request)
@@ -3780,23 +3764,15 @@ private struct IncrementalSpeechBuffer {
     }
 
     private mutating func updateText(_ newText: String) {
-        if newText.hasPrefix(self.latestText) {
-            self.latestText = newText
-        } else if self.latestText.hasPrefix(newText) {
-            // Stream reset or correction; prefer the newer prefix.
-            self.latestText = newText
-            self.spokenOffset = min(self.spokenOffset, newText.count)
-        } else {
-            // Diverged text means chunks arrived out of order or stream restarted.
-            let commonPrefix = Self.commonPrefixCount(self.latestText, newText)
-            self.latestText = newText
-            if self.spokenOffset > commonPrefix {
-                self.spokenOffset = commonPrefix
-            }
+        if !newText.hasPrefix(self.latestText) {
+            // A correction can only retain the spoken portion shared by both versions.
+            let commonPrefix = self.latestText.hasPrefix(newText)
+                ? newText.count
+                : Self.commonPrefixCount(self.latestText, newText)
+            self.spokenOffset = min(self.spokenOffset, commonPrefix)
         }
-        if self.spokenOffset > self.latestText.count {
-            self.spokenOffset = self.latestText.count
-        }
+        self.latestText = newText
+        self.spokenOffset = min(self.spokenOffset, newText.count)
     }
 
     private static func commonPrefixCount(_ lhs: String, _ rhs: String) -> Int {
@@ -3811,7 +3787,6 @@ private struct IncrementalSpeechBuffer {
         var inCodeBlock = self.inCodeBlock
         var buffer = ""
         var bufferAtBoundary = ""
-        var inCodeBlockAtBoundary = inCodeBlock
 
         while idx < chars.count {
             if idx + 2 < chars.count,
@@ -3830,7 +3805,6 @@ private struct IncrementalSpeechBuffer {
                 if Self.isBoundary(currentChar) || Self.isSoftBoundary(currentChar, bufferedChars: buffer.count) {
                     lastBoundary = idx + 1
                     bufferAtBoundary = buffer
-                    inCodeBlockAtBoundary = inCodeBlock
                 }
             }
 
@@ -3839,7 +3813,7 @@ private struct IncrementalSpeechBuffer {
 
         if let boundary = lastBoundary {
             self.spokenOffset = boundary
-            self.inCodeBlock = inCodeBlockAtBoundary
+            self.inCodeBlock = false
             let trimmed = bufferAtBoundary.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? [] : [trimmed]
         }
@@ -4161,9 +4135,6 @@ extension TalkModeManager {
         }
         self.defaultModelId = parsed.defaultModelId
         self.configuredProviderModelId = parsed.configuredModelId
-        if !self.modelOverrideActive {
-            self.currentModelId = self.defaultModelId
-        }
         self.defaultOutputFormat = parsed.defaultOutputFormat
 
         self.apiKey = parsed.route.gatewayOwnsCredentials ? nil : Self.normalizedTalkApiKey(parsed.rawConfigApiKey)
@@ -4238,9 +4209,6 @@ extension TalkModeManager {
         self.gatewayTalkProviderLabel = String(localized: "Not loaded")
         self.gatewayTalkTransportLabel = String(localized: "Not loaded")
         self.defaultModelId = Self.defaultModelIdFallback
-        if !self.modelOverrideActive {
-            self.currentModelId = self.defaultModelId
-        }
     }
 
     func markTalkPermissionUpgradeRequested() {

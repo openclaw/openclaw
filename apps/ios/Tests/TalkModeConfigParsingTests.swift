@@ -889,14 +889,16 @@ struct TalkModeManagerTests {
         let subscription = try #require(
             processing.range(of: "let completionSubscription = await gateway.makeServerEventSubscription"))
         let cleanup = try #require(processing.range(of: "defer { completionSubscription.cancel() }"))
-        let retention = try #require(processing.range(of: "streamingOwner.completionEvents = completionEvents"))
+        let retention = try #require(processing.range(of: "let completionEvents = completionSubscription.events"))
         let send = try #require(processing.range(of: "let acknowledgement = try await sendChat("))
+        let forwarding = try #require(processing.range(of: "completionEvents: completionEvents"))
 
         #expect(subscription.lowerBound < cleanup.lowerBound)
         #expect(cleanup.lowerBound < retention.lowerBound)
         #expect(retention.lowerBound < send.lowerBound)
+        #expect(send.lowerBound < forwarding.lowerBound)
         #expect(processing.contains("idempotencyKey: runId"))
-        #expect(completion.contains("guard let completionEvents = streamingOwner.completionEvents"))
+        #expect(completion.contains("completionEvents: AsyncStream<EventFrame>"))
         #expect(completion.contains("stream: completionEvents"))
         #expect(streaming.contains("as: OpenClawChatEventPayload.self"))
         #expect(streaming.contains("OpenClawChatEventText.assistantText"))

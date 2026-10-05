@@ -204,7 +204,6 @@ class WearReplyReceiver : BroadcastReceiver() {
               idempotencyKey = notificationReplyIdempotencyKey(sessionKey, notificationTag, reply),
               phoneNodeId = phoneNodeId,
             ),
-            requirePreferredPhone = true,
           )
         }
         NotificationManagerCompat.from(context).cancel(notificationTag, NOTIFICATION_ID)

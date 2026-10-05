@@ -592,7 +592,6 @@ class WearTalkAvatarTest {
     WearRealtimeTalkClient.ActiveAttempt(
       nodeId = "watch-a",
       attemptId = "attempt-$generation",
-      generation = generation,
       resources =
         WearRealtimeTalkClient.ChannelResources(
           channel = FakeRealtimeChannel("watch-a", "channel-$generation"),

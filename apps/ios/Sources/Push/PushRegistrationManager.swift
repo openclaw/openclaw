@@ -87,10 +87,7 @@ actor PushRegistrationManager {
         else {
             throw PushRelayError.relayMisconfigured("Missing bundle identifier for relay registration")
         }
-        guard let installationId = GatewaySettingsStore.loadStableInstanceID()?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !installationId.isEmpty
-        else {
+        guard let installationId = GatewaySettingsStore.loadStableInstanceID() else {
             throw PushRelayError.relayMisconfigured("Missing stable installation ID for relay registration")
         }
 
@@ -193,10 +190,6 @@ actor PushRegistrationManager {
     }
 
     private static func encodePayload(_ payload: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(payload)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw PushRelayError.relayMisconfigured("Failed to encode push registration payload as UTF-8")
-        }
-        return json
+        try String(decoding: JSONEncoder().encode(payload), as: UTF8.self)
     }
 }

@@ -628,47 +628,39 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         self.consumeIncomingPayload(applicationContext, transport: "applicationContext")
     }
 
-    private func consumeChatDeliveryReceipt(
-        _ payload: [String: Any],
-        acknowledgment: WatchMessageAcknowledgment?) -> Bool
-    {
-        let receipt: OpenClawWatchChatDeliveryReceipt
-        do {
-            receipt = try OpenClawWatchChatDeliveryCodec.decodeReceipt(payload)
-        } catch {
-            acknowledgment?.reject(reason: "invalid_payload")
-            return false
-        }
-        Task { @MainActor in
-            do {
-                let receiptAck = try await self.store.recordChatDeliveryReceipt(receipt)
-                if case let .rejected(code, _) = receipt.state,
-                   code == OpenClawWatchChatDeliveryCodec.staleRouteCode
-                {
-                    self.cancelClearedChatTransfers(context: receipt.context)
-                }
-                acknowledgment?.accept()
-                if let receiptAck {
-                    let payload = try OpenClawWatchChatDeliveryCodec.encode(receiptAck)
-                    let session = try await self.activatedSession()
-                    _ = await self.sendPayload(payload, session: session)
-                }
-            } catch {
-                acknowledgment?
-                    .reject(reason: (error as? OpenClawWatchChatDeliveryError)?.code ?? "storage_unavailable")
-            }
-        }
-        return true
-    }
-
-    @discardableResult
     private func consumeIncomingPayload(
         _ payload: [String: Any],
         transport: String,
-        acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool
+        acknowledgment: WatchMessageAcknowledgment? = nil)
     {
         if (payload["type"] as? String) == WatchPayloadType.chatDeliveryReceipt.rawValue {
-            return self.consumeChatDeliveryReceipt(payload, acknowledgment: acknowledgment)
+            let receipt: OpenClawWatchChatDeliveryReceipt
+            do {
+                receipt = try OpenClawWatchChatDeliveryCodec.decodeReceipt(payload)
+            } catch {
+                acknowledgment?.reject(reason: "invalid_payload")
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let receiptAck = try await self.store.recordChatDeliveryReceipt(receipt)
+                    if case let .rejected(code, _) = receipt.state,
+                       code == OpenClawWatchChatDeliveryCodec.staleRouteCode
+                    {
+                        self.cancelClearedChatTransfers(context: receipt.context)
+                    }
+                    acknowledgment?.accept()
+                    if let receiptAck {
+                        let payload = try OpenClawWatchChatDeliveryCodec.encode(receiptAck)
+                        let session = try await self.activatedSession()
+                        _ = await self.sendPayload(payload, session: session)
+                    }
+                } catch {
+                    acknowledgment?
+                        .reject(reason: (error as? OpenClawWatchChatDeliveryError)?.code ?? "storage_unavailable")
+                }
+            }
+            return
         }
         if let type = payload["type"] as? String,
            type == WatchPayloadType.directNodeSetup.rawValue,
@@ -679,7 +671,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 self.directNodeSetupHandler(setupCode, sentAtMs)
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         let appSnapshot = (payload[WatchPayloadType.appSnapshot.rawValue] as? [String: Any])
             .flatMap(WatchAppSnapshotMessage.parsePayload)
@@ -707,35 +699,35 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 }
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         if let incoming = Self.parseNotificationPayload(payload) {
             Task { @MainActor in
                 self.store.consume(message: incoming, transport: transport)
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         if let prompt = Self.parseExecApprovalPromptPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalPrompt: prompt, transport: transport)
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         if let resolved = Self.parseExecApprovalResolvedPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalResolved: resolved)
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         if let expired = Self.parseExecApprovalExpiredPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalExpired: expired)
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         if let snapshot = Self.parseExecApprovalSnapshotPayload(payload) {
             Task { @MainActor in
@@ -744,7 +736,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 }
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         if let snapshot = WatchAppSnapshotMessage.parsePayload(payload) {
             Task { @MainActor in
@@ -757,16 +749,15 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 acknowledgment?.accept()
                 self.replayChatDelivery()
             }
-            return true
+            return
         }
         if let completion = Self.parseChatCompletionPayload(payload) {
             Task { @MainActor in
                 self.store.consume(chatCompletion: completion)
                 acknowledgment?.accept()
             }
-            return true
+            return
         }
         acknowledgment?.reject(reason: "unsupported_payload")
-        return false
     }
 }

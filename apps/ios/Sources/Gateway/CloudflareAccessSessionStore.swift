@@ -129,7 +129,7 @@ final class CloudflareAccessSessionStore {
                 // must still be valid when persistence and publication happen.
                 try session.validate(now: self.now())
                 let encoded = try JSONEncoder().encode(session)
-                guard let value = String(data: encoded, encoding: .utf8), self.persistence.save(origin, value) else {
+                guard self.persistence.save(origin, String(decoding: encoded, as: UTF8.self)) else {
                     throw CloudflareAccessError.storageFailed
                 }
                 self.revision &+= 1
