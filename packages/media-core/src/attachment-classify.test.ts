@@ -98,6 +98,18 @@ describe("classifyAttachmentBytes", () => {
     ).resolves.toEqual({ mime: declaredMime, class: "text", charset: "utf-16le" });
   });
 
+  it.each([
+    ["a NUL run", `,${"\0".repeat(32)}`],
+    ["an unpaired surrogate", "a,\ud800b"],
+  ])("does not keep declared text/plain for UTF-16 BOM bytes with %s", async (_label, text) => {
+    await expect(
+      classifyAttachmentBytes({
+        buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]),
+        declaredMime: "text/plain",
+      }),
+    ).resolves.toEqual({ mime: "text/csv", class: "text", charset: "utf-16le" });
+  });
+
   it("keeps the charset when a BOM-less UTF-16 file resolves text by extension", async () => {
     await expect(
       classifyAttachmentBytes({
