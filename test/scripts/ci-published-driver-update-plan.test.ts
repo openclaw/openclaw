@@ -23,6 +23,8 @@ describe("published-driver update selection", () => {
     "src/infra/update-runner.ts",
     "src/infra/update-managed-service-handoff.ts",
     "src/cli/update-cli/update-command.ts",
+    "src/cli/runtime-cleanup-scope.ts",
+    "src/cli/runtime-cleanup.ts",
     "src/cli/startup-trace.ts",
     "src/gateway/server-startup-trace.ts",
     "src\\infra\\update-runner.ts",
