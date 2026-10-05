@@ -1832,6 +1832,25 @@ describe("plugin-clawhub-publish.sh", () => {
     ).toThrow("unexpected plugin ClawHub publish argument: extra");
   });
 
+  it.each(["clawhub", "./clawhub", "C:clawhub"])(
+    "rejects relative ClawHub CLI override %s",
+    (cli) => {
+      const repoDir = createTempPluginRepo();
+      writeFileSync(join(repoDir, "clawhub"), "#!/bin/sh\nexit 97\n", { mode: 0o755 });
+      const result = spawnSync(
+        "bash",
+        [
+          join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+          "--pack",
+          "extensions/demo-plugin",
+        ],
+        { cwd: repoDir, encoding: "utf8", env: { ...process.env, OPENCLAW_CLAWHUB_CLI: cli } },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("OPENCLAW_CLAWHUB_CLI must be an absolute executable path");
+    },
+  );
+
   it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
     const repoDir = createTempPluginRepo();
     const binDir = join(repoDir, "bin");

@@ -253,11 +253,13 @@ describe("terminal PTY invocation", () => {
         rows: 24,
       });
 
-      expect(mocks.spawn).toHaveBeenCalledWith(
-        nodePath,
-        [entrypoint, "exec", "--", "Fix A&B and 100%"],
-        expect.objectContaining({ cols: 80, rows: 24 }),
+      expect(mocks.spawn).toHaveBeenCalledOnce();
+      const [command, argv, options] = mocks.spawn.mock.calls[0] ?? [];
+      expect(fs.realpathSync.native(String(command)).toLowerCase()).toBe(
+        fs.realpathSync.native(nodePath).toLowerCase(),
       );
+      expect(argv).toEqual([entrypoint, "exec", "--", "Fix A&B and 100%"]);
+      expect(options).toMatchObject({ cols: 80, rows: 24 });
     },
   );
 
