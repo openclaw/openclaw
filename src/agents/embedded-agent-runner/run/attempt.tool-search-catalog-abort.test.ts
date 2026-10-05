@@ -350,6 +350,9 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ requesterThinkingLevel: "ultra" }),
         [],
+        undefined,
+        undefined,
+        expect.objectContaining({ assertCurrent: expect.any(Function) }),
       );
       expect(sessionOptions.thinkingLevel).toBe(expected ?? "off");
       expect(providerThinkingLevel).toBe(expected);

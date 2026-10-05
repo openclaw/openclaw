@@ -16,7 +16,6 @@ export type TranscriptScrollRestoreHost = {
   isConnected(): boolean;
   getPendingScrollFrame(): number | null;
   setPendingScrollFrame(frame: number | null): void;
-  requestUpdate(): void;
   onReaderScroll(): void;
 };
 
@@ -93,7 +92,8 @@ function schedulePendingScrollRetry(owner: TranscriptScrollRestoreHost): void {
         ) {
           pending.stableFrames += 1;
         }
-        owner.requestUpdate();
+        // Geometry notifications and settled reader policy own their renders.
+        applyPendingScrollOffset(owner);
       }
     }),
   );

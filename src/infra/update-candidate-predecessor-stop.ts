@@ -107,7 +107,6 @@ export async function stopSupervisedPredecessorGateway(
   input: { runId: string; repair: boolean },
   params: {
     root: string;
-    timeoutMs?: number;
     assertCurrent: () => void;
     warn: (message: string) => void;
   },
@@ -180,7 +179,7 @@ export async function stopSupervisedPredecessorGateway(
       // The delegated Doctor input carries no step budget; bound the drain and
       // stop by the service stop budget so a stuck predecessor cannot outlive
       // the parent's Doctor allowance.
-      timeoutMs: params.timeoutMs ?? GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+      timeoutMs: GATEWAY_SERVICE_STOP_TIMEOUT_MS,
       onStopped: record,
       assertCurrent: params.assertCurrent,
       warn: params.warn,

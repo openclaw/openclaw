@@ -25,6 +25,7 @@ import { readSessionMembershipRowsInDatabase } from "./session-membership-facts.
 import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
+import { listSessionSuggestionsInDatabase } from "./session-suggestion-store.kernel.js";
 
 type DomainOperations = SessionSharingWorkerOperations &
   HeartbeatOutcomeWorkerOperations &
@@ -98,23 +99,26 @@ export function createIncognitoSideDataWorker(
     execute(command: Command, selectedKeys: string[]) {
       keys = selectedKeys;
       const bound = binding;
+      const result = <Value>(value: Value) => ({ value, keys });
       const executeDomain = <Key extends keyof DomainOperations>(inner: {
         type: Key;
         input: DomainOperations[Key]["input"];
-      }): DomainOperations[Key]["output"] => {
+      }): { value: DomainOperations[Key]["output"]; keys: string[] } => {
         if (!bound) {
           throw new Error("Incognito side-data domain was not prepared");
         }
-        return domain.execute({
-          type: "database.domain.execute",
-          input: { id: bound.id, command: inner },
-        }) as DomainOperations[Key]["output"]; // SAFETY: the static domain owns this typed result.
+        return result(
+          domain.execute({
+            type: "database.domain.execute",
+            input: { id: bound.id, command: inner },
+          }) as DomainOperations[Key]["output"], // SAFETY: the static domain owns this typed result.
+        );
       };
       try {
         if (bound) {
           domain.execute({ type: "database.domain.bind", input: bound });
         }
-        const value = withSqlitePostCommitPublications(database.db, () => {
+        return withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
             case "session.boards.applyOps":
               return executeDomain({ type: "boards.applyOps", input: command.input });
@@ -123,16 +127,22 @@ export function createIncognitoSideDataWorker(
             case "session.boards.grant":
               return executeDomain({ type: "boards.grant", input: command.input });
             case "session.boards.readSnapshot":
-              return readBoardSnapshotWithHtmlViewMetadata(database, command.input.sessionKey);
+              return result(
+                readBoardSnapshotWithHtmlViewMetadata(database, command.input.sessionKey),
+              );
             case "session.boards.readWidgetDocument":
-              return readBoardWidgetDocument(
-                database,
-                command.input.sessionKey,
-                command.input.name,
-                command.input.contentKind,
+              return result(
+                readBoardWidgetDocument(
+                  database,
+                  command.input.sessionKey,
+                  command.input.name,
+                  command.input.contentKind,
+                ),
               );
             case "session.acp.source":
-              return readLegacyAcpMigrationContextInDatabase(database, command.input.sessionKey);
+              return result(
+                readLegacyAcpMigrationContextInDatabase(database, command.input.sessionKey),
+              );
             case "session.acp.entry": {
               const { entry } = mutateAcpSessionEntryInWorker(
                 database,
@@ -141,7 +151,7 @@ export function createIncognitoSideDataWorker(
                 (stage) => admit(stage, keys),
                 false,
               );
-              return { entry };
+              return result({ entry });
             }
             case "session.sharing.add":
               return executeDomain({
@@ -158,11 +168,36 @@ export function createIncognitoSideDataWorker(
                 type: "participant",
                 input: { ...command.input, scope: scope(command.input.sessionKey) },
               });
+            case "session.sharing.owner.assign":
+              return executeDomain({
+                type: "owner.assign",
+                input: { ...command.input, scope: scope(command.input.sessionKey) },
+              });
+            case "session.sharing.suggestion.add":
+              return executeDomain({
+                type: "suggestion.add",
+                input: { ...command.input, scope: scope(command.input.sessionKey) },
+              });
+            case "session.sharing.suggestion.claim":
+              return executeDomain({
+                type: "suggestion.claim",
+                input: { ...command.input, scope: scope(command.input.sessionKey) },
+              });
+            case "session.sharing.suggestion.release":
+              return executeDomain({
+                type: "suggestion.release",
+                input: { ...command.input, scope: scope(command.input.sessionKey) },
+              });
+            case "session.sharing.suggestion.finalize":
+              return executeDomain({
+                type: "suggestion.finalize",
+                input: { ...command.input, scope: scope(command.input.sessionKey) },
+              });
             case "session.category.apply": {
               // Both commands use the same binding and FIFO turn; the exact-row plan stays native.
               const input = { ...command.input, scope: scope("") };
               const prepared = executeDomain({ type: "category.prepare", input });
-              keys = prepared;
+              keys = prepared.value;
               return executeDomain({ type: "category.apply", input });
             }
             case "session.heartbeat.persist":
@@ -170,33 +205,38 @@ export function createIncognitoSideDataWorker(
             case "session.heartbeat.claim":
               return executeDomain({ type: "claim", input: command.input });
             case "session.reaction.set":
-              return reactions.execute(command, context);
+              return result(reactions.execute(command, context));
             case "session.category.keys":
-              return readSessionGroupCategoryKeys(database, command.input.name);
+              return result(readSessionGroupCategoryKeys(database, command.input.name));
             case "session.members.read":
-              return listSessionMembersInDatabase(database, command.input.sessionKey);
+              return result(listSessionMembersInDatabase(database, command.input.sessionKey));
+            case "session.suggestions.read":
+              return result(
+                listSessionSuggestionsInDatabase(
+                  database,
+                  command.input.sessionKey,
+                  command.input.params,
+                ),
+              );
             case "session.participants.read":
-              return (
+              return result(
                 participantRecordsBySessionKey(database.db, keys).get(command.input.sessionKey) ??
-                []
+                  [],
               );
             case "session.catalog.read": {
               const rows = readSessionMembershipRowsInDatabase(database, command.input.sessionKeys);
               keys = rows.map(([key]) => key);
-              return rows;
+              return result(rows);
             }
             case "session.reactions.read":
-              return listSessionReactionsInDatabase(
-                database,
-                command.input.sessionKey,
-                command.input,
+              return result(
+                listSessionReactionsInDatabase(database, command.input.sessionKey, command.input),
               );
             case "session.progressCard.get":
-              return readSessionProgressCard(database.db, command.input.sessionKey);
+              return result(readSessionProgressCard(database.db, command.input.sessionKey));
           }
           throw new Error("Unsupported incognito side-data operation");
         });
-        return { value, keys };
       } finally {
         if (bound) {
           domain.assertSettled();

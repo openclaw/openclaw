@@ -8,12 +8,14 @@ import "../styles/chat/text.css";
 let dispose: () => void;
 const filePath = "/Users/example/My Project/src/application.ts";
 
-beforeEach(() => {
+beforeEach(async () => {
   document.body.innerHTML = `<openclaw-tooltip-provider><main class="chat-text" style="padding:80px 24px">${toSanitizedMarkdownHtml(
     `[application.ts](<${filePath}:42>) and \`src/next.ts\`.`,
     { fileLinks: true },
   )}</main><button id="outside">Outside</button></openclaw-tooltip-provider><openclaw-toast-host></openclaw-toast-host>`;
   dispose = installTitleTooltips(document);
+  // The browser retains pointer coordinates when each case replaces the file links.
+  await page.getByRole("button", { name: "Outside", exact: true }).hover();
 });
 afterEach(() => {
   dispose();
@@ -68,6 +70,9 @@ describe("file path tooltip", () => {
       const fallback = vi.spyOn(document, "execCommand").mockReturnValue(copied);
       anchor().focus();
       await expect.element(copyButton()).toBeVisible();
+      expect(anchor().matches(":hover"), "keyboard fallback must start without pointer hover").toBe(
+        false,
+      );
       await userEvent.keyboard("{Tab}{Enter}");
       expect(fallback).toHaveBeenCalledWith("copy");
       expect(document.activeElement).toBe(anchor());

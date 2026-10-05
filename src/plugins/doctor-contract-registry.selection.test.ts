@@ -2,11 +2,32 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
+import { createLegacyWebhookListenerDoctorContract } from "../plugin-sdk/legacy-webhook-listener-migration.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
+
+// Script contract exports at module binding while keeping setup instance ownership.
+vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-instance-module-loader.js")>();
+  const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
+  return {
+    ...actual,
+    bindPluginInstanceModuleLoader: (
+      params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
+    ) =>
+      params.instance.bindModuleLoader(
+        getCachedPluginModuleLoader({
+          modulePath: params.source,
+          importerUrl: import.meta.url,
+          createLoader: getRegistryJitiMocks().createJiti,
+        }),
+      ),
+  };
+});
 
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
@@ -31,9 +52,7 @@ let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-reg
 let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIds;
 let collectDoctorConfigRepairPluginIds: typeof import("./doctor-contract-registry.js").collectDoctorConfigRepairPluginIds;
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
-let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
-  | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
-  | undefined;
+let withDeferredPluginDoctorMigrations: typeof import("./doctor-contract-registry.js").withDeferredPluginDoctorMigrations;
 
 function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
   mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
@@ -44,7 +63,7 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
-  setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
+  clearPluginDoctorContractRegistryCache?.();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -56,11 +75,10 @@ describe("doctor-contract-registry module loader", () => {
       collectRelevantDoctorPluginIds,
       collectDoctorConfigRepairPluginIds,
       listPluginDoctorSessionStoreAgentIds,
+      withDeferredPluginDoctorMigrations,
     } = await import("./doctor-contract-registry.js"));
-    ({
-      clearPluginDoctorContractRegistryCache,
-      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
-    } = await import("./doctor-contract-registry.test-fixtures.js"));
+    ({ clearPluginDoctorContractRegistryCache } =
+      await import("./doctor-contract-registry.test-fixtures.js"));
   });
 
   beforeEach(() => {
@@ -68,14 +86,160 @@ describe("doctor-contract-registry module loader", () => {
     mockDoctorPlugins();
     doctorContractWarnMock.mockReset();
     retainedConfigDoctorMock.mockReset().mockReturnValue(null);
-    // Loaded once in beforeAll; afterEach guards the same binding optionally because it
-    // can fire when that import never completed. Fail loudly here instead of silently
-    // running a case against the real module loader.
-    if (!setPluginDoctorContractRegistryModuleLoaderFactoryForTest) {
-      throw new Error("doctor contract registry test fixtures were not loaded");
-    }
-    setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
+  });
+
+  it.each([
+    {
+      name: "missing official plugin",
+      ownerId: undefined,
+      warning: undefined,
+      explicit: false,
+      pins: true,
+    },
+    {
+      name: "authored listener endpoints",
+      ownerId: undefined,
+      warning: undefined,
+      explicit: true,
+      pins: true,
+    },
+    {
+      name: "unresolved host facts",
+      ownerId: undefined,
+      warning: "Resolve account ambiguity",
+      explicit: false,
+      pins: false,
+    },
+    {
+      name: "deferred installed owner",
+      ownerId: "feishu",
+      warning: undefined,
+      explicit: false,
+      pins: false,
+    },
+    {
+      name: "deferred replacement owner",
+      ownerId: "custom-feishu",
+      warning: undefined,
+      explicit: false,
+      pins: false,
+    },
+  ])("preserves historical webhook ownership for $name", ({ ownerId, warning, explicit, pins }) => {
+    const config: OpenClawConfig = {
+      meta: { migrations: { webhookListeners: { telegram: [] } } },
+      gateway: { port: 18789 },
+      channels: {
+        feishu: {
+          enabled: true,
+          connectionMode: "webhook",
+          tools: { base: true },
+          ...(explicit ? { webhookPort: 9001, webhookHost: "0.0.0.0" } : {}),
+          accounts: {
+            default: { enabled: true },
+            optedOut: { legacyWebhook: false },
+            ...(explicit ? { specific: { enabled: true, webhookPort: 9002 } } : {}),
+          },
+        },
+      },
+    };
+    const original = structuredClone(config);
+    const listener = createLegacyWebhookListenerDoctorContract({
+      channelKey: "feishu",
+      defaultPort: 3000,
+      defaultHost: "127.0.0.1",
+    });
+    retainedConfigDoctorMock.mockReturnValue({
+      ...listener,
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+        config: { ...cfg, gateway: { ...cfg.gateway, port: 60000 } },
+        changes: ["Unrelated plugin repair"],
+      }),
+      normalizeHistoricalWebhookConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+        ...listener.normalizeCompatibilityConfig({ cfg }),
+        historicalWebhookAccountIds: ["default", "optedOut", ...(explicit ? ["specific"] : [])],
+        ...(warning ? { warnings: [warning] } : {}),
+      }),
+    });
+    if (ownerId) {
+      const pluginRoot = makeTempDir();
+      fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+      mocks.createJiti.mockImplementation(() => () => ({
+        normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+          config: { ...cfg, gateway: { ...cfg.gateway, port: 61000 } },
+          changes: ["Deferred owner ran"],
+        }),
+      }));
+      mockDoctorPlugins({
+        id: ownerId,
+        rootDir: pluginRoot,
+        channels: ["feishu"],
+        providers: [],
+        origin: "global",
+        doctorContract: { configRepair: true },
+      });
+    }
+    const inspected = vi.fn();
+    const result = withDeferredPluginDoctorMigrations([ownerId ?? "feishu"], () =>
+      applyPluginDoctorCompatibilityMigrations(config, {
+        config,
+        env: {},
+        pluginIds: ["feishu"],
+        historicalWebhookListeners: true,
+        onInspectedPlugin: inspected,
+      }),
+    );
+
+    expect(config).toEqual(original);
+    expect(result.config).toEqual(
+      pins
+        ? {
+            ...original,
+            meta: {
+              migrations: {
+                webhookListeners: {
+                  telegram: [],
+                  feishu: explicit
+                    ? []
+                    : [["channels", "feishu", "accounts", "default", "legacyWebhook"]],
+                },
+              },
+            },
+            channels: {
+              feishu: {
+                enabled: true,
+                connectionMode: "webhook",
+                tools: { base: true },
+                ...(explicit ? { legacyWebhook: { port: 9001, host: "0.0.0.0" } } : {}),
+                accounts: {
+                  default: {
+                    enabled: true,
+                    ...(explicit ? {} : { legacyWebhook: { port: 3000, host: "127.0.0.1" } }),
+                  },
+                  optedOut: { legacyWebhook: false },
+                  ...(explicit
+                    ? {
+                        specific: {
+                          enabled: true,
+                          legacyWebhook: { port: 9002, host: "0.0.0.0" },
+                        },
+                      }
+                    : {}),
+                },
+              },
+            },
+          }
+        : original,
+    );
+    expect(result.warnings).toEqual(warning ? [warning] : undefined);
+    expect(inspected).not.toHaveBeenCalled();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+    if (pins) {
+      expect(listener.normalizeCompatibilityConfig({ cfg: result.config })).toMatchObject({
+        config: result.config,
+        changes: [],
+      });
+    }
   });
 
   it.each([

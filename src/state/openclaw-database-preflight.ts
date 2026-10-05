@@ -291,12 +291,10 @@ export async function preflightOpenClawDatabaseSchemas(
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): Promise<OpenClawDatabaseSchemaPreflight> {
   options.signal?.throwIfAborted();
-  const {
-    supportedVersions = {
-      state: OPENCLAW_STATE_SCHEMA_VERSION,
-      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-    },
-  } = options;
+  const supportedVersions = options.supportedVersions ?? {
+    state: OPENCLAW_STATE_SCHEMA_VERSION,
+    agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+  };
   const result: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const startup = options.requireStartupMigrationReadiness
     ? getAgentDatabaseStartupAdmission()
@@ -661,7 +659,7 @@ export async function preflightOpenClawDatabaseSchemas(
             env: options.env ?? process.env,
           });
         }
-        recordPreparedSchemaHeader?.(agentVersion);
+        recordPreparedSchemaHeader?.(schemaInspection);
         if (schemaInspection.integrityGateOutcome === "pending") {
           return "defer";
         }

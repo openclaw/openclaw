@@ -125,14 +125,16 @@ export function deleteIncognitoSessionLifecycle(
         );
         if (result.deleted) {
           const absent = actor.sessions.captureSnapshot(target.sessionKey);
-          await deleteReceipts(() => {
-            actor.assertCurrent();
-            absent.assertCurrent();
+          await deleteReceipts({
+            assertCurrent: () => {
+              actor.assertCurrent();
+              absent.assertCurrent();
+            },
           });
         }
         return result;
       },
-      { incognito: actor },
+      { incognito: actor, callerSettlesReceipts: true },
     );
   });
 }

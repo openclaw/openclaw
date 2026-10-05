@@ -345,8 +345,7 @@ export function ensureMemoryIndexSchema(params: {
       ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(path, source);
-    CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
-      ON ${MEMORY_INDEX_CHUNKS_TABLE}(path);
+    DROP INDEX IF EXISTS idx_memory_index_chunks_path;
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);

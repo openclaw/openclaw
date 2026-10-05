@@ -1,0 +1,39 @@
+import { buildMultiAccountChannelSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
+import { z } from "zod";
+
+const XAccountSchema = z.object({
+  name: z.string().optional(),
+  enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
+  userId: z.string().regex(/^\d+$/).optional(),
+  username: z
+    .string()
+    .regex(/^[A-Za-z0-9_]{1,15}$/)
+    .optional(),
+  clientId: z.string().min(1).optional(),
+  clientSecret: buildSecretInputSchema().optional(),
+  refreshToken: buildSecretInputSchema().optional(),
+  bearerToken: buildSecretInputSchema().optional(),
+  events: z
+    .object({
+      mode: z.enum(["auto", "stream", "poll"]).optional(),
+      pollSeconds: z.number().int().min(15).optional(),
+    })
+    .strict()
+    .optional(),
+  allowFrom: z.array(z.string().regex(/^(?:x:)?\d+$/i)).optional(),
+  groupPolicy: z.enum(["allowlist", "open", "disabled"]).optional(),
+  dmPolicy: z.literal("disabled").optional(),
+  threadContext: z
+    .object({ maxPosts: z.number().int().min(2).max(100).optional() })
+    .strict()
+    .optional(),
+  replySignature: z.string().max(140).optional(),
+});
+
+export const XConfigSchema = buildMultiAccountChannelSchema(XAccountSchema, {
+  accountSchema: XAccountSchema,
+  accountsMode: "catchall",
+});
+export type XAccountConfig = z.infer<typeof XAccountSchema>;

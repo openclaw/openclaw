@@ -379,7 +379,7 @@ describe("tools.effective handler", () => {
     runtimeMocks.getRegisteredAgentHarness.mockReturnValue(undefined);
     runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValue([]);
     runtimeMocks.applyFinalEffectiveToolPolicy.mockImplementation((params) => params.bundledTools);
-    runtimeMocks.resolveEffectiveToolInventory.mockReturnValue(makeCoreInventory());
+    runtimeMocks.resolveEffectiveToolInventory.mockResolvedValue(makeCoreInventory());
   });
 
   it("rejects missing sessionKey", async () => {
@@ -465,10 +465,10 @@ describe("tools.effective handler", () => {
 
   it("does not reuse a fresh inventory after the same session key is reset", async () => {
     runtimeMocks.resolveEffectiveToolInventory
-      .mockReturnValueOnce(
+      .mockResolvedValueOnce(
         makeCoreInventory({ id: "old_session_tool", label: "Old", description: "Old session" }),
       )
-      .mockReturnValueOnce(
+      .mockResolvedValueOnce(
         makeCoreInventory({ id: "new_session_tool", label: "New", description: "New session" }),
       );
     const first = createInvokeParams({ sessionKey: "main:abc" });
@@ -555,8 +555,8 @@ describe("tools.effective handler", () => {
     });
     const refreshedPayload = makeCoreInventory();
     runtimeMocks.resolveEffectiveToolInventory
-      .mockReturnValueOnce(stalePayload)
-      .mockReturnValueOnce(refreshedPayload);
+      .mockResolvedValueOnce(stalePayload)
+      .mockResolvedValueOnce(refreshedPayload);
 
     const initial = createInvokeParams({ sessionKey: "main:abc" });
     await initial.invoke();
@@ -860,7 +860,7 @@ describe("tools.effective handler", () => {
       ...makeCoreInventory(),
       notices: [{ id: "base-notice", severity: "info", message: "Keep the base notice" }],
     };
-    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
+    runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(base);
     mockMcpConfigSummary();
     mockWarmMcpRuntime(makeMcpCatalog());
     runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([makeMcpTool()]);
@@ -893,7 +893,7 @@ describe("tools.effective handler", () => {
         message:
           "unavailable; retry after 2026-09-25T12:00:30.000Z; check reachability or reload MCP",
       };
-      runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
+      runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(base);
       mockMcpConfigSummary({ serverNames: ["offline", "reproProbe"] });
       mockWarmMcpRuntime({ ...makeMcpCatalog(), diagnostics: [diagnostic] });
       runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce(
@@ -927,7 +927,7 @@ describe("tools.effective handler", () => {
     Object.freeze(base.groups);
     Object.freeze(base.notices);
     Object.freeze(base);
-    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
+    runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(base);
     mockMcpConfigSummary();
     mockWarmMcpRuntime(makeMcpCatalog());
     const invalid = makeMcpTool({ type: "array", items: { type: "string" } });
@@ -1030,7 +1030,7 @@ describe("tools.effective handler", () => {
     runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("work");
     runtimeMocks.resolveAgentDir.mockReturnValueOnce("/tmp/agents/work/agent");
     runtimeMocks.resolveAgentWorkspaceDir.mockReturnValueOnce("/tmp/workspace-work");
-    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(makeCoreInventory());
+    runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(makeCoreInventory());
 
     const { respond, invoke } = createInvokeParams(
       {
@@ -1061,7 +1061,7 @@ describe("tools.effective handler", () => {
       storePath: "/tmp/shared-sessions.sqlite",
     } as never);
     runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("ops");
-    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(makeCoreInventory());
+    runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(makeCoreInventory());
 
     const { respond, invoke } = createInvokeParams(
       { sessionKey: "global" },

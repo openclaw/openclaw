@@ -2,7 +2,6 @@ import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
@@ -12,9 +11,9 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   buildAcpDatabaseSessionKey,
-  getAcpSessionKysely,
   parseAcpDatabaseSessionKey,
   resolveReadableAcpSessionRow,
+  selectAcpSessionRowsByKeys,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
@@ -69,21 +68,10 @@ export function readAcpSessionMetaBatch(params: {
   }
   withExistingOpenClawStateDatabaseReadOnly(
     ({ db: database }) => {
-      const db = getAcpSessionKysely(database);
-      const keys = [...entriesByKey.keys()];
-      for (let index = 0; index < keys.length; index += 500) {
-        const rows = executeSqliteQuerySync(
-          database,
-          db
-            .selectFrom("acp_sessions")
-            .selectAll()
-            .where("session_key", "in", keys.slice(index, index + 500)),
-        ).rows;
-        for (const row of rows) {
-          for (const entry of entriesByKey.get(row.session_key) ?? []) {
-            const readable = resolveReadableAcpSessionRow({ row, entry });
-            result.set(entry, readable ? rowToAcpSessionMeta(readable) : undefined);
-          }
+      for (const row of selectAcpSessionRowsByKeys(database, [...entriesByKey.keys()])) {
+        for (const entry of entriesByKey.get(row.session_key) ?? []) {
+          const readable = resolveReadableAcpSessionRow({ row, entry });
+          result.set(entry, readable ? rowToAcpSessionMeta(readable) : undefined);
         }
       }
     },

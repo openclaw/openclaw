@@ -13,6 +13,14 @@ export default {
     statusQueued: "Queued",
   },
   workboard: {
+    pinBoard: "Pin to sidebar",
+    unpinBoard: "Unpin from sidebar",
+    deleteBoard: "Delete board…",
+    deleteBoardTitle: "Delete “{name}”?",
+    deleteBoardConfirm: "Delete board",
+    deleteBoardHelp:
+      "This permanently deletes the board and its saved session placements. Sessions are kept. Boards with cards must be emptied first.",
+    deleteBoardUnavailable: "Connect with write access to delete this board.",
     discardCardTitle: "Discard this card?",
     discardChangesTitle: "Discard changes?",
     discardDraftHelp: "Your unsaved changes will be lost.",

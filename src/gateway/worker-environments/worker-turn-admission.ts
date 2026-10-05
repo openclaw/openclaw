@@ -13,7 +13,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
-import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -238,23 +238,20 @@ export function resolvePlacementIdentity(
 }
 
 export async function resolveWorkerPlacementRuntimeOverride(
-  placements: Pick<WorkerSessionPlacementStore, "prepareRuntimeRefresh">,
+  placements: Pick<WorkerSessionPlacementStore, "readProjection">,
   identity: Omit<LocalTurnPlacementClaim, "runId">,
 ): Promise<string | undefined> {
-  const prepared = await placements.prepareRuntimeRefresh(identity.sessionId);
-  try {
-    prepared.assertCurrent();
-    const placement = prepared.placement;
-    return placement &&
-      placement.state !== "local" &&
-      placement.executionMode === "worker-turn" &&
-      (identity.agentId === undefined || placement.agentId === identity.agentId) &&
-      (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
-      ? "openclaw"
-      : undefined;
-  } finally {
-    prepared.release();
-  }
+  // This is a runtime preference, not turn authority. Setup and the preceding
+  // turn may publish while it is read; execution still acquires a current claim.
+  const projection = await placements.readProjection([identity.sessionId], { current: true });
+  const placement = projection.placements.get(identity.sessionId);
+  return placement &&
+    placement.state !== "local" &&
+    placement.executionMode === "worker-turn" &&
+    (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+    (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+    ? "openclaw"
+    : undefined;
 }
 
 export function requireActivePlacement(
@@ -361,11 +358,7 @@ export async function claimWorkerTurn(params: {
         ...params.identity,
         claimId: randomUUID(),
         runId: params.runId,
-        owner: {
-          kind: "worker",
-          environmentId: params.placement.environmentId,
-          ownerEpoch: params.placement.activeOwnerEpoch,
-        },
+        owner: placementTurnOwner(params.placement),
       },
       () => {
         params.signal?.throwIfAborted();
@@ -375,7 +368,10 @@ export async function claimWorkerTurn(params: {
   try {
     return { placement: params.placement, turnClaim: await claim() };
   } catch (error) {
-    if (!(error instanceof ActiveTurnClaimError)) {
+    if (
+      params.placement.executionMode === "remote-exec" ||
+      !(error instanceof ActiveTurnClaimError)
+    ) {
       throw error;
     }
     const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(

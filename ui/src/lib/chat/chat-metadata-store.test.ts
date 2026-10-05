@@ -33,16 +33,14 @@ afterEach(() => {
 });
 
 describe("chat metadata store", () => {
-  it("publishes commands immediately before validating a queued catalog dispatched after the patch", async () => {
+  it("publishes compact commands while an invalidated queued catalog is pending", async () => {
     vi.useFakeTimers();
     const older = deferred<{ models: [] }>();
     const current = deferred<{ models: [] }>();
     const catalogs = vi.fn().mockReturnValueOnce(older.promise).mockReturnValue(current.promise);
     const client = clientWith(
       vi.fn((method: string) =>
-        method === "models.list"
-          ? catalogs()
-          : Promise.resolve({ ...metadata("current"), models: [] }),
+        method === "models.list" ? catalogs() : Promise.resolve(metadata("current")),
       ),
     );
     const scope = { agentId: "main", sessionKey: "agent:main:current" };
@@ -63,8 +61,10 @@ describe("chat metadata store", () => {
       ]);
       await expect(read).resolves.toEqual(metadata("current"));
       current.resolve({ models: [] });
-      await read;
+      await Promise.all([read, queued]);
       expect(listener).toHaveBeenLastCalledWith({ type: "result", result: metadata("current") });
+      expect(peekModelCatalog(client, scope)).toBeUndefined();
+      await expect(loadModelCatalog(client, scope)).resolves.toEqual({ models: [] });
       expect(peekModelCatalog(client, scope)).toEqual({ models: [] });
       expect(listener.mock.calls.filter(([update]) => update.type === "result")).toHaveLength(1);
     } finally {
@@ -74,94 +74,7 @@ describe("chat metadata store", () => {
     }
   });
 
-  it.each(["older", "other-session", "other-account", "other-view"])(
-    "does not wait for an ineligible %s catalog during patch validation",
-    async (kind) => {
-      vi.useFakeTimers();
-      const catalog = deferred<{ models: [] }>();
-      const response = { ...metadata("current"), models: [] };
-      const request = vi.fn((method: string) =>
-        method === "chat.metadata" ? Promise.resolve(response) : catalog.promise,
-      );
-      const client = clientWith(request);
-      const scope = { agentId: "main", sessionKey: "agent:main:current" };
-      const listener = vi.fn();
-      const release = subscribeChatMetadata(client, scope, listener);
-      const catalogScope = {
-        ...scope,
-        ...(kind === "other-session" ? { sessionKey: "agent:main:other" } : {}),
-        ...(kind === "other-account" ? { authProfileId: "test-account" } : {}),
-        ...(kind === "other-view" ? { includeDetails: true } : {}),
-      };
-      let pending = kind === "older" ? loadModelCatalog(client, catalogScope) : undefined;
-      invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-      pending ??= loadModelCatalog(client, catalogScope);
-      const read = loadChatMetadata(client, scope);
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        expect(listener).toHaveBeenLastCalledWith({
-          type: "result",
-          result: metadata("current"),
-          catalogChanged: true,
-        });
-      } finally {
-        catalog.resolve({ models: [] });
-        await Promise.all([read, pending]);
-        release();
-      }
-    },
-  );
-
-  it.each(["invalidate", "release"])(
-    "publishes commands immediately but suppresses deferred catalog validation after %s",
-    async (transition) => {
-      vi.useFakeTimers();
-      const catalog = deferred<{ models: [] }>();
-      const response = {
-        ...metadata("obsolete"),
-        models: [{ id: "different", name: "Different", provider: "test" }],
-      };
-      const client = clientWith(
-        vi.fn((method: string) =>
-          method === "chat.metadata" ? Promise.resolve(response) : catalog.promise,
-        ),
-      );
-      const scope = { agentId: "main", sessionKey: "agent:main:current" };
-      const listener = vi.fn();
-      const release = subscribeChatMetadata(client, scope, listener);
-      invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-      const pending = loadModelCatalog(client, scope);
-      const read = loadChatMetadata(client, scope);
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
-          [{ type: "result", result: metadata("obsolete") }],
-        ]);
-        await expect(read).resolves.toEqual(metadata("obsolete"));
-        if (transition === "invalidate") {
-          invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-        } else {
-          release();
-        }
-        catalog.resolve({ models: [] });
-        await Promise.all([read, pending]);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(peekChatMetadata(client, scope)).toEqual(
-          transition === "invalidate" ? undefined : metadata("obsolete"),
-        );
-        expect(peekModelCatalog(client, scope)).toEqual({ models: [] });
-        expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
-          [{ type: "result", result: metadata("obsolete") }],
-        ]);
-      } finally {
-        catalog.resolve({ models: [] });
-        await Promise.all([read, pending]);
-        release();
-      }
-    },
-  );
-
-  it("preserves only subscribed exact catalog scopes during session validation", async () => {
+  it("invalidates subscribed catalogs with their aliases and detailed views after a session patch", async () => {
     const client = clientWith(vi.fn().mockResolvedValue({ models: [] }));
     const scope = { agentId: "main", sessionKey: "agent:main:main" };
     const alias = { ...scope, sessionKey: "main" };
@@ -183,7 +96,7 @@ describe("chat metadata store", () => {
     beginChatMetadataPublication(client, alias).publish(metadata("inactive"));
     await Promise.all([scope, alias, detailed].map((params) => loadModelCatalog(client, params)));
     invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, defaults);
-    expect(peekModelCatalog(client, scope)).toEqual({ models: [] });
+    expect(peekModelCatalog(client, scope)).toBeUndefined();
     expect(peekModelCatalog(client, alias)).toBeUndefined();
     expect(peekModelCatalog(client, detailed)).toBeUndefined();
     release();
@@ -240,24 +153,29 @@ describe("chat metadata store", () => {
         refreshSessionFacts: sessionOnly,
       });
       expect(peekChatMetadata(client, scope)).toBeUndefined();
-      expect(peekModelCatalog(client, scope)).toEqual(sessionOnly ? { models: [] } : undefined);
+      expect(peekModelCatalog(client, scope)).toBeUndefined();
       expect(peekModelCatalog(client, other)).toEqual({ models: [] });
       release();
     },
   );
 
-  it("keeps legacy startup and RPC models out of the commands cache", async () => {
+  it("requests compact metadata and keeps startup models out of the commands cache", async () => {
     const commands = metadata("status");
     const legacy = {
       ...commands,
       models: [{ id: "old", name: "Old", provider: "example" }],
       accountSelection: { kind: "automatic", label: "Automatic" },
     } satisfies ChatMetadataResponse;
-    const client = clientWith(vi.fn().mockResolvedValue(legacy));
+    const request = vi.fn().mockResolvedValue(commands);
+    const client = clientWith(request);
     beginChatMetadataPublication(client, { agentId: "main" }).publish(legacy);
     expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
     invalidateChatMetadataStore(client);
     expect(await loadChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    expect(request).toHaveBeenCalledWith("chat.metadata", {
+      agentId: "main",
+      includeModels: false,
+    });
     expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
   });
 
@@ -315,7 +233,7 @@ describe("chat metadata store", () => {
       expect(request).toHaveBeenCalledTimes(2);
       expect(peekChatMetadata(client, scope)).toEqual(replacement);
       expect(updates).not.toContain("error");
-      expect(request).toHaveBeenLastCalledWith("chat.metadata", scope);
+      expect(request).toHaveBeenLastCalledWith("chat.metadata", { ...scope, includeModels: false });
       unsubscribe();
     },
   );

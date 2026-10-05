@@ -74,7 +74,7 @@ type WorkerGatewayToolsDependencies = {
   portals: WorkerPortalToolExecutorDependencies["portals"];
   skillWorkshop?: AnyAgentTool;
   portalAvailable?: boolean;
-  prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[];
+  prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
 };
 
 export function createWorkerSessionToolExecutor(
@@ -556,9 +556,9 @@ export function createWorkerWorkshopCallRetention() {
   };
 }
 
-export function createWorkerGatewayTools(
+export async function createWorkerGatewayTools(
   params: WorkerGatewayToolsDependencies & { identity: WorkerConnectionIdentity },
-): AnyAgentTool[] {
+): Promise<AnyAgentTool[]> {
   const claim = params.identity.turnClaim;
   const capability = claim && getWorkerTurnExecutionIdentityCapability(params.placements, claim);
   if (!claim || !capability) {
@@ -631,7 +631,9 @@ export function createWorkerGatewayTools(
   const runWithSource = createWorkerSessionToolSourceRunner(params);
   const retainWorkshopCall = createWorkerWorkshopCallRetention();
   const tools = [...adapters, presence, ...(params.skillWorkshop ? [params.skillWorkshop] : [])];
-  return (params.prepareTools?.(tools) ?? tools).map((tool) => {
+  const preparedTools = await (params.prepareTools?.(tools) ?? tools);
+  capability.receiptAuthority();
+  return preparedTools.map((tool) => {
     if (getAgentToolExecutionLocation(tool).kind === "placement" || adapterNames.has(tool.name)) {
       return tool;
     }

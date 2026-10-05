@@ -56,8 +56,9 @@ not by expecting a fresh model request to return identical words.
 ## Full Release Validation
 
 `Full Release Validation` is the manual release umbrella. Every run binds an
-exact Validation SHA + Tooling SHA tuple and rejects an `expected_sha` mismatch
-before child dispatch. Validation SHA maps to the Code SHA for product
+exact candidate C, qualification Q, and admission/publication P tuple and rejects
+an `expected_sha` mismatch before child dispatch. Fresh publication uses Q=C;
+P is independently trusted and cannot supply substitute tests. Validation SHA maps to the Code SHA for product
 validation or the Release SHA for changelog-only validation; it is not a third
 release identity. Beta-publish maps to `release_profile=beta` with
 `run_release_soak=false`. Regular stable releases use `release_profile=stable`.
@@ -187,13 +188,15 @@ For pinned commit proof on a fast-moving branch, use the helper instead of
 `gh workflow run ... --ref main -f ref=<sha>`:
 
 ```bash
-TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 VALIDATION_SHA="<full-release-candidate-sha>"
 PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
 pnpm ci:full-release \
   --sha "$VALIDATION_SHA" \
   --target-ref release/YYYY.M.PATCH \
-  --workflow-sha "$TOOLING_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
+  --request-file <private-request-file> \
   -f validation_purpose=publish \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
@@ -209,12 +212,11 @@ publication selection; profile and filters still select the actual coverage.
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
 helper first proves GitHub serves the exact Validation SHA by bare-SHA fetch in a
-fresh temporary repository, including in dry runs. It then pushes one immutable
-`release-ci/*` workflow ref at the trusted Tooling SHA, passes the exact Validation
-SHA through `ref` and `expected_sha`, reuses
-strict exact-target evidence when available, and verifies every child workflow
-`headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
-it from moving `main`. Regular release branches accept only their final package
+fresh temporary repository, including in dry runs. After independent admission,
+it pushes one immutable `release-ci/*` workflow ref at Q=C and passes C through
+`ref` and `expected_sha`. Reused evidence must retain its original Q and coverage;
+every new child workflow `headSha` must match Q. Record all three roles and never
+refresh qualification from moving `main`. Regular release branches accept only their final package
 version or a matching beta prerelease.
 
 `release_profile` controls live/provider breadth passed into release checks. The
@@ -240,7 +242,7 @@ needed.
 
 For recovery, decide blocker or flake for every failed test, then classify product, harness/tooling/provenance,
 infrastructure/credential, and wrapper failures before editing. Only confirmed
-product failure changes the Code SHA. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
+product or qualification-harness failure changes C/Q. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
 validation run; never retry a failed test automatically or widen to `all`.
 Flakes get at most two explicit same-SHA reruns and a tracked fix on `main`;
 record an eligible still-failing job instead of changing tooling, re-cutting,

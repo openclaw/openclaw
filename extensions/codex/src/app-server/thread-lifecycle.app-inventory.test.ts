@@ -27,7 +27,7 @@ import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel, useAutoCleanupTempDirTracker } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
@@ -110,7 +110,6 @@ describe("Codex app inventory across physical process restart", () => {
     const appServer = {
       ...createAppServerOptions(),
       connectionClass: "local-loopback" as const,
-      remoteAppsSubstrate: "preconfigured" as const,
     };
     appServer.start = {
       ...appServer.start,

@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
@@ -10,10 +11,12 @@ import * as metadataReader from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import * as sharedWorker from "./openclaw-state-worker-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -171,28 +174,114 @@ it("orders set, link and clear through both owners with zero caller-thread SQL",
   }
 });
 
-it.each(["read", "write"] as const)(
+it.each(["read", "write", "prepare"] as const)(
   "captures the ACP %s environment before deferred composition",
   async (operation) => {
     const sessionKey = key(`capture-${operation}`);
     await actor.sessions.create(authority, { sessionKey, entry: entry(`capture-${operation}`) });
     await actor.acp.upsertMeta({ authority, cfg, env, sessionKey, mutate: () => meta });
     const requestEnv = { ...env };
-    const input = { cfg, env: requestEnv, sessionKey };
+    const input = {
+      cfg,
+      env: requestEnv,
+      sessionKey,
+      authority,
+      databasePath: resolveOpenClawStateSqlitePath(env),
+    };
     const updated = { ...meta, lastActivityAt: 300 };
     const pending =
       operation === "read"
         ? readAcpSessionEntryAsync(input, { actor, authority }).then((value) => value?.acp)
-        : upsertAcpSessionMeta({ ...input, mutate: () => updated }, { actor, authority }).then(
-            (value) => value?.acp,
-          );
+        : operation === "write"
+          ? upsertAcpSessionMeta({ ...input, mutate: () => updated }, { actor, authority }).then(
+              (value) => value?.acp,
+            )
+          : actor.acp.prepareEntryRead(input).then((prepared) => {
+              try {
+                prepared.assertCurrent();
+                return prepared.session?.acp;
+              } finally {
+                prepared.release();
+              }
+            });
     requestEnv.OPENCLAW_STATE_DIR = tempDirs.make("incognito-acp-redirect-");
-    expect(await pending).toEqual(operation === "read" ? meta : updated);
+    if (operation === "prepare") {
+      input.sessionKey = key("wrong-preparation");
+      input.databasePath = resolveOpenClawStateSqlitePath(requestEnv);
+    }
+    expect(await pending).toEqual(operation === "write" ? updated : meta);
     expect((await actor.acp.readEntry({ authority, cfg, env, sessionKey }))?.acp).toEqual(
-      operation === "read" ? meta : updated,
+      operation === "write" ? updated : meta,
     );
   },
 );
+
+it("fences binding cleanup when ACP metadata commits after its actor entry", async () => {
+  const sessionKey = key("binding-cleanup");
+  await actor.sessions.create(authority, { sessionKey, entry: entry("binding-cleanup") });
+  const store = createPluginStateKeyedStore<string>("fixture", {
+    namespace: "incognito-acp-cleanup",
+    maxEntries: 10,
+    env,
+  });
+  await store.register("binding", sessionKey);
+  const reached = createDeferredCore();
+  const resume = createDeferredCore();
+  const run = sharedWorker.runOpenClawStateWorkerOperation;
+  const shared = vi
+    .spyOn(sharedWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) =>
+      run(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: new Proxy(scope.execute, {
+              async apply(fn, receiver, args: Parameters<typeof scope.execute>) {
+                if (args[0].type === "acp.commitMutation") {
+                  reached.resolve();
+                  await resume.promise;
+                }
+                return Reflect.apply(fn, receiver, args);
+              },
+            }),
+          }),
+        options,
+      ),
+    );
+  const updating = actor.acp.upsertMeta({ authority, cfg, env, sessionKey, mutate: () => meta });
+  void updating.catch(() => {});
+  let prepared: Awaited<ReturnType<IncognitoAcpSessionAccess["prepareEntryRead"]>> | undefined;
+  const observe = observeHostDataSql();
+  try {
+    await awaitGateBeforeSettlement(
+      reached.promise,
+      updating,
+      "ACP mutation skipped shared commit",
+    );
+    const request = { cfg, env: { ...env }, sessionKey, authority };
+    const preparing = actor.acp.prepareEntryRead(request);
+    request.sessionKey = key("wrong-binding");
+    request.env.OPENCLAW_STATE_DIR = tempDirs.make("incognito-acp-cleanup-redirect-");
+    prepared = await preparing;
+    expect(prepared.session?.sessionKey).toBe(sessionKey);
+    expect(prepared.session?.acp).toBeUndefined();
+    resume.resolve();
+    await updating;
+    expect(() => prepared!.assertCurrent()).toThrow("Prepared ACP session changed");
+    await expect(
+      store.delete("binding", { assertCurrent: prepared.assertCurrent }),
+    ).rejects.toThrow();
+    expect(await store.lookup("binding")).toBe(sessionKey);
+    expect(observe.queries).toEqual([]);
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([updating]);
+    prepared?.release();
+    observe.restore();
+    shared.mockRestore();
+  }
+});
 
 it.each(["snapshot", "policy"] as const)(
   "refuses changed %s before shared publication without replaying the mutator",

@@ -457,7 +457,6 @@ export function maybeRepairCodexRoutes(params: {
   cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
-  codexRuntimeReady?: boolean;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): { cfg: OpenClawConfigWithLegacyRoster; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;

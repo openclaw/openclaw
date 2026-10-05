@@ -345,9 +345,9 @@ async function withImageDescriptionTimeout<T>(params: {
   }
 }
 
-async function describeImagesWithModelInternal(
+export async function describeImagesWithModelPayloadTransformCore(
   params: ImagesDescriptionRequest,
-  options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
+  onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImagesDescriptionResult> {
   return await runWithAsyncWorkResources(async (onAcquired) => {
     let assertResourcesOpen: (() => void) | undefined;
@@ -472,9 +472,7 @@ async function describeImagesWithModelInternal(
     const completeImage = async (retry = false) => {
       params.signal?.throwIfAborted();
       assertResourcesOpen?.();
-      const payloadHandler = retry
-        ? imageRetryPayloadHandler(options.onPayload)
-        : options.onPayload;
+      const payloadHandler = retry ? imageRetryPayloadHandler(onPayload) : onPayload;
       const timeoutMs = configuredTimeoutMs;
       const streamOptions = {
         apiKey,
@@ -557,14 +555,7 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
 export async function describeImagesWithModelCore(
   params: ImagesDescriptionRequest,
 ): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params);
-}
-
-export async function describeImagesWithModelPayloadTransformCore(
-  params: ImagesDescriptionRequest,
-  onPayload: ProviderStreamOptions["onPayload"],
-): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params, { onPayload });
+  return await describeImagesWithModelPayloadTransformCore(params, undefined);
 }
 
 export async function describeImageWithModelCore(

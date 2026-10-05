@@ -1349,11 +1349,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       },
     });
 
-    const binDir = join(repoDir, "bin");
-    mkdirSync(binDir);
-    writeFileSync(join(binDir, "npm"), "#!/bin/sh\nprintf '\"1.2.4\"\\n'\n", { mode: 0o755 });
-    const previousPath = process.env.PATH;
-    process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+    const resolveLatestVersion = vi.fn(() => "1.2.4");
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
         bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
@@ -1371,15 +1367,11 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         rootDir: repoDir,
         fetchImpl,
         registryBaseUrl: "https://clawhub.ai",
+        resolveLatestVersion,
       },
-    ).finally(() => {
-      if (previousPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = previousPath;
-      }
-    });
+    );
 
+    expect(resolveLatestVersion).toHaveBeenCalledWith("demo-runtime");
     expect(plan.warnings).toEqual(
       ["demo-plugin", "demo-three", "demo-two"].map(
         (id) =>
@@ -1832,6 +1824,25 @@ describe("plugin-clawhub-publish.sh", () => {
     ).toThrow("unexpected plugin ClawHub publish argument: extra");
   });
 
+  it.each(["clawhub", "./clawhub", "C:clawhub"])(
+    "rejects relative ClawHub CLI override %s",
+    (cli) => {
+      const repoDir = createTempPluginRepo();
+      writeFileSync(join(repoDir, "clawhub"), "#!/bin/sh\nexit 97\n", { mode: 0o755 });
+      const result = spawnSync(
+        "bash",
+        [
+          join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+          "--pack",
+          "extensions/demo-plugin",
+        ],
+        { cwd: repoDir, encoding: "utf8", env: { ...process.env, OPENCLAW_CLAWHUB_CLI: cli } },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("OPENCLAW_CLAWHUB_CLI must be an absolute executable path");
+    },
+  );
+
   it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
     const repoDir = createTempPluginRepo();
     const binDir = join(repoDir, "bin");
@@ -2086,7 +2097,7 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$TEST_INVOCATIONS"
 if [[ "\${1:-}" == "--workdir" ]]; then shift 2; fi
 if [[ "\${2:-}" == "pack" ]]; then
-  printf '{"path":"%s"}\\n' "$TEST_TGZ"
+  node -e 'console.log(JSON.stringify({ path: process.env.TEST_TGZ }))'
   exit 0
 fi
 if [[ " $* " == *" --dry-run "* ]]; then
@@ -2139,8 +2150,9 @@ fi
       },
     );
 
-    expect(existsSync(attemptsPath), result.stderr).toBe(true);
-    expect(readFileSync(attemptsPath, "utf8"), result.stderr).toBe(String(attempts));
+    const publishOutput = `${result.stdout}\n${result.stderr}`;
+    expect(existsSync(attemptsPath), publishOutput).toBe(true);
+    expect(readFileSync(attemptsPath, "utf8"), publishOutput).toBe(String(attempts));
     expect(readFileSync(sleepsPath, "utf8")).toBe(sleeps.map((delay) => `${delay}\n`).join(""));
     expect(result.status === 0).toBe(attempts > failures && !mutate);
     if (diagnostic) {

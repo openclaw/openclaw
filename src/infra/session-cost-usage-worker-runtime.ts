@@ -11,7 +11,6 @@ import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   parseSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.js";
@@ -221,16 +220,19 @@ export async function runUsageCostWorker(
   };
   const capturedOperation = structuredClone(operation);
   const target = structuredClone(incognito.target);
-  const { agentId, databasePath } = captured.location;
+  const { agentId, path: databasePath } = incognito.actor;
   if (
-    agentId !== incognito.actor.agentId ||
-    databasePath !== incognito.actor.path ||
-    captured.location.storePath !== databasePath ||
-    captured.databases.some((entry) => entry.agentId !== agentId || entry.path !== databasePath)
+    captured.location.agentId !== agentId ||
+    !captured.databases.some((entry) => entry.agentId === agentId && entry.path === databasePath) ||
+    captured.databases.some(
+      (entry) =>
+        isIncognitoOpenClawAgentSqlitePath(entry.path, entry) &&
+        (entry.agentId !== agentId || entry.path !== databasePath),
+    )
   ) {
     throw new Error("Usage actor does not own the prepared database");
   }
-  const marker = { agentId, storePath: databasePath, sessionId: target.sessionId };
+  const marker = { agentId, storePath: databasePath };
   const selectedFiles =
     capturedOperation.kind === "sessions"
       ? capturedOperation.sessions.map((entry) => entry.sessionFile)
@@ -243,19 +245,32 @@ export async function runUsageCostWorker(
       ...(capturedOperation.kind === "refresh"
         ? (capturedOperation.rebuildRows?.map((row) => row.key) ?? [])
         : []),
-    ].some((file) => !sqliteSessionFileMarkerMatchesTarget(file, marker))
+    ].some((file) => {
+      const selected = parseSqliteSessionFileMarker(file);
+      return (
+        !selected ||
+        selected.agentId !== agentId ||
+        path.resolve(selected.storePath) !== databasePath ||
+        (target && selected.sessionId !== target.sessionId)
+      );
+    })
   ) {
     throw new Error("Usage request contains another incognito session");
   }
   return incognito.actor.sessions.withCompute(
     incognito.authority,
     target,
-    (compute) =>
-      runPreparedUsageCostWorker(
+    async (compute) => {
+      const instances = target
+        ? [{ ...target, updatedAtMs: 0 }]
+        : await compute.execute({ type: "session.compute.store.inventory", input: {} });
+      instances.forEach(({ sessionKey }) => incognito.retainSource?.(sessionKey));
+      return runPreparedUsageCostWorker(
         captured,
         capturedOperation,
-        createIncognitoUsageCostAdapter(compute, target, marker),
-      ),
+        createIncognitoUsageCostAdapter(compute, target, marker, instances),
+      );
+    },
     getAsyncWorkSignal(),
   );
 }
@@ -269,6 +284,7 @@ async function runPreparedUsageCostWorker(
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
+    const actorOwnsCache = incognito?.owns(location.agentId, location.databasePath) === true;
     const bindings = prepared.databases.map((options) => {
       const memory = isIncognitoOpenClawAgentSqlitePath(options.path, options);
       return {
@@ -301,6 +317,9 @@ async function runPreparedUsageCostWorker(
         admittedDatabase.path === binding.options.path &&
         getOpenClawAgentDatabaseIfOpen(binding.options) === admittedDatabase &&
         isOpenClawAgentDatabasePathCurrent(admittedDatabase);
+      if (incognito?.owns(binding.options.agentId, binding.options.path)) {
+        return;
+      }
       if (binding.memory) {
         const current = getOpenClawAgentDatabaseIfOpen(binding.options);
         if (!binding.database && current && admittedCache) {
@@ -340,9 +359,6 @@ async function runPreparedUsageCostWorker(
       incognito?.assertCurrent();
       scope.assertCurrent();
       signal?.throwIfAborted();
-      if (incognito) {
-        return;
-      }
       for (const binding of bindings) {
         if (binding !== cacheBinding) {
           assertBindingCurrent(binding);
@@ -379,7 +395,7 @@ async function runPreparedUsageCostWorker(
       pruneRows.length = 0;
     });
     const hostLock =
-      capturedOperation.kind === "refresh" && !incognito
+      capturedOperation.kind === "refresh" && !actorOwnsCache
         ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
             env: location.env,
             assertCurrent,
@@ -388,7 +404,12 @@ async function runPreparedUsageCostWorker(
     if (hostLock) {
       scope.retainCleanup(hostLock.release);
     }
-    const lock = capturedOperation.kind === "refresh" ? (incognito?.lock ?? hostLock) : undefined;
+    const lock =
+      capturedOperation.kind === "refresh"
+        ? actorOwnsCache
+          ? incognito?.lock
+          : hostLock
+        : undefined;
     if (lock) {
       if (!(await lock.acquire())) {
         return { kind: "busy" };
@@ -426,7 +447,7 @@ async function runPreparedUsageCostWorker(
           location,
           operation: workerOperation,
           databases: [],
-          transcriptFiles: incognito ? [incognito.filePath] : undefined,
+          transcriptFiles: incognito?.filePaths,
         },
         {
           signal,

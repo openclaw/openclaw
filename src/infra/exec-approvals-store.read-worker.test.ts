@@ -3,6 +3,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -14,8 +15,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
@@ -23,6 +27,10 @@ import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import {
   loadExecApprovalsReadOnlyAsync,
   readExecApprovalsPolicyReadOnlyAsync,
+  prepareCronExecHostPolicyUse,
+  readExecApprovalsSnapshot,
+  restoreExecApprovalsSnapshotLocked,
+  updateExecApprovalsSync,
 } from "./exec-approvals-store.js";
 import { testing } from "./exec-approvals-store.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -325,3 +333,226 @@ it("fails closed without a native retry when the worker read fails", async () =>
   expect(loggerWarn).toHaveBeenCalledTimes(1);
   expect(loggerWarn.mock.calls[0]?.[0]).toContain("unavailable");
 });
+
+function prepareCronPolicy(env: NodeJS.ProcessEnv) {
+  return prepareCronExecHostPolicyUse(captureOpenClawStateWorkerContext({ env }), {
+    agentId: "main",
+    security: "allowlist",
+    ask: "on-miss",
+  });
+}
+
+it.each(["commit", "rollback", "unknown commit"] as const)(
+  "retires only the prepared cron policy use across a native %s",
+  async (outcome) => {
+    const { root, env } = fixture();
+    const source = seed(env);
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const use = await prepareCronPolicy(env);
+    const sql = watchNativeSql();
+    expect(use.assertCurrent).not.toThrow();
+    sql.expectIdle();
+    sql.restore();
+    const exec = source.db.exec.bind(source.db);
+    const failure =
+      outcome === "unknown commit"
+        ? vi.spyOn(source.db, "exec").mockImplementation((statement) => {
+            exec(statement);
+            if (statement === "COMMIT") {
+              throw new Error("synthetic lost commit acknowledgement");
+            }
+          })
+        : undefined;
+    const write = () =>
+      runOpenClawStateWriteTransaction(() => {
+        updateExecApprovalsSync({ update: (file) => ({ ...file, defaults: { ask: "always" } }) });
+        expect(use.assertCurrent).toThrow("policy changed");
+        if (outcome === "rollback") {
+          throw new Error("synthetic rollback");
+        }
+      });
+    try {
+      if (outcome === "commit") {
+        write();
+      } else {
+        expect(write).toThrow();
+      }
+      expect(use.assertCurrent).toThrow();
+    } finally {
+      failure?.mockRestore();
+      use.release();
+    }
+    if (outcome === "rollback") {
+      const fresh = await prepareCronPolicy(env);
+      expect(fresh.assertCurrent).not.toThrow();
+      fresh.release();
+    }
+  },
+);
+
+it("never revives an old policy use when a native commit outruns its prepared read", async () => {
+  const { root, env } = fixture();
+  seed(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const reached = createDeferred();
+  const deliver = createDeferred();
+  const read = stateReads.executeExistingOpenClawStateRead;
+  const held = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementationOnce(async (...args) => {
+      const result = await read(...args);
+      reached.resolve();
+      await deliver.promise;
+      return result;
+    });
+  const prepared = prepareCronPolicy(env);
+  const refused = expect(prepared).rejects.toThrow("policy changed");
+  try {
+    await awaitGateBeforeSettlement(
+      reached.promise,
+      prepared,
+      "Policy read settled before delivery gate",
+    );
+    updateExecApprovalsSync({ update: (file) => ({ ...file, defaults: { security: "deny" } }) });
+    updateExecApprovalsSync({
+      update: (file) => ({ ...file, defaults: { security: "allowlist" } }),
+    });
+  } finally {
+    deliver.resolve();
+    held.mockRestore();
+  }
+  await refused;
+  const fresh = await prepareCronPolicy(env);
+  expect(fresh.assertCurrent).not.toThrow();
+  fresh.release();
+});
+
+it("keeps cron policy uses current through real worker grant and usage writes without caller SQL", async () => {
+  const { root, env } = fixture();
+  seed(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const initial = readExecApprovalsSnapshot().file;
+  const sql = watchNativeSql();
+  sql.calibrate();
+  const use = await prepareCronPolicy(env);
+  try {
+    await commitExecAuthorizationLocked({
+      agentId: "main",
+      matches: [],
+      command: "echo policy-neutral",
+      authorization: {
+        source: "explicit-approval",
+        security: "allowlist",
+        ask: "on-miss",
+        allowlistSatisfied: false,
+        policySnapshot: createExecApprovalPolicySnapshot({ file: initial, agentId: "main" }),
+      },
+      allowAlwaysDecision: { kind: "exact-command", commandText: "echo policy-neutral" },
+    });
+    const file = await loadExecApprovalsReadOnlyAsync({ env });
+    const matches = file.agents?.main?.allowlist ?? [];
+    expect(matches).toHaveLength(1);
+    await commitExecAuthorizationLocked({
+      agentId: "main",
+      matches,
+      command: "echo policy-neutral",
+      authorization: {
+        source: "current-policy",
+        security: "allowlist",
+        ask: "on-miss",
+        allowlistSatisfied: true,
+      },
+    });
+    expect(use.assertCurrent).not.toThrow();
+    sql.expectIdle();
+  } finally {
+    use.release();
+    sql.restore();
+  }
+});
+
+it("publishes native restoration and scopes policy retirement to the original physical source", async () => {
+  const { root, env } = fixture();
+  seed(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const original = readExecApprovalsSnapshot();
+  updateExecApprovalsSync({ update: (file) => ({ ...file, defaults: { ask: "always" } }) });
+  const denied = readExecApprovalsSnapshot();
+  await restoreExecApprovalsSnapshotLocked(original, denied.hash);
+  const use = await prepareCronPolicy(env);
+  const foreign = fixture();
+  seed(foreign.env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", foreign.root);
+  updateExecApprovalsSync({ update: (file) => ({ ...file, defaults: { security: "deny" } }) });
+  expect(use.assertCurrent).not.toThrow();
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  await restoreExecApprovalsSnapshotLocked(denied, original.hash);
+  expect(use.assertCurrent).toThrow("policy changed");
+  use.release();
+});
+
+it("releases prepared policy observations on database close without reviving them on reopen", async () => {
+  const { env } = fixture();
+  seed(env);
+  const use = await prepareCronPolicy(env);
+  await closeOpenClawStateDatabaseAsync();
+  expect(use.assertCurrent).toThrow();
+  openOpenClawStateDatabase({ env });
+  const fresh = await prepareCronPolicy(env);
+  expect(fresh.assertCurrent).not.toThrow();
+  expect(use.assertCurrent).toThrow();
+  fresh.release();
+});
+
+it.each(["fulfilled", "throwing launch", "unknown"] as const)(
+  "retains the policy mutation fence through a %s native acknowledgement",
+  async (outcome) => {
+    const { root, env } = fixture();
+    seed(env);
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const use = await prepareCronPolicy(env);
+    const acknowledgement = createDeferred();
+    const deny = () =>
+      updateExecApprovalsSync({
+        update: (file) => ({ ...file, defaults: { security: "deny" } }),
+      });
+    const launch = vi.fn(() => {
+      if (outcome === "throwing launch") {
+        throw new Error("synthetic native launch failure");
+      }
+    });
+    try {
+      if (outcome === "throwing launch") {
+        expect(() => use.initiate(launch, acknowledgement.promise)).toThrow(
+          "synthetic native launch failure",
+        );
+      } else {
+        use.initiate(launch, acknowledgement.promise);
+      }
+      expect(launch).toHaveBeenCalledOnce();
+      use.release();
+      expect(deny).toThrow("native launch acknowledgement is pending");
+      expect(
+        updateExecApprovalsSync({
+          update: (file) => ({ ...file, socket: { path: "/synthetic-metadata" } }),
+        }),
+      ).not.toBeNull();
+      expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).not.toBe("deny");
+      if (outcome === "unknown") {
+        acknowledgement.reject(new Error("synthetic native outcome unknown"));
+        await acknowledgement.promise.catch(() => {});
+        expect(deny).toThrow("native launch acknowledgement is pending");
+        await closeOpenClawStateDatabaseAsync();
+        expect(deny()).not.toBeNull();
+      } else {
+        acknowledgement.resolve();
+        await acknowledgement.promise;
+        expect(deny()).not.toBeNull();
+      }
+      expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
+    } finally {
+      acknowledgement.resolve();
+      use.release();
+    }
+  },
+);

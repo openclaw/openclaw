@@ -119,6 +119,16 @@ export function createWorkboardSessionsBoardTools(params: {
           strictObject({
             agentIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
             includeArchived: Type.Optional(Type.Boolean()),
+            includeAutomation: Type.Optional(
+              Type.Boolean({
+                description: "Include automation (cron) and system sessions. Defaults to false.",
+              }),
+            ),
+            includeHome: Type.Optional(
+              Type.Boolean({
+                description: "Include each agent's Home session. Defaults to false.",
+              }),
+            ),
             maxAgeHours: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
           }),
         ),

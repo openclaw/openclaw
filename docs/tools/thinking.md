@@ -134,9 +134,9 @@ check the per-agent setting if the model default still does not take effect.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 - `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels and `"raw"` for unabridged non-shell detail. Standalone shell summaries require `/verbose full` for command text; progress drafts require the channel's explicit `streaming.*.commandText: "raw"` opt-in. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
-  - `/verbose on`: `🛠️ Exec`
-  - `/verbose full` + `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`
-  - `/verbose full` + `raw`: `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js`
+  - `/verbose on`: `Exec`
+  - `/verbose full` + `explain`: `check JS syntax for /tmp/app.js`
+  - `/verbose full` + `raw`: `check JS syntax for /tmp/app.js, node --check /tmp/app.js`
 
 ## Plugin trace directives (/trace)
 

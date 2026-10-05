@@ -419,6 +419,7 @@ describe("memory storage migration", () => {
       CREATE TABLE memory_index_state (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL) STRICT;
       INSERT INTO memory_index_state VALUES(1, 10);
       CREATE INDEX idx_memory_index_chunks_path_source ON memory_index_chunks(path, source);
+      CREATE INDEX idx_memory_index_chunks_path ON memory_index_chunks(path);
       CREATE INDEX idx_memory_embedding_cache_updated_at ON memory_embedding_cache(updated_at);
     `);
     for (const event of ["insert", "update", "delete"]) {
@@ -428,14 +429,14 @@ describe("memory storage migration", () => {
     }
     const indexes = db
       .prepare(
-        "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
+        "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_index_chunks_path', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
       )
       .all();
     migrateMemoryIndexStorage(db);
     expect(
       db
         .prepare(
-          "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
+          "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_index_chunks_path', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
         )
         .all(),
     ).toEqual(indexes);

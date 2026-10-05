@@ -62,13 +62,9 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   return null;
 }
 
-function getNativeNotificationsPoster() {
-  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawNotifications;
-  return handler?.postMessage.bind(handler);
-}
-
 export function createNativeNotificationsCapability(): NativeNotificationsCapability | null {
-  const postMessage = getNativeNotificationsPoster();
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawNotifications;
+  const postMessage = handler?.postMessage.bind(handler);
   if (!postMessage) {
     return null;
   }

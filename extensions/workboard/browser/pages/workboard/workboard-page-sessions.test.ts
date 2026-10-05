@@ -343,6 +343,100 @@ it("recovers empty-board facts through one plugin refresh of the selected people
   });
 });
 
+it("skips unchanged board events, preserves tiles on conditional reads and rereads after reconnect", async () => {
+  const page = sessionsPage();
+  const revision = { epoch: "sessions", revision: 1, boardId: "sessions", scope: "everyone" };
+  Object.assign(page.result, { revision });
+  await page.connect();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation(async (method, params) =>
+    method === "workboard.sessionsBoard.read" &&
+    (params as { sinceRevision?: unknown }).sinceRevision
+      ? { unchanged: true, revision }
+      : request(method, params),
+  );
+  page.request.mockClear();
+  page.fixture.emit("plugin.workboard.changed", {
+    epoch: "sessions",
+    revision: 2,
+    cardsRevision: 2,
+    sessionsRevision: 1,
+  });
+  page.fixture.emit("sessions.changed", { reason: "category", sessionKey: "agent:main:working" });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(page.reads()).toBe(0);
+  page.fixture.emit("plugin.workboard.changed", { epoch: "sessions", revision: 3 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+    sinceRevision: revision,
+  });
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).toContain("Checking reconnects");
+
+  page.fixture.connection.connected = false;
+  page.fixture.notify();
+  await page.connect();
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+  });
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
+});
+
+it("fences an older conditional read when a session moves", async () => {
+  const page = sessionsPage();
+  const revision = { epoch: "sessions", revision: 1, boardId: "sessions", scope: "everyone" };
+  Object.assign(page.result, { revision });
+  await page.connect();
+  const pending = createDeferred<unknown>();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation(async (method, params) => {
+    if (
+      method === "workboard.sessionsBoard.read" &&
+      (params as { sinceRevision?: unknown }).sinceRevision
+    ) {
+      return pending.promise;
+    }
+    if (method === "workboard.sessionsBoard.move") {
+      page.result.sessions[0]!.columnId = "done";
+    }
+    return request(method, params);
+  });
+  page.fixture.emit("plugin.workboard.changed", {
+    epoch: "sessions",
+    revision: 2,
+    sessionsRevision: 2,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const tile = expectDefined(page.container.querySelector("[data-session-key]"), "session tile");
+  tile.dispatchEvent(new Event("dragstart", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expectDefined(
+    page.container.querySelector('[data-session-column="done"]'),
+    "destination",
+  ).dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    page.container.querySelector('[data-session-column="done"]')?.getAttribute("aria-label"),
+  ).toBe("Done, 2");
+  pending.resolve({ unchanged: true, revision });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    page.container.querySelector('[data-session-column="done"]')?.getAttribute("aria-label"),
+  ).toBe("Done, 2");
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+  });
+});
+
 it("renders session columns, owner avatars and canonical facts without card controls or an unavailable dock", async () => {
   const page = sessionsPage();
   await page.connect();
@@ -414,6 +508,63 @@ it("pins a dragged session and rereads the selected people view", async () => {
     view: { includePeople: true, involvingMe: true },
   });
   expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
+});
+
+it("links up to four pull requests by state without opening or dragging the session", async () => {
+  const page = sessionsPage();
+  page.result.sessions[0]!.pullRequests = [
+    { number: 10, state: "closed" },
+    { number: 11, state: "merged" },
+    { number: 12, state: "draft" },
+    {
+      number: 13,
+      state: "open",
+      url: "https://github.com/example/project/pull/13",
+      title: "Fix session retries",
+    },
+    { number: 14, state: "closed" },
+    { number: 15, state: "closed" },
+  ];
+  await page.connect();
+  const tile = expectDefined(
+    page.container.querySelector<HTMLElement>('[data-session-key="agent:main:working"]'),
+    "session tile",
+  );
+  const pullRequests = [...tile.querySelectorAll<HTMLElement>(".workboard-session-pr")];
+  expect(pullRequests.map((entry) => entry.textContent?.trim())).toEqual([
+    "#13 · Open",
+    "#12 · Draft",
+    "#11 · Merged",
+    "#10 · Closed",
+  ]);
+  expect(tile.querySelector(".workboard-session-tile__prs")?.textContent).toContain("+2");
+  const link = expectDefined(tile.querySelector<HTMLAnchorElement>("a"), "pull-request link");
+  expect(link.href).toBe("https://github.com/example/project/pull/13");
+  expect(link.target).toBe("_blank");
+  expect(link.rel).toBe("noreferrer");
+  expect(link.title).toBe("Fix session retries");
+  expect(link.closest("button")).toBeNull();
+  expect(pullRequests.slice(1).every((entry) => entry.tagName === "SPAN")).toBe(true);
+
+  const icon = expectDefined(link.querySelector("svg"), "pull-request state icon");
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+  icon.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(false);
+  expect(page.fixture.host.sessions.open).not.toHaveBeenCalled();
+  link.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }));
+  expectDefined(
+    page.container.querySelector('[data-session-column="done"]'),
+    "destination",
+  ).dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.move"),
+  ).toBe(false);
+  expectDefined(tile.querySelector<HTMLButtonElement>("button"), "session title").click();
+  expect(page.fixture.host.sessions.open).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: "agent:main:working",
+    agentId: "main",
+  });
 });
 
 it.each(["cards", "sessions"] as const)(

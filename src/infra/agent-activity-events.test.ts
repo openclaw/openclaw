@@ -268,6 +268,61 @@ describe("agent activity events", () => {
     }
   });
 
+  test("keeps a completed step countable when its only child is routine progress", () => {
+    const projected = projectAgentHistoryActivity([
+      {
+        messageId: "step",
+        message: {
+          role: "assistant",
+          runId: "run",
+          content: [
+            {
+              type: "toolCall",
+              id: "step",
+              name: "exec",
+              arguments: {
+                title: "Check the release checklist",
+                code: "await tools.progress_card({});",
+              },
+            },
+          ],
+        },
+      },
+      {
+        messageId: "progress",
+        message: createNestedToolActivity({
+          runId: "run",
+          scopeId: "scope",
+          afterEntryId: "step",
+          startOrder: 1,
+          parentToolCallId: "step",
+          toolCallId: "progress",
+          toolName: "progress_card",
+          input: { action: "update", title: "Release checklist" },
+          result: { content: [{ type: "text", text: "Updated" }] },
+          isError: false,
+          startedAt: 1,
+          timestamp: 2,
+        }),
+      },
+      {
+        messageId: "result",
+        message: {
+          role: "toolResult",
+          runId: "run",
+          toolCallId: "step",
+          toolName: "exec",
+          isError: false,
+          content: [{ type: "text", text: "Finished" }],
+        },
+      },
+    ]);
+    expect(projected.find((entry) => entry.messageId === "step")?.items).toEqual([
+      expect.objectContaining({ toolCallId: "step", name: "exec", status: "completed" }),
+    ]);
+    expect(projected.find((entry) => entry.messageId === "progress")?.items).toEqual([]);
+  });
+
   test.each([true, false])(
     "does not expose a child assignment in progress (named: %s)",
     (named) => {

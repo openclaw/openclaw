@@ -18,6 +18,11 @@ import {
   resetRuntimeServiceMocks,
 } from "./server-runtime-services.test-harness.js";
 
+// mock-isolation: Scheduler tests must not start channel or transcript repair lifetimes.
+vi.mock("./server-startup-plugins.js", () => ({
+  runGatewayPostReadyStartupMaintenance: vi.fn(async () => {}),
+}));
+
 const { scheduleGatewayPostReadyMaintenance } = await import("./server-runtime-services.js");
 
 beforeEach(() => {

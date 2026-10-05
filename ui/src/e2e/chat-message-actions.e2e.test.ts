@@ -630,7 +630,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
       await file.hover();
       await expect.poll(() => openTooltip.count()).toBe(1);
-      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      const filePath = group.locator("openclaw-tooltip[open] .markdown-file-tooltip__path");
+      await filePath.waitFor({ state: "visible" });
+      expect(await filePath.textContent()).toBe("/workspace/tooltip-proof.txt");
       expect(await popupStyle()).toEqual(metadataStyle);
       expect(await file.getAttribute("title")).toBe("");
       await screenshot(page, "tooltip-file-hint.png");

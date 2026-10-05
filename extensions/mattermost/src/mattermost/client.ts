@@ -8,6 +8,7 @@ import {
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureChannelReadAuthority,
+  captureEffectAuthority,
   responseWithRelease,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -269,6 +270,7 @@ export function createMattermostClient(params: {
     | ((input: RequestInfo | URL, init?: MattermostRequestInit) => Promise<Response>)
     | undefined = externalFetchImpl
     ? async (input, init) => {
+        const effect = captureEffectAuthority();
         const assertReadAuthority = captureChannelReadAuthority();
         assertReadAuthority?.();
         const url =
@@ -286,11 +288,15 @@ export function createMattermostClient(params: {
             ? AbortSignal.any([callerSignal, timeoutSignal])
             : (callerSignal ?? timeoutSignal);
         try {
-          assertRequestCurrent?.();
-          if (isMessagePost) {
-            postDispatchStarted = true;
-          }
-          const response = await externalFetchImpl(input, { ...requestInit, signal });
+          const response = await effect.initiate(() => {
+            assertReadAuthority?.();
+            assertRequestCurrent?.();
+            signal?.throwIfAborted();
+            if (isMessagePost) {
+              postDispatchStarted = true;
+            }
+            return externalFetchImpl(input, { ...requestInit, signal });
+          });
           // Match guarded production fetches: retain cancellation and the
           // request deadline until the custom response body is consumed.
           return responseWithRelease(response, async () => cleanup());

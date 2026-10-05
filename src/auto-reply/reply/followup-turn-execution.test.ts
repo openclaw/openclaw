@@ -180,6 +180,7 @@ describe("executeFollowupTurn", () => {
     const turn = createTurn();
     const typing = createTypingController();
     const onAgentRunStart = vi.fn();
+    turn.queued.runObservers = { onAgentRunStart };
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       params.opts?.onAgentRunStart?.("run-1");
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
@@ -190,7 +191,6 @@ describe("executeFollowupTurn", () => {
       defaults: {
         typing,
         typingMode: "instant",
-        opts: { onAgentRunStart },
       },
     });
 
@@ -529,7 +529,7 @@ describe("executeFollowupTurn", () => {
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       await params.opts?.onToolStart?.({ name: "read", phase: "start" });
-      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      await params.opts?.onToolResult?.({ text: "Web Fetch: working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -547,7 +547,7 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onToolStart).toHaveBeenCalledOnce();
-    expect(onChannelToolResult).toHaveBeenCalledWith({ text: "📄 Web Fetch: working" });
+    expect(onChannelToolResult).toHaveBeenCalledWith({ text: "Web Fetch: working" });
     expect(onDurableToolResult).not.toHaveBeenCalled();
   });
 
@@ -753,7 +753,7 @@ describe("executeFollowupTurn", () => {
     const onChannelToolResult = vi.fn(async () => {});
     const onDurableToolResult = vi.fn(async () => {});
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      await params.opts?.onToolResult?.({ text: "Web Fetch: working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -770,7 +770,7 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onChannelToolResult).not.toHaveBeenCalled();
-    expect(onDurableToolResult).toHaveBeenCalledWith({ text: "📄 Web Fetch: working" });
+    expect(onDurableToolResult).toHaveBeenCalledWith({ text: "Web Fetch: working" });
   });
 
   it("keeps forced tool results durable when channel progress is unavailable", async () => {
@@ -785,7 +785,7 @@ describe("executeFollowupTurn", () => {
       },
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      await params.opts?.onToolResult?.({ text: "Web Fetch: working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -798,7 +798,7 @@ describe("executeFollowupTurn", () => {
     });
     await result.progress.drain();
 
-    expect(onDurableToolResult).toHaveBeenCalledWith({ text: "📄 Web Fetch: working" });
+    expect(onDurableToolResult).toHaveBeenCalledWith({ text: "Web Fetch: working" });
   });
 
   it.each([

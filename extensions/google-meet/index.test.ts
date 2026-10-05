@@ -3206,7 +3206,8 @@ describe("google-meet plugin", () => {
   it("defaults Chrome command-pair realtime to agent-driven talk-back", async () => {
     vi.useFakeTimers();
     try {
-      const sendUserMessage = vi.fn();
+      const responseSent = createDeferred<void>();
+      const sendUserMessage = vi.fn((_message: string) => responseSent.resolve());
       const { provider, requireRequest } = createTestMeetVoiceProvider({
         defaultModel: "gpt-realtime-2",
         sendUserMessage,
@@ -3272,9 +3273,8 @@ describe("google-meet plugin", () => {
       callbacks.onTranscript?.("user", "Please include launch blockers.", true);
 
       await vi.advanceTimersByTimeAsync(TEST_TALKBACK_DEBOUNCE_MS);
-      await vi.waitFor(() => {
-        expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      });
+      await responseSent.promise;
+      expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
       const consultArgs = requireRecord(
         (runtime.agent.runEmbeddedAgent.mock.calls as unknown[][])[0]?.[0],
         "default talk-back agent request",

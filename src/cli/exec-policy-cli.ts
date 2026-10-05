@@ -40,6 +40,7 @@ import {
 } from "./exec-policy-diagnostics.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
 
@@ -374,8 +375,23 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
   defaultRuntime.log(theme.muted(payload.effectivePolicy.note));
 }
 
-async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+  return runWithLocalStateOwner({
+    method: "exec-policy.set",
+    params: { ...policy },
+    target: "local exec policy and approvals",
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => applyOwnedExecPolicy(policy, assertCurrent),
+  });
+}
+
+async function applyOwnedExecPolicy(
+  policy: ExecPolicyResolved,
+  assertCurrent: () => void,
+): Promise<ExecPolicyShowPayload> {
+  assertCurrent();
   const configSnapshot = await readConfigFileSnapshot();
+  assertCurrent();
   const nextConfig = structuredClone(configSnapshot.config ?? {});
   applyConfigExecPolicy(nextConfig, policy);
   if (nextConfig.tools?.exec?.host === "node") {
@@ -387,20 +403,25 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
   const writtenApprovals = await updateExecApprovals({
     baseHash: approvalsSnapshot.hash,
+    assertCurrent,
     update: () => nextApprovals,
   });
   if (!writtenApprovals) {
     throw new Error("Exec approvals changed; reload and retry.");
   }
   try {
+    assertCurrent();
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
       nextConfig,
+      writeOptions: { assertCurrent },
     });
   } catch (err) {
     try {
+      assertCurrent();
       if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
         await updateExecApprovals({
+          assertCurrent,
           update: (current) =>
             buildExecPolicyApprovalsRollback({
               current,

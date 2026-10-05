@@ -75,6 +75,13 @@ export type SessionListFilterParams = {
   shouldYield?: () => boolean;
 };
 
+export function matchesSessionArchiveFilter(
+  entry: Pick<SessionEntry, "archivedAt">,
+  archived: SessionsListParams["archived"],
+) {
+  return archived === "all" || (entry.archivedAt !== undefined) === (archived === true);
+}
+
 function createSessionCandidateFilter(params: SessionListFilterParams) {
   const { opts, now } = params;
   let rowContext: SessionListRowContext | undefined;
@@ -122,11 +129,8 @@ function createSessionCandidateFilter(params: SessionListFilterParams) {
         return false;
       }
     }
-    if (opts.archived !== "all") {
-      const archived = entry.archivedAt !== undefined;
-      if (opts.archived === true ? !archived : archived) {
-        return false;
-      }
+    if (!matchesSessionArchiveFilter(entry, opts.archived)) {
+      return false;
     }
     if (
       opts.requireLastInteraction === true &&

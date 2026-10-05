@@ -24,7 +24,9 @@ Use this path only for a `.33+` Gateway distribution from the trailing
 completed month: the `openclaw` npm package, official npm plugins,
 and matching Docker Gateway images. Use
 `scripts/openclaw-npm-extended-stable-release.mjs` and the release workflows
-on pinned current `main` for command and validation requirements.
+at the frozen candidate Q=C for qualification; independently trusted P owns
+admission, verification, and publication. Deliberately backport missing Q
+contracts before freezing C, without importing future-main scenarios.
 
 1. On `extended-stable/YYYY.M.33`, verify the root and every publishable official
    plugin have the intended version. Generate and commit the complete
@@ -36,8 +38,8 @@ on pinned current `main` for command and validation requirements.
    Release Validation derives `npm_dist_tag=extended-stable` from the version.
 3. Run complete Full Release Validation against the canonical branch with
    `release_profile=stable`; save its run ID and successful `run_attempt`.
-   Use the trusted main-pinned helper's canonical `release-ci/*` producer,
-   which attests the immutable target SHA in its manifest. Direct branch/main
+   Use the canonical helper's candidate-owned `release-ci/*` producer at Q=C,
+   after independent P admission. Preserve its target, coverage, and descriptor. Direct branch/main
    producers do not satisfy protected-tag shared publication. Current manifests
    include qualified npm and prepared Docker artifacts; use that same run ID
    and attempt for npm preflight publication evidence. Also run the supplemental
@@ -52,7 +54,7 @@ on pinned current `main` for command and validation requirements.
    direct canonical-branch/main producers and narrow reruns.
 6. With publication/tag-push authority, create and push a protected lightweight
    `release-publish/<tooling-sha12>-<epoch>` tag at the frozen trusted-main
-   Tooling SHA: `git tag "$PUBLISH_REF" "$TOOLING_SHA"`, then
+   P SHA (not Q): `git tag "$PUBLISH_REF" "$TOOLING_SHA"`, then
    `git push origin "refs/tags/$PUBLISH_REF"`. Set `PUBLISH_REF` to the chosen
    protected tag name before running these commands. Dispatch
    `OpenClaw Release Publish` with `--ref` set to that tooling tag, the product

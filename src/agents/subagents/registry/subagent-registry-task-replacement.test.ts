@@ -42,7 +42,7 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   finalizeInterruptedSubagentRun,
@@ -742,7 +742,8 @@ it.each([
       createHookRunner(createEmptyPluginRegistry()),
     );
     const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: (id, entry) => isSameSubagentRunOwner(subagentRuns.get(id), entry),
+      isEndedHookOwnerCurrent: (entry) =>
+        isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
       warn: () => {},
     });
     const lateStamp =
@@ -889,9 +890,10 @@ it.each([
         replacement.generation = original.generation! + 1;
         replacement.task = "replacement owner";
         // An independent writer changes the durable execution while the worker is held.
-        upsertSubagentRunRowInDatabase(
+        writeSubagentRunValuesInDatabase(
           openOpenClawStateDatabase(),
-          bindSubagentRunRecord(replacement),
+          [bindSubagentRunRecord(replacement)],
+          [],
         );
       }
       release.resolve();

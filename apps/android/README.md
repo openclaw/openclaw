@@ -28,6 +28,14 @@ Gradle sync generates the native localization lookup and resources before IDE
 indexing. Use the repository's supported Node.js version on your PATH, as for
 the build commands below; no separate localization generation step is required.
 
+## Tool icons
+
+Chat tool activity uses the shared tool display icons with native Android glyphs.
+Command, read, edit, write, search, and fetch rows take precedence over the tool's
+configured icon; unknown tools use a puzzle piece. Tool Search calls use the
+called tool's icon. Failed rows retain their error mark, and progress cards keep
+their receipt presentation.
+
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.

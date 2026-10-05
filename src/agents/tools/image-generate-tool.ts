@@ -51,7 +51,7 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import type { ToolModelConfig } from "./model-config.helpers.js";
+import { prepareToolAuthProfileStoreSource, type ToolModelConfig } from "./model-config.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
@@ -303,6 +303,8 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
       const params = args as Record<string, unknown>;
       const action = resolveGenerateAction(params);
       if (action === "list") {
+        const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+        signal?.throwIfAborted();
         return withImageGenerationProviders(cfg, (providers) =>
           createImageGenerateListActionResult({
             cfg,
@@ -310,6 +312,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             workspaceDir: options?.workspaceDir,
             agentDir: options?.agentDir,
             authStore: options?.authProfileStore,
+            authProfileStoreSource,
           }),
         );
       }

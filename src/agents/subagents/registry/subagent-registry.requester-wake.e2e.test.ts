@@ -41,6 +41,7 @@ import type {
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import { registerRequesterStartupAdmissionTests } from "./subagent-registry.requester-wake-admission.test-support.js";
 import { registerRequesterWakeReceiptBoundaryTests } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
@@ -402,6 +403,15 @@ describe("requester settle wake product flow", () => {
       },
     });
   };
+
+  registerRequesterStartupAdmissionTests({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    getFixture: () => ({ testState, sessionStore, sessionStorePath }),
+    createGatewayContext,
+    flushOwnedWork,
+    getRequesterWakeCalls,
+    wakeRequester,
+  });
 
   it.each(
     ["alpha", "beta"].flatMap((firstCompleted) =>

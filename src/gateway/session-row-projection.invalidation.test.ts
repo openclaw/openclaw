@@ -239,62 +239,64 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
       { agentId: "main", storePath: staged, sessionKey: "agent:main:new" },
       { sessionId: "new", updatedAt: 2, category: "new group" },
     );
-    await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
-    const projection = await createSessionRowProjection({ cfg });
-    await projection.ensureMaterialized();
-    try {
-      const readIdentity = databaseIdentity.readOpenClawAgentDatabaseIdentity;
-      const previousIdentity = readIdentity(
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
-      );
-      const reusedIdentity = previousIdentity.identity;
-      if (typeof reusedIdentity !== "string") {
-        throw new Error("Expected a persistent fixture database identity");
-      }
-      expect([...projection.sessionGroupTargets().keys()]).toEqual(["old group"]);
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-      renameSync(staged, storePath);
-      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const replacementIdentity = readIdentity(
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
-      );
-      // Coarse filesystem clocks must not determine whether the inode-reuse case is covered.
-      const replacementBirthtime =
-        replacementIdentity.birthtime === previousIdentity.birthtime
-          ? (BigInt(previousIdentity.birthtime ?? "0") + 1n).toString()
-          : replacementIdentity.birthtime;
-      const identity = vi
-        .spyOn(databaseIdentity, "readOpenClawAgentDatabaseIdentity")
-        .mockImplementation((database) => {
-          const prepared = readIdentity(database);
-          return prepared.filename === replacementIdentity.filename
-            ? { ...prepared, identity: reusedIdentity, birthtime: replacementBirthtime }
-            : prepared;
-        });
-      const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-      // Both observations must describe the same simulated inode reuse.
-      const workerIdentity = vi
-        .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-        .mockImplementation((targets, consume) =>
-          readDatabases(targets, (owners) =>
+    const readIdentity = databaseIdentity.readOpenClawAgentDatabaseIdentity;
+    const previousIdentity = readIdentity(
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
+    );
+    const replacementIdentity = readIdentity(
+      openOpenClawAgentDatabase({ agentId: "main", path: staged }),
+    );
+    if (typeof replacementIdentity.identity !== "string") {
+      throw new Error("Expected a persistent fixture database identity");
+    }
+    const reusedIdentity = replacementIdentity.identity;
+    const previousBirthtime = (BigInt(replacementIdentity.birthtime ?? "0") + 1n).toString();
+    const initialSource = (source: { identity?: string; birthtime?: string }) =>
+      source.identity === previousIdentity.identity &&
+      source.birthtime === previousIdentity.birthtime;
+    const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
+    // Simulate the initial inode while retaining real file verification at both admissions.
+    const workerIdentity = vi
+      .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
+      .mockImplementation((targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
             consume(
               owners.map((owner) => ({
                 ...owner,
-                async readMembershipFacts(input) {
-                  const reply = await owner.readMembershipFacts(input);
-                  return reply.identity === replacementIdentity.identity &&
-                    reply.birthtime === replacementIdentity.birthtime
+                async readStoreProjection(input) {
+                  const reply = await owner.readStoreProjection(input);
+                  return reply.source && initialSource(reply.source)
                     ? {
                         ...reply,
-                        identity: reusedIdentity,
-                        birthtime: replacementBirthtime,
+                        source: {
+                          ...reply.source,
+                          identity: reusedIdentity,
+                          birthtime: previousBirthtime,
+                        },
                       }
+                    : reply;
+                },
+                async readMembershipFacts(input) {
+                  const reply = await owner.readMembershipFacts(input);
+                  return initialSource(reply)
+                    ? { ...reply, identity: reusedIdentity, birthtime: previousBirthtime }
                     : reply;
                 },
               })),
             ),
-          ),
-        );
+          lane,
+        ),
+      );
+    await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
+    const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
+    try {
+      expect([...projection.sessionGroupTargets().keys()]).toEqual(["old group"]);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+      renameSync(staged, storePath);
+      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
       try {
         await withReadySessionRows(
           projection,
@@ -323,7 +325,6 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
         }
       } finally {
         workerIdentity.mockRestore();
-        identity.mockRestore();
       }
     } finally {
       projection.dispose();

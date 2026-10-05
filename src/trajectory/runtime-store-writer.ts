@@ -37,6 +37,8 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
+import { scheduleSqliteTrajectoryRuntimeRetention } from "./runtime-retention.js";
+import type { TrajectoryRuntimeRetentionRevision } from "./runtime-retention.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeAppend,
@@ -262,6 +264,20 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   };
 }
 
+function createTrajectoryDatabaseGuard(
+  options: OpenClawAgentDatabaseOptions,
+  database: OpenClawAgentDatabase,
+  assertCommitAllowed: (() => void) | undefined,
+): () => void {
+  return () => {
+    // Retention keeps source authority without capturing a completed append batch.
+    if (!database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options)?.db !== database.db) {
+      throw new Error("Trajectory append lost its borrowed database owner");
+    }
+    assertCommitAllowed?.();
+  };
+}
+
 async function appendSqliteTrajectoryRuntimeEventsInWorker(
   options: OpenClawAgentDatabaseOptions,
   database: OpenClawAgentDatabase,
@@ -280,13 +296,14 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       nativeLocation: identity.filename,
     },
   });
+  const assertDatabaseCurrent = createTrajectoryDatabaseGuard(
+    options,
+    database,
+    assertCommitAllowed,
+  );
   const assertCurrent = () => {
     execution.assertCurrent();
-    // The source guard can read session metadata; retain its admitted host handle.
-    if (!database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options)?.db !== database.db) {
-      throw new Error("Trajectory append lost its borrowed database owner");
-    }
-    assertCommitAllowed?.();
+    assertDatabaseCurrent();
   };
   let transaction:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
@@ -309,12 +326,13 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       };
     },
   };
+  let retentionRevision: TrajectoryRuntimeRetentionRevision | undefined;
   try {
     await runOpenClawAgentWorkerWrite(options, async () => {
       const written = await execution.runExisting(source, async (worker) => {
         let completed = false;
         try {
-          await worker.execute({ type: "trajectory.events.append", input });
+          retentionRevision = await worker.execute({ type: "trajectory.events.append", input });
           completed = true;
         } finally {
           if (transaction) {
@@ -334,6 +352,15 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
         throw new Error("Trajectory database disappeared before append");
       }
     });
+    if (retentionRevision) {
+      void scheduleSqliteTrajectoryRuntimeRetention({
+        database,
+        options,
+        input,
+        revision: retentionRevision,
+        assertCurrent: assertDatabaseCurrent,
+      });
+    }
   } finally {
     await execution.release();
   }

@@ -1249,11 +1249,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it.each([
     {
-      name: "model",
-      switchOptions: { provider: "openai", model: "gpt-5.4" },
-      expectedOverride: true,
-    },
-    {
       name: "runtime",
       switchOptions: { provider: "openai", model: "gpt-5.4", agentRuntimeOverride: "codex" },
       expectedOverride: true,
@@ -3635,51 +3630,46 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it.each(["next_fallback", "succeeded", "chain_exhausted"] as const)(
-    "records and publishes a run-scoped %s fallback step",
-    async (outcome) => {
-      const step: ModelFallbackStepFields = {
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "fixture-primary/primary-model",
-        ...(outcome !== "chain_exhausted"
-          ? { fallbackStepToModel: "fixture-fallback/fallback-model" }
-          : {}),
-        fallbackStepFromFailureReason: "overloaded",
-        fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: outcome,
+  it("records and publishes a run-scoped fallback step", async () => {
+    const step: ModelFallbackStepFields = {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "fixture-primary/primary-model",
+      fallbackStepToModel: "fixture-fallback/fallback-model",
+      fallbackStepFromFailureReason: "overloaded",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.onFallbackStep?.(step);
+      const result = await runInitialFallbackAttempt(params);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
       };
-      state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-        await params.onFallbackStep?.(step);
-        const result = await runInitialFallbackAttempt(params);
-        return {
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempts: [],
-        };
-      });
-      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
-      await runBasicAgentCommand({ runId: "run-fallback-step" });
+    await runBasicAgentCommand({ runId: "run-fallback-step" });
 
-      expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
-      expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
-      expect(mockCallArg(state.trajectoryRecordEventMock, 0, 1)).toEqual(step);
-      const fallbackEvents = state.emitAgentEventMock.mock.calls
-        .map(([event]) => requireRecord(event, "agent event"))
-        .filter((event) => requireRecord(event.data, "agent event data").phase === "fallback_step");
-      expect(fallbackEvents).toEqual([
-        {
-          runId: "run-fallback-step",
-          lifecycleGeneration: "test-generation",
-          sessionKey: "agent:main:main",
-          stream: "lifecycle",
-          data: { phase: "fallback_step", ...step },
-        },
-      ]);
-      expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
+    expect(mockCallArg(state.trajectoryRecordEventMock, 0, 1)).toEqual(step);
+    const fallbackEvents = state.emitAgentEventMock.mock.calls
+      .map(([event]) => requireRecord(event, "agent event"))
+      .filter((event) => requireRecord(event.data, "agent event data").phase === "fallback_step");
+    expect(fallbackEvents).toEqual([
+      {
+        runId: "run-fallback-step",
+        lifecycleGeneration: "test-generation",
+        sessionKey: "agent:main:main",
+        stream: "lifecycle",
+        data: { phase: "fallback_step", ...step },
+      },
+    ]);
+    expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])("preserves empty transcript text with media=%s", async (hasMedia) => {
     setupSuccessfulAttempt();

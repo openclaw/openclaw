@@ -2,10 +2,12 @@ import { isDeepStrictEqual } from "node:util";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
+import { AgentDatabaseAdmissionError } from "../../../state/agent-database-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { readSharedBatchState } from "../announce/subagent-announce.requester-settle-state.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
@@ -44,6 +46,8 @@ import {
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+
+const REQUESTER_DATABASE_ADMISSION_RETRY_MS = 30_000;
 
 const completeRequesterSettleWakeBatch = async (
   context: SubagentLifecycleWakeContext,
@@ -500,8 +504,14 @@ export function scheduleRequesterSettleWake(
             if (isGatewayRestartDrainError(error)) {
               return;
             }
+            const inspectionPending =
+              error instanceof AgentDatabaseAdmissionError &&
+              error.refusal.code === "agent-database-inspection-pending";
             const safeError = buildSafeLifecycleErrorMeta(error);
-            if (shouldReportRequesterSettleWakeFailure(context, entry, safeError)) {
+            if (
+              !inspectionPending &&
+              shouldReportRequesterSettleWakeFailure(context, entry, safeError)
+            ) {
               params.warn("requester settle wake failed", {
                 error: safeError,
                 runId: maskLifecycleIdentifier(runId, "run"),
@@ -509,33 +519,51 @@ export function scheduleRequesterSettleWake(
               });
             }
             const current = params.runs.get(runId);
+            const currentWake = current?.requesterSettleWake;
             if (
               getPendingWakeCommit(context, entry) ||
+              !currentWake ||
               !admittedWake ||
               !isSameSubagentRunOwner(current, entry) ||
-              current?.requesterSettleWake?.rearmGeneration !== admittedWake.rearmGeneration ||
+              currentWake.rearmGeneration !== admittedWake.rearmGeneration ||
               !isSourceCurrent()
             ) {
               return;
             }
+            // Startup inspection is not a delivery attempt. Keep the same cohort,
+            // replay identity, and counters; the existing durable timer retries it.
+            const retryState = inspectionPending
+              ? {
+                  ...readSharedBatchState(admittedBatch),
+                  nextAttemptAt: Date.now() + REQUESTER_DATABASE_ADMISSION_RETRY_MS,
+                }
+              : undefined;
             try {
               await commitRequesterWake(
                 context,
                 admittedBatch,
                 admittedWake.rearmGeneration,
                 (members, episode) =>
-                  completeRequesterSettleWakeBatch(
-                    context,
-                    members,
-                    stateContext,
-                    episode,
-                    admittedWake.rearmGeneration,
-                    {
-                      delivered: false,
-                      path: "none",
-                      error: safeError.message,
-                    },
-                  ),
+                  retryState
+                    ? commitRequesterSettleWakeMutation(
+                        context,
+                        members,
+                        { kind: "transition", state: retryState },
+                        stateContext,
+                        episode,
+                      )
+                    : completeRequesterSettleWakeBatch(
+                        context,
+                        members,
+                        stateContext,
+                        episode,
+                        admittedWake.rearmGeneration,
+                        {
+                          delivered: false,
+                          path: "none",
+                          error: safeError.message,
+                        },
+                      ),
                 true,
                 false,
                 stateContext,

@@ -19,7 +19,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.test-support.js";
 
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {

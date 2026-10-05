@@ -34,11 +34,39 @@ capture, worker accounting, the live-pool registry, and shared compute capacity.
 The package controls when those operations run and holds admission until their
 required settlement receipts arrive.
 
+Each synchronous pool or rotation pass captures its native workers and asks the
+host to service them. OpenClaw's host binds a pool to one native source, so one
+service call advances that shared source. Nested calls capture a fresh pass;
+individual stop and resource operations retain their own servicing. Reference
+changes still check current transport availability and refresh native liveness,
+while repeated `ref()` or `unref()` calls avoid redundant control messages.
+
 Worker creation returns a `WorkerLifecycle` and, when needed, its
 `RetainedNativeWorker`. The native owner keeps runtime-generation and resource
 custody. Worker-side `WorkerTaskServerHost` installs the captured context and
 provides memory sampling, logging initialization, and idle hooks without importing
 those application concerns into the protocol implementation.
+
+Retained task hosts provide a dedicated message port through a private startup
+message, leaving `workerData` unchanged. Task
+inputs, results, host exchanges, and resource-close requests use that channel;
+the supervisor continues to own startup, native exit, and resource settlement.
+The native handle buffers task messages until startup is recorded and drains
+admitted messages before terminal lifecycle events. A failed startup discards
+unadmitted data. Losing the task channel is a transport
+failure, never an execution or cleanup receipt. Ordinary SDK workers keep their
+parent-port transport.
+
+Private served transports declare `requiresReady` on the host and acknowledge
+readiness only after the task server installs its message listener. A native
+failure before that acknowledgment stops further worker construction for the
+pool generation. Healthy ready siblings keep serving queued work; if none
+remain, queued and subsequent submissions fail without repeated startup
+attempts. A successful `rotate()` joins the old generation and clears this
+failure, as does creating a new pool. Input preparation and serialization errors
+and ordinary failures from ready workers do not latch startup failure. Arbitrary
+SDK Workers have no readiness requirement and retain their existing recovery
+behavior.
 
 ## Results and settlement
 

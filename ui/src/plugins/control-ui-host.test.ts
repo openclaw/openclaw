@@ -396,7 +396,7 @@ describe("native UI locale subscription", () => {
 });
 
 describe("native UI page navigation", () => {
-  it("pins only registered destinations once through sidebar preferences and retires pin handles", () => {
+  it("pins and unpins through saved sidebar preferences once and retires the handles", () => {
     const fixture = createRosterHost(vi.fn());
     onTestFinished(fixture.dispose);
     let sidebarEntries = ["route:usage", "session:agent:main:existing"];
@@ -412,7 +412,12 @@ describe("native UI page navigation", () => {
       },
     });
     const view = new AbortController();
-    const pin = scopeControlUiHost(fixture.host, view.signal).ui.pinNavigation;
+    const {
+      pinNavigation: pin,
+      unpinNavigation: unpin,
+      isNavigationPinned: isPinned,
+    } = scopeControlUiHost(fixture.host, view.signal).ui;
+    expect(isPinned("board")).toBe(false);
     pin("board");
     expect(update).not.toHaveBeenCalled();
     const unregister = fixture.host.ui.registerNavigation({
@@ -427,14 +432,25 @@ describe("native UI page navigation", () => {
     expect(update).toHaveBeenCalledExactlyOnceWith({
       sidebarEntries: ["route:usage", "session:agent:main:existing", "plugin:review/board"],
     });
+    expect(isPinned("board")).toBe(true);
+    expect(isPinned("foreign/board")).toBe(false);
     unregister();
-    sidebarEntries = ["route:usage"];
+    unpin("foreign/board");
+    unpin("board");
+    unpin("board");
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(sidebarEntries).toEqual(["route:usage", "session:agent:main:existing"]);
+    expect(isPinned("board")).toBe(false);
     pin("board");
-    expect(update).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledTimes(2);
     view.abort();
     expect(() => pin("board")).toThrow("view has ended");
+    expect(() => unpin("board")).toThrow("view has ended");
+    expect(() => isPinned("board")).toThrow("view has ended");
     fixture.dispose();
     expect(() => fixture.host.ui.pinNavigation("board")).toThrow("activation has ended");
+    expect(() => fixture.host.ui.unpinNavigation("board")).toThrow("activation has ended");
+    expect(() => fixture.host.ui.isNavigationPinned("board")).toThrow("activation has ended");
   });
 
   it("opens a queried global session with its owner before changing the selected key", async () => {

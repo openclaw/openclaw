@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { runGatewayStartupMaintenance } from "../gateway/server-startup-plugins.js";
+import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -89,11 +89,9 @@ it.each(["missing", "drifted"] as const)(
       damage,
     );
     const runStartup = () =>
-      runGatewayStartupMaintenance({
-        cfgAtStart: config,
-        startupRuntimeConfig: config,
-        minimalTestGateway: false,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      prepareGatewayStartupSessions({
+        cfg: config,
+        log: { info: vi.fn(), warn: vi.fn() },
       });
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),

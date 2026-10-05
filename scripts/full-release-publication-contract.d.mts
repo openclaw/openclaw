@@ -20,10 +20,16 @@ export interface PublicationIntent {
   publicationSelection: PublicationSelection | null;
 }
 export interface PublicationDispatchEnvelope extends PublicationIntent {
+  qualificationAdmission?: Record<string, unknown>;
   trustedWorkflow: { ref: string; fullRef: string; sha: string } | null;
-  laneInputs?: { extension_test_exclude_patterns_json?: string };
+  laneInputs?: {
+    extension_test_exclude_patterns_json?: string;
+    qualification_baselines_json?: string;
+  };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
+  qualificationAdmission?: Record<string, unknown>;
+  qualificationInputs?: Record<string, string | boolean | number>;
   repository: string;
   candidateSha: string;
   targetContextRef: string;
@@ -63,6 +69,7 @@ export function publicationDispatchEnvelope(
   trustedWorkflow: PublicationDispatchEnvelope["trustedWorkflow"],
   intent: PublicationIntent,
   laneInputs?: PublicationDispatchEnvelope["laneInputs"],
+  qualificationAdmission?: Record<string, unknown>,
 ): string;
 export function publicationSourceRequest(
   env: Record<string, string | undefined>,

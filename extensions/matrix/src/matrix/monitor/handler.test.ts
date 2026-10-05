@@ -1046,7 +1046,6 @@ describe("matrix monitor handler pairing account scope", () => {
       resolveAgentRoute,
       isDirectMessage: true,
       startupMs: 1_000,
-      startupGraceMs: 0,
       dropPreStartupMessages: true,
     });
 
@@ -1947,7 +1946,7 @@ describe("matrix monitor handler draft streaming", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(singleTextMessageBody()).toMatch(/`🛠️ Exec: running`$/);
+      expect(singleTextMessageBody()).toMatch(/`Exec: running`$/);
       await finish();
     } finally {
       vi.useRealTimers();

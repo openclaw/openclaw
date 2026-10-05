@@ -110,7 +110,6 @@ export function stopBrowserControlRuntime(params: {
     }
     await stopBrowserRuntime({
       current,
-      getState: () => state,
       clearState: () => {
         state = null;
         owner = null;

@@ -40,7 +40,7 @@ it.each(["linux", "darwin", "win32"] as const)(
         }
         return Promise.resolve(decodeLaunchAgentPlistFixture(options.input, args[1]));
       });
-      const { stdoutPath } = resolveGatewaySupervisorLogPaths(f.env, { platform });
+      const { stdoutPath } = resolveGatewaySupervisorLogPaths(f.env);
       original = buildLaunchAgentPlist({
         ...f.command,
         label: resolveLaunchAgentLabel(f.env),
@@ -48,7 +48,7 @@ it.each(["linux", "darwin", "win32"] as const)(
         stdoutPath,
         stderrPath: stdoutPath,
       })
-        .replace(/(<key>ExitTimeOut<\/key>\s*<integer>)20/u, "$1600")
+        .replace(/(<key>ExitTimeOut<\/key>\s*<integer>)\d+/u, "$1600")
         .replace(/(<key>ThrottleInterval<\/key>\s*<integer>)10/u, "$11");
     } else {
       original = buildTaskScript({ ...f.command, description });

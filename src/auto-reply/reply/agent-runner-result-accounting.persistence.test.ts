@@ -563,8 +563,13 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
   );
 
   it.each([
-    { mode: "heartbeat", withUsage: true },
-    { mode: "heartbeat", withUsage: false },
+    // Queued turns are never heartbeats; only ordinary runs account heartbeat completions.
+    ...(lane === "ordinary"
+      ? [
+          { mode: "heartbeat", withUsage: true },
+          { mode: "heartbeat", withUsage: false },
+        ]
+      : []),
     { mode: "exhausted fallback", withUsage: true },
     { mode: "exhausted fallback", withUsage: false },
     { mode: "inter-session completion", withUsage: true },

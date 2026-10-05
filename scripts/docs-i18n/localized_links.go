@@ -251,7 +251,8 @@ func (ri *routeIndex) localizeURL(raw string) string {
 	}
 
 	canonical := normalizeRoute(pathPart)
-	if ri.routeHasLocalePrefix(canonical) {
+	segment := firstPathSegment(strings.TrimPrefix(canonical, "/"))
+	if _, ok := ri.localePrefixes[segment]; segment != "" && ok {
 		return raw
 	}
 
@@ -282,16 +283,4 @@ func splitURLSuffix(raw string) (string, string) {
 		return raw, ""
 	}
 	return raw[:index], raw[index:]
-}
-
-func (ri *routeIndex) routeHasLocalePrefix(route string) bool {
-	return ri.isLocalePrefix(firstPathSegment(strings.TrimPrefix(route, "/")))
-}
-
-func (ri *routeIndex) isLocalePrefix(segment string) bool {
-	if segment == "" {
-		return false
-	}
-	_, ok := ri.localePrefixes[segment]
-	return ok
 }

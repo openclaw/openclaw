@@ -38,10 +38,10 @@ const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
 // Draft progress uses compact tool rows; the Slack Block Kit card uses plain
 // "Exec — detail" rows; native Slack uses task_update chunks.
-const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const toolRow = /\b(?:Exec|Bash)\b/u;
 const slackCardToolRow = /\b(?:Exec|Bash) — /u;
 const nativeToolTitle = /^(?:Exec|Bash)\b/u;
-const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
+const failedToolRow = /\b(?:Exec|Bash): failed\b/u;
 type WireWrite = {
   at: number;
   method: string;

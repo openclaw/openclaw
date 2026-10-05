@@ -34,6 +34,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
@@ -516,6 +517,142 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           }),
         );
       }
+    },
+  );
+  it.each(["newer task generation", "superseded cancellation", "all-superseded turn"] as const)(
+    "recovers interrupted children with %s",
+    async (supersededBy) => {
+      const allSuperseded = supersededBy === "all-superseded turn";
+      const requesterYielded = supersededBy === "newer task generation";
+      const now = Date.now();
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const requesterSessionKey = "agent:main:dashboard:restart-parent";
+      const requesterTurnRunId = "restart-parent-run";
+      const staleRequesterTurnRunId = allSuperseded ? "retired-parent-run" : requesterTurnRunId;
+      const stale = makeRunRecord({
+        runId: "stale-child-run",
+        childSessionKey: "agent:main:subagent:restart-child",
+        requesterSessionKey,
+        requesterTurnRunId: staleRequesterTurnRunId,
+        expectsCompletionMessage: true,
+        createdAt: now - 3_000,
+        generation: 1,
+        execution: { status: "running", startedAt: now - 3_000, lifecycleGeneration },
+        ...(supersededBy === "superseded cancellation"
+          ? { killReconciliation: { killedAt: now - 2_000, supersededAt: now - 1_000 } }
+          : {}),
+      });
+      const child = makeRunRecord({
+        runId: "restart-child-run",
+        taskRunId: supersededBy !== "superseded cancellation" ? stale.runId : undefined,
+        childSessionKey: stale.childSessionKey,
+        requesterSessionKey,
+        requesterTurnRunId,
+        requesterTurnYielded: requesterYielded || undefined,
+        expectsCompletionMessage: true,
+        generation: 2,
+        createdAt: now - 2_000,
+        execution: { status: "running", startedAt: now - 2_000, lifecycleGeneration },
+      });
+      const sibling = makeRunRecord({
+        runId: "restart-sibling-run",
+        childSessionKey: "agent:main:subagent:restart-sibling",
+        requesterSessionKey,
+        requesterTurnRunId,
+        requesterTurnYielded: requesterYielded || undefined,
+        expectsCompletionMessage: true,
+        execution: { status: "running", startedAt: now - 1_000, lifecycleGeneration },
+      });
+      const nested = makeRunRecord({
+        runId: "restart-nested-run",
+        childSessionKey: "agent:main:subagent:restart-nested",
+        requesterSessionKey: child.childSessionKey,
+        requesterTurnRunId: child.runId,
+        expectsCompletionMessage: true,
+        execution: { status: "running", startedAt: now - 1_000, lifecycleGeneration },
+      });
+      const interrupted = [child, sibling, nested];
+      // Original order: children abort, the main requester is marked, then a new Gateway activates.
+      for (const entry of interrupted) {
+        const storePath = await writeSubagentSessionEntry({
+          stateDir: fixture.stateDir,
+          agentId: "main",
+          sessionKey: entry.childSessionKey,
+          defaultSessionId: `${entry.runId}-session`,
+          abortedLastRun: true,
+        });
+        await replaceSessionEntry(
+          { storePath, sessionKey: entry.childSessionKey },
+          {
+            ...loadSessionEntryReadOnly({ storePath, sessionKey: entry.childSessionKey })!,
+            status: "running",
+            activeWriterRunId: entry.runId,
+            lifecycleRunId: entry.runId,
+          },
+        );
+      }
+      const storePath = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        defaultSessionId: "restart-parent-session",
+      });
+      const parent = loadSessionEntryReadOnly({ storePath, sessionKey: requesterSessionKey })!;
+      transitionMainSessionRecovery(parent, {
+        kind: "mark_interrupted",
+        cycleId: "restart-cycle",
+        now,
+        runs: [{ runId: requesterTurnRunId, lifecycleGeneration }],
+      });
+      await replaceSessionEntry({ storePath, sessionKey: requesterSessionKey }, parent);
+      saveSubagentRegistryToSqlite(
+        new Map([stale, ...interrupted].map((entry) => [entry.runId, entry])),
+      );
+      await resetSubagentRegistryForTests({ persist: false });
+      rotateAgentEventLifecycleGeneration();
+      await initSubagentRegistry();
+
+      const settleRequester = allSuperseded
+        ? vi.spyOn(
+            await import("./subagent-registry-requester-yield.js"),
+            "settleRequesterTurnAfterSessionSpawns",
+          )
+        : undefined;
+      await fixture.activateGatewayRuntime();
+      if (settleRequester) {
+        expect(settleRequester).not.toHaveBeenCalledWith(
+          expect.objectContaining({ requesterTurnRunId: staleRequesterTurnRunId }),
+        );
+      }
+      const activated = loadSubagentRegistryFromSqlite();
+      for (const entry of [child, sibling]) {
+        if (requesterYielded) {
+          expect(activated.get(entry.runId)?.requesterSettleWake).toMatchObject({
+            requesterYieldBatch: true,
+            yieldedFinalDeliverable: true,
+            batchRunIds: [child.runId, sibling.runId],
+          });
+        } else {
+          expect(activated.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+        }
+      }
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+
+      const persisted = loadSubagentRegistryFromSqlite();
+      for (const entry of interrupted) {
+        expect(persisted.get(entry.runId)).toMatchObject({
+          execution: { status: "terminal", interruptionReason: "gateway-restart" },
+        });
+        expect(persisted.get(entry.runId)?.requesterTurnRunId).toBeUndefined();
+        expect(
+          loadSessionEntryReadOnly({ storePath, sessionKey: entry.childSessionKey }),
+        ).toMatchObject({ status: "interrupted" });
+      }
+      expect(fixture.dispatchAgent).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly({ storePath, sessionKey: requesterSessionKey })).toEqual(
+        parent,
+      );
     },
   );
 });

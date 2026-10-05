@@ -877,8 +877,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     };
   });
 
+  // mock-isolation: Compaction hook fixtures exercise lifecycle behavior without credential-source admission.
   vi.doMock("../auth-profiles/source-check.js", () => ({
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+    hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
   }));
 
   vi.doMock("../memory-search.js", () => ({

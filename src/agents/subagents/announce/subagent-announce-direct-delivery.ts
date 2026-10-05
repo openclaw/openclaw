@@ -595,6 +595,7 @@ export async function sendSubagentAnnounceDirectly(
         agentId: requesterAgentId,
         storePath: requesterStorePath,
         sessionKeys: [canonicalRequesterSessionKey],
+        snapshotFields: [],
       });
     } catch (error) {
       if (params.signal?.aborted) {

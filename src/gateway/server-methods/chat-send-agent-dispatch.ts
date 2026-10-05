@@ -393,7 +393,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   : {}),
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
-                onAgentRunStart: (runId, _identity, options) => {
+                onAgentRunStart: (runId, _identity, options, transcriptStart) => {
                   if (titleWaiting) {
                     stopTitleWait?.();
                     stopTitleWait = onAgentEventForRun(runId, (event) => {
@@ -417,7 +417,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                       { accessChanged: false },
                     );
                   }
-                  agentRunStarted = replyDispatch.captureAgentTranscriptStart(runId);
+                  // A bound runtime can start on a different transcript than the source chat.
+                  agentRunStarted = true;
+                  replyDispatch.captureAgentTranscriptStart(runId, transcriptStart);
                   emitServerTiming(
                     "agent-run-started",
                     runId !== clientRunId ? { agentRunId: runId } : undefined,

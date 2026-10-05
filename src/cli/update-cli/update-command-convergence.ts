@@ -252,7 +252,7 @@ export async function convergeUpdatePlugins(params: {
         postCorePluginUpdate &&
         (!params.coreAlreadyCurrent ||
           postCorePluginUpdate.changed ||
-          hasDeferredUpdateModelRetirement())
+          hasDeferredUpdateModelRetirement(params.opts.run?.env, params.opts.run?.runId))
       ) {
         // Release the plugin lease before fresh Doctor. The finalizer either
         // retains its stopped interval or parks an already-current core here.
@@ -264,7 +264,6 @@ export async function convergeUpdatePlugins(params: {
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: producedPluginUpdate,
-          freshDoctorRequired: producedPluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,
           yes: params.opts.yes === true,

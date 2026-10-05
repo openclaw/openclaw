@@ -15,8 +15,10 @@ and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
 starts as soon as the listener binds, with at most two databases opening
-concurrently. Secrets and model preparation retain their serialized publication
-order, independently of admission and restored subagent work. Readiness reports
+concurrently. Agent-local session preparation waits for restored recovery owners,
+then runs with up to four agents concurrently. Only credential/model publication
+and final admission are serialized, in the order agents finish session preparation;
+a slow open or migration does not hold that publication turn. Readiness reports
 pending required stores in
 `agentDatabases` without failing the Gateway probe; confirmed database failures
 still fail readiness. The validation deadlines, dirty-close checks, and
@@ -52,33 +54,46 @@ Native Gateway admission distinguishes two missing-receipt classes:
 - **Process death:** every swept lease belongs to the same Linux host, OS boot,
   PID namespace, OpenClaw version, and physical database file; the recorded
   owner has a known start identity, completed admission, and its PID is definitely dead; no foreign or
-  unknown live owner remains. SQLite opens normally with a nonempty WAL and no
-  rollback journal. Page size, schema version, WAL journal mode, and non-mutating
-  WAL frame state are readable/consistent, and the existing owner, current-schema,
+  unknown live owner remains. SQLite opens normally in WAL mode with no
+  rollback journal. Page size and schema version are readable, a passive
+  checkpoint succeeds, and the existing owner, current-schema,
   and canonical-index preflight passes. Admission runs **no synchronous page
   scan**. SQLite's WAL crash-recovery guarantee supplies consistency after a
   process crash; it does not establish freedom from unrelated storage damage.
   The listening Gateway queues a full integrity and foreign-key check in its
   existing low-priority verifier child.
 - **Corruption risk:** foreign host/boot, changed PID start identity, legacy or
-  unknown provenance, dirty receipt without a matching dead lease, missing WAL,
+  unknown provenance, dirty receipt without a matching dead lease,
   failed journal/header checks, and pending migrations retain the full admission
-  gate. Other platforms, SQLite before 3.53 without `wal_checkpoint(NOOP)`, and
-  non-native openers remain conservative.
+  gate. Other platforms and non-native openers remain conservative.
+
+An empty or absent WAL after checkpointing, committed WAL frames awaiting
+backfill, and uncommitted writes interrupted by process death all retain the
+process-death class. SQLite recovers committed frames and discards uncommitted
+transactions on open. `wal_checkpoint(PASSIVE)` works on all supported SQLite
+versions; busy readers or an incomplete checkpoint do not imply corruption.
+Its work can grow with outstanding WAL pages, but admission does not scan the
+whole database or run `quick_check`.
+
+Concurrent readers of persisted canonical session proof preserve an in-flight
+native integrity handoff. Recording that read result does not replace the
+validation owner or force later startup work to repeat its scan. Explicit
+invalidation and native database replacement still revoke delayed handoffs.
 
 Lease IDs retain their UUID format. The nullable `agent_database_leases.provenance`
 column binds the provenance above separately from ownership identifiers. The
 lease owner adds this column on first use without changing the schema version;
-existing rows receive `NULL` and cannot defer integrity verification. Maintenance
+existing rows receive `NULL` and retain one full admission with
+`because=legacy-provenance-missing`. The successor cannot reconstruct the old
+owner's host or boot identity from a PID alone. Its own admitted lease records
+provenance for later restarts. Maintenance
 accepts an absent provenance column so it can claim stopped-writer ownership
 before migration without modifying the old schema. Older readers ignore this
 additive column. Newly created files without a prior physical identity also use the
 full gate. A new claim has `opened_at=0`; only successful admission publishes its
 opening timestamp. A process killed during a required full gate therefore cannot
 lend restart provenance, even when its host, boot, and WAL match. Updates, rollback, canaries, Doctor, and copied-file verification retain
-their existing strict checks. Admission observes WAL state without a passive
-checkpoint, which would synchronously copy WAL pages and grow with the journal.
-SQLite still performs its own required recovery; OpenClaw adds no full-file scan.
+their existing strict checks.
 
 The deferred open lends only revocable runtime admission and does not publish
 durable verification or a clean-close receipt. Background success is logged;
@@ -110,7 +125,14 @@ leases, `revoked` for other
 invalidated proof, `dirty-receipt` when verification remains without a certified
 final checkpoint and close, `no-proof` for unavailable or nonmatching proof, and
 `lease-class` when a foreign or unknown lease owner prevents runtime reuse.
-Slow-open summaries include the same facts. A dirty receipt alone does not
+For `stale-lease-full`, `because` names the failed predicate before the scan
+starts and in the final gate and slow-open summaries. Lease diagnostics distinguish
+unfinished admission, missing start identity, a path mismatch, missing legacy
+provenance, a host/boot/namespace/version/file provenance mismatch, and a remaining
+live or unknown owner. The stored provenance is a combined hash, so a mismatch
+cannot identify which hashed component changed. Native admission, prepared
+provenance, pending migration, journal, header, and WAL recovery refusals have
+separate reasons. A dirty receipt alone does not
 distinguish an incomplete checkpoint from a live lease; neither permits restart
 reuse. A process exiting with status zero after its shutdown deadline can still
 leave a stale lease and require the admission gate. Stale-lease diagnostics name
@@ -453,8 +475,8 @@ remain separate, with no cached readiness result shared between them.
 
 ### Startup on multi-agent hosts
 
-Current development builds already limit startup agent-database checks and
-session startup maintenance to two databases at a time. Each inspection's
+Foreground startup agent-database checks and session startup maintenance are
+limited to two databases at a time. Each inspection's
 size-derived foreground allowance starts when its scheduled inspection begins, so waiting for a
 slot does not consume it. For example, a 267.5 MiB database without sidecars gets
 635 seconds. These concurrency and budget improvements precede the background
@@ -476,12 +498,23 @@ migration and ordinary writes. The inspection continues in the background within
 the same concurrency limit. Expiring the wait does not establish corruption.
 
 A successful inspection alone does not make the agent available. The Gateway
-first refreshes its credentials and completes that agent's session validation,
-transcript preparation, and model preparation, with current database and runtime ownership checked before
-publication. Only then does it clear the pending refusal. A failed inspection or
+opens each agent's database and completes its session validation and transcript
+preparation independently, then takes a FIFO turn to publish credentials, prepare
+models, and clear the pending refusal. Current database, config, runtime ownership,
+and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Every 60 seconds while recovery is pending, `agent database startup preparation
+still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;
+`publication-wait` also names `publishingAgentId`. Success (`agent database
+recovered after background inspection and preparation`) and failure (`agent
+database remains degraded`) include total `elapsedMs` and `phaseDurationsMs`.
+Use the phase durations to distinguish inspection, activation, open/migration
+permit waits, open, readiness, migration, publication wait, secrets, models, and
+final publication. These are wall times, including scheduling delays, not CPU time;
+progress warnings do not impose a deadline or prove corruption.
 
 Inspect `openclaw gateway call agents.list --json` or Gateway logs for the affected
 agent and reason. If the check fails, follow that reason's repair guidance; stop the Gateway
@@ -566,9 +599,30 @@ path for inspection. No SQL schema migration is involved. The rewritten database
 has a new physical identity (device/inode), so the next boot re-runs
 canonical validation once instead of reusing the original identity receipt.
 
+## Planner statistics maintenance
+
+The shared-state writer refreshes SQLite planner statistics once during its
+30-minute WAL maintenance pass, after a successful checkpoint. It uses
+`PRAGMA analysis_limit=1000; ANALYZE main;` under the existing writer admission
+and transaction authority, with no busy wait. Contention skips that attempt;
+later periodic maintenance retries. Checkpoint-only ticks, database admission,
+opens, and ordinary writes do not analyze tables. Vacuum continuation units do
+not repeat the analysis. Shutdown joins accepted maintenance before native close.
+
+The limit bounds sampling per index, not total work or elapsed time across the
+database. Statistics are SQLite-owned, derived data: application records,
+retention, and schema versions are unchanged. Updates and rollback require no
+migration. Existing read snapshots remain intact. Newly opened readers use the
+latest statistics; retained connections can keep older selectivity after later
+refreshes until their normal retirement. This policy does not add recurring
+analysis to agent databases; Doctor's stopped-writer media maintenance continues
+using the same bounded statistics primitive.
+
 ## Troubleshooting
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
+
+Shared-state database admission also preserves native SQLite result codes across worker transport. Lease and managed-worktree provisioning diagnostics retain the underlying storage failure even when acquisition fails before a lease is created.
 
 ### The state database is busy
 

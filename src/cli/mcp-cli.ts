@@ -659,7 +659,7 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): Promise<Awaited<ReturnType<typeof readMcpProbeResult>>> {
+}): Promise<void> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
       name,
@@ -677,7 +677,6 @@ async function probeMcpServersOrFail(params: {
     if (probeIssue) {
       fail(probeIssue);
     }
-    return result;
   } finally {
     await runtime.dispose();
   }

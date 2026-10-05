@@ -68,7 +68,6 @@ const VoiceCallNumberRouteConfigSchema = z
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
-type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 const VoiceCallServeConfigSchema = z
   .object({
@@ -76,8 +75,7 @@ const VoiceCallServeConfigSchema = z
     bind: z.string().default("127.0.0.1"),
     path: z.string().min(1).default("/voice/webhook"),
   })
-  .strict()
-  .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
+  .strict();
 
 const VoiceCallTunnelConfigSchema = z
   .object({
@@ -89,8 +87,7 @@ const VoiceCallTunnelConfigSchema = z
     /** Trust loopback forwarding for ngrok URL reconstruction; signatures remain mandatory. */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
-  .strict()
-  .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
+  .strict();
 
 const VoiceCallWebhookSecurityConfigSchema = z
   .object({
@@ -107,8 +104,7 @@ const VoiceCallWebhookSecurityConfigSchema = z
      */
     trustedProxyIPs: z.array(z.string().min(1)).default([]),
   })
-  .strict()
-  .default({ allowedHosts: [], trustForwardingHeaders: false, trustedProxyIPs: [] });
+  .strict();
 export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfigSchema>;
 
 const CallModeSchema = z.enum(["notify", "conversation"]);
@@ -122,8 +118,7 @@ const OutboundConfigSchema = z
     /** Seconds to wait after TTS before auto-hangup in notify mode */
     notifyHangupDelaySec: z.number().int().nonnegative().default(3),
   })
-  .strict()
-  .default({ defaultMode: "notify", notifyHangupDelaySec: 3 });
+  .strict();
 
 const RealtimeToolSchema = z
   .object({
@@ -164,14 +159,7 @@ const VoiceCallRealtimeFastContextConfigSchema = z
     /** Fall back to the full agent consult when fast context has no answer. */
     fallbackToConsult: z.boolean().default(false),
   })
-  .strict()
-  .default({
-    enabled: false,
-    timeoutMs: 800,
-    maxResults: 3,
-    sources: ["memory", "sessions"],
-    fallbackToConsult: false,
-  });
+  .strict();
 const VoiceCallRealtimeAgentContextConfigSchema = z
   .object({
     /** Include configured identity and selected profile files alongside the always-on agent context. */
@@ -184,14 +172,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     /** Workspace-relative files to include, bounded by maxChars. */
     files: z.array(z.string().min(1)).default(["SOUL.md", "IDENTITY.md", "USER.md"]),
   })
-  .strict()
-  .default({
-    enabled: false,
-    maxChars: 6000,
-    includeIdentity: true,
-    includeWorkspaceFiles: true,
-    files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-  });
+  .strict();
 
 const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
@@ -224,9 +205,13 @@ const VoiceCallRealtimeConfigSchema = z
     consultFastMode: z.boolean().optional(),
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
-    fastContext: VoiceCallRealtimeFastContextConfigSchema,
+    fastContext: VoiceCallRealtimeFastContextConfigSchema.default(
+      VoiceCallRealtimeFastContextConfigSchema.parse({}),
+    ),
     /** Bounded agent persona/context injection for the fast realtime voice path. */
-    agentContext: VoiceCallRealtimeAgentContextConfigSchema,
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema.default(
+      VoiceCallRealtimeAgentContextConfigSchema.parse({}),
+    ),
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallProvidersConfigSchema,
   })
@@ -265,16 +250,7 @@ const VoiceCallStreamingConfigSchema = z
     /** Hard cap for all open media stream sockets (pending + active). */
     maxConnections: z.number().int().positive().default(128),
   })
-  .strict()
-  .default({
-    enabled: false,
-    streamPath: "/voice/stream",
-    providers: {},
-    preStartTimeoutMs: 5000,
-    maxPendingConnections: 32,
-    maxPendingConnectionsPerIp: 4,
-    maxConnections: 128,
-  });
+  .strict();
 
 export const VoiceCallConfigSchema = z
   .object({
@@ -302,7 +278,7 @@ export const VoiceCallConfigSchema = z
     /** Per-dialed-number overrides for inbound calls. Keys are E.164 numbers. */
     numbers: z.record(E164Schema, VoiceCallNumberRouteConfigSchema).default({}),
 
-    outbound: OutboundConfigSchema,
+    outbound: OutboundConfigSchema.default(OutboundConfigSchema.parse({})),
 
     maxDurationSeconds: z.number().int().positive().default(300),
 
@@ -322,16 +298,18 @@ export const VoiceCallConfigSchema = z
 
     maxConcurrentCalls: z.number().int().positive().default(1),
 
-    serve: VoiceCallServeConfigSchema,
+    serve: VoiceCallServeConfigSchema.default(VoiceCallServeConfigSchema.parse({})),
 
     /** @deprecated Prefer tunnel config. */
     tailscale: VoiceCallTailscaleConfigSchema,
 
-    tunnel: VoiceCallTunnelConfigSchema,
+    tunnel: VoiceCallTunnelConfigSchema.default(VoiceCallTunnelConfigSchema.parse({})),
 
-    webhookSecurity: VoiceCallWebhookSecurityConfigSchema,
+    webhookSecurity: VoiceCallWebhookSecurityConfigSchema.default(
+      VoiceCallWebhookSecurityConfigSchema.parse({}),
+    ),
 
-    streaming: VoiceCallStreamingConfigSchema,
+    streaming: VoiceCallStreamingConfigSchema.default(VoiceCallStreamingConfigSchema.parse({})),
 
     realtime: VoiceCallRealtimeConfigSchema,
 
@@ -450,9 +428,6 @@ function resolveVoiceCallNumberRouteKey(
   phone: string | undefined,
 ): string | undefined {
   const routes = config.numbers;
-  if (!routes) {
-    return undefined;
-  }
   if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
@@ -500,7 +475,6 @@ export function resolveVoiceCallEffectiveConfig(
       ...config,
       ...route,
       tts: normalizeVoiceCallTtsConfig(config.tts, route.tts),
-      numbers: config.numbers,
     },
   };
 }
@@ -508,11 +482,8 @@ export function resolveVoiceCallEffectiveConfig(
 function sanitizeVoiceCallProviderConfigs(
   value: Record<string, Record<string, unknown> | undefined> | undefined,
 ): Record<string, Record<string, unknown>> {
-  if (!value) {
-    return {};
-  }
   return Object.fromEntries(
-    Object.entries(value).filter(
+    Object.entries(value ?? {}).filter(
       (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
     ),
   );
@@ -520,13 +491,10 @@ function sanitizeVoiceCallProviderConfigs(
 
 function sanitizeVoiceCallNumberRoutes(
   value: Record<string, unknown> | undefined,
-): Record<string, VoiceCallNumberRouteConfig> {
-  if (!value) {
-    return {};
-  }
+): VoiceCallConfig["numbers"] {
   return Object.fromEntries(
-    Object.entries(value)
-      .filter((entry): entry is [string, unknown] => entry[1] !== undefined)
+    Object.entries(value ?? {})
+      .filter(([, route]) => route !== undefined)
       .map(([key, route]) => [key, VoiceCallNumberRouteConfigSchema.parse(route)]),
   );
 }
@@ -565,9 +533,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
-    numbers: sanitizeVoiceCallNumberRoutes(
-      (config.numbers ?? defaults.numbers) as Record<string, unknown>,
-    ),
+    numbers: sanitizeVoiceCallNumberRoutes(config.numbers ?? defaults.numbers),
     outbound: { ...defaults.outbound, ...config.outbound },
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
@@ -616,17 +582,10 @@ export function resolveVoiceCallSessionKey(params: {
   coreSession?: VoiceCallCoreSessionConfig;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
-  if (explicit) {
+  if (explicit || params.config.sessionScope === "main") {
     return resolveVoiceCallAgentSessionKey({
       config: params.config,
-      sessionKey: explicit,
-      coreSession: params.coreSession,
-    });
-  }
-  if (params.config.sessionScope === "main") {
-    return resolveVoiceCallAgentSessionKey({
-      config: params.config,
-      sessionKey: "main",
+      sessionKey: explicit || "main",
       coreSession: params.coreSession,
     });
   }
@@ -722,7 +681,7 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.webhookSecurity.trustForwardingHeaders =
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
 
-  return normalizeVoiceCallConfig(resolved);
+  return resolved;
 }
 
 export function validateProviderConfig(config: VoiceCallConfig): {

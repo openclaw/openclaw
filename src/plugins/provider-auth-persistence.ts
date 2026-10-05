@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { ProviderAuthPersistenceError } from "@openclaw/normalization-core/error-coercion";
 import { persistAuthProfileBatch } from "../agents/auth-profiles.js";
 import { OAUTH_REFRESH_LOCK_OPTIONS } from "../agents/auth-profiles/constants.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -226,11 +227,10 @@ async function materializeProviderAuthProfiles(params: {
     try {
       await rollback();
     } catch (rollbackError) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
-      throw new AggregateError(
-        [error, rollbackError],
+      throw new ProviderAuthPersistenceError(
         "Provider credential persistence failed and protected-store rollback could not be confirmed.",
-        { cause: error },
+        error,
+        { cause: rollbackError },
       );
     }
     throw error;
@@ -329,11 +329,10 @@ async function stageProviderAuthProfilesForPersistence(params: {
     try {
       await releaseProviderAuthLocks(locks);
     } catch (releaseError) {
-      // oxlint-disable-next-line preserve-caught-error -- The aggregate retains the release error and the initiating failure remains its cause.
-      throw new AggregateError(
-        [error, releaseError],
+      throw new ProviderAuthPersistenceError(
         "Provider auth persistence failed and staged state could not be fully released.",
-        { cause: error },
+        error,
+        { cause: releaseError },
       );
     }
     throw error;
@@ -390,11 +389,10 @@ async function stageProviderAuthProfileBatchCore(
     try {
       await prepared.rollback();
     } catch (rollbackError) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
-      throw new AggregateError(
-        [error, rollbackError],
+      throw new ProviderAuthPersistenceError(
         "Provider auth persistence failed and staged state could not be fully released.",
-        { cause: error },
+        error,
+        { cause: rollbackError },
       );
     }
     throw error;

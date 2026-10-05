@@ -571,7 +571,6 @@ export async function runSetupMigrationImport(params: {
               opts: params.opts,
               prompter: params.prompter,
               runtime: params.runtime,
-              workspaceDir: stage.staged.workspaceDir,
               agentDir: stage.staged.agentDir,
               stateDir: stage.staged.stateDir,
               configTarget: stage.inferenceConfigTarget,

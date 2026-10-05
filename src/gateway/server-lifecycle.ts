@@ -519,6 +519,7 @@ export async function prepareGatewayLifecycle(params: {
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
+        preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
         chatRunState,
         chatAbortControllers,
         chatQueuedTurns,

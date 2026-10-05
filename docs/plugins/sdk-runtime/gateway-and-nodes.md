@@ -252,7 +252,9 @@ applicable policy also requires fresh publication admission.
     previews can be absent while enrichment is pending. Missing PR snapshots
     refresh in the background. Use `api.runtime.gateway.subscribeSessionChanges`
     to reread the affected `sessionKey` when facts change, and call the returned
-    unsubscribe function when finished. Unchanged facts need no age-based retry.
+    unsubscribe function when finished. Category-only changes carry
+    `factsInvalidated: "category"`; projections that do not use session categories
+    can ignore them. Unchanged facts need no age-based retry.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 

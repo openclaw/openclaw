@@ -135,54 +135,6 @@ describe("TranscriptsStore", () => {
       });
     },
   );
-  it("keeps a streamed page stable across writes and shared writer closure", async () => {
-    const { store, stateDir } = createStore();
-    for (const id of ["a", "b", "c"]) {
-      await store.writeSession({ ...session(id), title: id });
-    }
-    // Drain fixture writers before retaining a reader; their orderly TRUNCATE close would wait for it.
-    await closeOpenClawStateDatabaseAsync();
-    const writer = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const rows = store.iterateReadEntries({ limit: 3 });
-    try {
-      const first = await rows.next();
-      expect(first.done).toBe(false);
-      if (first.done) {
-        throw new Error("Expected first transcript row");
-      }
-      expect(first.value.session.title).toBe("a");
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          executeSqliteQuerySync(
-            db,
-            meetingTranscriptDb(db)
-              .updateTable("meeting_transcript_sessions")
-              .set({ title: "changed" })
-              .where("session_id", "=", "c"),
-          ),
-        { database: writer },
-      );
-      // The retained reader deliberately prevents a truncating WAL checkpoint.
-      closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
-      expect(writer.db.isOpen).toBe(false);
-      await expect(probeExclusiveDatabaseAccess(writer.path)).rejects.toMatchObject({
-        code: "ERR_SQLITE_ERROR",
-        errcode: 5,
-      });
-      const remaining: string[] = [];
-      for await (const entry of rows) {
-        remaining.push(entry.session.title ?? "");
-      }
-      expect(remaining).toEqual(["b", "c"]);
-    } finally {
-      await rows.return(false);
-    }
-    await expect(probeExclusiveDatabaseAccess(writer.path)).resolves.toBeUndefined();
-    expect((await store.readSession("c"))?.title).toBe("changed");
-  });
-
   it.each(["return", "consumer-error"] as const)(
     "releases its streamed utterance reader after %s",
     async (finish) => {

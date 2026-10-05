@@ -15,12 +15,10 @@ import {
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
-import {
-  readSessionEntriesFromStoreInWorker,
-  loadSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-accessor.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -147,17 +145,16 @@ function sanitizeFreshCronSessionEntry(
 }
 
 /**
- * Reads the current cron session row without an in-process cache snapshot.
+ * Reads the current cron session row through the canonical agent worker.
  * Lifecycle admission guards compare this against the run's initial entry, so
- * the read must bypass cached store snapshots (accessor readConsistency
- * "latest"). Cron keys are canonicalized before use, so accessor key
- * resolution selects the same row the cron persist path writes.
+ * the read must bypass cached store snapshots. Canonical key resolution selects
+ * the same row the cron persist path writes.
  */
 export function loadCronSessionEntryLatest(
   storePath: string,
   sessionKey: string,
-): SessionEntry | undefined {
-  return loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
+): Promise<SessionEntry | undefined> {
+  return readSessionEntryInWorker({ sessionKey, storePath, readConsistency: "latest" });
 }
 
 type CronSessionParams = {

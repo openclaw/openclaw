@@ -169,12 +169,6 @@ type SessionPreviewSource = {
   archived?: boolean;
 };
 
-type LoadSessionPreview = (
-  sessionKey: string,
-  context: GatewayRequestContext,
-  client: GatewayClient | null,
-) => SessionPreviewSource | null;
-
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
 
 function boundedPreviewText(value: string | undefined, maxChars = SESSION_PREVIEW_TEXT_MAX_CHARS) {
@@ -382,7 +376,6 @@ const loadSessionCheckDetails: LoadSessionCheckDetails = async (params, deps) =>
 export function createControlUiHandlers(
   loadGitHubPreview: LoadGitHubPreview = (...args) =>
     gitHubPublicApi.loadControlUiGitHubPreview(...args),
-  loadSessionPreview?: LoadSessionPreview,
   loadChecks: LoadSessionCheckDetails = loadSessionCheckDetails,
 ): GatewayRequestHandlers {
   return {
@@ -448,11 +441,7 @@ export function createControlUiHandlers(
           }
           respond(true, projectSessionPreview(preview), undefined);
         };
-        if (loadSessionPreview) {
-          consume(loadSessionPreview(sessionKey, context, client));
-        } else {
-          await withControlUiSessionPreview(sessionKey, context, client, consume);
-        }
+        await withControlUiSessionPreview(sessionKey, context, client, consume);
       } catch {
         respond(
           false,

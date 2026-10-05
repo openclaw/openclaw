@@ -28,7 +28,9 @@ const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
 
 function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoardView | undefined {
-  const unknownParam = Object.keys(input).find((key) => key !== "boardId" && key !== "view");
+  const unknownParam = Object.keys(input).find(
+    (key) => key !== "boardId" && key !== "view" && key !== "sinceRevision",
+  );
   if (unknownParam) {
     throw new Error(`Unknown Sessions board read field: ${unknownParam}.`);
   }
@@ -164,7 +166,16 @@ export function registerWorkboardGatewayMethods(params: {
     [
       "workboard.cards.list",
       READ_SCOPE,
-      ({ params: requestParams }) => store.listCards(requestParams.boardId),
+      async ({ params: requestParams }) => {
+        const result = await store.listCards(requestParams.boardId);
+        const since = requestParams.sinceRevision;
+        return isRecord(since) &&
+          since.epoch === result.revision.epoch &&
+          since.revision === result.revision.revision &&
+          since.boardId === result.revision.boardId
+          ? { unchanged: true, revision: result.revision }
+          : result;
+      },
     ],
   ]);
 
@@ -278,12 +289,22 @@ export function registerWorkboardGatewayMethods(params: {
     [
       "workboard.sessionsBoard.read",
       READ_SCOPE,
-      (context: GatewayMethodContext) =>
-        sessionsBoard().read(
+      async (context: GatewayMethodContext) => {
+        const result = await sessionsBoard().read(
           readStringParam(context.params, "boardId", { required: true }),
           sessionsBoardView(context.params),
           sessionsBoardCaller(context),
-        ),
+        );
+        const since = context.params.sinceRevision;
+        return isRecord(since) &&
+          result.revision &&
+          since.epoch === result.revision.epoch &&
+          since.revision === result.revision.revision &&
+          since.boardId === result.revision.boardId &&
+          since.scope === result.revision.scope
+          ? { unchanged: true, revision: result.revision }
+          : result;
+      },
     ],
     [
       "workboard.sessionsBoard.update",

@@ -775,25 +775,61 @@ describe("same-root local mutation routing", () => {
     },
   );
 
-  it("visibly refuses live sandbox recreate before any worktree SQL or owner dispatch", async () => {
-    const before = methods.length;
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "sandbox", "recreate", "--all", "--force"],
-      env,
-    });
-    expect(result.code, result.stderr).toBe(1);
-    expect(result.stderr).toContain("exclusive offline state ownership");
-    expect(methods).toHaveLength(before);
-    expect(
-      JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
-        .worktreeSql,
-    ).toBe(0);
-  });
+  it.each([
+    ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
+    ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
+    ["exec-policy set", ["exec-policy", "set", "--ask", "always"]],
+  ])(
+    "refuses live %s before changing local state or dispatching to the owner",
+    async (_name, args) => {
+      const before = methods.length;
+      const configBefore = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, ...args],
+        env,
+      });
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.stderr).toContain("exclusive offline state ownership");
+      expect(methods).toHaveLength(before);
+      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(configBefore);
+      expect(
+        JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
+          .worktreeSql,
+      ).toBe(0);
+    },
+  );
 });
 
 describe("offline local mutation custody", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   afterEach(() => vi.unstubAllEnvs());
+
+  it("keeps offline exec-policy preset writes and their config update working", async () => {
+    const root = roots.make("openclaw-exec-policy-offline-");
+    const env = environment(root);
+    await fs.mkdir(env.OPENCLAW_STATE_DIR!, { recursive: true });
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
+    const result = await runCliProcessChild({
+      nodeArgs: [...entrypoint, "exec-policy", "preset", "cautious", "--json"],
+      env,
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      preset: "cautious",
+      approvalsExists: true,
+      effectivePolicy: {
+        scopes: [
+          expect.objectContaining({
+            security: expect.objectContaining({ effective: "allowlist" }),
+            ask: expect.objectContaining({ effective: "on-miss" }),
+          }),
+        ],
+      },
+    });
+    expect(JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"))).toMatchObject({
+      tools: { exec: { host: "gateway", mode: "ask" } },
+    });
+  });
 
   it.skipIf(process.platform === "win32")(
     "retains offline CLI custody through its POSIX setup hook while Gateway startup races",

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
@@ -56,6 +58,108 @@ async function activePlacement(
 }
 
 describe("worker placement read projection", () => {
+  it("refreshes admission facts when the preceding turn releases during its read", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-admission-refresh-"));
+    const database = openOpenClawStateDatabase();
+    const { store, placement, identity } = await activePlacement(database, "next-turn");
+    const claim = await store.claimTurn({
+      ...identity,
+      owner: placementTurnOwner(placement),
+      claimId: "preceding-claim",
+      runId: "preceding-run",
+    });
+    const read = store.readProjection.bind(store);
+    const observed = createDeferred();
+    const resume = createDeferred();
+    vi.spyOn(store, "readProjection").mockImplementationOnce(async (...args) => {
+      const result = await read(...args);
+      observed.resolve();
+      await resume.promise;
+      return result;
+    });
+    const sql = observeMainThreadSql();
+    const preparing = store.prepareRuntimeRefresh(identity.sessionId);
+    const settled = preparing.catch(() => undefined);
+    try {
+      await awaitGateBeforeSettlement(observed.promise, preparing, "placement read was skipped");
+      await store.releaseTurn(claim);
+      resume.resolve();
+      const prepared = await preparing;
+      try {
+        expect(prepared.placement).toMatchObject({
+          state: "active",
+          generation: placement.generation,
+          turnClaim: null,
+        });
+        prepared.assertCurrent();
+        sql.expectIdle();
+      } finally {
+        prepared.release();
+      }
+    } finally {
+      resume.resolve();
+      await settled;
+      sql.restore();
+    }
+  });
+
+  it("joins publication settlement and keeps unknown, closed, and cancelled reads fenced", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-admission-pending-"));
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const placement = await store.startDispatch({
+      sessionId: "pending-publication",
+      sessionKey: "agent:main:pending-publication",
+      agentId: "main",
+    });
+    const read = vi.spyOn(store, "readProjection");
+    for (const settlement of ["commit", "rollback", "invalidate", "cancel", "close"] as const) {
+      const previous = await store.prepareRuntimeRefresh(placement.sessionId);
+      const publication = stagePlacementTurnClaimWorkerPublication(
+        requireOpenClawStateDatabaseIdentity({ db: database.db }),
+        placement,
+      );
+      read.mockClear();
+      const scope = new AsyncWorkScope();
+      const preparing = scope.track(() => store.prepareRuntimeRefresh(placement.sessionId));
+      const settled = preparing.catch(() => undefined);
+      try {
+        expect(read).not.toHaveBeenCalled();
+        if (settlement === "close") {
+          await closeOpenClawStateDatabaseAsync();
+        } else if (settlement === "cancel") {
+          scope.beginClose();
+        } else {
+          publication[settlement]();
+        }
+        if (settlement === "commit" || settlement === "rollback") {
+          const prepared = await preparing;
+          try {
+            expect(prepared.placement).toEqual(placement);
+            prepared.assertCurrent();
+            expect(read).toHaveBeenCalledOnce();
+          } finally {
+            prepared.release();
+          }
+        } else {
+          await expect(preparing).rejects.toThrow();
+          expect(read).not.toHaveBeenCalled();
+        }
+        if (settlement === "cancel") {
+          // Abandoning this reader cannot settle the independent accepted writer.
+          expect(() => previous.assertCurrent()).toThrow("placement authority changed");
+          publication.rollback();
+          previous.assertCurrent();
+        }
+      } finally {
+        publication.rollback();
+        previous.release();
+        await settled;
+        await scope.drain();
+      }
+    }
+  });
+
   it("invalidates an empty maintenance scan when a new placement commits", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-inventory-"));
     const database = openOpenClawStateDatabase();

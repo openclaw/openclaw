@@ -626,13 +626,16 @@ export function projectSessionPatchResult(params: {
     catalogEntry: thinking.catalogEntry,
     selected: params.entry.contextWindow,
   });
+  const entry = projectPublicSessionEntry(params.entry);
+  delete entry.skillsSnapshot;
+  delete entry.systemPromptReport;
   return {
     ok: true,
     path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
       agentId: params.targetAgentId,
     }).path,
     key: params.canonicalKey,
-    entry: projectPublicSessionEntry(params.entry),
+    entry,
     resolved: {
       modelProvider: displayModel.provider,
       model: displayModel.model,

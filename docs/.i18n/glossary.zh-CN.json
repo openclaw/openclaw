@@ -1,5 +1,21 @@
 [
   {
+    "source": "X / Twitter",
+    "target": "X / Twitter"
+  },
+  {
+    "source": "X plugin reference",
+    "target": "X 插件参考"
+  },
+  {
+    "source": "X replies",
+    "target": "X 回复"
+  },
+  {
+    "source": "x",
+    "target": "x"
+  },
+  {
     "source": "Radius",
     "target": "Radius"
   },

@@ -1,22 +1,45 @@
 import { expect, test, vi } from "vitest";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
+import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import * as acpSessionMeta from "../acp/runtime/session-meta-readonly.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeRetainedOpenClawStateReadConnections } from "../state/openclaw-state-db-read-connection.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import type {
+  OpenClawStateReadReply,
+  OpenClawStateReadRequest,
+} from "../state/openclaw-state-read.types.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowProjection from "./session-utils-row.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
+const stateWorker = vi.hoisted(() => ({
+  read: vi.fn<(input: OpenClawStateReadRequest) => OpenClawStateReadReply>(),
+}));
+vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
+  serveOwnedWorkerTasks(handler: (input: OpenClawStateReadRequest) => OpenClawStateReadReply) {
+    stateWorker.read.mockImplementation(handler);
+  },
+}));
+import "../state/openclaw-state-read.worker.js";
+
 test("retains ACP batch bounds while clean lists and canonical metadata updates reuse resident facts", async () => {
-  await withStateDirEnv("openclaw-perf-acp-", async () => {
+  await withStateDirEnv("openclaw-perf-acp-", async ({ stateDir }) => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     const cfg = {
@@ -78,6 +101,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       sessionKey: stateKey,
       sessionId: stateEntry.sessionId,
       meta: stateMeta,
+      now: () => 100,
     });
 
     seedCanonicalAcpSessionMeta({
@@ -97,6 +121,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
           { sessionKey: stateKey, entry: staleAliasEntry },
           { sessionKey: missingKey, entry: missingEntry },
           { sessionKey: markerKey, entry: markerEntry },
+          { sessionKey: missingKey, entry: stateEntry },
         ],
       }),
     ).toEqual(
@@ -109,16 +134,74 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
     );
 
     const database = openOpenClawStateDatabase();
-    const originalPrepare = database.db.prepare.bind(database.db);
-    let acpSelects = 0;
     let projection: SessionRowProjection | undefined;
-    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
-      if (/^select\b.*\bacp_sessions\b/is.test(sql)) {
-        acpSelects += 1;
-      }
-      return originalPrepare(sql);
-    });
+    const acpSelects = trackSqliteStatementExecutions(database.db, ["metadata"], (sql) =>
+      /^select\b.*\bacp_sessions\b/is.test(sql) ? "metadata" : null,
+    );
     try {
+      const unboundKey = "agent:default:webchat:dm:unbound";
+      seedCanonicalAcpSessionMeta({
+        sessionKey: unboundKey,
+        meta: { ...markerMeta, runtimeSessionName: unboundKey },
+      });
+      const key = (sessionKey: string, agentId = "default") =>
+        buildAcpDatabaseSessionKey(sessionKey, agentId);
+      const cohort: AcpSessionReadInput[] = [
+        { keys: [key(stateKey)], entry: stateEntry },
+        { keys: [key(stateKey)], entry: staleAliasEntry },
+        { keys: [key(missingKey), key(stateKey)], entry: stateEntry },
+        { keys: [key(stateKey), key(markerKey)], entry: markerEntry },
+        { keys: [key(markerKey), key(stateKey)] },
+        { keys: [key(stateKey), key(unboundKey)] },
+        { keys: [key(unboundKey)], entry: staleAliasEntry },
+        { keys: [key(stateKey)], entry: { sessionId: "state-session", sessionStartedAt: 101 } },
+        { keys: [key(stateKey)], entry: { sessionId: "state-session", sessionStartedAt: 100 } },
+        {
+          keys: [key(stateKey)],
+          entry: { lifecycleRevision: "state-session", sessionId: "other", sessionStartedAt: 101 },
+        },
+        { keys: [key(stateKey, "other")], entry: stateEntry },
+        { keys: [key(stateKey), key(stateKey)], entry: stateEntry },
+        ...Array.from({ length: 52 }, (_, index) => ({
+          keys: [key(`agent:default:webchat:dm:cohort-missing-${index}`)],
+          entry: missingEntry,
+        })),
+      ];
+      const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        const reply = stateWorker.read({
+          context: { environment: { OPENCLAW_STATE_DIR: stateDir } },
+          databasePath: database.path,
+          location: database.path,
+          checkFreshAdmission: false,
+          command: { type: "acpSessions.metadata", entries: cohort },
+        });
+        if (!reply.ok || reply.type !== "acpSessions.metadata") {
+          throw new Error("ACP worker metadata read failed");
+        }
+        expect(reply.rows.map((row) => row?.runtime_session_name ?? null)).toEqual([
+          stateKey,
+          null,
+          stateKey,
+          markerKey,
+          markerKey,
+          stateKey,
+          unboundKey,
+          null,
+          stateKey,
+          stateKey,
+          null,
+          stateKey,
+          ...Array.from({ length: 52 }, () => null),
+        ]);
+        expect(
+          sql.queries.filter((query) => /^select\b.*\bacp_sessions\b/is.test(query)),
+        ).toHaveLength(1);
+      } finally {
+        sql.restore();
+        closeRetainedOpenClawStateReadConnections();
+      }
+      acpSelects.counts.metadata = 0;
       // Canonical identities share the production 500-key chunks.
       // Cross a boundary without materializing tens of thousands of rows.
       const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
@@ -132,7 +215,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
       expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
       expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
-      expect(acpSelects).toBe(2);
+      expect(acpSelects.counts.metadata).toBe(2);
 
       const runtimeEntries = Object.fromEntries(
         aboveBatchChunkSize
@@ -150,7 +233,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       });
       projection = await createSessionRowProjection({ cfg });
       await projection.ensureMaterialized();
-      acpSelects = 0;
+      acpSelects.counts.metadata = 0;
       const rows = vi.spyOn(rowProjection, "readSessionRowInputs");
       const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry");
       try {
@@ -159,7 +242,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
           opts: { agentId: "default", limit: 3 },
         });
         expect(result.sessions).toHaveLength(3);
-        expect(acpSelects).toBe(0);
+        expect(acpSelects.counts.metadata).toBe(0);
         for (const search of ["openclaw", "unmatched-runtime"]) {
           const searched = await listProjectedSessions({
             projection,
@@ -167,7 +250,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
           });
           expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
           expect(rows).not.toHaveBeenCalled();
-          expect(acpSelects).toBe(0);
+          expect(acpSelects.counts.metadata).toBe(0);
         }
         expect(
           projection.snapshot({ agentId: "default", key: missingKey }).row?.runtimeSelectionLocked,
@@ -183,12 +266,12 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
           },
           1,
         );
-        acpSelects = 0;
+        acpSelects.counts.metadata = 0;
         await projection.ensureMaterialized();
         expect(rows).toHaveBeenCalledOnce();
         expect(rows.mock.calls[0]?.[0].key).toBe(missingKey);
         expect(metadataReads).not.toHaveBeenCalled();
-        expect(acpSelects).toBe(0);
+        expect(acpSelects.counts.metadata).toBe(0);
         expect(
           projection.snapshot({ agentId: "default", key: missingKey }).row?.runtimeSelectionLocked,
         ).toBe(true);
@@ -198,7 +281,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       }
     } finally {
       projection?.dispose();
-      prepareSpy.mockRestore();
+      acpSelects.restore();
     }
   });
 });

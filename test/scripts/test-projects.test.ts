@@ -617,6 +617,7 @@ describe("scripts/test-projects changed-target routing", () => {
     })),
     ...[
       "src/agents/command/session-store.test.ts",
+      "src/agents/embedded-agent-runner/run-entry.cyber-failover.runner.test.ts",
       "src/agents/models-config.providers.endpoint.test.ts",
       "src/agents/models-config.root-authorship.test.ts",
       "src/agents/models-config.runtime-source-snapshot.test.ts",
@@ -628,6 +629,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
       "src/state/openclaw-state-db.test.ts",
       "src/worker/worker.runtime.test.ts",
+      "test/cron-conversation-delivery.codex.integration.test.ts",
     ].map((file) => ({ file, owner: "infra", inventory: databaseWorkerCoreTestFiles })),
   ])("routes $file to $owner", ({ file, owner, source, inventory }) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([source ?? file]), {

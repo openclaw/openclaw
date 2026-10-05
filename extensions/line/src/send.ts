@@ -5,6 +5,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   readProviderJsonResponse,
@@ -112,12 +113,19 @@ interface LineSendOpts {
   quoteToken?: string;
   /** Revalidate immediately before every provider attempt, including retries. */
   authorize?: () => boolean | Promise<boolean>;
+  assertDirectAdapterHandoff?: () => void;
 }
 
 type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
 type LinePushOpts = Pick<
   LineSendOpts,
-  "cfg" | "channelAccessToken" | "accountId" | "verbose" | "quoteToken" | "authorize"
+  | "cfg"
+  | "channelAccessToken"
+  | "accountId"
+  | "verbose"
+  | "quoteToken"
+  | "authorize"
+  | "assertDirectAdapterHandoff"
 >;
 
 interface LinePushBehavior {
@@ -199,9 +207,17 @@ async function sendLineProviderMessages(
   request: LineProviderRequest,
   retryKey?: string,
   authorize?: LineSendOpts["authorize"],
+  assertDirectAdapterHandoff?: () => void,
 ): Promise<LineProviderResponse> {
   try {
-    return await postLineProviderMessages(operation, token, request, retryKey, authorize);
+    return await postLineProviderMessages(
+      operation,
+      token,
+      request,
+      retryKey,
+      authorize,
+      assertDirectAdapterHandoff,
+    );
   } catch (error) {
     // LINE refuses the whole request for a quote token it no longer accepts and
     // names no field in the answer, so a quoted reply would simply disappear.
@@ -220,6 +236,7 @@ async function sendLineProviderMessages(
       { ...request, messages: unquoted },
       retryKey,
       authorize,
+      assertDirectAdapterHandoff,
     );
   }
 }
@@ -230,7 +247,9 @@ async function postLineProviderMessages(
   request: LineProviderRequest,
   retryKey?: string,
   authorize?: LineSendOpts["authorize"],
+  assertDirectAdapterHandoff?: () => void,
 ): Promise<LineProviderResponse> {
+  const effect = captureEffectAuthority();
   const requestBody = JSON.stringify(request);
   if (authorize) {
     const authorized = authorize();
@@ -239,19 +258,22 @@ async function postLineProviderMessages(
       throw new Error("LINE send authorization denied");
     }
   }
-  const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
-    `https://api.line.me/v2/bot/message/${operation}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
-        ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
+  const response = await effect.initiate(() => {
+    assertDirectAdapterHandoff?.();
+    return fetchWithRuntimeDispatcherOrMockedGlobal(
+      `https://api.line.me/v2/bot/message/${operation}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
+          ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
+        },
+        body: requestBody,
       },
-      body: requestBody,
-    },
-  );
+    );
+  });
 
   // LINE answers a retried key with 409 and the accepted request's sent messages
   // instead of delivering the batch a second time, so that conflict is the
@@ -398,6 +420,7 @@ async function pushLineMessages(
         { to: chatId, messages: normalizedMessages },
         retryKey,
         opts.authorize,
+        opts.assertDirectAdapterHandoff,
       );
     } catch (err) {
       if (behavior.errorContext) {
@@ -447,6 +470,7 @@ async function replyLineMessages(
     { replyToken, messages: normalizedMessages },
     undefined,
     opts.authorize,
+    opts.assertDirectAdapterHandoff,
   );
   const result = resolveLineProviderMessageIds(response, "reply");
   return { ...result, accountId: account.accountId };
@@ -661,9 +685,8 @@ function fetchLineMemberProfile(
 
 export async function getUserProfile(
   userId: string,
-  opts: LineClientOpts & { useCache?: boolean } & LineConversationScope,
+  opts: LineClientOpts & LineConversationScope,
 ): Promise<LineUserProfile | null> {
-  const useCache = opts.useCache ?? true;
   try {
     // Client construction resolves the canonical account for the cache key and
     // can throw; an unresolvable name must never cost the inbound turn.
@@ -679,11 +702,6 @@ export async function getUserProfile(
         return null;
       }
     };
-    if (!useCache) {
-      const profile = await load();
-      rememberLineIdentity(profileCache, cacheKey, profile);
-      return profile;
-    }
     return await loadLineIdentity(profileCache, cacheKey, load);
   } catch (err) {
     logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);

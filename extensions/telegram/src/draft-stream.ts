@@ -24,7 +24,7 @@ import {
 import { escapeTelegramHtml, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
   TelegramRequestNotStartedError,
-  isRecoverableTelegramNetworkError,
+  isRetryableTelegramApiError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramMessageNotModifiedError,
@@ -470,13 +470,13 @@ export function createTelegramDraftStream(params: {
         return false;
       }
       // A final 429 already outlived the limiter's wait and stays retryable for
-      // stop's bounded resume. Edits retry on any transient network error
+      // stop's bounded resume. Edits retry on transient network and server errors
       // (re-editing the same content is idempotent) while an unsent first preview
       // retries only on provably pre-connect failures — anything ambiguous could
       // duplicate the preview.
       const retryable =
         isTelegramRateLimitError(err) ||
-        (isEdit ? isRecoverableTelegramNetworkError(err) : isSafeToRetrySendError(err));
+        (isEdit ? isRetryableTelegramApiError(err) : isSafeToRetrySendError(err));
       consecutivePreviewFailures += 1;
       if (retryable && consecutivePreviewFailures <= MAX_CONSECUTIVE_PREVIEW_FAILURES) {
         params.warn?.(

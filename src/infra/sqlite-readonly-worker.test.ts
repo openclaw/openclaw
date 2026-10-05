@@ -332,6 +332,28 @@ it("uses online backup instead of raw WAL copying for live inspection", async ()
   }
 });
 
+it("preserves an intermittent failed launch without parsing absent worker output", async () => {
+  const source = createDatabase(null);
+  const stagingRoot = tempDirs.make("openclaw-snapshot-launch-");
+  const run = () => runSqliteReadOnlyWorkerSync(source, stagingRoot);
+  expect(fs.existsSync(run())).toBe(true);
+
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  // Use Node's actual failed-launch result: its declared string outputs can be absent.
+  vi.mocked(spawnSync).mockImplementationOnce((_command, args, options) =>
+    actual.spawnSync(path.join(stagingRoot, "missing-node"), args, options),
+  );
+  expect(run).toThrow(
+    expect.objectContaining({
+      message: expect.stringContaining(`failed to start for ${source}`),
+      cause: expect.objectContaining({ code: "ENOENT" }),
+    }),
+  );
+
+  expect(fs.existsSync(run())).toBe(true);
+  expect(fs.readFileSync(source)).toEqual(Buffer.alloc(0));
+});
+
 describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)", (mode) => {
   async function run(source: string): Promise<string> {
     const stagingRoot = tempDirs.make("openclaw-snapshot-budget-staging-");

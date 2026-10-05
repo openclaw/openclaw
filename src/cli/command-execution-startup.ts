@@ -58,7 +58,9 @@ export async function ensureCliExecutionBootstrap(params: {
   const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
   if (!skipConfigGuard) {
     await measureCliCommandStartup("config-ready", async () => {
-      const { ensureConfigReady } = await configGuardModuleLoader.load();
+      const { ensureConfigReady } = await measureCliCommandStartup("config-guard-import", () =>
+        configGuardModuleLoader.load(),
+      );
       const runConfigGuard = () =>
         ensureConfigReady({
           runtime,

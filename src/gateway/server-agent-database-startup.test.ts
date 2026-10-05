@@ -311,21 +311,23 @@ it.for([
     });
     if (outcome === "recover" || outcome === "superseded") {
       const session = await import("./server-startup-session-migration.js");
-      const migrate = session.runStartupSessionMigration;
-      vi.spyOn(session, "runStartupSessionMigration").mockImplementation(async (params) => {
-        await migrate(params);
-        if (params.agentIds?.has(agentId)) {
-          if (outcome === "recover") {
-            const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
-              logOutput: false,
-            });
-            preparationParent = Number(result.stdout);
+      const migrate = session.runGatewaySessionStartupMaintenance;
+      vi.spyOn(session, "runGatewaySessionStartupMaintenance").mockImplementation(
+        async (params) => {
+          await migrate(params);
+          if (params.databases.some(({ database: prepared }) => prepared.agentId === agentId)) {
+            if (outcome === "recover") {
+              const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
+                logOutput: false,
+              });
+              preparationParent = Number(result.stdout);
+            }
+            sessionPrepared = true;
+            preparationEntered.resolve();
+            await preparationRelease.promise;
           }
-          sessionPrepared = true;
-          preparationEntered.resolve();
-          await preparationRelease.promise;
-        }
-      });
+        },
+      );
     }
     if (outcome === "superseded") {
       const model = await import("../agents/prepared-model-runtime.js");
@@ -575,7 +577,7 @@ it.for([
           expect(hostJournalReads).toBe(0);
         }
         if (holdSubagentRestoration) {
-          expect(startupSettled).toBe(false);
+          expect(startupSettled).toBe(true);
           restorationRelease.resolve();
           await server.startupSettled;
         }

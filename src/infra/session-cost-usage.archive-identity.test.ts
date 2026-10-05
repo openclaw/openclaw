@@ -38,7 +38,7 @@ import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-
 import {
   listUsageCountedTranscriptStats,
   resolveUsageCostTranscriptFile,
-} from "./session-cost-usage-collection.js";
+} from "./session-cost-usage-collection.test-support.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { decodeUsageCostRollupEnvelope } from "./session-cost-usage-rollup-codec.js";
 import {
@@ -333,15 +333,14 @@ describe("usage archive identity", () => {
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
     await persistSessionTranscriptTurn(scope, { messages: [{ message: assistant(17) }] });
     const params = { agentId: "main", config: scopedConfig, startMs: 0, endMs: Date.now() };
-    expect(
-      await loadCostUsageSummaryFromCache({ ...params, refreshMode: "sync-when-empty" }),
-    ).toMatchObject({ totals: { totalTokens: 17 }, cacheStatus: { status: "fresh" } });
+    expect(await loadCostUsageSummary(params)).toMatchObject({
+      totals: { totalTokens: 17 },
+      cacheStatus: { status: "fresh" },
+    });
     await persistSessionTranscriptTurn(scope, { messages: [{ message: assistant(29) }] });
     const work = new AsyncWorkScope();
     try {
-      await work.track(() =>
-        loadCostUsageSummaryFromCache({ ...params, refreshMode: "background" }),
-      );
+      await work.track(() => loadCostUsageSummaryFromCache(params));
       await work.runWhenIdle(() => undefined);
       expect(
         await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),

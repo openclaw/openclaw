@@ -46,6 +46,7 @@ export function createMediaGenerateProviderListActionResult<
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   listModes: (provider: TProvider) => string[];
   summarizeCapabilities: (
     provider: TProvider,
@@ -76,6 +77,7 @@ export function createMediaGenerateProviderListActionResult<
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        authProfileStoreSource: params.authProfileStoreSource,
       }),
       authEnvVars: getProviderEnvVarsCore(provider.id),
       capabilities: provider.capabilities,

@@ -73,6 +73,7 @@ export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
+  private publicationGenerationActive = false;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -259,7 +260,10 @@ export class MemoryIndexDatabase {
           store: await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
             this.writeOptions,
             this.db,
-            worker,
+            {
+              ...worker,
+              retainExecutionUntilClose: this.publicationGenerationActive ? true : undefined,
+            },
           ),
           busyTimeoutMs: pragmas.busy_timeout,
         };
@@ -512,6 +516,15 @@ export class MemoryIndexDatabase {
       const worker = await this.publicationWorker;
       await worker.store.close();
       this.publicationWorker = undefined;
+    }
+  }
+
+  async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
+    this.publicationGenerationActive = true;
+    try {
+      await run();
+    } finally {
+      this.publicationGenerationActive = false;
     }
   }
 

@@ -327,15 +327,16 @@ It passes the observed revision and service definition to the installer after it
 final local custody checks. Failed or unknown inspection stops the install. If an
 operator changes the service or runtime pin before installation begins, the CLI
 preserves that selection and the app reports it without retrying or rolling it
-back. Older installed CLIs keep their existing invocation contract.
+back.
 
-Node rollback and restoration of a prior bundled build still run the retained
-CLI, which cannot be assumed to accept this expectation. An operator change
-between the app's final custody check and that CLI's initial snapshot is not yet
-fenced. The app cannot substitute its current bundled CLI: the installer derives
-the service entrypoint from its own package, which would change what recovery
-restores. A narrow core installer capability for selecting the retained service
-entrypoint is the follow-up needed to close this recovery window.
+Node rollback and prior-build restoration use this app's bundled CLI with the
+same runtime-intent observation. The installer restores the retained package's
+runtime and entrypoint, and its SQLite library for Bun, rather than its own.
+Recovery does not require the failed replacement service to be running. An
+operator change is preserved and reported without retry. If the app's bundled
+runtime is missing or incompatible, recovery stops; reinstall OpenClaw.app.
+The core updater step still runs the installed CLI and is not covered by this
+installation fence.
 
 Channel-policy installs, independently managed services, and services with
 saved operator runtime pins are not migrated. This includes a saved pin pointing

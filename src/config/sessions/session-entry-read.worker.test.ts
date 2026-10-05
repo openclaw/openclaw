@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -34,8 +37,116 @@ import {
   readExactSessionEntriesWithLifecycle,
   readSessionRowDatabaseFacts,
 } from "./session-entry-read.worker.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 import * as sharingKernel from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+
+it("hydrates only requested snapshots while retaining exact-read lifecycle and authorization facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:scoped-snapshots";
+    const entry = {
+      sessionId: "snapshot-session",
+      updatedAt: 1,
+      createdAt: 1,
+      sessionStartedAt: 1,
+      status: "running" as const,
+      skillsSnapshot: { prompt: "saved prompt".repeat(8192), skills: [] },
+      sessionDiffBaseline: {
+        version: 1 as const,
+        sessionId: "snapshot-session",
+        root: "/synthetic",
+        files: [],
+      },
+      systemPromptReport: {
+        source: "run" as const,
+        generatedAt: 1,
+        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    };
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, entry);
+    const target = { agentId: database.agentId, path: database.path };
+    await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      retained.run(target, () => {
+        const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
+        if (!opened.found) {
+          throw new Error("Expected seeded snapshot database");
+        }
+        const read = (snapshotFields?: readonly SessionEntrySnapshotField[], exact = false) =>
+          readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: target,
+            env,
+            sessionKeys: [sessionKey, "agent:main:absent"],
+            projection: exact ? "exact" : "full",
+            snapshotFields,
+            lifecycleSessionKey: sessionKey,
+            includeAuthorization: true,
+            includeMembers: true,
+            includeParticipantRecords: true,
+          });
+        // Admit the physical file before measuring the requested row payload.
+        expect(read().entries[0]?.entry).toMatchObject(entry);
+        const payloads = trackSqliteStatementExecutions(opened.value.db, ["entry"], (sql) =>
+          isSessionNodePayloadSelect(sql) ||
+          (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
+            ? "entry"
+            : null,
+        );
+        try {
+          for (const fields of [[], ["systemPromptReport"], ["sessionDiffBaseline"]] as const) {
+            payloads.textBytes.entry = 0;
+            const selected = read(fields);
+            expect(selected.entries).toHaveLength(1);
+            expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
+            expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
+            expect(selected.members).toEqual({ [sessionKey]: [] });
+            expect(selected.participantRecords).toEqual({});
+            for (const field of [
+              "skillsSnapshot",
+              "systemPromptReport",
+              "sessionDiffBaseline",
+            ] as const) {
+              expect(selected.entries[0]?.entry[field]).toEqual(
+                fields.some((selectedField) => selectedField === field) ? entry[field] : undefined,
+              );
+            }
+            expect(payloads.textBytes.entry).toBeLessThan(2048);
+            expect(read(fields, true).entries).toEqual(selected.entries);
+          }
+          const recovery = readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: target,
+            env,
+            sessionKeys: [],
+            statusSelection: { statuses: ["running"], presenceOnly: false },
+          });
+          expect(recovery.entries).toEqual(read([]).entries);
+          expect(read().entries[0]?.entry).toMatchObject(entry);
+        } finally {
+          payloads.restore();
+        }
+      });
+    } finally {
+      retained.close();
+    }
+    const transported = await readSessionEntriesFromStoreInWorker({
+      agentId: target.agentId,
+      storePath: target.path,
+      env,
+      sessionKeys: [sessionKey],
+      snapshotFields: ["sessionDiffBaseline"],
+    });
+    expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
+    expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
+    expect(transported.entries[0]?.entry.systemPromptReport).toBeUndefined();
+  });
+});
 
 it("publishes exact-read admission only after commit and reuses it on the retained reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -146,7 +257,7 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
   });
 });
 
-it("reads row metadata, board presence, and cold summary position from one snapshot", async () => {
+it.each([false, true])("reads row metadata (continuation: %s)", async (useContinuation) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cron:row-facts";
@@ -204,7 +315,7 @@ it("reads row metadata, board presence, and cold summary position from one snaps
     const concurrentCommit = vi
       .spyOn(boardStore, "readBoardSessionKeys")
       .mockImplementationOnce((reader, key) => {
-        // Commit after entry decoding; the remaining facts must retain its original snapshot.
+        // Commit after entry acquisition; the remaining facts must retain its original snapshot.
         peer.exec("BEGIN IMMEDIATE");
         try {
           peer
@@ -236,9 +347,42 @@ it("reads row metadata, board presence, and cold summary position from one snaps
         if (!opened.found) {
           throw new Error("Expected the seeded read-only database");
         }
-        const queries = trackSqliteStatementExecutions(opened.value.db, ["boards"], (sql) =>
-          /\bfrom "board_tabs"/iu.test(sql) ? "boards" : null,
+        if (useContinuation) {
+          readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: target,
+            env,
+            sessionKeys: [sessionKey],
+          });
+        }
+        const continuation = useContinuation
+          ? captureCanonicalSessionReaderContinuation(opened.value)
+          : undefined;
+        if (useContinuation && !continuation) {
+          throw new Error("Expected committed reader admission");
+        }
+        const exec = vi.spyOn(opened.value.db, "exec");
+        const queries = trackSqliteStatementExecutions(
+          opened.value.db,
+          ["boards", "entries"],
+          (sql) => {
+            if (/\bfrom "board_tabs"/iu.test(sql)) {
+              return "boards";
+            }
+            return /\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')
+              ? "entries"
+              : null;
+          },
         );
+        const parse = vi.spyOn(JSON, "parse");
+        const entryParseCount = () =>
+          parse.mock.calls.filter(
+            ([value]) =>
+              typeof value === "string" &&
+              value.includes('"sessionId":') &&
+              (value.includes(sessionId) ||
+                sessionKeys.slice(1).some((key) => value.includes(key))),
+          ).length;
         try {
           const read = () =>
             readSessionRowDatabaseFacts({
@@ -246,10 +390,14 @@ it("reads row metadata, board presence, and cold summary position from one snaps
               database: target,
               env,
               sessionKeys,
+              continuation: continuation?.receipt,
             });
           const first = read();
           expect(first.rows).toHaveLength(64);
           expect(queries.counts.boards).toBe(1);
+          expect(queries.counts.entries).toBe(1);
+          expect(queries.rowCounts.entries).toBe(64);
+          expect(entryParseCount()).toBe(64);
           expect(first.rows.filter((row) => row.hasBoard).map((row) => row.sessionKey)).toEqual(
             boardKeys,
           );
@@ -270,7 +418,17 @@ it("reads row metadata, board presence, and cold summary position from one snaps
             activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
           });
           expect(queries.counts.boards).toBe(2);
+          expect(queries.counts.entries).toBe(2);
+          expect(entryParseCount()).toBe(128);
+          expect(
+            exec.mock.calls
+              .map(([sql]) => sql)
+              .filter((sql) => /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql)),
+          ).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
         } finally {
+          continuation?.release();
+          exec.mockRestore();
+          parse.mockRestore();
           queries.restore();
         }
       });
@@ -357,7 +515,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
   });
 });
 
-it.each(["worker", "row-facts"] as const)(
+it.each(["worker", "exact", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   async (reader) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -376,7 +534,7 @@ it.each(["worker", "row-facts"] as const)(
               database: { agentId: "main", path: storePath },
               env,
               sessionKeys,
-              projection: "list",
+              projection: reader === "exact" ? "exact" : "list",
             }).entries;
       expect(read()).toEqual([]);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });

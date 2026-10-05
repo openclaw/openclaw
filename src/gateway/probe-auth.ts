@@ -137,13 +137,6 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
   return { auth };
 }
 
-/** Resolves probe auth with async SecretRef support. */
-export async function resolveGatewayProbeAuthWithSecretInputs(
-  params: GatewayProbeCredentialParams,
-): Promise<{ token?: string; password?: string }> {
-  return (await resolveGatewayProbeAuthResolutionWithSecretInputs(params)).auth;
-}
-
 /** Resolves probe auth without throwing for unavailable SecretRefs, returning a warning. */
 export async function resolveGatewayProbeAuthSafeWithSecretInputs(
   params: GatewayProbeCredentialParams,

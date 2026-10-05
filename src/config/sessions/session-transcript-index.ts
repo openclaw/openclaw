@@ -561,23 +561,28 @@ const transcriptIndexTables = [
   "session_transcript_index_state",
 ] as const;
 
+function selectOrphanedTranscriptOwners(
+  db: DatabaseSync,
+  table: (typeof transcriptIndexTables)[number],
+) {
+  const kysely = getIndexKysely(db);
+  return (
+    kysely
+      .selectFrom(table)
+      .select("session_id")
+      .distinct()
+      .except(kysely.selectFrom("transcript_events").select("session_id").distinct())
+      // Older SQLite needs ordering to merge owner sets and skip duplicate keys.
+      .orderBy("session_id")
+  );
+}
+
 /** Orphan-only cleanup is independent of live sessions' projection watermarks. */
 export function hasOrphanedTranscriptIndexRows(db: DatabaseSync): boolean {
-  const kysely = getIndexKysely(db);
   return transcriptIndexTables.some(
     (table) =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom(table)
-          .select("session_id")
-          .where(
-            "session_id",
-            "not in",
-            kysely.selectFrom("transcript_events").select("session_id").distinct(),
-          )
-          .limit(1),
-      ) !== undefined,
+      executeSqliteQueryTakeFirstSync(db, selectOrphanedTranscriptOwners(db, table).limit(1)) !==
+      undefined,
   );
 }
 
@@ -587,13 +592,7 @@ export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync)
   for (const table of transcriptIndexTables) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom(table)
-        .where(
-          "session_id",
-          "not in",
-          kysely.selectFrom("transcript_events").select("session_id").distinct(),
-        ),
+      kysely.deleteFrom(table).where("session_id", "in", selectOrphanedTranscriptOwners(db, table)),
     );
   }
 }

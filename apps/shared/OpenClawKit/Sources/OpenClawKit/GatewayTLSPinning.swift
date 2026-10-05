@@ -403,11 +403,12 @@ public enum GatewayTLSStore {
         stableID: String,
         account: String) -> FingerprintRead
     {
-        let v2Account = self.keychainAccount(
-            stableID: stableID,
-            prefix: self.legacyCanonicalAccountPrefix)
-        if let v2Account {
-            switch self.readLegacyKeychainFingerprint(account: v2Account) {
+        let accounts = [
+            self.keychainAccount(stableID: stableID, prefix: self.legacyCanonicalAccountPrefix),
+            self.canSafelyReadLegacyRawStorageKey(stableID) ? stableID : nil,
+        ].compactMap(\.self)
+        for legacyAccount in accounts {
+            switch self.readLegacyKeychainFingerprint(account: legacyAccount) {
             case let .value(fingerprint):
                 return self.migrateLegacyFingerprint(
                     fingerprint,
@@ -419,19 +420,7 @@ public enum GatewayTLSStore {
                 break
             }
         }
-        guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return .missing }
-
-        switch self.readLegacyKeychainFingerprint(account: stableID) {
-        case let .value(fingerprint):
-            return self.migrateLegacyFingerprint(
-                fingerprint,
-                stableID: stableID,
-                account: account)
-        case .unavailable:
-            return .unavailable
-        case .missing:
-            return .missing
-        }
+        return .missing
     }
 
     private static func migrateLegacyFingerprint(

@@ -30,7 +30,7 @@ import {
 } from "../registry/subagent-registry.store.codec.js";
 import {
   conflictingSubagentRunVersions,
-  upsertSubagentRunRowInDatabase,
+  writeSubagentRunValuesInDatabase,
   type SubagentRegistryWrite,
 } from "../registry/subagent-registry.store.kernel.js";
 import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
@@ -123,7 +123,7 @@ export function admitSubagentCompletionInWorker(
           queueEntry.id,
         ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending";
       if (claimed) {
-        upsertSubagentRunRowInDatabase(database, boundSubagent);
+        writeSubagentRunValuesInDatabase(database, [boundSubagent], []);
       } else {
         // The namespace owns this payload; a duplicate may acknowledge only its original generation.
         const existing = loadDeliveryQueueEntryInDatabase(

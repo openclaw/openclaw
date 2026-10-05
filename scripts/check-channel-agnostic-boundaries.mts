@@ -60,6 +60,7 @@ const channelIds = [
   "twitch",
   "web",
   "whatsapp",
+  "x",
   "zalo",
   "zalouser",
 ];

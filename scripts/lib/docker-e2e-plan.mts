@@ -35,6 +35,7 @@ import {
   isTrustedHarnessOwnedUpgradeSurvivorScenario,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
+  readUpgradeSurvivorScenarioCatalog,
   supportsUpgradeSurvivorScenarioAtBaseline,
 } from "./upgrade-survivor-policy.mjs";
 
@@ -263,37 +264,7 @@ function readInertFrozenScenarioContract(
   if (text === null) {
     return readLegacyFrozenScenarioContract(source);
   }
-  // Read declared capabilities as data; never evaluate the selected tree's modules.
-  let catalog: unknown;
-  try {
-    catalog = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (
-    !catalog ||
-    typeof catalog !== "object" ||
-    Array.isArray(catalog) ||
-    Object.keys(catalog).length !== 2 ||
-    !("scenarios" in catalog) ||
-    !("assertionOnlyScenarios" in catalog) ||
-    !Array.isArray(catalog.scenarios) ||
-    catalog.scenarios.length === 0 ||
-    !Array.isArray(catalog.assertionOnlyScenarios)
-  ) {
-    return undefined;
-  }
-  const scenarios: unknown[] = [...catalog.scenarios, ...catalog.assertionOnlyScenarios];
-  if (
-    !scenarios.every(
-      (scenario): scenario is string =>
-        typeof scenario === "string" && /^[a-z0-9][a-z0-9-]*$/u.test(scenario),
-    ) ||
-    new Set(scenarios).size !== scenarios.length
-  ) {
-    return undefined;
-  }
-  return scenarios;
+  return readUpgradeSurvivorScenarioCatalog(text);
 }
 
 function readFrozenScenarioContract(

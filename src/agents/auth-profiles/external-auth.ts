@@ -114,7 +114,7 @@ function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolea
 /** Persist safe external CLI OAuth profiles that own their local profile slot. */
 export function syncPersistedExternalCliAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+  params?: ExternalCliOverlayOptions,
 ): AuthProfileStore {
   // MiniMax keeps its persisted external profile fresh without an explicit scope.
   if (
@@ -125,7 +125,6 @@ export function syncPersistedExternalCliAuthProfiles(
   }
   const persistedProfiles = resolveAllowedExternalCliAuthProfiles({
     store,
-    env: params?.env,
     externalCli: params,
   }).filter((profile) => profile.persistence === "persisted");
   if (persistedProfiles.length === 0) {

@@ -52,9 +52,12 @@ The table is not secret storage. See the
 Since [agent schema 24](/reference/database-schemas/agent-schema-history#session-hot-facts-and-snapshots),
 `session_nodes.entry_json` contains hot session facts. The separately keyed
 `session_entry_snapshots` rows own diff baselines, saved skills, and system-prompt
-reports. Metadata reads do not load these payloads; full-entry consumers acquire
-them in the same statement snapshot. The logical session node owns their
-retention and deletion.
+reports. Exact readers select only the snapshots their caller needs: metadata
+reads omit all three, usage context reads the system-prompt report, and session
+diff reads the diff baseline. Selected snapshots, entry metadata, and lifecycle
+facts remain in the same read transaction. Replacement and initialization reads
+retain complete entries so saved snapshots survive writeback. The logical
+session node owns their retention and deletion; no migration is required.
 
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the cache format. Revision 2 introduced the current prose (one to three concise sentences); revision 3 keeps that prose and certifies that the oversized-omission flag counts only skipped user or assistant messages, not oversized tool results such as screenshots. Missing or pre-revision-2 records retain their text and coverage while the existing queue refreshes the prose with a model call. Revision-2 records are rechecked once without a model call unless new messages arrived: the stale omission notice is removed when only tool results were skipped, and kept when an earlier user or assistant message was genuinely omitted. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 

@@ -215,9 +215,13 @@ or protocol-version change.
   and activity-summary enrichment enabled. This adds catalog-backed fields such
   as thinking options and replaces legacy model aliases with canonical model IDs
   in event rows. The Control UI applies these rows locally to existing roster
-  members, so their values match the list. A `reason: "patch"` event that commits a
-  model, account, or runtime selection also carries `catalogChanged: true`; clients
-  may treat other patches as session-only and keep cached catalogs. Top-level lifecycle and capacity fields
+  members, so their values match the list. An explicit model, account, or runtime
+  selection can also mark the event with `catalogChanged: true`.
+  Visible Control UI panes refresh commands and the direct model catalog together, coalescing
+  ordinary `patch` and `command-metadata` events while refreshing marked selections
+  immediately. Compact `chat.metadata` responses omit model/account data, so the
+  direct catalog refresh also reconciles selection changes without the hint.
+  Top-level lifecycle and capacity fields
   remain event receipts, including explicit clearing values. When a nested row
   omits an optional field, honor its top-level clearing tombstone; nested values
   take precedence when present. Merge an existing
@@ -298,8 +302,10 @@ or protocol-version change.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
   snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
-  distinct. Publication rechecks row readiness after each yield, and shutdown joins
-  admitted publications before disposing their projection.
+  distinct. Publication rechecks row readiness after each yield. Accepted recap
+  notifications outlive the compaction or scheduler work that triggered them.
+  Shutdown stops new notifications and joins admitted publications before closing
+  clients and disposing their projection.
   Authorized incognito descriptions and events use the same row presentation from
   transient process-local state. Incognito rows remain excluded from the session
   roster, and queued events cannot cross a reset or database replacement.

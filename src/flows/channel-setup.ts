@@ -1,6 +1,5 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelOnboardingPostWriteHook,
@@ -196,13 +195,10 @@ export async function setupChannels(
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
-    setup?: {
-      forceReload?: boolean;
-      forceSetupOnlyChannelPlugins?: boolean;
-    },
+    forceReload = false,
   ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
-    if (existing && setup?.forceReload !== true) {
+    if (existing && !forceReload) {
       return existing;
     }
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
@@ -211,7 +207,7 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins ?? true,
+      forceSetupOnlyChannelPlugins: true,
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
@@ -505,10 +501,7 @@ export async function setupChannels(
     setupOptions: SetupChannelsOptions,
   ) => {
     if (scopedPluginsById.has(channel)) {
-      await loadScopedChannelPlugin(channel, undefined, {
-        forceReload: true,
-        forceSetupOnlyChannelPlugins: true,
-      });
+      await loadScopedChannelPlugin(channel, undefined, true);
     }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
@@ -598,9 +591,7 @@ export async function setupChannels(
           plugin,
         })
       : DEFAULT_ACCOUNT_ID;
-    const resolvedAccountId =
-      normalizeAccountId(accountId) ??
-      (plugin ? resolveChannelDefaultAccountId({ plugin, cfg: next }) : DEFAULT_ACCOUNT_ID);
+    const resolvedAccountId = normalizeAccountId(accountId);
     const accountLabel = formatAccountLabel(resolvedAccountId);
 
     if (action === "delete") {

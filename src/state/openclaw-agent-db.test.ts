@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -64,7 +64,10 @@ import {
   isSameOpenClawAgentDatabasePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
+import {
+  removeCanonicalValidationFromHistoricalAgentFixture,
+  seedSchema19SessionKeyRepairFixture,
+} from "./openclaw-agent-db.test-support.js";
 import { materializeV21WorkerAgentDatabase } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
@@ -76,6 +79,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   createCacheExpiryIndexPhysicalDrift,
+  createCanonicalAgentIndexDrift,
   createTranscriptIdempotencyIndexDrift,
   createUnsafeIndexDrift,
 } from "./sqlite-index-drift.test-support.js";
@@ -83,7 +87,6 @@ import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
   normalizeSqliteSchemaShapeSql,
-  replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
 const agentDbTempDirs: string[] = [];
@@ -2951,63 +2954,47 @@ describe("openclaw agent database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
     );
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const drifted = new DatabaseSync(databasePath);
-    try {
-      drifted.exec(`
-        DROP INDEX idx_agent_session_windows_session_key;
-        DROP INDEX idx_agent_transcript_event_identity_sequence;
-      `);
-      expect(replaceNamedIndexesWithNoncanonicalIndexes(drifted).length).toBeGreaterThan(25);
-      expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(drifted.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    } finally {
-      drifted.close();
-    }
+    createCanonicalAgentIndexDrift(databasePath);
 
     const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
       canonicalShape,
     );
     expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT seq, run_id, event_json, created_at FROM trajectory_runtime_events ORDER BY seq",
+        )
+        .all(),
+    ).toEqual([
+      { seq: 0, run_id: null, event_json: '{"type":"unassigned"}', created_at: 1 },
+      { seq: 1, run_id: "run-1", event_json: '{"type":"named"}', created_at: 2 },
+    ]);
   });
 
   it("repairs schema-19 additive session-key surfaces before upgrading schema validation", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeV21WorkerAgentDatabase(stateDir);
+    const expectedShape = createSqliteSchemaShapeFromSql(
+      new URL("./openclaw-agent-schema.sql", import.meta.url),
+    );
 
     const { DatabaseSync } = requireNodeSqlite();
     const shippedSchema = new DatabaseSync(databasePath);
-    removeCanonicalValidationFromHistoricalAgentFixture(shippedSchema);
-    shippedSchema
-      .prepare(
-        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(
-        "agent:worker-1:session-1",
-        "session-1",
-        JSON.stringify({ sessionId: "session-1", updatedAt: 1 }),
-        1,
-      );
+    // Agent migration retains this optional historical index until memory initialization.
+    const historicalChunks = collectSqliteSchemaShape(shippedSchema).memory_index_chunks;
+    const expectedChunks = expectedShape.memory_index_chunks;
+    assert(historicalChunks && expectedChunks, "Both fixtures must contain memory chunks");
+    const historicalPathIndex = historicalChunks.indexes.filter(
+      (index) => index.name === "idx_memory_index_chunks_path",
+    );
+    expect(historicalPathIndex).toHaveLength(1);
+    expectedChunks.indexes.push(...historicalPathIndex);
+    expectedChunks.indexes.sort((left, right) => left.name.localeCompare(right.name));
     try {
-      shippedSchema.exec(`
-        DROP TABLE session_transcript_cold_archives;
-        PRAGMA user_version = 19;
-        UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
-        DROP TRIGGER session_nodes_entry_valid_after_insert;
-        DROP TRIGGER session_nodes_entry_valid_after_entry_update;
-        DROP TRIGGER session_nodes_entry_valid_after_identity_update;
-        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
-        DROP INDEX idx_agent_session_nodes_entry_valid_pending;
-        DROP INDEX idx_agent_session_nodes_entry_not_valid;
-        DROP TABLE session_key_contract;
-        ALTER TABLE session_nodes DROP COLUMN entry_valid;
-        ALTER TABLE session_conversations DROP COLUMN route_context_json;
-      `);
+      seedSchema19SessionKeyRepairFixture(shippedSchema);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(19);
     } finally {
       shippedSchema.close();
@@ -3015,9 +3002,7 @@ describe("openclaw agent database", () => {
 
     const repaired = await migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(repaired.db))).toEqual(
-      normalizeSqliteSchemaShapeSql(
-        createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
-      ),
+      normalizeSqliteSchemaShapeSql(expectedShape),
     );
     expect(
       repaired.db

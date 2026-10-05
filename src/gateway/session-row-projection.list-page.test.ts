@@ -122,6 +122,48 @@ it("retains prepared child metadata across a parent presentation refresh", async
   });
 });
 
+it("counts only matching live children on cold and refreshed parent list pages", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const parent = "agent:main:dashboard:archive-parent";
+    const children = [1, 2].map((id) => `${parent}-child-${id}`);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "archive-parent", updatedAt: 3 },
+    );
+    const writeChild = (index: number, archivedAt?: number) =>
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: children[index]! },
+        { sessionId: `archive-child-${index}`, updatedAt: 1, parentSessionKey: parent, archivedAt },
+      );
+    writeChild(0);
+    writeChild(1, 1);
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const listParent = async () => {
+      const result = await listProjectedSessions({ projection, opts: { limit: 1 } });
+      expect(result.sessions[0]?.key).toBe(parent);
+      return result.sessions[0]?.childSessions ?? [];
+    };
+    try {
+      expect(await listParent()).toEqual([children[0]]);
+      const archived = await listProjectedSessions({ projection, opts: { archived: true } });
+      expect(archived.sessions.map((row) => row.key)).toEqual([children[1]]);
+      const all = await listProjectedSessions({ projection, opts: { archived: "all", limit: 1 } });
+      expect(all.sessions[0]?.childSessions).toEqual(children);
+      writeChild(0, 2);
+      expect(await listParent()).toEqual([]);
+      writeChild(0);
+      writeChild(1);
+      expect(await listParent()).toEqual(children);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
+
 it("yields while materializing only overlapping selected pages for concurrent list handlers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };

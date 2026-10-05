@@ -26,6 +26,7 @@ import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
   filterSessionEntries,
+  matchesSessionArchiveFilter,
   type SessionListFilteredEntries,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
@@ -608,8 +609,19 @@ export async function listProjectedSessions(params: {
             if (!sharedRow) {
               return [];
             }
-            sharedRows.push(sharedRow);
             const row = { ...sharedRow };
+            if (row.childSessions?.length && opts.archived !== "all") {
+              let excluded: Set<string> | undefined;
+              for (const { key: childKey, entry } of record.materialized.source.childLinks ?? []) {
+                if (!matchesSessionArchiveFilter(entry, opts.archived)) {
+                  (excluded ??= new Set()).add(childKey);
+                }
+              }
+              if (excluded) {
+                row.childSessions = row.childSessions.filter((childKey) => !excluded.has(childKey));
+              }
+            }
+            sharedRows.push(row.childSessions === sharedRow.childSessions ? sharedRow : row);
             bindSessionListRowRead(row, { projection, record, client });
             if ((record.materializedSequence ?? 0) > materializedBefore) {
               materializedRowCount++;

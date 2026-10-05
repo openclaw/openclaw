@@ -300,6 +300,22 @@ export function createControlUiPluginHost(
           context.navigation.update({ sidebarEntries: [...entries, entry] });
         }
       },
+      unpinNavigation(id) {
+        const context = current();
+        const entry = serializeSidebarEntry({
+          type: "plugin",
+          key: `${owner.descriptor.pluginId}/${id}`,
+        });
+        const entries = context.navigation.snapshot.sidebarEntries;
+        if (entries.includes(entry)) {
+          context.navigation.update({ sidebarEntries: entries.filter((value) => value !== entry) });
+        }
+      },
+      isNavigationPinned(id) {
+        return current().navigation.snapshot.sidebarEntries.includes(
+          serializeSidebarEntry({ type: "plugin", key: `${owner.descriptor.pluginId}/${id}` }),
+        );
+      },
       registerPanel: (value) => runtime.register(owner, "panels", value),
       openPanel(id, session) {
         const context = current();

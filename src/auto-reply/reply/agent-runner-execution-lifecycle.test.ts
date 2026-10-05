@@ -731,6 +731,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(false);
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
       params.onExecutionPhase?.({
         phase: "model_call_started",
         provider: "openai",

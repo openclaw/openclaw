@@ -1,9 +1,25 @@
 // Native open/close and physical identity admission share one owner.
 import type { DatabaseSync } from "node:sqlite";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+const identities = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateNativeIdentities"),
+  () => new WeakMap<DatabaseSync, DatabasePathIdentity>(),
+);
+
+/** Physical identity admitted by the native opener, never a later pathname observation. */
+export function readTrackedStateDatabaseIdentity(database: DatabaseSync) {
+  return identities.get(database);
+}
 
 type StateDatabaseOpenOptions = {
   existingOnly?: boolean;
@@ -41,9 +57,23 @@ export function openTrackedStateDatabaseResult(
     const nativeOptions = options?.readOnly
       ? { readOnly: true, timeout: options.timeout }
       : { enableForeignKeyConstraints: options?.enableForeignKeyConstraints };
+    const openingIdentity = readDatabasePathIdentitySync(pathname);
     const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location, nativeOptions));
     try {
       assertStateDatabaseAccessAllowed(pathname);
+      if (openingIdentity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(pathname, openingIdentity.key, openingIdentity.birthtime);
+      }
+      const identity = openingIdentity.key.startsWith("file:")
+        ? openingIdentity
+        : readDatabasePathIdentitySync(pathname);
+      if (identity.key.startsWith("file:")) {
+        identities.set(database, identity);
+        const unregister = registerNodeSqliteDisposeCallback(database, () => {
+          identities.delete(database);
+          unregister();
+        });
+      }
     } catch (error) {
       database.close();
       throw error;

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   admitMediaHandle,
   resetGeneratedMediaTaskActivityForTests,
@@ -367,6 +368,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     });
     const lifecycle = createImageMediaLifecycle();
     const handle = await lifecycle.createTaskRun({ sessionKey, prompt: "proof image" });
+    assert(handle);
 
     scheduleImageCompletion({
       lifecycle,
@@ -407,6 +409,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       requesterOrigin: { channel: "discord", to: "channel:123" },
       prompt: "proof image",
     });
+    assert(handle);
 
     scheduleImageCompletion({
       lifecycle,
@@ -451,6 +454,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         sessionKey,
         prompt: "proof image",
       });
+      assert(handle);
 
       scheduleImageCompletion({
         lifecycle,

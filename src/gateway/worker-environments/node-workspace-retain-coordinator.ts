@@ -172,14 +172,13 @@ export function createNodeWorkspaceRetainCoordinator(
 ) {
   const controllerId = randomUUID();
   const abortController = new AbortController();
-  const pendingNodes = new Set<string>();
+  const pendingNodes = new Set<string | undefined>();
   const acknowledgedBundleGenerationByNode = new Map<
     string,
     { connId: string; generation: number }
   >();
   let transport: NodeWorkerSupervisorTransport | undefined;
   let sequence = 0;
-  let pendingAll = false;
   const operations = new Map<string | undefined, Promise<void>>();
   let started = false;
   let stopped = false;
@@ -412,11 +411,8 @@ export function createNodeWorkspaceRetainCoordinator(
     if (stopped) {
       return Promise.resolve();
     }
-    if (nodeId) {
-      pendingNodes.add(nodeId);
-    } else {
-      pendingAll = true;
-    }
+    const target = nodeId || undefined;
+    pendingNodes.add(target);
     if (!started || !transport) {
       return Promise.resolve();
     }
@@ -426,11 +422,7 @@ export function createNodeWorkspaceRetainCoordinator(
     }
     const run = async () => {
       do {
-        if (nodeId) {
-          pendingNodes.delete(nodeId);
-        } else {
-          pendingAll = false;
-        }
+        pendingNodes.delete(target);
         const currentTransport = transport;
         if (!currentTransport || stopped) {
           return;
@@ -455,11 +447,11 @@ export function createNodeWorkspaceRetainCoordinator(
             `Node workspace retain publication failed (${nodeId ?? "inventory"}): ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-      } while (nodeId ? pendingNodes.has(nodeId) : pendingAll);
+      } while (pendingNodes.has(target));
     };
     const operation = run().finally(() => {
       operations.delete(nodeId);
-      if (!stopped && (nodeId ? pendingNodes.has(nodeId) : pendingAll)) {
+      if (!stopped && pendingNodes.has(target)) {
         void schedule(nodeId);
       }
     });
@@ -476,8 +468,7 @@ export function createNodeWorkspaceRetainCoordinator(
     },
     start(): Promise<void> {
       started = true;
-      const targets = pendingAll ? [undefined] : [...pendingNodes];
-      pendingAll = false;
+      const targets = pendingNodes.has(undefined) ? [undefined] : [...pendingNodes];
       pendingNodes.clear();
       return Promise.all((targets.length ? targets : [undefined]).map(schedule)).then(
         () => undefined,
@@ -488,7 +479,6 @@ export function createNodeWorkspaceRetainCoordinator(
       stopped = true;
       started = false;
       abortController.abort(new Error("node workspace retention stopped"));
-      pendingAll = false;
       pendingNodes.clear();
       await Promise.all(operations.values());
     },

@@ -274,7 +274,7 @@ export function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
 
 function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
   let hostCapabilities = overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES;
-  if (!hostCapabilities.createToolSurface) {
+  if (!hostCapabilities.createToolSurfaceAsync) {
     hostCapabilities = createCodexTestHostCapabilities(hostCapabilities);
     setCodexTestToolFactory({ hostCapabilities }, createOpenClawCodingToolsMock);
   }

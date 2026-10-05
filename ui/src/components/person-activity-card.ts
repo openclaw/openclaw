@@ -49,28 +49,11 @@ function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSessi
   if (!data) {
     return sessions;
   }
-  const lists = [
-    [data.sessionsAgentId, data.sessionsResult?.sessions] as const,
-    ...Object.entries(data.sessionResultsByAgent).map(
-      ([agentId, result]) => [agentId, result.sessions] as const,
-    ),
-    ...Object.entries(data.childSessionRowsByParent)
-      .filter(([parent]) => data.loadedChildSessionKeys.has(parent))
-      .map(
-        ([parent, rows]) =>
-          [parseAgentSessionKey(parent)?.agentId ?? data.sessionsAgentId, rows] as const,
-      ),
-  ];
-  for (const [scope, rows] of lists) {
-    if (!scope) {
-      continue;
-    }
-    for (const row of rows ?? []) {
-      const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? scope;
-      const key = sessionIdentity(row.key, agentId, input);
-      if (!sessions.has(key)) {
-        sessions.set(key, { row, agentId });
-      }
+  for (const row of data.sessionsResult?.sessions ?? []) {
+    const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? input.watchAgentId;
+    const key = sessionIdentity(row.key, agentId, input);
+    if (!sessions.has(key)) {
+      sessions.set(key, { row, agentId });
     }
   }
   return sessions;
@@ -253,11 +236,7 @@ class PersonActivityCard extends Directive {
       recent.sort(newestFirst);
     }
     // Capture once a roster exists; thereafter retire ineligible identities without backfilling.
-    if (
-      this.recentSessionKeys ||
-      sessionData?.sessionsResult ||
-      Object.keys(sessionData?.sessionResultsByAgent ?? {}).length
-    ) {
+    if (this.recentSessionKeys || sessionData?.sessionsResult) {
       this.recentSessionKeys = recent
         .slice(0, 3)
         .map(({ row, agentId }) => sessionIdentity(row.key, agentId, input));

@@ -62,29 +62,10 @@ type SystemAgentVerifiedInferenceState = Readonly<{
   route: SystemAgentVerifiedExecutionRoute;
 }>;
 
-type SystemAgentVerifiedExecutionFingerprint = {
-  route: unknown;
-  defaultSelection: unknown;
-  auth: unknown;
-  models: unknown;
-  defaults: unknown;
-  agent?: unknown;
-  plugins: unknown;
-  ownerPluginRuntimes: readonly SystemAgentOwnerPluginRuntimeIdentity[];
-};
-
-type SystemAgentOwnerPluginRuntimeIdentity = Readonly<{
-  pluginId: string;
-  origin: string;
-  rootDir: string;
-  manifestPath: string;
-  manifestHash: string;
-  source: string | null;
-  packageName: string | null;
-  packageVersion: string | null;
-  installRecordHash: string | null;
-  packageJson: Readonly<{ path: string; hash: string }> | null;
-}>;
+type SystemAgentVerifiedExecutionFingerprint = Awaited<
+  ReturnType<typeof projectVerifiedExecutionFingerprint>
+>;
+type SystemAgentOwnerPluginRuntimeIdentity = Readonly<ReturnType<typeof projectOwnerPluginRuntime>>;
 
 type SystemAgentOwnerPluginArtifactIdentity = Readonly<{
   pluginId: string;
@@ -342,9 +323,7 @@ function projectRelevantPlugins(
   );
 }
 
-function projectOwnerPluginRuntime(
-  record: SystemAgentOwnerPluginRegistryRecord,
-): SystemAgentOwnerPluginRuntimeIdentity {
+function projectOwnerPluginRuntime(record: SystemAgentOwnerPluginRegistryRecord) {
   return {
     pluginId: record.pluginId,
     origin: record.origin,
@@ -356,7 +335,7 @@ function projectOwnerPluginRuntime(
     packageVersion: record.packageVersion ?? null,
     installRecordHash: record.installRecordHash ?? null,
     packageJson: record.packageJson
-      ? { path: record.packageJson.path, hash: record.packageJson.hash }
+      ? ({ path: record.packageJson.path, hash: record.packageJson.hash } as const)
       : null,
   };
 }
@@ -368,7 +347,7 @@ function projectOwnerPluginRuntimes(params: {
   route: SystemAgentConfiguredRoute;
   ownerPluginIds: readonly string[];
   deps: SystemAgentVerifiedInferenceDeps;
-}): SystemAgentOwnerPluginRuntimeIdentity[] {
+}): readonly SystemAgentOwnerPluginRuntimeIdentity[] {
   if (params.ownerPluginIds.length === 0) {
     return [];
   }
@@ -425,7 +404,7 @@ async function projectVerifiedExecutionFingerprint(
   route: SystemAgentVerifiedExecutionRoute,
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
-): Promise<SystemAgentVerifiedExecutionFingerprint> {
+) {
   const projection = await projectInferenceRoute(config, route.agentId, {
     ...deps,
     modelTarget: route.modelTarget,

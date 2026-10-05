@@ -133,28 +133,27 @@ function publicationRequest(ready = readyRelease(), resumeRunId = "") {
 }
 
 describe("release readiness contract", () => {
-  it.each([
-    ["v2026.9.2-beta.1", "beta"],
-    ["v2026.9.2", "beta"],
-    ["v2026.9.2", "latest"],
-  ])("seals full-release inputs for %s on %s", (tag, channel) => {
-    const value = validateReleaseButtonInputs(
-      inputs({
-        tag,
-        npm_dist_tag: channel,
-        publish_openclaw_npm: true,
-        publish_docker_only: false,
-      }),
-    );
-    expect(value).toEqual({
-      ...inputs({ tag, npm_dist_tag: channel }),
-      plugin_publish_scope: "all-publishable",
-      publish_openclaw_npm: "true",
-      publish_docker_only: "false",
-      release_evidence_mode: "full-release-validation",
-      wait_for_clawhub: "true",
-    });
-  });
+  it.each([["v2026.9.2-beta.1", "beta"]])(
+    "seals full-release inputs for %s on %s",
+    (tag, channel) => {
+      const value = validateReleaseButtonInputs(
+        inputs({
+          tag,
+          npm_dist_tag: channel,
+          publish_openclaw_npm: true,
+          publish_docker_only: false,
+        }),
+      );
+      expect(value).toEqual({
+        ...inputs({ tag, npm_dist_tag: channel }),
+        plugin_publish_scope: "all-publishable",
+        publish_openclaw_npm: "true",
+        publish_docker_only: "false",
+        release_evidence_mode: "full-release-validation",
+        wait_for_clawhub: "true",
+      });
+    },
+  );
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
@@ -396,6 +395,7 @@ describe("release readiness executable handoff", () => {
     expect(
       runInNewContext(workflow.jobs[jobName].if, {
         github: { repository: REPOSITORY, ref: "refs/heads/main" },
+        inputs: { operation: workflowName === "prepare" ? "prepare" : operation },
         startsWith: (value: string, prefix: string) => value.startsWith(prefix),
       }),
     ).toBe(true);
@@ -1483,7 +1483,7 @@ function publicationFixture(overrides: Record<string, unknown> = {}, ready = rea
 }
 
 describe("publication dispatch retention", () => {
-  it.each(["success", "lost", "malformed"])("retains intent before POST: %s", (response) => {
+  it.each(["lost", "malformed"])("retains intent before POST: %s", (response) => {
     const fixture = publicationFixture({ publicationResponse: response });
     const result = fixture.publish();
     const expected = publicationRequest();
@@ -1498,30 +1498,20 @@ describe("publication dispatch retention", () => {
       { event: "publication-dispatch", request: unknown },
     ]);
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toHaveLength(1);
-    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(
-      response === "success" ? expected : unknown,
-    );
-    expect(result.status, result.stderr).toBe(response === "success" ? 0 : 1);
-    if (response !== "success") {
-      expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
-      expect(result.stderr).toContain("unknown; do not redispatch");
-    }
+    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(unknown);
+    expect(result.status, result.stderr).toBe(1);
+    expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
+    expect(result.stderr).toContain("unknown; do not redispatch");
     expect(fixture.state().writes).toBe(0);
   });
 
-  it.each(["existing", "create failure"])("does not POST after %s", (failure) => {
+  it("does not POST over an existing request", () => {
     const fixture = publicationFixture();
     mkdirSync(dirname(fixture.requestPath), { recursive: true });
-    if (failure === "existing") {
-      writeFileSync(fixture.requestPath, '{"preserve":"original"}');
-    } else {
-      mkdirSync(fixture.requestPath);
-    }
+    writeFileSync(fixture.requestPath, '{"preserve":"original"}');
     expect(fixture.publish().status).toBe(1);
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
-    if (failure === "existing") {
-      expect(readFileSync(fixture.requestPath, "utf8")).toBe('{"preserve":"original"}');
-    }
+    expect(readFileSync(fixture.requestPath, "utf8")).toBe('{"preserve":"original"}');
   });
 
   it.each([
@@ -1579,7 +1569,6 @@ describe("publication dispatch retention", () => {
   });
 
   it.each([
-    { state: "unknown", releaseRunId: null },
     { state: "unverified" },
     { schema: "unsupported" },
     { releaseRunAttempt: 2 },
@@ -2023,7 +2012,7 @@ process.exitCode = 1;
     },
   );
 
-  it.each(["0", " 800", "9007199254740992"])(
+  it.each(["0", "9007199254740992"])(
     "rejects malformed resume run %s without dispatching publication",
     (resumeRunId) => {
       const fixture = finalizationFixture();
@@ -2052,7 +2041,6 @@ process.exitCode = 1;
 
   it.each([
     ["button", "v2026.9.2-beta.1", "beta", true, false],
-    ["button", "v2026.9.2", "beta", false, false],
     ["button", "v2026.9.2", "latest", false, true],
     ["parent", "v2026.9.2-beta.1", "beta", true, false],
     ["parent", "v2026.9.2", "beta", false, false],

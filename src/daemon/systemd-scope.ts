@@ -445,12 +445,7 @@ async function findMarkerOwnedSystemSystemdUnit(
   const custom = new Map<string, SystemdServiceReadTarget>();
 
   const { findSystemGatewayServices } = await import("./inspect.js");
-  let services: Awaited<ReturnType<typeof findSystemGatewayServices>>;
-  try {
-    services = await findSystemGatewayServices();
-  } catch {
-    return null;
-  }
+  const services = await findSystemGatewayServices();
   for (const svc of services) {
     if (
       svc.platform !== "linux" ||

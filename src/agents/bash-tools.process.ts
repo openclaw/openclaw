@@ -294,8 +294,7 @@ export function createProcessTool(
     if (!runtime?.waitingForInput) {
       return "";
     }
-    const idle = formatDurationCompact(runtime.idleMs) ?? `${runtime.idleMs}ms`;
-    return `\n\nNo new output for ${idle}; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.`;
+    return "\n\nNo new output; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.";
   };
 
   return {

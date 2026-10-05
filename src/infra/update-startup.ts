@@ -12,6 +12,10 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RemoteCatalogPublicationResult } from "../model-catalog/remote-overlay.js";
+import {
+  refreshRemoteModelCatalog,
+  REMOTE_MODEL_CATALOG_TTL_MS,
+} from "../model-catalog/remote-refresh.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
@@ -50,7 +54,6 @@ import {
   withUpdateInstallStatus,
 } from "./update-install-status.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
-import { scheduleGatewayRemoteCatalogChecks } from "./update-startup-catalog.js";
 import {
   getUpdateSchedule,
   resetUpdateStatusState,
@@ -94,10 +97,6 @@ const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_STABLE_DELAY_HOURS = 6;
 const AUTO_STABLE_JITTER_HOURS = 12;
-
-function shouldSkipCheck(allowInTests: boolean): boolean {
-  return !allowInTests && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
-}
 
 function resolveCheckIntervalMs(
   cfg: OpenClawConfig,
@@ -256,7 +255,7 @@ async function runGatewayUpdateCheckOwned(
   const setSchedule = (next: UpdateScheduleState) =>
     setUpdateScheduleCache({ next, onUpdateScheduleChange: params.onUpdateScheduleChange });
   params.signal?.throwIfAborted();
-  if (shouldSkipCheck(Boolean(params.allowInTests))) {
+  if (!params.allowInTests && (process.env.VITEST || process.env.NODE_ENV === "test")) {
     return;
   }
   if (params.isNixMode) {
@@ -707,7 +706,38 @@ export function createGatewayUpdateCheck(params: {
         }
         return resolveCheckIntervalMs(params.getConfig(), getUpdateSchedule()?.install?.kind);
       });
-      scheduleGatewayRemoteCatalogChecks(params);
+      lifecycle.schedule("update.remote-model-catalog", async () => {
+        let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
+        try {
+          const result = await refreshRemoteModelCatalog({
+            config: params.getConfig(),
+            signal: lifecycle.signal,
+          });
+          if (lifecycle.signal.aborted) {
+            return REMOTE_MODEL_CATALOG_TTL_MS;
+          }
+          nextCheckInMs =
+            result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
+          if (result.status === "error") {
+            params.log.info(
+              "remote model catalog refresh failed; next check in 6 hours, or run openclaw models refresh",
+              { error: result.error },
+            );
+          } else if (result.status !== "disabled") {
+            const state = await params.applyRemoteCatalogUpdate(lifecycle.signal);
+            if (state === "published") {
+              params.log.info("remote model catalog applied");
+            } else if (state === "superseded") {
+              params.log.info("remote model catalog check superseded; deferred to the next check");
+            }
+          }
+        } catch (error) {
+          if (!lifecycle.signal.aborted) {
+            params.log.info("remote model catalog check failed", { error: String(error) });
+          }
+        }
+        return nextCheckInMs;
+      });
     },
   };
 }

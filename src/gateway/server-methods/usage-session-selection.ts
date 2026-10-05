@@ -445,6 +445,7 @@ export function loadUsageSessionContext(
         readOnly: true,
         readSource: { agentId: target.agentId, path: target.storePath },
         sessionKeys: rows.map(({ storedKey }) => storedKey),
+        projection: ["systemPromptReport"],
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     );
     for (const { row, storedKey } of rows) {

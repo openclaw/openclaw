@@ -258,11 +258,11 @@ export async function resolveReplySessionPreprocessingState(
 ): Promise<ReplySessionPreprocessingState> {
   const attemptContext = await resolveInitSessionStateAttemptContext(params, "preprocessing");
   const { sessionKey } = attemptContext;
-  const sessionEntry = loadReplySessionInitializationSnapshot({
+  const { currentEntry: sessionEntry } = await loadReplySessionInitializationSnapshot({
     agentId: attemptContext.agentId,
     storePath: attemptContext.storePath,
     sessionKey,
-  }).currentEntry;
+  });
   const contextError = resolveAgentHarnessSessionContextError(sessionKey, sessionEntry);
   if (contextError) {
     throw new Error(contextError);
@@ -306,7 +306,7 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
   }
   params.signal?.throwIfAborted();
   const parentSessionKey = normalizeOptionalString(params.ctx.ParentSessionKey);
-  const snapshot = loadReplySessionInitializationSnapshot({
+  const snapshot = await loadReplySessionInitializationSnapshot({
     agentId: attemptContext.agentId,
     storePath: attemptContext.storePath,
     sessionKey: attemptContext.sessionKey,
@@ -542,7 +542,7 @@ async function initSessionStateAttemptLocked(
     ctx.CommandTargetSessionKey,
     resolveSessionParentSessionKey(sessionKey),
   ].filter((key): key is string => typeof key === "string");
-  const initializationSnapshot = loadReplySessionInitializationSnapshot({
+  const initializationSnapshot = await loadReplySessionInitializationSnapshot({
     agentId,
     storePath,
     sessionKey,
@@ -986,6 +986,13 @@ async function initSessionStateAttemptLocked(
       if (!previousSessionEntry || !currentEntry) {
         return;
       }
+      await resetRegisteredAgentHarnessSessions({
+        agentId,
+        sessionId: currentEntry.sessionId,
+        sessionKey,
+        sessionFile: sessionKey,
+        reason: previousSessionEndReason ?? "unknown",
+      });
       const memoryEvent = resetTriggered ? "command" : "session";
       const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
       if (hasInternalHookListeners(memoryEvent, memoryAction)) {
@@ -1084,15 +1091,12 @@ async function initSessionStateAttemptLocked(
     sessionKey,
     sessionStore,
   });
-  const previousSessionTranscript = committed.previousSessionTranscript;
   if (previousSessionEntry?.sessionId) {
     emitSessionAutoResetHook({
       cfg,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
       reason: previousSessionEndReason,
-      sessionFile: previousSessionTranscript.sessionFile,
-      transcriptArchived: previousSessionTranscript.transcriptArchived,
       nextSessionId: sessionId,
       nextSessionKey: sessionKey,
       agentId,
@@ -1108,13 +1112,6 @@ async function initSessionStateAttemptLocked(
           error: String(error),
         });
       },
-    });
-    await resetRegisteredAgentHarnessSessions({
-      agentId,
-      sessionId: previousSessionEntry.sessionId,
-      sessionKey,
-      sessionFile: sessionKey,
-      reason: previousSessionEndReason ?? "unknown",
     });
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
@@ -1161,8 +1158,6 @@ async function initSessionStateAttemptLocked(
           agentId,
           storePath,
           reason: previousSessionEndReason,
-          sessionFile: previousSessionTranscript.sessionFile,
-          transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
           resetBoundaryId: resetBoundary?.boundaryId,
         });

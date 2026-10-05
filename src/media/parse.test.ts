@@ -598,6 +598,11 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:https://169.254.169.254/latest/meta-data",
     'MEDIA:"https://169.254.169.254/a.png)"',
     "MEDIA:https://[::1]/a.png",
+    "MEDIA:https://[fe80::1]/a.png",
+    "MEDIA:https://[fd00::1]/a.png",
+    "MEDIA:https://[fd00:ec2::254]/a.png",
+    "MEDIA:https://[::ffff:127.0.0.1]/a.png",
+    "MEDIA:https://[64:ff9b::169.254.169.254]/a.png",
     "MEDIA:https://metadata.google.internal/a.png",
     "MEDIA:https://metadata.google.internal../a.png",
     "MEDIA:https://example..com/a.png",
@@ -606,6 +611,13 @@ describe("splitMediaFromOutput", () => {
   ] as const)("rejects unsafe remote media URL: %s", (input) => {
     expectPolicyRejectedMediaUrlCase(input);
   });
+
+  it.each(["https://[2606:4700::1111]/a.png", "https://[2001:4860:4860::8888]/a.png"] as const)(
+    "accepts public IPv6 remote media URL: %s",
+    (url) => {
+      expectParsedMediaOutputCase(`MEDIA:${url}`, { mediaUrls: [url], text: "" });
+    },
+  );
 
   it.each([
     {

@@ -85,9 +85,7 @@ import { AgentSelectionDrafts } from "./selection-drafts.ts";
 import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 import { renderAgents, renderAgentsPageHeader } from "./view.ts";
 
-type AgentsRequestSources = Partial<
-  Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
->;
+type AgentsRequestSources = Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>;
 
 class AgentsPage
   extends OpenClawLightDomElement
@@ -514,8 +512,8 @@ class AgentsPage
   private isCurrentRequest(
     client: GatewayBrowserClient,
     generation: number,
-    agentId?: string,
-    sources: AgentsRequestSources = {},
+    agentId: string | undefined,
+    sources: AgentsRequestSources,
   ): boolean {
     return (
       this.client === client &&
@@ -523,7 +521,6 @@ class AgentsPage
       this.requestGeneration === generation &&
       (!sources.agents || this.context.agents === sources.agents) &&
       (!sources.agentIdentity || this.context.agentIdentity === sources.agentIdentity) &&
-      (!sources.sessions || this.context.sessions === sources.sessions) &&
       (!agentId || this.agentsSelectedId === agentId)
     );
   }

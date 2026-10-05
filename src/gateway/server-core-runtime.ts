@@ -25,6 +25,7 @@ import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generati
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
@@ -467,6 +468,7 @@ export async function startGatewayCoreRuntime(input: {
         Object.assign(attachedGatewayExtraHandlers, loaded.pluginRegistry.gatewayHandlers);
         attachedPluginGatewayHandlerKeys = nextHandlerKeys;
         attachedGatewayMethodRegistry = nextMethodRegistry;
+        invalidateSharedReadResponses(broadcast);
         kernel.publishMethodSurface(nextMethods);
       },
       afterCommit: () => {

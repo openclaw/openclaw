@@ -225,7 +225,14 @@ export async function readScheduledTaskCommand(
     deadline?: number;
   },
 ): Promise<GatewayServiceCommandConfig | null> {
-  return readWindowsTaskCommand({ kind: "scheduled-task", env }, options);
+  try {
+    const command = await readWindowsTaskCommand({ kind: "scheduled-task", env }, options);
+    options?.onCommandInspection?.(command ? { kind: "present", command } : { kind: "absent" });
+    return command;
+  } catch (error) {
+    options?.onCommandInspection?.({ kind: "unavailable", error });
+    throw error;
+  }
 }
 
 export async function readStartupEntryCommand(

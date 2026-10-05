@@ -65,16 +65,10 @@ const BUNDLED_CATALOG_SOURCE_REFS = new Set(
 function* bundledOfficialExternalPluginCatalogEntries(): Generator<OfficialExternalPluginCatalogEntry> {
   const seen = new Set<string>();
   for (const entry of BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES) {
-    const install = isRecord(entry.install) ? entry.install : undefined;
-    const candidates = install?.candidates;
     if (
-      Array.isArray(candidates) &&
-      candidates.some((candidate) => {
-        if (!isRecord(candidate)) {
-          return false;
-        }
-        return !hasKnownCatalogSourceRef(candidate, BUNDLED_CATALOG_SOURCE_REFS);
-      })
+      getFeedEntryInstallCandidateRecords(entry).some(
+        (candidate) => !hasKnownCatalogSourceRef(candidate, BUNDLED_CATALOG_SOURCE_REFS),
+      )
     ) {
       continue;
     }
