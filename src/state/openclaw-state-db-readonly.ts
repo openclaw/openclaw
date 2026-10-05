@@ -180,20 +180,21 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         });
       }
     } catch (error) {
-      let cause = error;
+      const failure = new Error(
+        `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes.`,
+        { cause: error },
+      );
       try {
         await preparation?.startClose().result;
       } catch (cleanupError) {
-        cause = createSqliteLifecycleAggregateError(
+        failure.cause = createSqliteLifecycleAggregateError(
           [error, cleanupError],
           "Shared-state snapshot preparation and cleanup failed",
           error,
         );
       }
-      throw new Error(
-        `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes. ${String(cause)}`,
-        { cause },
-      );
+      failure.message += ` ${String(failure.cause)}`;
+      throw failure;
     }
     const releaseSource = retainSnapshotTempDirectory(
       prepared.cleanupRoot ?? path.dirname(prepared.location),

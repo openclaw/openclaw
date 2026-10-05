@@ -63,7 +63,7 @@ export function registerSubagentRestoreCacheCases(params: {
             runs: snapshot,
             versions: new Map([...snapshot.keys()].map((runId) => [runId, "fixture-version"])),
             page: {
-              order: [...snapshot].map(([runId, entry]) => [runId, entry.createdAt] as const),
+              order: [...snapshot].map(([runId, row]) => [runId, row.createdAt] as const),
               nextRunId: null,
             },
           };

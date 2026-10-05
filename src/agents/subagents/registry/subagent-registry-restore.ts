@@ -250,8 +250,10 @@ export function createSubagentRegistryRestorer(config: {
     ensureListener();
     // Session-mode runs have no archive deadline but still need TTL cleanup.
     startSweeper();
+    // Resume only this captured owner set; registration may change the live map while we yield.
+    const capturedRuns = [...runs];
     let visited = 0;
-    for (const [runId, snapshot] of [...runs]) {
+    for (const [runId, snapshot] of capturedRuns) {
       if (++visited % 128 === 0) {
         await yieldToEventLoop();
         assertCurrent();

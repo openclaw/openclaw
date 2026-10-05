@@ -61,8 +61,10 @@ export async function bindSubagentRunGatewayOwners(params: {
     return false;
   }
   const isCurrent = () => params.getGatewayContextResolver() === resolver && resolver() === gateway;
+  // New registrations during a yield belong to the next pass, not this captured owner set.
+  const capturedRuns = [...params.runs.values()];
   let visited = 0;
-  for (const snapshot of [...params.runs.values()]) {
+  for (const snapshot of capturedRuns) {
     if (++visited % 128 === 0) {
       await yieldToEventLoop();
       if (!isCurrent()) {

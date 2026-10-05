@@ -163,8 +163,8 @@ export function registerSessionMaintenanceProtectionTests() {
           const prepare = preservation.prepareSessionMaintenancePreservation;
           const prepareSpy = vi
             .spyOn(preservation, "prepareSessionMaintenancePreservation")
-            .mockImplementationOnce(async (path, options) => {
-              const prepared = await prepare(path, options);
+            .mockImplementationOnce(async (requestedStorePath, options) => {
+              const prepared = await prepare(requestedStorePath, options);
               try {
                 const runId = run.runId;
                 const writeId = "foreign-maintenance-registration";

@@ -197,7 +197,7 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
 };
 
 export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRecord> = {
-  getLatestSubagentRun(childSessionKey: string, childAgentId?: string): T | null;
+  getLatestSubagentRun: (childSessionKey: string, childAgentId?: string) => T | null;
 };
 
 export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(

@@ -26,9 +26,12 @@ type PrepareSessionMaintenancePreserveKeys = (options: {
 }) => Promise<PreparedSessionMaintenancePreserveKeys>;
 
 export type PreparedSessionMaintenancePreservation = {
-  capture(): SessionMaintenancePreservationSnapshot;
-  refreshCandidates(sessionKeys: readonly string[]): SessionMaintenancePreservationSnapshot;
-  dispose(): void;
+  capture(this: void): SessionMaintenancePreservationSnapshot;
+  refreshCandidates(
+    this: void,
+    sessionKeys: readonly string[],
+  ): SessionMaintenancePreservationSnapshot;
+  dispose(this: void): void;
   readonly subagentRunBasis?: SubagentMaintenanceDurableBasis;
 };
 

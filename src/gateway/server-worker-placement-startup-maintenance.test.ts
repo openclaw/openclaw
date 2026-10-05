@@ -464,7 +464,7 @@ describe("worker placement session maintenance ownership", () => {
       placements: [placement],
       recoveryError,
       onRecovery: async () => {
-        protectedDuringRecovery = (await preservedSessionKeys()).has(placement.sessionKey) === true;
+        protectedDuringRecovery = (await preservedSessionKeys()).has(placement.sessionKey);
       },
     });
     const registerSidecar = vi.fn();

@@ -127,7 +127,9 @@ export async function runNativeColdRecovery(
       if (isRecord(value) && value.type === "target-ready" && typeof value.wallClock === "number") {
         targetReady = true;
         targetWallClock = value.wallClock;
-        if (typeof value.monotonic === "bigint") targetMonotonic = value.monotonic;
+        if (typeof value.monotonic === "bigint") {
+          targetMonotonic = value.monotonic;
+        }
       }
     });
     worker.once("exit", () => {

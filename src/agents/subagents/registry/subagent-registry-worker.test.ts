@@ -109,11 +109,12 @@ async function register(...entries: SubagentRunRecord[]) {
 }
 
 it("restores bounded payload pages from one snapshot and retains their physical row versions", async () => {
-  const entries = [3, 1, 2].map((createdAt, index) => ({
-    ...entry(`paged-${index}`),
-    createdAt,
-    task: "synthetic retained task ".repeat(24_000),
-  }));
+  const entries = [3, 1, 2].map((createdAt, index) =>
+    Object.assign(entry(`paged-${index}`), {
+      createdAt,
+      task: "synthetic retained task ".repeat(24_000),
+    }),
+  );
   const fixtureRows = new Map(entries.map((row) => [row.runId, row]));
   saveSubagentRegistryChangesToSqlite(fixtureRows, [...fixtureRows.keys()]);
   const read = stateReads.executeExistingOpenClawStateRead;
