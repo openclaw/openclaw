@@ -12,10 +12,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
-import {
-  expectRegisteredSubagentRun,
-  supportedSpawnModelChoice,
-} from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import * as spec from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -30,6 +27,7 @@ import { registerSessionsSpawnVisibleCleanupTests } from "./sessions-spawn-tool.
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-visible-spawn-");
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
+const { expectRegisteredSubagentRun, supportedSpawnModelChoice } = spec;
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 type SpawnOptions = NonNullable<Parameters<typeof createSessionsSpawnTool>[0]>;
@@ -78,6 +76,7 @@ describe("sessions_spawn tool", () => {
       status: "accepted",
       context: "isolated",
       childSessionKey: "agent:main:subagent:1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       runId: "run-subagent",
     });
     hoisted.spawnAcpDirectMock.mockReset().mockResolvedValue({
@@ -805,6 +804,7 @@ describe("sessions_spawn tool", () => {
     expect(result.details).toMatchObject({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       runId: "run-subagent",
     });
     expect(result.details).not.toHaveProperty("role");

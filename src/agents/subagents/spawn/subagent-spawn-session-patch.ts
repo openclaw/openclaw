@@ -299,3 +299,12 @@ export async function createInitialSubagentSession(params: {
     return { status: "error", error: `child session patch failed: ${message}` };
   }
 }
+
+export function acceptedChildReceipt(
+  childSessionKey: string,
+  entry?: SessionEntry,
+  collect?: boolean,
+) {
+  const sessionId = typeof entry?.sessionId === "string" ? entry.sessionId.trim() : "";
+  return { childSessionKey, ...(!collect && sessionId ? { sessionId } : {}) };
+}

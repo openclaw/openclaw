@@ -102,7 +102,10 @@ export async function prepareSubagentSessionContext(params: {
       status: "ok",
       mode: "fork",
       parentEntry: forkedResult.parentEntry,
-      childEntry: forkedResult.sessionEntry,
+      childEntry: {
+        ...forkedResult.sessionEntry,
+        sessionId: forkedResult.fork.sessionId,
+      },
       forked: forkedResult.fork,
     };
   } catch (err) {

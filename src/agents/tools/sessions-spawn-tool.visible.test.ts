@@ -99,6 +99,7 @@ describe("sessions_spawn visible work receipts", () => {
       label: "Track upstream fix",
       owner: { type: "agent", id: "main", label: "Roboclaw" },
     });
+    expect(result.details).not.toHaveProperty("sessionId");
     expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
       "sessions.create",
       expect.objectContaining({

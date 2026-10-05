@@ -10,14 +10,12 @@ import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
-import {
-  createConfigOverride,
-  createSubagentRegistrationScopeForTest,
-  inheritedSpawnCases,
-  installSessionStoreCaptureMock,
-  loadSubagentSpawnModuleForTest,
-  supportedSpawnModelChoice,
-} from "./subagent-spawn.test-helpers.js";
+import * as spawnTest from "./subagent-spawn.test-helpers.js";
+
+const { createConfigOverride, createSubagentRegistrationScopeForTest, inheritedSpawnCases } =
+  spawnTest;
+const { installSessionStoreCaptureMock, loadSubagentSpawnModuleForTest } = spawnTest;
+const { supportedSpawnModelChoice } = spawnTest;
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
@@ -279,9 +277,12 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.sessionKey).toBe(result.childSessionKey);
-    expect(result.expectsCompletionMessage).toBe(false);
+    expect(result).toMatchObject({
+      status: "accepted",
+      sessionKey: result.childSessionKey,
+      expectsCompletionMessage: false,
+    });
+    expect(result).not.toHaveProperty("sessionId");
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       runId: result.runId,
