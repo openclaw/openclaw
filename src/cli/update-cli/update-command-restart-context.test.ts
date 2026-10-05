@@ -9,15 +9,19 @@ const mocks = vi.hoisted(() => ({
   revalidate: vi.fn<() => Promise<ManagedGatewayUpdateVerdict>>(),
 }));
 
-vi.mock("../../daemon/service.js", () => ({ resolveGatewayService: () => ({}) }));
-vi.mock("./update-command-service-plan.js", () => ({
-  GatewayServiceUpdateOwnershipError: class extends Error {},
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  resolveGatewayService: () => ({}),
+}));
+vi.mock("./update-command-service-plan.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-plan.js")>()),
   isGatewayServiceManagementAllowedForUpdate: () => true,
   readGatewayServiceStateForUpdate: mocks.readState,
   resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
   resolveUpdatedGatewayRestartPort: () => 18789,
 }));
-vi.mock("./update-command-service-revalidation.js", () => ({
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
 }));
 
