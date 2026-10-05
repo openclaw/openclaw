@@ -32,17 +32,24 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
 export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   return normalizeMediaFacts(ctx.media)
     .map((fact, index) => {
-      const kind = fact.fileName ? (resolveMediaFactKind(fact) ?? fact.kind) : fact.kind;
-      return {
+      const attachment: MediaAttachment = {
         path: fact.path,
         url: fact.url,
         mime: fact.contentType,
         index,
         alreadyTranscribed: fact.transcribed === true,
-        ...(kind ? { kind } : {}),
-        ...(fact.fileName ? { fileName: fact.fileName } : {}),
-        ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
       };
+      const kind = fact.fileName ? (resolveMediaFactKind(fact) ?? fact.kind) : fact.kind;
+      if (kind) {
+        attachment.kind = kind;
+      }
+      if (fact.fileName) {
+        attachment.fileName = fact.fileName;
+      }
+      if (fact.workspaceDir) {
+        attachment.workspaceDir = fact.workspaceDir;
+      }
+      return attachment;
     })
     .filter((entry) => Boolean(entry.path ?? entry.url));
 }

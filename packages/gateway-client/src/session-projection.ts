@@ -747,5 +747,7 @@ export function reduceSessionProjection(
     case "reconnected":
       // A successful reconnect cannot clear a known gap before authoritative history arrives.
       return state;
+    default:
+      return state;
   }
 }

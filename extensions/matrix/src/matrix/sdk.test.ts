@@ -367,7 +367,7 @@ async function installSecretStorageKey(privateKey: Uint8Array<ArrayBuffer>) {
   const secretStorage = {
     getDefaultKeyId: vi.fn(async () => "SSSSKEY"),
     getKey: vi.fn<MatrixJsSdkClient["secretStorage"]["getKey"]>(async () => ["SSSSKEY", keyInfo]),
-    checkKey: vi.fn<MatrixJsSdkClient["secretStorage"]["checkKey"]>((key, info) =>
+    checkKey: vi.fn<typeof ServerSideSecretStorageImpl.prototype.checkKey>((key, info) =>
       ServerSideSecretStorageImpl.prototype.checkKey(key, info),
     ),
   };

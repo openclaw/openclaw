@@ -83,8 +83,8 @@ function createBootstrapSecretStorageMock(errorMessage?: string) {
 }
 
 function createRecoveryKeyCrypto(params: {
-  bootstrapSecretStorage: ReturnType<typeof vi.fn>;
-  createRecoveryKeyFromPassphrase: ReturnType<typeof vi.fn>;
+  bootstrapSecretStorage: MatrixCryptoBootstrapApi["bootstrapSecretStorage"];
+  createRecoveryKeyFromPassphrase: MatrixCryptoBootstrapApi["createRecoveryKeyFromPassphrase"];
   status: MatrixSecretStorageStatus;
 }): MatrixCryptoBootstrapApi {
   return createMatrixCryptoApi({

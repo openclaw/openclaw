@@ -109,18 +109,16 @@ function resolveEditTarget(root: JsoncValue, segments: readonly string[]): Jsonc
 }
 
 function jsoncValueToJson(value: JsoncValue): unknown {
-  switch (value.kind) {
-    case "object":
-      return Object.fromEntries(
-        value.entries.map((entry) => [entry.key, jsoncValueToJson(entry.value)]),
-      );
-    case "array":
-      return value.items.map(jsoncValueToJson);
-    case "string":
-    case "number":
-    case "boolean":
-      return value.value;
-    case "null":
-      return null;
+  if (value.kind === "null") {
+    return null;
   }
+  if (value.kind === "string" || value.kind === "number" || value.kind === "boolean") {
+    return value.value;
+  }
+  if (value.kind === "array") {
+    return value.items.map(jsoncValueToJson);
+  }
+  return Object.fromEntries(
+    value.entries.map((entry) => [entry.key, jsoncValueToJson(entry.value)]),
+  );
 }

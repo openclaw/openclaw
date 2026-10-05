@@ -518,19 +518,15 @@ export function buildOpenAICompletionsRequest(
     let suppressScalarEffort = false;
     if (model.reasoning) {
       const enabled = thinkingEnabled ?? false;
-      switch (compat.thinkingFormat) {
-        case "qwen-chat-template":
-          params.chat_template_kwargs = { enable_thinking: enabled };
-          suppressScalarEffort = true;
-          break;
-        case "qwen":
-          params.enable_thinking = enabled;
-          suppressScalarEffort = true;
-          break;
-        case "together":
-          params.reasoning = { enabled };
-          suppressScalarEffort = !enabled;
-          break;
+      if (compat.thinkingFormat === "qwen-chat-template") {
+        params.chat_template_kwargs = { enable_thinking: enabled };
+        suppressScalarEffort = true;
+      } else if (compat.thinkingFormat === "qwen") {
+        params.enable_thinking = enabled;
+        suppressScalarEffort = true;
+      } else if (compat.thinkingFormat === "together") {
+        params.reasoning = { enabled };
+        suppressScalarEffort = !enabled;
       }
     }
     if (

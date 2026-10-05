@@ -99,7 +99,12 @@ export function renderTimeSeriesCompact(
     cumTokens += p.totalTokens;
     cumCost += p.cost;
     return {
-      ...p,
+      timestamp: p.timestamp,
+      input: p.input,
+      output: p.output,
+      cacheRead: p.cacheRead,
+      cacheWrite: p.cacheWrite,
+      cost: p.cost,
       value: isCumulative
         ? cumTokens
         : breakdownByType

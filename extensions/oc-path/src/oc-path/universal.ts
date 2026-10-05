@@ -149,16 +149,16 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
     return resolveInsertion(ast, insertion);
   }
 
-  switch (ast.kind) {
-    case "md":
-      return resolveMdToUniversal(ast, path);
-    case "jsonc":
-      return resolveJsoncToUniversal(ast, path);
-    case "jsonl":
-      return resolveJsonlToUniversal(ast, path);
-    case "yaml":
-      return resolveYamlToUniversal(ast, path);
+  if (ast.kind === "md") {
+    return resolveMdToUniversal(ast, path);
   }
+  if (ast.kind === "jsonc") {
+    return resolveJsoncToUniversal(ast, path);
+  }
+  if (ast.kind === "jsonl") {
+    return resolveJsonlToUniversal(ast, path);
+  }
+  return resolveYamlToUniversal(ast, path);
 }
 
 function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
@@ -166,18 +166,16 @@ function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
   if (m === null) {
     return null;
   }
-  switch (m.kind) {
-    case "root":
-      return { kind: "root", ast, line: 1 };
-    case "frontmatter":
-      return { kind: "leaf", valueText: m.node.value, leafType: "string", line: m.node.line };
-    case "block":
-      return { kind: "node", descriptor: "md-block", line: m.node.line };
-    case "item":
-      return { kind: "node", descriptor: "md-item", line: m.node.line };
-    case "item-field":
-      return { kind: "leaf", valueText: m.value, leafType: "string", line: m.node.line };
+  if (m.kind === "root") {
+    return { kind: "root", ast, line: 1 };
   }
+  if (m.kind === "frontmatter") {
+    return { kind: "leaf", valueText: m.node.value, leafType: "string", line: m.node.line };
+  }
+  if (m.kind === "block" || m.kind === "item") {
+    return { kind: "node", descriptor: `md-${m.kind}`, line: m.node.line };
+  }
+  return { kind: "leaf", valueText: m.value, leafType: "string", line: m.node.line };
 }
 
 function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
@@ -195,20 +193,15 @@ function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
 }
 
 function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
-  switch (value.kind) {
-    case "object":
-      return { kind: "node", descriptor: "jsonc-object", line };
-    case "array":
-      return { kind: "node", descriptor: "jsonc-array", line };
-    case "string":
-      return { kind: "leaf", valueText: value.value, leafType: "string", line };
-    case "number":
-      return { kind: "leaf", valueText: String(value.value), leafType: "number", line };
-    case "boolean":
-      return { kind: "leaf", valueText: String(value.value), leafType: "boolean", line };
-    case "null":
-      return { kind: "leaf", valueText: "null", leafType: "null", line };
+  if (value.kind === "object" || value.kind === "array") {
+    return { kind: "node", descriptor: `jsonc-${value.kind}`, line };
   }
+  return {
+    kind: "leaf",
+    valueText: value.kind === "null" ? "null" : String(value.value),
+    leafType: value.kind,
+    line,
+  };
 }
 
 function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
@@ -235,17 +228,13 @@ function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
   if (m === null) {
     return null;
   }
-  switch (m.kind) {
-    case "root":
-      return { kind: "root", ast, line: 1 };
-    case "scalar":
-    case "pair":
-      return yamlScalarToMatch(m.value, yamlLine(ast, m.path));
-    case "map":
-      return { kind: "node", descriptor: "yaml-map", line: yamlLine(ast, m.path) };
-    case "seq":
-      return { kind: "node", descriptor: "yaml-seq", line: yamlLine(ast, m.path) };
+  if (m.kind === "root") {
+    return { kind: "root", ast, line: 1 };
   }
+  if (m.kind === "scalar" || m.kind === "pair") {
+    return yamlScalarToMatch(m.value, yamlLine(ast, m.path));
+  }
+  return { kind: "node", descriptor: `yaml-${m.kind}`, line: yamlLine(ast, m.path) };
 }
 
 function yamlScalarToMatch(value: unknown, line: number): OcMatch {
@@ -306,16 +295,16 @@ function yamlLine(ast: YamlAst, path: readonly string[]): number {
 }
 
 function resolveInsertion(ast: OcAst, info: InsertionInfo): InsertionMatch | null {
-  switch (ast.kind) {
-    case "md":
-      return resolveMdInsertion(ast, info);
-    case "jsonc":
-      return resolveJsoncInsertion(ast, info);
-    case "jsonl":
-      return resolveJsonlInsertion(ast, info);
-    case "yaml":
-      return resolveYamlInsertion(ast, info);
+  if (ast.kind === "md") {
+    return resolveMdInsertion(ast, info);
   }
+  if (ast.kind === "jsonc") {
+    return resolveJsoncInsertion(ast, info);
+  }
+  if (ast.kind === "jsonl") {
+    return resolveJsonlInsertion(ast, info);
+  }
+  return resolveYamlInsertion(ast, info);
 }
 
 function resolveMdInsertion(ast: MdAst, info: InsertionInfo): InsertionMatch | null {
@@ -377,25 +366,20 @@ function resolveYamlInsertion(ast: YamlAst, info: InsertionInfo): InsertionMatch
   if (m === null) {
     return null;
   }
-  switch (m.kind) {
-    case "root": {
-      const root = ast.doc.contents;
-      if (isMap(root)) {
-        return { kind: "insertion-point", container: "yaml-map", line: 1 };
-      }
-      if (isSeq(root)) {
-        return { kind: "insertion-point", container: "yaml-seq", line: 1 };
-      }
-      return null;
+  if (m.kind === "root") {
+    const root = ast.doc.contents;
+    if (isMap(root)) {
+      return { kind: "insertion-point", container: "yaml-map", line: 1 };
     }
-    case "map":
-      return { kind: "insertion-point", container: "yaml-map", line: yamlLine(ast, m.path) };
-    case "seq":
-      return { kind: "insertion-point", container: "yaml-seq", line: yamlLine(ast, m.path) };
-    case "pair":
-    case "scalar":
-      return null;
+    if (isSeq(root)) {
+      return { kind: "insertion-point", container: "yaml-seq", line: 1 };
+    }
+    return null;
   }
+  if (m.kind === "pair" || m.kind === "scalar") {
+    return null;
+  }
+  return { kind: "insertion-point", container: `yaml-${m.kind}`, line: yamlLine(ast, m.path) };
 }
 
 /**
@@ -419,27 +403,25 @@ export function setOcPath(
   }
   const insertion = detectInsertion(path);
   if (insertion !== null) {
-    switch (ast.kind) {
-      case "md":
-        guardSentinel(value, () => formatOcPath(path));
-        return setMdInsertion(ast, insertion, value);
-      case "jsonc":
-        return setJsoncInsertion(ast, insertion, value);
-      case "jsonl":
-        return setJsonlInsertion(ast, insertion, value);
-      case "yaml":
-        return setYamlInsertion(ast, insertion, value);
+    if (ast.kind === "md") {
+      guardSentinel(value, () => formatOcPath(path));
+      return setMdInsertion(ast, insertion, value);
     }
+    if (ast.kind === "jsonc") {
+      return setJsoncInsertion(ast, insertion, value);
+    }
+    if (ast.kind === "jsonl") {
+      return setJsonlInsertion(ast, insertion, value);
+    }
+    return setYamlInsertion(ast, insertion, value);
   }
-  switch (ast.kind) {
-    case "md":
-      return setMdOcPath(ast, path, value);
-    case "jsonc":
-    case "jsonl":
-      return setStructuredLeaf(ast, path, value, options);
-    case "yaml":
-      return setYamlLeaf(ast, path, value);
+  if (ast.kind === "md") {
+    return setMdOcPath(ast, path, value);
   }
+  if (ast.kind === "jsonc" || ast.kind === "jsonl") {
+    return setStructuredLeaf(ast, path, value, options);
+  }
+  return setYamlLeaf(ast, path, value);
 }
 
 function setStructuredLeaf(
@@ -771,5 +753,3 @@ function jsonToJsoncValue(v: unknown): JsoncValue | null {
   // JSON.parse never produces undefined / function / symbol.
   throw new Error(`unsupported JSON value type: ${typeof v}`);
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

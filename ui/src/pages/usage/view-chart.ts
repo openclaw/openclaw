@@ -161,9 +161,9 @@ export function renderDailyChartCompact(
           </div>
           <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
             ${daily.map((d, idx) => {
-              const value = isTokenMode ? d.totalTokens : d.totalCost;
-              const ratio = usesCompressedScale ? Math.sqrt(value / maxValue) : value / maxValue;
-              const heightPx = value <= 0 ? 0 : Math.max(minBarPx, ratio * chartAreaPx);
+              const total = isTokenMode ? d.totalTokens : d.totalCost;
+              const ratio = usesCompressedScale ? Math.sqrt(total / maxValue) : total / maxValue;
+              const heightPx = total <= 0 ? 0 : Math.max(minBarPx, ratio * chartAreaPx);
               const isSelected = selectedDaySet.has(d.date);
               const showDateLabel =
                 daily.length <= 14 ||

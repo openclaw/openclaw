@@ -69,7 +69,7 @@ class CommandLaneTaskTimeoutError extends Error {
       | { cause: "abort-grace"; elapsedMs: number; graceMs: number; taskBudgetMs: number }
       | { cause: "release-signal"; elapsedMs: number; taskBudgetMs: number },
   ) {
-    const message = ((): string => {
+    const message = (() => {
       switch (details.cause) {
         case "task-budget":
           return `elapsed ${details.elapsedMs}ms reached task budget ${details.taskBudgetMs}ms`;
@@ -81,6 +81,8 @@ class CommandLaneTaskTimeoutError extends Error {
           return `abort grace ${details.graceMs}ms elapsed (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
         case "release-signal":
           return `lane release requested after ${details.elapsedMs}ms (task budget ${details.taskBudgetMs}ms)`;
+        default:
+          throw new TypeError("Unsupported command lane timeout cause");
       }
     })();
     super(`Command lane "${lane}" task timed out: ${message}`);

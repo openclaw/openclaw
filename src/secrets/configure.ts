@@ -167,7 +167,7 @@ async function promptRequiredText(params: {
   initialValue?: string;
   validate?: (value: string) => string | undefined;
 }): Promise<string> {
-  const value = assertNoCancel(
+  const enteredValue = assertNoCancel(
     await text({
       ...params,
       validate: (value) => {
@@ -176,7 +176,7 @@ async function promptRequiredText(params: {
       },
     }),
   );
-  return value.trim();
+  return enteredValue.trim();
 }
 
 const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
@@ -616,10 +616,10 @@ async function configureProvidersInteractive(
       const preset = assertNoCancel(
         await select({
           message: "Select plugin preset",
-          options: presetEntries.map((preset) => ({
-            value: preset,
-            label: preset.displayName,
-            hint: `${preset.providerAlias} | ${preset.pluginId}:${preset.id} | exec plugin`,
+          options: presetEntries.map((entry) => ({
+            value: entry,
+            label: entry.displayName,
+            hint: `${entry.providerAlias} | ${entry.pluginId}:${entry.id} | exec plugin`,
           })),
         }),
       );
