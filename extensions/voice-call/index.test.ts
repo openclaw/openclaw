@@ -479,11 +479,16 @@ describe("voice-call plugin", () => {
       },
       respond,
     });
-    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith("+15550001234", undefined, {
-      dtmfSequence: "ww123456#",
-      message: "Hi",
-      mode: "conversation",
-    });
+    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
+      "+15550001234",
+      undefined,
+      {
+        dtmfSequence: "ww123456#",
+        message: "Hi",
+        mode: "conversation",
+      },
+      { isCurrent: expect.any(Function) },
+    );
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
@@ -509,6 +514,7 @@ describe("voice-call plugin", () => {
         mode: "conversation",
         requesterSessionKey: "agent:main:discord:channel:general",
       },
+      { isCurrent: expect.any(Function) },
     );
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
@@ -528,6 +534,7 @@ describe("voice-call plugin", () => {
       "+15550001234",
       undefined,
       expect.objectContaining({ agentId: "support" }),
+      { isCurrent: expect.any(Function) },
     );
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
@@ -598,7 +605,9 @@ describe("voice-call plugin", () => {
 
     await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
 
-    expect(runtimeStub.manager["speak"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).toHaveBeenCalledWith("call-1", "hello", {
+      isCurrent: expect.any(Function),
+    });
     expect(firstRespondCall(respond)).toEqual([true, { success: true }]);
   });
 
@@ -658,7 +667,9 @@ describe("voice-call plugin", () => {
     })) as { details: { success?: boolean } };
 
     expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
-    expect(runtimeStub.manager["speak"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).toHaveBeenCalledWith("call-1", "hello", {
+      isCurrent: expect.any(Function),
+    });
     expect(result.details.success).toBe(true);
   });
 
@@ -740,6 +751,7 @@ describe("voice-call plugin", () => {
           message: "Hello",
           requesterSessionKey: "agent:support:discord:channel:general",
         }),
+        { isCurrent: expect.any(Function) },
       );
     },
   );
@@ -1001,7 +1013,9 @@ describe("voice-call plugin", () => {
     );
     expect(startPayload?.status).toBe("pending");
     expect(startPayload?.pollTimeoutMs).toBe(180000);
-    expect(runtimeStub.manager["continueCall"]).toHaveBeenCalledWith("call-1", "Hello");
+    expect(runtimeStub.manager["continueCall"]).toHaveBeenCalledWith("call-1", "Hello", {
+      isCurrent: expect.any(Function),
+    });
 
     const pendingRespond = vi.fn();
     await result?.({
