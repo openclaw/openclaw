@@ -4,10 +4,14 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  createSubsystemLogger,
   resolveStateDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { stopMemorySqliteWalMaintenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_INDEX_FTS_TABLE,
+  stopMemorySqliteWalMaintenance,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
@@ -21,7 +25,10 @@ import {
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import {
+  memoryDatabaseTableExists,
+  MemoryIndexRevisionConflictError,
+} from "./manager-db-kernel.js";
 import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
@@ -46,6 +53,7 @@ import {
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+const log = createSubsystemLogger("memory");
 type PublicationWorker = {
   store: OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>;
   busyTimeoutMs: number;
@@ -74,6 +82,7 @@ export class MemoryIndexDatabase {
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
   private publicationGenerationActive = false;
+  private schemaAdmission?: Promise<void>;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -83,30 +92,59 @@ export class MemoryIndexDatabase {
   private releaseInProgress = false;
   shadowReleased = false;
 
-  static openPublished(params: {
+  static async openPublished(params: {
     agentId: string;
     writeOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0] & { path: string };
     readOnly: boolean;
     allowExtension: boolean;
     maintenanceSource?: MemoryIndexDatabase;
-  }): MemoryIndexDatabase {
+    schema: MemoryPublicationOperations["schema.admit"]["input"];
+  }): Promise<MemoryIndexDatabase> {
     const connection = params.readOnly
       ? openMemoryDatabaseReadOnlyAtPath(
           params.writeOptions.path,
           params.allowExtension,
           params.agentId,
         )
-      : borrowOpenClawAgentDatabase(params.writeOptions);
+      : await withOpenClawAgentDatabaseWrite(
+          params.writeOptions,
+          () => ({ ...borrowOpenClawAgentDatabase(params.writeOptions), hasIndex: true }),
+          params.maintenanceSource?.db,
+        );
     if (params.maintenanceSource && connection.db !== params.maintenanceSource.db) {
       connection.release();
       throw new Error("Memory maintenance source connection changed");
     }
-    return new MemoryIndexDatabase(
+    const database = new MemoryIndexDatabase(
       connection.db,
       connection.release,
       params.readOnly,
       params.writeOptions,
+      connection.hasIndex,
     );
+    try {
+      database.fts.enabled = params.schema.ftsEnabled;
+      if (
+        params.maintenanceSource &&
+        (!database.fts.enabled || params.maintenanceSource.fts.available)
+      ) {
+        Object.assign(database.fts, params.maintenanceSource.fts);
+      } else if (params.readOnly) {
+        database.fts.available =
+          database.hasIndex &&
+          database.fts.enabled &&
+          memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
+      } else {
+        await database.admitSchema(params.schema);
+        // Sync must acquire its own retained executor for accepted shutdown work.
+        await database.closePublicationWorker();
+      }
+      return database;
+    } catch (error) {
+      // Failed worker cleanup retains its own borrow with the agent lifecycle.
+      database.release();
+      throw error;
+    }
   }
 
   static openShadow(filename: string, allowExtension: boolean): MemoryIndexDatabase {
@@ -161,6 +199,7 @@ export class MemoryIndexDatabase {
     readonly release: () => void = () => closeMemoryDatabase(db),
     readonly readOnly = false,
     readonly writeOptions?: Parameters<typeof withOpenClawAgentDatabaseWrite>[0],
+    readonly hasIndex = true,
   ) {}
 
   get isShadow(): boolean {
@@ -360,6 +399,28 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
     return this.runPublication((scope) => scope.execute(command), assertCurrent);
+  }
+
+  admitSchema(input: MemoryPublicationOperations["schema.admit"]["input"]): Promise<void> {
+    this.schemaAdmission ??= this.runPublication(
+      (scope) => this.retryPublication(() => scope.execute({ type: "schema.admit", input })),
+      () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before schema admission");
+        }
+      },
+    ).then((result) => {
+      if (!result) {
+        throw new Error("Memory schema admission did not complete");
+      }
+      this.fts.enabled = input.ftsEnabled;
+      this.fts.available = result.ftsAvailable;
+      this.fts.loadError = result.ftsError;
+      if (input.ftsEnabled && result.ftsError) {
+        log.warn(`fts unavailable: ${result.ftsError}`);
+      }
+    });
+    return this.schemaAdmission;
   }
 
   async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {

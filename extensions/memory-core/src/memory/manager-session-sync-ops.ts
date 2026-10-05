@@ -46,7 +46,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       try {
         const inspection = await inspectMemorySourceState({
           files: this.memoryFiles,
-          db: this.db,
+          db: this.database.hasIndex ? this.db : undefined,
           workspaceDir: this.workspaceDir,
           settings: this.settings,
           concurrency: this.getIndexConcurrency(),
@@ -184,7 +184,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       return [];
     }
     const existingRows = loadMemorySourceFileState({
-      db: this.db,
+      db: this.database.hasIndex ? this.db : undefined,
       source: "sessions",
     });
     const indexedPaths = new Set(existingRows.map((row) => row.path));

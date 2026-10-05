@@ -248,11 +248,14 @@ describe("private session source staging", () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     const timedOut = createDeferred<void>();
+    const writes = vi.spyOn(sqliteRuntime, "runSqliteWorkerStoreWrite");
     const load = storage.loadSqliteVecExtension;
     vi.spyOn(storage, "loadSqliteVecExtension").mockImplementation(async (input) => {
       if (!input.db.location()?.includes(".memory-reindex-")) {
         return load(input);
       }
+      // Schema admission finished before this setup acquired private access.
+      writes.mockClear();
       entered.resolve();
       await resume.promise;
       return { ok: false, error: "controlled late vector setup" };
@@ -280,10 +283,8 @@ describe("private session source staging", () => {
       },
     );
     const run = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
-    // replaceSource queues first; the owned store opens only after private admission.
-    const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore");
-    const shadowOpens = () =>
-      open.mock.calls.filter(([options]) => options.databasePath === shadowPath);
+    const shadowWrites = () =>
+      writes.mock.calls.filter((call) => shadowPath !== undefined && call[3].includes(shadowPath));
     const sync = manager.sync({ reason: "cli", force: true });
     void sync.catch(() => undefined);
     let close: Promise<void> | undefined;
@@ -292,7 +293,7 @@ describe("private session source staging", () => {
       await Promise.race([Promise.all([entered.promise, timedOut.promise]), sync]);
       await nextTurn();
       expect(shadowPath).toBeDefined();
-      expect(shadowOpens()).toHaveLength(0);
+      expect(shadowWrites()).toHaveLength(0);
       close = manager.close().then(() => {
         closed = true;
       });
@@ -301,7 +302,7 @@ describe("private session source staging", () => {
       resume.resolve();
       await Promise.all([sync, close]);
       expect(run).toHaveBeenCalledTimes(1);
-      expect(shadowOpens()).toHaveLength(1);
+      expect(shadowWrites().length).toBeGreaterThan(0);
     } finally {
       resume.resolve();
       await Promise.allSettled([sync, close]);

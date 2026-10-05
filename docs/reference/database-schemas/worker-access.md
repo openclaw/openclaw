@@ -1098,6 +1098,18 @@ authority checked after delivery. The published-generation guard for shadow sour
 writes and cold opening remain separate work. Schemas, cache retention, and stored
 formats are unchanged.
 
+Memory index construction and shadow reindexing admit their schema through that
+same publication worker. Each memory database owner retains its admitted FTS facts;
+the manager never repeats the storage or STRICT schema checks. Admission captures
+the original file identity and checks current host authority after BEGIN and before
+COMMIT. The synchronous SDK schema helper remains available to standalone callers
+and joins the worker's existing transaction when one is supplied. Published-owner
+admission closes its temporary client before an accepted sync acquires its retained
+executor, preserving shutdown settlement. Missing-store status carries empty index
+facts without constructing an in-memory schema or creating persistent stores.
+Doctor repairs and canonical agent migrations retain their existing owners. Updates
+use the same schemas, migration rules, stored bytes, and strict drift refusals.
+
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.

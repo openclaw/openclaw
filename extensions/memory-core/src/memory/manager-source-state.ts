@@ -62,7 +62,7 @@ export async function resolveMemorySourceFileEntries(params: {
 }
 
 export async function inspectMemorySourceState(params: {
-  db: DatabaseSync;
+  db: DatabaseSync | undefined;
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
@@ -97,10 +97,13 @@ export async function inspectMemorySourceState(params: {
 }
 
 export function loadMemorySourceFileState(params: {
-  db: DatabaseSync;
+  db: DatabaseSync | undefined;
   source: MemorySource;
   paths?: readonly string[];
 }): MemorySourceFileStateRow[] {
+  if (!params.db) {
+    return [];
+  }
   let query = getNodeSqliteKysely<MemorySourceDatabase>(params.db)
     .selectFrom("memory_index_sources")
     .select(["path", "hash", "mtime", "size"])

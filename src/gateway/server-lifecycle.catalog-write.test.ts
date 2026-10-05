@@ -161,6 +161,8 @@ it("joins accepted startup notice persistence after the Gateway close prelude ab
     const operation = Promise.resolve().then(() =>
       runGatewayStartupObservers({
         registry: createEmptyPluginRegistry(),
+        resolveGatewayContext: () => undefined,
+        loadSubagentRegistryActivation: async () => () => {},
         signal: kernel.connectionWork.signal,
         port,
         config: fixture.config,
