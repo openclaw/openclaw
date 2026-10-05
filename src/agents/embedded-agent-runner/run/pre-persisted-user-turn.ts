@@ -109,7 +109,10 @@ export async function preparePersistedCurrentUserTurn(params: {
                 "Persisted user turn changed its database owner before replay admission",
               );
             }
-            return operation({ ...scope, ...captured, sessionKey: scope.sessionKey }, assertSource);
+            return operation(
+              { ...scope, agentId: captured.agentId, storePath: captured.storePath },
+              assertSource,
+            );
           },
           signal,
         );
