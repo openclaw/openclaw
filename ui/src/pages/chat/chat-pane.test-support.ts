@@ -183,13 +183,18 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   historyObserverArmed: boolean;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
-  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
+  loadCatalogSession: (
+    key: CatalogSessionKey,
+    older: boolean,
+    options?: { retainLoadedHistory?: boolean },
+  ) => Promise<boolean>;
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
   resetOlderMessagesViewport: () => void;
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
+  catalogLoading: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
   headerEditing: boolean;
