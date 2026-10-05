@@ -137,6 +137,9 @@ export function prepareProjectedSessionPresentation(
   const publicationState = publication?.(rowContext);
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
+  const preparedRowContext = { ...rowContext, subagentRuns };
+  const runState = (key: string, entry: records.MaterializedRow["entry"]) =>
+    projectGatewaySessionRunState({ key, entry, now, rowContext: preparedRowContext });
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
       requestedKey: key,
@@ -258,13 +261,6 @@ export function prepareProjectedSessionPresentation(
         sessionId: record.entry.sessionId,
         index: rowContext.projectedAgentRuns,
       });
-      const runState = (key: string, entry: records.MaterializedRow["entry"]) =>
-        projectGatewaySessionRunState({
-          key,
-          entry,
-          now,
-          rowContext: { ...rowContext, subagentRuns },
-        });
       const temporal = runState(record.key, record.entry);
       const facts = [
         record.materialized,
@@ -430,7 +426,7 @@ export function prepareProjectedSessionPresentation(
     return projectModels(row);
   };
   return {
-    rowContext: { ...rowContext, subagentRuns },
+    rowContext: preparedRowContext,
     active,
     sharing,
     target,

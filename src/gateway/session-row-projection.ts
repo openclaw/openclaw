@@ -210,7 +210,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const matching = (query: records.Query, kind = "key") =>
     rowScope.selectMatchingSessionRows({ rows, indexes, scope }, query, kind);
   const lookup = (query: records.Lookup) =>
-    rowReads.lookupSessionRow(query, { disposed, cfg, matching, storePaths: stores.keys() });
+    disposed ? undefined : rowReads.lookupSessionRow(query, { cfg, rows, byKey, scope, stores });
   function referenced(ref: string) {
     return records.firstReferenced(ref, rows, byKey, stores.keys());
   }
@@ -657,6 +657,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     setArchivePageSize: archive.setPageSize,
     modelFacts: rowReads.createSessionRowModelFactsReader({
       lookup,
+      dirty,
       readSourceEntry,
       state: () => ({ cfg, modelCatalog: catalog.current, rowContext: metadata.current }),
     }),
@@ -666,10 +667,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     prepareSelection,
     withSelectionPreparation,
     needsSelectionPreparation: selectionNeedsPreparation,
-    isMaterialized(query: records.Lookup) {
-      const row = lookup(query);
-      return row !== undefined && !dirty.has(records.identity(row)) && records.ready(row);
-    },
     ...membershipRead,
     get materializedCount() {
       return materializedCount;
