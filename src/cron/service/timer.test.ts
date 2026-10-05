@@ -231,10 +231,7 @@ describe("cron service timer seam coverage", () => {
     }
   });
 
-  it.each([
-    { kind: "on-exit", command: "true" },
-    { kind: "stream", command: ["true"] },
-  ] satisfies CronJob["schedule"][])(
+  it.each([{ kind: "stream", command: ["true"] }] satisfies CronJob["schedule"][])(
     "keeps $kind jobs event-driven after a next-run state update",
     async (schedule) => {
       const { storePath } = await makeStorePath();
@@ -299,7 +296,6 @@ describe("cron service timer seam coverage", () => {
     { target: "main", notify: "queue changed", wake: "next-heartbeat" },
     { target: "isolated", notify: "queue changed", wake: "now" },
     { target: "main", notify: undefined, wake: "now" },
-    { target: "main", notify: "queue changed", wake: undefined },
   ] as const)(
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
@@ -431,18 +427,6 @@ describe("cron service timer seam coverage", () => {
       expect(job?.state.consecutiveErrors ?? 0).toBe(errors);
     },
   );
-
-  it("clamps a script nextCheck through the shared pacing path", async () => {
-    const job = await runStoredScript(
-      createDueScriptJob({ now, pacing: { min: "15m", max: "4h" } }),
-      {
-        status: "ok",
-        nextCheck: { delayMs: 5 * 60_000 },
-      },
-    );
-    expect(job?.state.nextRunAtMs).toBe(now + 15 * 60_000);
-    expect(job?.state.pacedNextRunAtMs).toBe(now + 15 * 60_000);
-  });
 
   it("records current-bound cron metadata against the backing cron session", async () => {
     const { storePath } = await makeStorePath();

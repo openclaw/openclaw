@@ -426,8 +426,8 @@ extensions/irc/src/irc-ingress.ts	9
 extensions/irc/src/message-adapter.ts	1
 extensions/irc/src/monitor.ts	1
 extensions/irc/src/send.ts	1
-extensions/irc/src/setup-core.ts	6
-extensions/irc/src/setup-surface.ts	25
+extensions/irc/src/setup-core.ts	4
+extensions/irc/src/setup-surface.ts	24
 extensions/kilocode/provider-models.ts	3
 extensions/kilocode/stream.ts	1
 extensions/kimi-coding/provider-policy-api.ts	2
@@ -440,7 +440,7 @@ extensions/line/src/flex-templates/schedule-cards.ts	27
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
-extensions/line/src/outbound.ts	4
+extensions/line/src/outbound.ts	3
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2

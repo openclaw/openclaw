@@ -508,6 +508,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/sessions/session-upstream-links.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listWatchedSessionUpstreamLinksInDatabase"],
+        evidence:
+          "Only sessionUpstream.listWatched dispatches this read; mutation kernels retain v2026.9.8 synchronous SDK callers until the next Plugin SDK major.",
+      },
+    ],
+  ],
+  [
     "src/sessions/session-state-events.kernel.ts",
     [
       {
@@ -2006,8 +2017,6 @@ const workerModules = new Set([
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
   "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata, exec environment, and exact values only run through stateReadRegistry in the shared-state reader.
-
-  "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
 
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.

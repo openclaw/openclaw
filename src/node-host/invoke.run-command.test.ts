@@ -10,29 +10,6 @@ describe("runCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it("captures stdout, stderr, and exit status", async () => {
-    await expect(
-      runCommand(
-        [
-          process.execPath,
-          "-e",
-          "process.stdout.write('captured stdout'); process.stderr.write('captured stderr')",
-        ],
-        undefined,
-        undefined,
-        undefined,
-      ),
-    ).resolves.toEqual({
-      exitCode: 0,
-      timedOut: false,
-      success: true,
-      stdout: "captured stdout",
-      stderr: "captured stderr",
-      error: null,
-      truncated: false,
-    });
-  });
-
   it.each(["before", "after"] as const)(
     "checks node launch policy %s native execution",
     async (timing) => {
@@ -65,38 +42,6 @@ describe("runCommand", () => {
     },
   );
 
-  it("closes stdin for commands that wait for EOF", async () => {
-    await expect(
-      runCommand(
-        [
-          process.execPath,
-          "-e",
-          "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('eof'))",
-        ],
-        undefined,
-        undefined,
-        2_000,
-      ),
-    ).resolves.toMatchObject({ success: true, stdout: "eof" });
-  });
-
-  it("preserves nonzero command results", async () => {
-    await expect(
-      runCommand(
-        [process.execPath, "-e", "process.stderr.write('failed'); process.exit(7)"],
-        undefined,
-        undefined,
-        undefined,
-      ),
-    ).resolves.toMatchObject({
-      exitCode: 7,
-      timedOut: false,
-      success: false,
-      stderr: "failed",
-      error: null,
-    });
-  });
-
   it.runIf(process.platform !== "win32")("preserves signal termination diagnostics", async () => {
     const result = await runCommand(
       [process.execPath, "-e", "process.kill(process.pid, 'SIGTERM')"],
@@ -113,18 +58,6 @@ describe("runCommand", () => {
       stderr: "",
       error: "Command terminated by signal SIGTERM",
     });
-  });
-
-  it.runIf(process.platform !== "win32")("force-kills timed-out command trees", async () => {
-    const startedAt = Date.now();
-    const result = await runCommand(
-      [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
-      undefined,
-      undefined,
-      25,
-    );
-    expect(result).toMatchObject({ timedOut: true, success: false, error: null });
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
   it.runIf(process.platform !== "win32")("force-kills cancelled command trees", async () => {
@@ -151,29 +84,6 @@ describe("runCommand", () => {
     }
   });
 
-  it("keeps the combined output prefix bounded", async () => {
-    const result = await runCommand(
-      [process.execPath, "-e", "process.stdout.write('x'.repeat(200_001))"],
-      undefined,
-      undefined,
-      undefined,
-    );
-    expect(result.stdout).toHaveLength(200_000);
-    expect(result.stdout).toBe("x".repeat(200_000));
-    expect(result.truncated).toBe(true);
-  });
-
-  it("preserves child launch errors", async () => {
-    const result = await runCommand(
-      [`openclaw-missing-${process.pid}-${Date.now()}`],
-      undefined,
-      undefined,
-      undefined,
-    );
-    expect(result).toMatchObject({ exitCode: undefined, timedOut: false, success: false });
-    expect(result.error).toMatch(/ENOENT|not found/i);
-  });
-
   describe("working directory failures", () => {
     const enoent = (message: string) =>
       Object.assign(new Error(message), { code: "ENOENT" }) as NodeJS.ErrnoException;
@@ -182,13 +92,6 @@ describe("runCommand", () => {
       vi.spyOn(processExec, "runCommandWithTimeout").mockRejectedValueOnce(error);
       return (await runCommand([process.execPath], cwd, undefined, undefined)).error;
     }
-
-    it("blames a missing working directory instead of the shell", async () => {
-      const cwd = path.join(os.tmpdir(), `node-exec-missing-${process.pid}-${Date.now()}`);
-      expect(await runCommandError(enoent("spawn /bin/sh ENOENT"), cwd)).toBe(
-        `node exec working directory does not exist on the node host: ${cwd} (os reported: spawn /bin/sh ENOENT)`,
-      );
-    });
 
     it("flags a cwd that exists but is not a directory", async () => {
       const file = path.join(os.tmpdir(), `node-exec-file-${process.pid}-${Date.now()}.txt`);

@@ -42,7 +42,7 @@ import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
 import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
-import { createTlonCitationResolver } from "./cites.js";
+import { resolveTlonCitations } from "./cites.js";
 import { fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
@@ -642,11 +642,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     return watchedChannels.size - previousCount;
   };
 
-  const { resolveAllCites } = createTlonCitationResolver({
-    api,
-    runtime,
-  });
-
   const { queueApprovalRequest, handleApprovalResponse, handleAdminCommand } =
     createTlonApprovalRuntime({
       api,
@@ -810,7 +805,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const messageText = (await resolveAllCites(contentBody)) + rawText;
+      const messageText = (await resolveTlonCitations(contentBody, api, runtime)) + rawText;
 
       await processMessage({
         messageId,
@@ -988,7 +983,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const resolvedMessageText = (await resolveAllCites(essay.content)) + rawText;
+      const resolvedMessageText =
+        (await resolveTlonCitations(essay.content, api, runtime)) + rawText;
       if (ownerDm) {
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
       }

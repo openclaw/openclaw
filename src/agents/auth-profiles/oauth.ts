@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
@@ -39,6 +40,7 @@ import {
   markOAuthRefreshFailureSettled,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
+import { withPersonalAuthProfileStore, type PersonalAuthProfileStore } from "./personal-store.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -49,10 +51,7 @@ import {
 } from "./runtime-snapshots.js";
 import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
-import {
-  findPersistedAuthProfileCredential,
-  resolvePersistedAuthProfileOwnerAgentDir,
-} from "./store.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
@@ -220,8 +219,10 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 async function resolveOAuthProfileAccess(
   params: ResolveApiKeyForProfileParams,
   credential: OAuthCredential,
+  personalStore?: PersonalAuthProfileStore,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const resolved = await oauthManager.resolveOAuthAccess({
+    personalStore,
     store: params.store,
     profileId: params.profileId,
     credential,
@@ -361,10 +362,25 @@ export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   params.signal?.throwIfAborted();
+  const resolved = isUserModelAuthProfileId(params.profileId)
+    ? ((await withPersonalAuthProfileStore(params.profileId, (owner) =>
+        resolveApiKeyForProfileOwned(params, owner),
+      )) ?? null)
+    : await resolveApiKeyForProfileOwned(params);
+  params.signal?.throwIfAborted();
+  return resolved;
+}
+
+async function resolveApiKeyForProfileOwned(
+  params: ResolveApiKeyForProfileParams,
+  personalStore?: PersonalAuthProfileStore,
+): Promise<ResolveApiKeyForProfileResult | null> {
+  params.signal?.throwIfAborted();
   const { cfg, store, profileId } = params;
-  const storedProfile = isUserModelAuthProfileId(profileId)
-    ? findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId })
+  const storedProfile = personalStore
+    ? (await personalStore.read()).profiles[profileId]
     : store.profiles[profileId];
+  params.signal?.throwIfAborted();
   if (
     !storedProfile ||
     !isSetupCredentialAccessible({
@@ -448,16 +464,21 @@ export async function resolveApiKeyForProfile(
   }
 
   try {
-    const resolved = await resolveOAuthProfileAccess(params, cred);
+    const resolved = await resolveOAuthProfileAccess(params, cred, personalStore);
     params.signal?.throwIfAborted();
     return resolved;
   } catch (error) {
     params.signal?.throwIfAborted();
+    if (hasSqliteWorkerOutcomeUnknown(error)) {
+      throw error;
+    }
     let settlementComplete = isSettledOAuthRefreshFailure(error);
     let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
-        : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+        : personalStore
+          ? await personalStore.read()
+          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
     if (isRefreshTokenReusedError(surfacedCause)) {
@@ -495,7 +516,9 @@ export async function resolveApiKeyForProfile(
         }
       }
       if (clearedLastGood) {
-        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+        refreshedStore = personalStore
+          ? await personalStore.read()
+          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
       }
     }
     const fallbackProfileId =

@@ -63,11 +63,11 @@ beforeEach(async (context) => {
     ),
   ]);
   const upsert = vi
-    .spyOn(owner, "upsertSessionUpstreamLink")
-    .mockImplementation(facade.upsertSessionUpstreamLink);
+    .spyOn(owner, "upsertSessionUpstreamLinkWithCurrentSource")
+    .mockImplementation((input, options) => facade.upsertSessionUpstreamLinkAsync(input, options));
   const remove = vi
-    .spyOn(owner, "deleteSessionUpstreamLink")
-    .mockImplementation(facade.deleteSessionUpstreamLink);
+    .spyOn(owner, "deleteSessionUpstreamLinkAsync")
+    .mockImplementation(facade.deleteSessionUpstreamLinkAsync);
   restoreUpstreamLinks = () => {
     upsert.mockRestore();
     remove.mockRestore();

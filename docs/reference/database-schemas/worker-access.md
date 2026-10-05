@@ -108,8 +108,24 @@ retain unrelated later appends. Source-mirror tail restrictions and turn/media m
 with their existing selectors; unrelated transcript rows keep their bytes and
 sequences. Transaction and commit grants recheck current host authority. Native
 maintenance and process-held incognito keep their existing adapters. Locked mirror
-appends and feedback remain separate cutover work. Schemas, retention, durability,
+appends remain separate cutover work. Schemas, retention, durability,
 SDK signatures, and update behavior are unchanged.
+
+Channel feedback retains its selected physical session reader through event persistence
+in the existing agent writer. The synchronous transaction rereads the current session,
+appends the original event bytes, and returns an acknowledged projection receipt.
+The host checks reader authority at transaction and commit and schedules any required
+projection reconciliation only after acknowledgment. Accepted writes use the existing
+FIFO and settlement owner. Maintenance and process-held incognito retain their native
+adapter, which first-party SQLite test helpers also reuse. Schemas, stored bytes,
+retention, and update behavior are unchanged.
+
+Explicit restart-tombstone recovery clones the transcript and changes both session
+identities atomically in the agent writer worker. Source preparation uses worker
+reads, while the Gateway retains current caller authority and invalidates prepared
+facts when the source changes. Transaction and commit admission recheck those
+guards; accepted writes retain settlement and committed identity publication.
+These cutovers change no schema, stored bytes, retention, or update behavior.
 
 Strict harness transcript appends prepare messages outside the existing agent
 writer transaction. The writer rereads idempotency and pending-input custody
@@ -121,13 +137,6 @@ awaited preparation is limited to a single message without transaction predicate
 compound turns retain their existing synchronous preparation contract. Released
 synchronous preparation retains native callback ordering until the next Plugin SDK
 major. Schemas, stored bytes, retention, and update behavior are unchanged.
-
-Explicit restart-tombstone recovery clones the transcript and changes both session
-identities atomically in the agent writer worker. Source preparation uses worker
-reads, while the Gateway retains current caller authority and invalidates prepared
-facts when the source changes. Transaction and commit admission recheck those
-guards; accepted writes retain settlement and committed identity publication.
-These cutovers change no schema, stored bytes, retention, or update behavior.
 
 ## Keep one store owner
 
@@ -707,6 +716,30 @@ retires no T1 sites, and changes no schema, retention, durability, expiry,
 configuration, or update behavior. Public creation and generic entry-patch
 composition remain a separate inactive prerequisite.
 
+### Incognito creation and entry patches (P7h2, inactive)
+
+Public creation and generic entry patches consume P7h1's captured actor binding.
+Creation prepares on that actor, then rechecks the authoritative entry and label
+inside its synchronous transaction. Transcript initialization and owner assignment
+commit together. Entry patches reuse the existing selection, CAS, predicate, and
+mutation kernels, including CLI-history admission and transcript-watermark checks.
+
+Prepared source authority stays retained through settlement. Same-actor source
+predicates run inside the worker transaction; native-only and foreign-store
+sources refuse until their owners supply the corresponding actor composition.
+
+Native commit receipts certify the exact result and session facts delivered through
+the existing framed transfer, without adding an entry-size limit. Acknowledged
+publication installs those facts before callbacks and identity observers, within
+the original writer FIFO. Preparation and postcommit bookkeeping retain actor
+lifetime without holding the FIFO across another actor request. Accepted writes
+settle independently of the enclosing admission signal; new work respects it.
+
+Production acquisition still supplies no actor binding. The final atomic activation
+must install it with the remaining adapters and remove native routes together.
+This prerequisite retires no T1 sites and changes no schema, retention, durability,
+expiry, configuration, or update behavior.
+
 ### Existing worker flows
 
 Remote model catalog refreshes capture the shared store before downloading and
@@ -902,6 +935,17 @@ uses a typed upsert descriptor while its projection and opaque transaction
 callbacks retain their existing owner. Native-binding settlement and incognito
 activation remain separate cutovers. These changes require no schema, durability,
 retention, configuration, or update migration.
+
+Durable Board writes prepare exact session existence in the session reader and carry
+its session and lifecycle identity into transaction and commit checks. Session
+presentation consumes worker-prepared Board membership through its existing row
+projection; unavailable facts stay dirty until preparation finishes. Process-held
+incognito retains its native reader. Board request authority prepares session and
+membership predicates before worker grants; the worker rereads those facts at
+transaction and commit while the host rechecks live caller authority. Released
+opaque SDK guards and cross-store assertions retain their synchronous transaction
+contract. Board publication, schemas, permissions,
+retention, and update behavior are unchanged.
 
 Durable entry deletion can carry prepared Agents API and Codex binding participants
 through the same executing worker. Binding deletion still commits in shared state
@@ -1482,9 +1526,17 @@ the same usage reducers, and provider observations retain their credential and
 block-generation checks. Transaction and commit grants recheck live host authority
 without caller-thread SQL. Acknowledged usage returns to the selected turn only;
 personal credentials and selection never enter shared rotation. Post-run success
-remains nonblocking, while maintenance close joins accepted bookkeeping. OAuth
-refresh, selection, and released SDK updater callbacks retain their existing
-owners. Schemas, credential bytes, retention, and update behavior are unchanged.
+remains nonblocking, while maintenance close joins accepted bookkeeping.
+Personal OAuth refresh retains that same physical shared-state actor across
+provider preparation and settlement. The existing writer compares the original
+credential and usage postimage inside its transaction; only its acknowledged
+commit publishes the exact replacement. Definite conflicts refuse the stale
+update, and uncertain outcomes never replay it. Personal credentials never scan
+shared or agent refresh peers. Final credential acceptance holds the writer's
+FIFO and native transaction while checking current pin authority, including
+retained synchronous SDK writers. Caller cancellation stops observation while
+accepted settlement joins before worker teardown. Schemas, credential bytes,
+retention, and update behavior are unchanged.
 
 Personal account inventory, reconnect preparation, connection, selection, and
 unlinking use the existing shared-state profile worker. The Gateway captures the
@@ -1848,6 +1900,20 @@ removal, and row deletion retain their existing shared permit, with disk pressur
 rechecked after admission. Page limits do not bound checkpoint copying or storage
 latency. Slow transaction diagnostics include commit and rollback time on both
 the main thread and workers, naming the database and operation when supplied.
+
+Session upstream-link adoption and native initialization writes use the existing
+shared-state writer. Callers capture the physical store and input before yielding;
+the worker preserves FIFO order, compares current rows, and requests live host
+authority at transaction and commit. Native fork guards consume transaction-local
+source-link facts for these grants. Exact rollback cleanup joins accepted writes
+before deleting its own link; uncertain outcomes are never replayed. Session deletion
+removes its upstream link and signal state in the existing cleanup transaction,
+capturing one physical store and revoking ambient reads before yielding. The released
+synchronous upsert/delete SDK methods and native initializer's `link` method remain
+deprecated compatibility paths until the next Plugin SDK major. Synchronous link
+reads used by immediate native-fork authority checks remain separate migration
+work. Schemas, stored data, retention, and update behavior are unchanged. See
+[await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher probe and pruning. Producers await settlement and recheck

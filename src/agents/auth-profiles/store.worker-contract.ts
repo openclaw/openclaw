@@ -51,6 +51,14 @@ export type AuthProfileUsageResult =
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
 export type AuthProfileWorkerOperations = {
+  "authProfiles.personalAccept": {
+    input: { profileId: string; credential: AuthProfileCredential };
+    output: boolean;
+  };
+  "authProfiles.personalReplace": {
+    input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile };
+    output: UserModelAuthProfile | undefined;
+  };
   "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
   "authProfiles.personalUsage": {
     input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };

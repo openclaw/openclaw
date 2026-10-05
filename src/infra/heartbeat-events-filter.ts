@@ -186,6 +186,14 @@ export function isExecCompletionEvent(evt: string): boolean {
   );
 }
 
+/** A command completion started by a conversation turn rather than heartbeat or automation work. */
+export function isConversationExecCompletion(event: {
+  text: string;
+  fromConversationTurn?: boolean;
+}): boolean {
+  return event.fromConversationTurn === true && isExecCompletionEvent(event.text);
+}
+
 export function isHeartbeatDeliveryAwarenessEvent(event: { contextKey?: string | null }): boolean {
   return event.contextKey?.startsWith(HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX) ?? false;
 }

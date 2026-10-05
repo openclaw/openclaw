@@ -47,57 +47,40 @@ function buildCitedPostScryPath(nest: string, postId: string): string | null {
   return scryPath;
 }
 
-export function createTlonCitationResolver(params: { api: TlonScryApi; runtime: RuntimeEnv }) {
-  const { api, runtime } = params;
-
-  const resolveCiteContent = async (nest: string, postId: string): Promise<string | null> => {
+export async function resolveTlonCitations(
+  content: unknown,
+  api: TlonScryApi,
+  runtime: RuntimeEnv,
+): Promise<string> {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const resolved: string[] = [];
+  for (const verse of content) {
+    const block = asRecord(asRecord(verse)?.block);
+    const chan = asRecord(asRecord(block?.cite)?.chan);
+    const nest = readStringField(chan, "nest");
+    const whereMatch = readStringField(chan, "where")?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
+    const postId = whereMatch?.[2];
+    if (!nest || !postId) {
+      continue;
+    }
     const scryPath = buildCitedPostScryPath(nest, postId);
     if (!scryPath) {
       runtime.log?.("[tlon] Skipping cited post: citation does not name a channel post");
-      return null;
+      continue;
     }
-
     try {
       runtime.log?.(`[tlon] Fetching cited post: ${scryPath}`);
-
       const data = asRecord(await api.scry(scryPath));
       const essay = asRecord(data?.essay);
-      if (essay?.content) {
-        return extractMessageText(essay.content) || null;
-      }
-
-      return null;
-    } catch (err) {
-      runtime.log?.(`[tlon] Failed to fetch cited post: ${String(err)}`);
-      return null;
-    }
-  };
-
-  const resolveAllCites = async (content: unknown): Promise<string> => {
-    if (!Array.isArray(content)) {
-      return "";
-    }
-
-    const resolved: string[] = [];
-    for (const verse of content) {
-      const block = asRecord(asRecord(verse)?.block);
-      const chan = asRecord(asRecord(block?.cite)?.chan);
-      const nest = readStringField(chan, "nest");
-      const whereMatch = readStringField(chan, "where")?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
-      const postId = whereMatch?.[2];
-      if (!nest || !postId) {
-        continue;
-      }
-      const text = await resolveCiteContent(nest, postId);
+      const text = essay?.content ? extractMessageText(essay.content) : "";
       if (text) {
         resolved.push(`> ${whereMatch?.[1] || "unknown"} wrote: ${text}`);
       }
+    } catch (err) {
+      runtime.log?.(`[tlon] Failed to fetch cited post: ${String(err)}`);
     }
-
-    return resolved.length > 0 ? `${resolved.join("\n")}\n\n` : "";
-  };
-
-  return {
-    resolveAllCites,
-  };
+  }
+  return resolved.length > 0 ? `${resolved.join("\n")}\n\n` : "";
 }
