@@ -69,6 +69,11 @@ export async function readSessionTranscriptAnchorsAsync(
     entryIds: [...selection.entryIds],
     afterSeq: selection.afterSeq,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
+    replayValidation: selection.replayValidation && { ...selection.replayValidation },
+  };
+  const empty: SessionTranscriptAnchorFacts = {
+    anchors: [],
+    ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();
   if (
@@ -82,7 +87,7 @@ export async function readSessionTranscriptAnchorsAsync(
       ? readOpenClawAgentDatabase(database, (reader) =>
           readSessionTranscriptAnchorFactsInDatabase(reader, resolved, request),
         ).value
-      : { anchors: [] };
+      : empty;
     onRead?.(facts);
     return facts;
   }
@@ -109,14 +114,14 @@ export async function readSessionTranscriptAnchorsAsync(
     assertCurrent();
     if (!identity) {
       if (!readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
-        onRead?.({ anchors: [] });
-        return { anchors: [] };
+        onRead?.(empty);
+        return empty;
       }
       throw new Error("Transcript anchors changed their captured database owner");
     }
     if (!identity.key.startsWith("file:")) {
-      onRead?.({ anchors: [] });
-      return { anchors: [] };
+      onRead?.(empty);
+      return empty;
     }
     return withSessionHistoryWorkerDatabase(
       { ...options, requestedPath: storePath },

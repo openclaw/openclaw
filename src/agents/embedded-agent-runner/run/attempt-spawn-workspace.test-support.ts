@@ -818,7 +818,7 @@ type MutableSession = {
   [agentSessionSetContextReplacementHook]: (
     callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
   ) => void;
-  [agentSessionSetPromptPreparation]: (prepare: (() => Promise<void>) | undefined) => void;
+  [agentSessionSetPromptPreparation]: AgentSession[typeof agentSessionSetPromptPreparation];
 };
 
 export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {
@@ -961,7 +961,7 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
-  let promptPreparation: (() => Promise<void>) | undefined;
+  let promptPreparation: Parameters<AgentSession[typeof agentSessionSetPromptPreparation]>[0];
   let promptPreparationInstalled = false;
   let pendingPrompt:
     | {
@@ -1065,13 +1065,43 @@ export function createDefaultEmbeddedSession(params?: {
       const prompt = session.prompt;
       session.prompt = async (...args) => {
         const currentPreparation = promptPreparation;
-        if (currentPreparation) {
-          await currentPreparation();
+        if (!currentPreparation) {
+          return prompt(...args);
+        }
+        const admit = await currentPreparation();
+        const assertCurrent = () => {
           if (currentPreparation !== promptPreparation) {
             throw new Error("Session prompt preparation is stale after replacement or disposal.");
           }
+        };
+        assertCurrent();
+        let running: Promise<PromiseSettledResult<void>> | undefined;
+        const start = (commit?: () => void) => {
+          assertCurrent();
+          commit?.();
+          assertCurrent();
+          running = prompt(...args).then(
+            (value) => ({ status: "fulfilled", value }),
+            (reason: unknown) => ({ status: "rejected", reason }),
+          );
+        };
+        try {
+          if (admit) {
+            await admit(start);
+          } else {
+            start();
+          }
+        } catch (error) {
+          await running;
+          throw error;
         }
-        return prompt(...args);
+        if (!running) {
+          throw new Error("Session prompt admission did not start the agent loop.");
+        }
+        const result = await running;
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
       };
     },
   };
