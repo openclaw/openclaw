@@ -1,25 +1,18 @@
-import type {
-  BindingTargetKind,
-  SessionBindingRecord,
+import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import type { SessionBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import {
+  projectThreadBindingRecord,
+  resolveThreadBindingLifecycle,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
-import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 type MatrixThreadBindingTargetKind = "subagent" | "acp";
 
-export type MatrixThreadBindingRecord = {
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  targetKind: MatrixThreadBindingTargetKind;
-  targetSessionKey: string;
-  agentId?: string;
-  label?: string;
-  boundBy?: string;
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-};
+export type MatrixThreadBindingRecord =
+  AccountScopedConversationBindingRecord<MatrixThreadBindingTargetKind> & {
+    parentConversationId?: string;
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+  };
 
 export type MatrixThreadBindingManager = {
   accountId: string;
@@ -60,14 +53,6 @@ export function resolveBindingKey(params: {
   return `${params.accountId}:${params.parentConversationId?.trim() || "-"}:${params.conversationId}`;
 }
 
-function toSessionBindingTargetKind(raw: MatrixThreadBindingTargetKind): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-export function toMatrixBindingTargetKind(raw: BindingTargetKind): MatrixThreadBindingTargetKind {
-  return raw === "subagent" ? "subagent" : "acp";
-}
-
 export function toSessionBindingRecord(
   record: MatrixThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
@@ -80,28 +65,16 @@ export function toSessionBindingRecord(
   const idleTimeoutMs =
     typeof record.idleTimeoutMs === "number" ? record.idleTimeoutMs : defaults.idleTimeoutMs;
   const maxAgeMs = typeof record.maxAgeMs === "number" ? record.maxAgeMs : defaults.maxAgeMs;
-  return {
-    bindingId: resolveBindingKey(record),
-    targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
+  return projectThreadBindingRecord(record, {
     conversation: {
       channel: "matrix",
-      accountId: record.accountId,
       conversationId: record.conversationId,
       parentConversationId: record.parentConversationId,
     },
-    status: "active",
-    boundAt: record.boundAt,
-    expiresAt: lifecycle.expiresAt,
-    metadata: {
-      agentId: record.agentId,
-      label: record.label,
-      boundBy: record.boundBy,
-      lastActivityAt: record.lastActivityAt,
-      idleTimeoutMs,
-      maxAgeMs,
-    },
-  };
+    bindingId: resolveBindingKey(record),
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+    lifecycle: { ...lifecycle, idleTimeoutMs, maxAgeMs },
+  });
 }
 
 export function setBindingRecord(record: MatrixThreadBindingRecord): void {
