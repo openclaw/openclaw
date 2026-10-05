@@ -85,6 +85,11 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       text: "Caption ![one](https://x.test/one.png) ![two](https://x.test/two.png)",
       extractMarkdownImages: true,
     },
+    {
+      name: "multiline Markdown images",
+      text: "Caption ![one](\nhttps://x.test/one.png\n) ![two](\nhttps://x.test/two.png\n)",
+      extractMarkdownImages: true,
+    },
   ])("merges every explicit attachment and extracted $name in source order", (testCase) => {
     const plan = createOutboundPayloadPlan(
       [
