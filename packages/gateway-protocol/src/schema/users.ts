@@ -114,7 +114,18 @@ export type UsersPersonalFileGetResult = Static<typeof UsersPersonalFileGetResul
 export type UsersPersonalFileSetResult = Static<typeof UsersPersonalFileSetResultSchema>;
 
 export const UsersSelfParamsSchema = closedObject({});
-export const UsersSelfResultSchema = closedObject({ profile: UserProfileSchema });
+export const UsersSelfResultSchema = closedObject({
+  profile: UserProfileSchema,
+  authenticatedGitHubIdentity: Type.Optional(
+    closedObject({
+      host: Type.String({ minLength: 1, maxLength: 253 }),
+      accountId: Type.Integer({ minimum: 1 }),
+      login: Type.String({ minLength: 1, maxLength: 100 }),
+      profileUrl: NonEmptyString,
+      gitCoauthorEligible: Type.Optional(Type.Boolean()),
+    }),
+  ),
+});
 
 export const UsersLinkEmailParamsSchema = closedObject({
   email: Type.String({ minLength: 1, maxLength: 320 }),

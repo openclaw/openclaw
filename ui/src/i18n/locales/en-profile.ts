@@ -57,6 +57,8 @@ const enProfile = {
         "Adds this account's public GitHub noreply address to commits created from shared sessions. Turning it off affects future commits only.",
       gitCoauthorUnavailable:
         "Available after your GitHub-backed sign-in is verified. Refresh to retry.",
+      enterpriseGitCoauthorUnavailable:
+        "Git co-author credit is unavailable for this GitHub Enterprise account.",
       ownerGitCoauthorDescription:
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       avatarErrors: {

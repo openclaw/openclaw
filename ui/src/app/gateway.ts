@@ -55,7 +55,7 @@ export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
-  /** Raw history is captured only while subscribeEventLog has consumers. */
+  /** Safe request outcomes stay bounded in memory; raw history requires subscribeEventLog consumers. */
   readonly eventLog: readonly EventLogEntry[];
   /** Advances when the connection or authentication context retires diagnostic history. */
   readonly eventLogRevision: number;

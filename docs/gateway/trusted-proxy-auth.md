@@ -193,6 +193,10 @@ scopes, then applies an explicit `x-openclaw-scopes` connection cap.
 These grants are session-only. They do not create or update device pairing
 records and do not trigger device scope-upgrade requests. Token, password, and
 no-auth connections do not carry a verified identity and never receive a grant.
+Named roles can also grant connection-only write access to verified identities
+with `verifiedIdentityWrite`. The role assignment must be reconciled from current
+identity-provider entitlements, and the proxy scope header remains a cap. See
+[Operator scopes](/gateway/operator-scopes#named-operator-roles).
 
 ## Automatic device approval
 

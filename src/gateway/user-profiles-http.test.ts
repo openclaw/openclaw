@@ -31,6 +31,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar }));
+vi.mock("../agents/github-tool-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/github-tool-identity.js")>()),
+  resolveVerifiedSystemNativeGitHubAccount,
+}));
 
 vi.mock("./http-auth-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
@@ -110,6 +114,7 @@ describe("profile avatar HTTP endpoint", () => {
     profileFixture.mockReset();
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
+    resolveVerifiedSystemNativeGitHubAccount.mockReset();
     authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
       bindHttpResponseAuthority({}, res, () => true),
     );
@@ -552,6 +557,133 @@ describe("profile avatar HTTP endpoint", () => {
       expect(first.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
       expect(second.response.statusCode).toBe(404);
     }
+  });
+
+  it("proxies only the verified Factory account picture through the profile avatar route", async () => {
+    const principal = "github:microsoft.ghe.com:1358766";
+    const profileId = "profile-factory";
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+      },
+    });
+    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority(
+        {
+          authMethod: "trusted-proxy",
+          authenticatedUserId: principal,
+          authenticatedUserProfile: { profileId },
+        },
+        res,
+        () => true,
+      ),
+    );
+    avatarFixture.mockReturnValue(undefined);
+    profileFixture.mockReturnValue({
+      id: profileId,
+      displayName: principal,
+      emails: [principal],
+      hasAvatar: false,
+    });
+    resolveVerifiedSystemNativeGitHubAccount.mockResolvedValue({
+      accountId: 1358766,
+      login: "Galin-Iliev",
+      avatarUrl: "https://microsoft.ghe.com/avatars/u/1358766?token=fixture",
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([4, 5, 6]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    const res = response();
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      res.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+    expect(resolveVerifiedSystemNativeGitHubAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 1358766, host: "microsoft.ghe.com" }),
+    );
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://microsoft.ghe.com/avatars/u/1358766?token=fixture",
+      expect.objectContaining({ redirect: "error", signal: expect.any(AbortSignal) }),
+    );
+    expect(res.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({
+        "Content-Type": "image/png",
+        "Cache-Control": "private, max-age=0, must-revalidate",
+      }),
+    );
+    expect(res.end).toHaveBeenCalledWith(new Uint8Array([4, 5, 6]));
+
+    resolveVerifiedSystemNativeGitHubAccount.mockResolvedValue({
+      accountId: 1358766,
+      login: "Galin-Iliev",
+      avatarUrl: "https://evil.example/avatars/u/1358766",
+    });
+    fetchImpl.mockClear();
+    const rejected = response();
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      rejected.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(rejected.response.statusCode).toBe(502);
+  });
+
+  it("uses the trusted Factory account avatar without a native credential lookup", async () => {
+    const principal = "github:microsoft.ghe.com:101";
+    const profileId = "profile-factory";
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+      },
+    });
+    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority(
+        {
+          authMethod: "trusted-proxy",
+          authenticatedUserId: principal,
+          authenticatedUserProfile: { profileId },
+        },
+        res,
+        () => true,
+      ),
+    );
+    avatarFixture.mockReturnValue(undefined);
+    profileFixture.mockReturnValue({
+      id: profileId,
+      displayName: principal,
+      emails: [principal],
+      hasAvatar: false,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([4, 5, 6]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    const res = response();
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler", {
+        "x-factory-github-login": "first-admin",
+        "x-factory-github-avatar-url": "https://microsoft.ghe.com/avatars/u/101",
+      }),
+      res.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+    expect(resolveVerifiedSystemNativeGitHubAccount).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://microsoft.ghe.com/avatars/u/101",
+      expect.objectContaining({ redirect: "error" }),
+    );
+    expect(res.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
   });
 
   it.each([404, 503])(

@@ -18,6 +18,7 @@ import {
   resolveGatewayErrorDetailCode,
   type GatewayBrowserClientOptions,
   type GatewayEventListener,
+  type GatewayEventFrame,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
@@ -46,6 +47,7 @@ import {
   createGatewayEventLog,
   createGatewayMetadataObserver,
   createGatewayEventObserver,
+  createGatewayRequestTimingObserver,
   notifyGatewayObservers,
 } from "./gateway-observers.ts";
 import { readSuspensionPhase } from "./gateway-readiness.ts";
@@ -206,7 +208,7 @@ export function createApplicationGateway(
     persistConnectionSettings = true;
     settings = patchSettings(patch, { selectGateway });
   };
-  const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
+  const recordGatewayEvent = (event: GatewayEventFrame, retainWithoutSubscribers = false) => {
     const eventClient = client;
     if (
       (event.event === "plugins.changed" || event.event === "plugins.controlUi.changed") &&
@@ -278,10 +280,11 @@ export function createApplicationGateway(
       refreshSelfProfile();
     }
     // Snapshot observers can replace their client before this event reaches the log.
-    if (!isCurrentClient(eventClient) || eventLogListeners.size === 0) {
+    const captureLog = retainWithoutSubscribers || eventLogListeners.size > 0;
+    if (!isCurrentClient(eventClient) || !captureLog) {
       return;
     }
-    const entries = eventLog.record(event);
+    const entries = eventLog.record(event, retainWithoutSubscribers);
     const ownsEventLog = (current: readonly EventLogEntry[]) =>
       current === eventLog.entries && isCurrentClient(eventClient);
     notifyGatewayObservers(eventLogListeners, entries, "event", ownsEventLog);
@@ -388,6 +391,7 @@ export function createApplicationGateway(
     canvasSurface.stop();
     client?.stop();
 
+    const requestTimingRevision = connectionRevision;
     const nextClient = createClient({
       ...credentials.prepare(nextConnection, credentialsChanged, client),
       clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
@@ -501,7 +505,7 @@ export function createApplicationGateway(
             nextClient.instanceId,
           ),
         });
-        if (isCurrentClient(nextClient) && !snapshot.selfUser) {
+        if (isCurrentClient(nextClient) && selfProfile.needsRefresh()) {
           refreshSelfProfile();
         }
         canvasSurface.start(nextClient, canvasLeaseGeneration, canvasPluginSurfaceUrl ?? undefined);
@@ -607,6 +611,10 @@ export function createApplicationGateway(
           connect();
         }
       },
+      onRequestTiming: createGatewayRequestTimingObserver({
+        isAttached: () => client === nextClient && connectionRevision === requestTimingRevision,
+        record: (event) => recordGatewayEvent(event, true),
+      }),
       onEvent: createGatewayEventObserver({
         isAttached: () => client === nextClient,
         isCurrent: () => isCurrentClient(nextClient),
@@ -697,7 +705,7 @@ export function createApplicationGateway(
       return () => {
         eventLogListeners.delete(listener);
         if (eventLogListeners.size === 0) {
-          eventLog.clear();
+          eventLog.releaseSubscribers();
         }
       };
     },
@@ -708,7 +716,11 @@ export function createApplicationGateway(
         return;
       }
       selfProfile.invalidate();
-      setSnapshot({ selfUser: { ...snapshot.selfUser, ...patch } });
+      const updated = { ...snapshot.selfUser, ...patch };
+      if (snapshot.selfUser.authenticatedGitHubIdentity && "name" in patch) {
+        updated.name = patch.name?.trim() || snapshot.selfUser.authenticatedGitHubIdentity.login;
+      }
+      setSnapshot({ selfUser: updated });
     },
     ...createDeviceCredentialMethods({
       gatewayUrl: () => connection.gatewayUrl,

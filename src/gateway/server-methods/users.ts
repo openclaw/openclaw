@@ -139,7 +139,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     });
   },
   "users.self": async (options) => {
-    const { client, params, respond } = options;
+    const { client, context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
@@ -153,22 +153,78 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     try {
       let syncError: unknown;
+      let factoryIdentity: { accountId: number; login: string; avatarUrl?: string } | undefined;
       if (client.authenticatedGitHubIdentitySync) {
         try {
-          await client.authenticatedGitHubIdentitySync();
+          factoryIdentity = (await client.authenticatedGitHubIdentitySync()).factory;
         } catch (error) {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
           syncError = error;
         }
       }
-      const profile = await prepareAuthenticatedProfile(options);
-      profile.assertCurrent();
-      const profileId = profile.profileId;
+      const requester = await prepareAuthenticatedProfile(options);
+      requester.assertCurrent();
+      const profileId = requester.profileId;
       if (!profileId) {
         respond(false, undefined, authenticatedProfileUnavailableError(syncError));
         return;
       }
-      respond(true, { profile: getUserProfileListItem(profileId) });
+      const config = context.getRuntimeConfig();
+      const accountId = client.authenticatedFactoryGitHubAccountId;
+      const verified =
+        accountId &&
+        config.gateway?.auth?.mode === "trusted-proxy" &&
+        config.gateway.auth.trustedProxy?.userHeader?.toLowerCase() === "x-factory-principal"
+          ? factoryIdentity?.accountId === accountId
+            ? factoryIdentity
+            : await resolveVerifiedSystemNativeGitHubAccount({
+                config,
+                sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
+                accountId,
+                host: "microsoft.ghe.com",
+              }).catch(() => null)
+          : null;
+      requester.assertCurrent();
+      if (client.authenticatedFactoryGitHubAccountId !== accountId) {
+        throw new Error("Gateway requester GitHub identity changed");
+      }
+      const factoryPrincipal = accountId ? `github:microsoft.ghe.com:${accountId}` : null;
+      const coauthorIdentity = verified
+        ? await resolveFactoryGitHubCoauthorEligibility(profileId)
+        : undefined;
+      const profile = await readCanonicalUserProfileListItem(profileId);
+      requester.assertCurrent();
+      if (client.authenticatedFactoryGitHubAccountId !== accountId) {
+        throw new Error("Gateway requester GitHub identity changed");
+      }
+      const ownsFactoryAlias =
+        factoryPrincipal !== null && profile.emails.includes(factoryPrincipal);
+      respond(true, {
+        profile: ownsFactoryAlias
+          ? {
+              ...profile,
+              displayName:
+                profile.displayName === factoryPrincipal
+                  ? (verified?.login ?? null)
+                  : profile.displayName,
+              emails: profile.emails.filter((email) => email !== factoryPrincipal),
+            }
+          : profile,
+        ...(verified
+          ? {
+              authenticatedGitHubIdentity: {
+                host: "microsoft.ghe.com",
+                accountId: verified.accountId,
+                login: verified.login,
+                profileUrl: `https://microsoft.ghe.com/${encodeURIComponent(verified.login)}`,
+                gitCoauthorEligible:
+                  ownsFactoryAlias &&
+                  coauthorIdentity?.accountId === verified.accountId &&
+                  profile.emails.includes(coauthorIdentity.verifiedEmail),
+              },
+            }
+          : {}),
+      });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

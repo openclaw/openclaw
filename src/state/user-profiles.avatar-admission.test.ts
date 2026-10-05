@@ -166,6 +166,37 @@ function adoptAvatar(profileId: string) {
     fetchedAvatar(),
   );
 }
+it("refuses provider avatar commit when connection authority expires after fetch", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "avatar-connection-admission-",
+  });
+  try {
+    const profile = ensureProfileForEmail("connection@example.test");
+    let current = true;
+    boundary.beforeOperation = () => {
+      current = false;
+    };
+    await expect(
+      adoptTailscaleProfileAvatar(
+        profile.id,
+        "https://avatars.example.test/p",
+        {},
+        {
+          ...fetchedAvatar(),
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("synthetic connection authority expired");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("connection authority expired");
+    expect(getProfileAvatar(profile.id)).toBeUndefined();
+  } finally {
+    await state.cleanup();
+  }
+});
 
 it("checks original source identity before publishing an acknowledged avatar receipt", async () => {
   const state = await createOpenClawTestState({

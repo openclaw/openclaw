@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   UserProfile,
+  UsersSelfResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
@@ -69,6 +70,7 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   @state() private selfUser: AuthenticatedUser | null = null;
   @state() private ownProfile: UserProfile | null = null;
+  @state() private authenticatedGitHubIdentity: UsersSelfResult["authenticatedGitHubIdentity"];
   @state() private displayName = "";
   @state() private gitCoauthorEnabled = true;
   @state() private identityLoading = false;
@@ -187,12 +189,16 @@ export class ProfilePage extends OpenClawLightDomElement {
         return;
       }
       this.ownProfile = profile;
+      this.authenticatedGitHubIdentity =
+        profile && this.context.gateway.snapshot.selfUser?.id === profile.id
+          ? this.context.gateway.snapshot.selfUser.authenticatedGitHubIdentity
+          : undefined;
       if (!profile) {
         return;
       }
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
-      this.gitCoauthorEnabled = true;
-      if (profile.githubIdentity) {
+      this.gitCoauthorEnabled = !this.authenticatedGitHubIdentity;
+      if (profile.githubIdentity || this.authenticatedGitHubIdentity?.gitCoauthorEligible) {
         const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
         if (requestId !== this.identityRequestId) {
           return;
@@ -358,6 +364,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       config: this.context.config,
       profile: this.ownProfile,
       canWrite: this.canWrite,
+      authenticatedGitHubIdentity: this.authenticatedGitHubIdentity,
       avatarUrl,
       displayName: this.displayName,
       gitCoauthorEnabled: this.gitCoauthorEnabled,
@@ -443,9 +450,23 @@ export class ProfilePage extends OpenClawLightDomElement {
     const list = this.context.agents.state.agentsList;
     const agentId = list?.defaultId ?? "main";
     const row = list?.agents.find((agent) => agent.id === agentId) ?? { id: agentId };
+    const verified = this.authenticatedGitHubIdentity;
+    const principal = verified ? `github:${verified.host}:${verified.accountId}` : null;
+    const user = this.selfUser;
+    const displayUser =
+      user && verified && principal
+        ? {
+            ...user,
+            name:
+              user.name === principal
+                ? (this.ownProfile?.displayName ?? verified.login)
+                : user.name,
+            email: user.email === principal ? `@${verified.login}` : user.email,
+          }
+        : user;
     return renderProfileHero({
       row,
-      user: this.selfUser,
+      user: displayUser,
       identity: this.context.agentIdentity.get(agentId),
       avatarLoader: this.heroAvatarLoader,
     });

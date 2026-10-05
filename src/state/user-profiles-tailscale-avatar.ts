@@ -11,6 +11,7 @@ const TAILSCALE_AVATAR_MAX_REDIRECTS = 3;
 export type TailscaleAvatarFetchOptions = {
   fetchImpl?: FetchLike;
   timeoutMs?: number;
+  assertCurrent?: () => void;
 };
 
 export async function fetchTailscaleAvatar(
@@ -25,9 +26,11 @@ export async function fetchTailscaleAvatar(
       import("../media/fetch.js"),
       import("file-type"),
     ]);
+    options.assertCurrent?.();
     const loaded = await readRemoteMediaBuffer({
       url,
       fetchImpl,
+      beforeRequest: options.assertCurrent,
       maxBytes: MAX_USER_PROFILE_AVATAR_BYTES,
       maxRedirects: TAILSCALE_AVATAR_MAX_REDIRECTS,
       timeoutMs,

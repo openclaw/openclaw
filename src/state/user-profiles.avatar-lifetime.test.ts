@@ -114,3 +114,53 @@ it.each([false, true])(
     }
   },
 );
+
+it.each(["expired", "custom"] as const)(
+  "keeps a fetched provider avatar from replacing current custody (%s)",
+  async (outcome) => {
+    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-avatar-guard-") } };
+    const profile = ensureProfileForEmail("avatar-guard@example.test", options);
+    const entered = createDeferredCore();
+    const response = createDeferredCore<Response>();
+    let current = true;
+    const pending = adoptTailscaleProfileAvatar(
+      profile.id,
+      "https://avatars.example.test/profile",
+      options,
+      {
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("synthetic connection authority expired");
+          }
+        },
+        fetchImpl: vi.fn(async () => {
+          entered.resolve();
+          return response.promise;
+        }),
+      },
+    );
+    try {
+      await entered.promise;
+      const custom = new Uint8Array([1, 2, 3]);
+      if (outcome === "custom") {
+        expect(setAvatar(profile.id, custom, "image/png", options).ok).toBe(true);
+      } else {
+        current = false;
+      }
+      const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
+      response.resolve(
+        new Response(Uint8Array.from(bytes).buffer, { headers: { "content-type": "image/png" } }),
+      );
+      if (outcome === "expired") {
+        await expect(pending).rejects.toThrow("connection authority expired");
+        expect(getProfileAvatar(profile.id, options)).toBeUndefined();
+      } else {
+        await pending;
+        expect(getProfileAvatar(profile.id, options)?.bytes).toEqual(custom);
+      }
+    } finally {
+      response.resolve(new Response("unavailable", { status: 503 }));
+      await Promise.allSettled([pending]);
+    }
+  },
+);

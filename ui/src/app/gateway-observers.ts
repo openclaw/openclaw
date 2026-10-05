@@ -1,3 +1,4 @@
+import type { GatewayProtocolRequestTiming } from "@openclaw/gateway-client/browser";
 import type {
   ModelCatalogTarget,
   ModelsSnapshotEvent,
@@ -20,6 +21,49 @@ import {
 } from "../lib/sessions/session-key.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
+
+export function createGatewayRequestTimingObserver(options: {
+  isAttached: () => boolean;
+  record: (event: GatewayEventFrame) => void;
+}): (timing: GatewayProtocolRequestTiming) => void {
+  return (timing) => {
+    if (
+      !options.isAttached() ||
+      !["chat.send", "sessions.github.options", "sessions.github.status"].includes(timing.method)
+    ) {
+      return;
+    }
+    const errorCode = timing.errorCode;
+    options.record({
+      type: "event",
+      event: "gateway.request",
+      payload: {
+        requestId: timing.id,
+        method: timing.method,
+        ok: timing.ok,
+        startedAtMs: timing.startedAtMs,
+        endedAtMs: timing.endedAtMs,
+        durationMs: timing.durationMs,
+        ...(errorCode
+          ? {
+              errorCode: [
+                "INVALID_REQUEST",
+                "UNAVAILABLE",
+                "FORBIDDEN",
+                "NOT_FOUND",
+                "CLIENT_TIMEOUT",
+                "CLIENT_ABORTED",
+                "CLIENT_SEND_ERROR",
+                "CLIENT_CLOSED",
+              ].includes(errorCode)
+                ? errorCode
+                : "unclassified",
+            }
+          : {}),
+      },
+    });
+  };
+}
 
 export function createGatewayEventObserver(options: {
   isAttached: () => boolean;
@@ -67,6 +111,7 @@ export function notifyGatewayObservers<T>(
 
 export function createGatewayEventLog() {
   let entries: EventLogEntry[] = [];
+  const retainedRequestOutcomes = new WeakSet<EventLogEntry>();
   let revision = 0;
   let recoveryScope: string | null = null;
   const retire = () => {
@@ -81,8 +126,8 @@ export function createGatewayEventLog() {
     get revision() {
       return revision;
     },
-    clear() {
-      entries = [];
+    releaseSubscribers() {
+      entries = entries.filter((entry) => retainedRequestOutcomes.has(entry));
     },
     resetConnection() {
       recoveryScope = null;
@@ -94,11 +139,13 @@ export function createGatewayEventLog() {
       recoveryScope = nextScope;
       return changed ? retire() : null;
     },
-    record(event: GatewayEventFrame) {
-      entries = [{ ts: Date.now(), event: event.event, payload: event.payload }, ...entries].slice(
-        0,
-        250,
-      );
+    record(event: GatewayEventFrame, retainWithoutSubscribers = false) {
+      const entry = { ts: Date.now(), event: event.event, payload: event.payload };
+      // Only local allowlisted projections may survive without subscribers, never a named wire event.
+      if (retainWithoutSubscribers) {
+        retainedRequestOutcomes.add(entry);
+      }
+      entries = [entry, ...entries].slice(0, 250);
       return entries;
     },
   };

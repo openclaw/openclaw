@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import {
@@ -23,7 +22,6 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import type { HealthSummary } from "../../health/types.js";
-import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import {
   HEALTH_REFRESH_INTERVAL_MS,
   MAX_PREAUTH_PAYLOAD_BYTES,
@@ -38,7 +36,6 @@ import {
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
-import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
@@ -53,7 +50,6 @@ import {
   createConnectedTestClient,
   createHealthSummary,
   createSetCloseCauseMock,
-  createTestAgentRuntimeIdentityLease,
   DEVICE_TOKEN_MUTATION_PARAMS,
   localUserIngressFor,
   useGatewayTestConfig,
@@ -61,17 +57,12 @@ import {
   withGatewayTestState,
   type CloseGatewayConnection,
 } from "./message-handler.post-connect-health.test-support.js";
-
-const TEST_CONNECT_PARAMS = {
-  ...BACKEND_CONNECT_PARAMS,
-  client: { id: "test", version: "dev", platform: "test", mode: "test" },
-};
-
-const REMOTE_BACKEND_OPTIONS = {
-  requestHost: "gateway.example.com:18789",
-  remoteAddr: "203.0.113.50",
-  resolvedAuth: { mode: "token", token: "gateway-token", allowTailscale: false },
-} as const;
+import {
+  registerHandshakePolicyTest,
+  registerRuntimeIdentityTokenTests,
+  TEST_CONNECT_PARAMS,
+  REMOTE_BACKEND_OPTIONS,
+} from "./message-handler.runtime-identity.test-cases.js";
 
 const {
   buildGatewaySnapshotMock,
@@ -143,7 +134,8 @@ vi.mock("../../../infra/host-account-name.js", () => ({
   resolveHostAccountName: vi.fn(async () => "Gateway Person"),
 }));
 
-vi.mock("../../github-user-identity.js", () => ({
+vi.mock("../../github-user-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../github-user-identity.js")>()),
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
 }));
 
@@ -783,6 +775,83 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       );
     });
   });
+
+  it.each(["live", "closed"] as const)(
+    "adopts the verified Factory avatar with connection lifetime authority (%s)",
+    async (state) => {
+      await withGatewayTestState({ label: "gateway-factory-avatar" }, async () => {
+        const principal = "github:microsoft.ghe.com:101";
+        const profile = ensureProfileForEmail(principal);
+        const avatarUrl = "https://microsoft.ghe.com/avatars/u/101?size=96";
+        createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(async () => ({
+          profileId: profile.id,
+          updatedAt: profile.updatedAt,
+          factory: { accountId: 101, login: "alice", avatarUrl },
+        }));
+        const entered = createGatewayHarnessGate();
+        const release = createGatewayHarnessGate();
+        let assertCurrent: (() => void) | undefined;
+        adoptTailscaleProfileAvatarMock.mockImplementationOnce(
+          async (_id, _url, _options, fetchOptions) => {
+            assertCurrent = fetchOptions?.assertCurrent;
+            entered.resolve();
+            await release.promise;
+            assertCurrent?.();
+            return profile;
+          },
+        );
+        resolveConnectAuthStateMock.mockResolvedValueOnce({
+          authResult: { ok: true, method: "trusted-proxy", user: principal },
+          authOk: true,
+          authMethod: "trusted-proxy",
+          sharedAuthOk: true,
+        });
+        useGatewayTestConfig(loadConfigMock, () => ({
+          gateway: {
+            auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+            controlUi: { allowedOrigins: ["http://127.0.0.1:19001"] },
+          },
+        }));
+        let closed = false;
+        const harness = attachGatewayHarness({
+          connId: "factory-avatar",
+          connectNonce: "factory-avatar",
+          isClosed: () => closed,
+          resolvedAuth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: { userHeader: "x-factory-principal" },
+          },
+          headers: { "x-factory-principal": principal },
+        });
+        harness.sendConnect("factory-avatar", {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+          role: "operator",
+          caps: [],
+        });
+        try {
+          await harness.whenAttached;
+          await entered.promise;
+          expect(adoptTailscaleProfileAvatarMock).toHaveBeenCalledWith(
+            profile.id,
+            avatarUrl,
+            {},
+            { assertCurrent: expect.any(Function) },
+          );
+          expect(assertCurrent).toBeTypeOf("function");
+          expect(() => assertCurrent!()).not.toThrow();
+          closed = state === "closed";
+          if (closed) {
+            expect(() => assertCurrent!()).toThrow("authority expired");
+          }
+        } finally {
+          release.resolve();
+        }
+      });
+    },
+  );
 
   it("registers a verified profile before detached Tailscale avatar adoption completes", async () => {
     await withGatewayTestState({ label: "gateway-tailscale-avatar-detached" }, async () => {
@@ -1696,118 +1765,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     },
   );
 
-  it("binds handshake policy to the verified login rather than unrelated identity grants", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const preparationStarted = createDeferred();
-      const releasePreparation = createGatewayHarnessGate();
-      prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
-        preparationStarted.resolve();
-        await releasePreparation.promise;
-        return true;
-      });
-      const harness = connectTrustedProxyUser(
-        loadConfigMock,
-        "identity-policy",
-        { id: "openclaw-control-ui" },
-        ["operator.read"],
-      );
-      await preparationStarted.promise;
-      const config = structuredClone(loadConfigMock());
-      const next: OpenClawConfig = {
-        ...config,
-        gateway: {
-          ...config.gateway,
-          auth: { ...config.gateway.auth, mode: "trusted-proxy" },
-        },
-      };
-      const scopes = next.gateway!.auth!.identityScopes!;
-      scopes["other@example.test"] = ["operator.admin"];
-      useGatewayTestConfig(loadConfigMock, () => next as ReturnType<typeof loadConfigMock>);
-      releasePreparation.resolve();
-      await harness.whenAttached;
-      const client = harness.client as GatewayWsClient;
-      expect(client.authenticatedUserId).toBe("alice@example.com");
-      expect(client.connect.scopes).toEqual(["operator.read"]);
-      disconnectDisallowedGatewayPolicyClients([client], next);
-      expect(client.invalidated).not.toBe(true);
-      const removed = structuredClone(next);
-      delete removed.gateway!.auth!.identityScopes!["alice@example.com"];
-      disconnectDisallowedGatewayPolicyClients([client], removed);
-      expect(client.invalidated).toBe(true);
-    });
-  });
+  registerHandshakePolicyTest({ loadConfigMock, prepareGatewayNodeConnectMock });
 
-  it.each(["missing", "local", "remote"] as const)(
-    "attests approval runtime authority for a %s token",
-    async (kind) => {
-      const harness = attachGatewayHarness({
-        connId: "approval-runtime",
-        connectNonce: "approval-runtime",
-        ...(kind === "remote" ? REMOTE_BACKEND_OPTIONS : {}),
-      });
-      harness.sendConnect("connect", {
-        ...BACKEND_CONNECT_PARAMS,
-        scopes: ["operator.approvals"],
-        auth: {
-          ...(kind === "remote" ? { token: "gateway-token" } : {}),
-          ...(kind === "missing"
-            ? {}
-            : { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }),
-        },
-      });
-      await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
-      const client = harness.client as GatewayWsClient;
-      if (kind === "missing") {
-        expect(client.connect.scopes).toEqual(["operator.approvals"]);
-      }
-      if (kind === "local") {
-        expect(client.internal?.approvalRuntime).toBe(true);
-      } else {
-        expect(client.internal?.approvalRuntime).not.toBe(true);
-      }
-    },
-  );
-
-  it.each([
-    { kind: "local", error: undefined },
-    {
-      kind: "remote",
-      error: "agent runtime identity token is only accepted from local backend gateway clients",
-    },
-    { kind: "invalid", error: "invalid agent runtime identity token" },
-  ] as const)("attests agent runtime identity for a $kind token", async ({ kind, error }) => {
-    const close = createCloseMock();
-    const harness = attachGatewayHarness({
-      connId: "agent-runtime",
-      connectNonce: "agent-runtime",
-      ...(kind === "remote" ? REMOTE_BACKEND_OPTIONS : {}),
-      close,
-    });
-    const identityLease =
-      kind === "invalid" ? undefined : await createTestAgentRuntimeIdentityLease();
-    try {
-      harness.sendConnect("connect", {
-        ...BACKEND_CONNECT_PARAMS,
-        scopes: ["operator.write"],
-        auth: {
-          ...(kind === "remote" ? { token: "gateway-token" } : {}),
-          agentRuntimeIdentityToken: identityLease?.token ?? "not-a-valid-token",
-        },
-      });
-      if (error) {
-        await waitForFast(() => expect(close).toHaveBeenCalledWith(1008, error));
-        expect(harness.client).toBeNull();
-      } else {
-        await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
-        expect((harness.client as GatewayWsClient).internal?.agentRuntimeIdentity).toMatchObject({
-          agentId: "ops",
-          sessionKey: "agent:ops:telegram:direct:alice",
-        });
-      }
-    } finally {
-      identityLease?.close();
-    }
-  });
+  registerRuntimeIdentityTokenTests();
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

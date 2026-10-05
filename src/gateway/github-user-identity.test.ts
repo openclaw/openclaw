@@ -14,15 +14,205 @@ import {
 } from "../state/user-profile-writes.worker.js";
 import {
   ensureProfileForTailscaleIdentity,
+  ensureFactoryGitHubProfile,
+  ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { ControlUiGitHubError } from "./github-public-api.js";
-import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
+import {
+  createAuthenticatedGitHubIdentitySync,
+  resolveTrustedFactoryGitHubAccountId,
+  resolveTrustedFactoryGitHubMetadata,
+} from "./github-user-identity.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+
+const reader = vi.hoisted(() => ({ active: false }));
+vi.mock("../process/gateway-work-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/gateway-work-admission.js")>()),
+  isGatewayReadonlyWork: () => reader.active,
+}));
+
+it("attests a Factory account id only from the admitted trusted-proxy principal", () => {
+  const authConfig = {
+    mode: "trusted-proxy" as const,
+    trustedProxy: { userHeader: "x-factory-principal" },
+  };
+  const authResult = {
+    ok: true as const,
+    method: "trusted-proxy" as const,
+    user: "github:microsoft.ghe.com:101",
+  };
+  expect(resolveTrustedFactoryGitHubAccountId({ authConfig, authResult })).toBe(101);
+  expect(
+    resolveTrustedFactoryGitHubAccountId({
+      authConfig,
+      authResult: { ...authResult, method: "password" },
+    }),
+  ).toBeUndefined();
+  expect(
+    resolveTrustedFactoryGitHubAccountId({
+      authConfig,
+      authResult: { ...authResult, user: "github:microsoft.ghe.com:101.evil" },
+    }),
+  ).toBeUndefined();
+  expect(
+    resolveTrustedFactoryGitHubAccountId({
+      authConfig: { ...authConfig, trustedProxy: { userHeader: "x-other" } },
+      authResult,
+    }),
+  ).toBeUndefined();
+});
+
+it("accepts bounded Factory metadata only beside its verified principal", () => {
+  const authConfig = {
+    mode: "trusted-proxy" as const,
+    trustedProxy: { userHeader: "x-factory-principal" },
+  };
+  const authResult = {
+    ok: true as const,
+    method: "trusted-proxy" as const,
+    user: "github:microsoft.ghe.com:101",
+  };
+  const requestHeaders = {
+    "x-factory-github-login": "first-admin",
+    "x-factory-github-name": "First Admin",
+    "x-factory-github-email": "first-admin@example.test",
+    "x-factory-github-avatar-url": "https://microsoft.ghe.com/avatars/u/101",
+  };
+  expect(resolveTrustedFactoryGitHubMetadata({ authConfig, authResult, requestHeaders })).toEqual({
+    accountId: 101,
+    email: "first-admin@example.test",
+    login: "first-admin",
+    name: "First Admin",
+    avatarUrl: "https://microsoft.ghe.com/avatars/u/101",
+  });
+  expect(
+    resolveTrustedFactoryGitHubMetadata({
+      authConfig,
+      authResult: { ...authResult, method: "password" },
+      requestHeaders,
+    }),
+  ).toBeUndefined();
+  expect(
+    resolveTrustedFactoryGitHubMetadata({
+      authConfig,
+      authResult: { ...authResult, user: "github:microsoft.ghe.com:202" },
+      requestHeaders,
+    })?.avatarUrl,
+  ).toBeUndefined();
+  expect(
+    resolveTrustedFactoryGitHubMetadata({
+      authConfig,
+      authResult,
+      requestHeaders: { ...requestHeaders, "x-factory-github-login": "not a login" },
+    }),
+  ).toBeUndefined();
+});
+
+it("adopts each Factory account's name without changing another profile or a chosen name", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = {
+      mode: "trusted-proxy" as const,
+      trustedProxy: { userHeader: "x-factory-principal" },
+    };
+    const sync = (id: number, login: string, name: string) =>
+      createAuthenticatedGitHubIdentitySync({
+        authResult: { ok: true, method: "trusted-proxy", user: `github:microsoft.ghe.com:${id}` },
+        authConfig: config,
+        requestHeaders: {
+          "x-factory-github-login": login,
+          "x-factory-github-name": name,
+          "x-factory-github-email": `${login}@example.test`,
+          "x-factory-github-avatar-url": `https://microsoft.ghe.com/avatars/u/${id}`,
+        },
+      })!();
+    const first = await sync(101, "first-admin", "First Admin");
+    const second = await sync(202, "second-admin", "Second Admin");
+    expect(first.factory?.accountId).toBe(101);
+    expect(second.factory?.accountId).toBe(202);
+    expect(first.profileId).not.toBe(second.profileId);
+    expect(getUserProfileListItem(first.profileId).emails).toContain("first-admin@example.test");
+    expect(getUserProfileListItem(second.profileId).emails).toContain("second-admin@example.test");
+    expect(getUserProfileListItem(first.profileId).displayName).toBe("First Admin");
+    expect(getUserProfileListItem(second.profileId).displayName).toBe("Second Admin");
+    setDisplayName(first.profileId, "Chosen Name");
+    await sync(101, "renamed-first", "New GitHub Name");
+    expect(getUserProfileListItem(first.profileId).displayName).toBe("Chosen Name");
+    expect(getUserProfileListItem(second.profileId).displayName).toBe("Second Admin");
+  });
+});
+
+it("rejects malformed Factory email without inventing an alias", () => {
+  for (const email of [
+    "alice",
+    "a@b@c",
+    "a b@example.test",
+    "a@example.test,b@example.test",
+    ["a@b"],
+    "a@b\nInjected: yes",
+    "é@example.test",
+    "a".repeat(255) + "@b",
+  ]) {
+    const metadata = resolveTrustedFactoryGitHubMetadata({
+      authConfig: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+      authResult: { ok: true, method: "trusted-proxy", user: "github:microsoft.ghe.com:101" },
+      requestHeaders: { "x-factory-github-login": "alice", "x-factory-github-email": email },
+    });
+    expect(metadata?.email).toBeUndefined();
+  }
+});
+
+it("keeps a conflicting email, role and chosen name with their existing person", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const original = ensureProfileForEmail("existing@example.test");
+    setDisplayName(original.id, "Chosen Original");
+    setUserProfileRole(original.id, "admin");
+    const factory = ensureFactoryGitHubProfile("github:microsoft.ghe.com:101", "Factory User");
+    const before = getUserProfileListItem(original.id);
+    const sync = createAuthenticatedGitHubIdentitySync({
+      authConfig: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+      authResult: { ok: true, method: "trusted-proxy", user: "github:microsoft.ghe.com:101" },
+      requestHeaders: {
+        "x-factory-github-login": "alice",
+        "x-factory-github-email": " EXISTING@example.test ",
+      },
+    })!;
+    await expect(sync()).rejects.toThrow("already bound to another profile");
+    expect(getUserProfileListItem(original.id)).toEqual(before);
+    expect(getUserProfileListItem(factory.id)).toMatchObject({
+      emails: ["github:microsoft.ghe.com:101"],
+      mergedInto: null,
+    });
+  });
+});
+
+it("reads the frozen Factory profile without adopting changed provider metadata", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const principal = "github:microsoft.ghe.com:101";
+    const profile = ensureFactoryGitHubProfile(principal, "Frozen Name");
+    const before = getUserProfileListItem(profile.id);
+    reader.active = true;
+    try {
+      const sync = createAuthenticatedGitHubIdentitySync({
+        authConfig: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+        authResult: { ok: true, method: "trusted-proxy", user: principal },
+        requestHeaders: {
+          "x-factory-github-login": "alice",
+          "x-factory-github-name": "Changed Name",
+          "x-factory-github-email": "new@example.test",
+        },
+      })!;
+      await expect(sync()).resolves.toMatchObject({ profileId: profile.id });
+      expect(getUserProfileListItem(profile.id)).toEqual(before);
+    } finally {
+      reader.active = false;
+    }
+  });
+});
 
 function githubResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {

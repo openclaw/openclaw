@@ -202,6 +202,53 @@ describe("renderIdentitySection", () => {
     expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
 
+  it("shows the verified enterprise sign-in without granting public GitHub co-author credit", () => {
+    const container = document.createElement("div");
+    render(
+      renderIdentitySection(
+        createProps({
+          profile: { ...PROFILE, emails: [] },
+          authenticatedGitHubIdentity: {
+            login: "Galin-Iliev",
+            profileUrl: "https://microsoft.ghe.com/Galin-Iliev",
+          },
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector<HTMLAnchorElement>(".settings-account")?.href).toBe(
+      "https://microsoft.ghe.com/Galin-Iliev",
+    );
+    expect(container.textContent).toContain("Verified from your GitHub-backed sign-in");
+    expect(container.textContent).not.toContain("Refresh to retry");
+    expect(container.textContent).not.toContain("Linked emails");
+    expect(container.textContent).toContain(
+      "Git co-author credit is unavailable for this GitHub Enterprise account.",
+    );
+    expect(container.querySelector<HTMLElement>("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("enables the existing Enterprise consent switch only for verified eligibility", () => {
+    const container = document.createElement("div");
+    render(
+      renderIdentitySection(
+        createProps({
+          profile: { ...PROFILE, githubIdentity: null },
+          authenticatedGitHubIdentity: {
+            login: "enterprise-human",
+            profileUrl: "https://microsoft.ghe.com/enterprise-human",
+            gitCoauthorEligible: true,
+          },
+          gitCoauthorEnabled: false,
+        }),
+      ),
+      container,
+    );
+    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(toggle?.hasAttribute("disabled")).toBe(false);
+    expect(toggle?.checked).toBe(false);
+  });
+
   it("explains personal GitHub sign-in for the shared owner without email or retry rows", () => {
     const container = document.createElement("div");
     render(

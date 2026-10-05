@@ -47,6 +47,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   /** Accepted interaction on this exact connection, never copied from another client. */
   connectionLastActivityAt?: number;
   authenticatedUserId?: string;
+  /** Immutable GHE account id attested by the admitted Factory trusted proxy. */
+  authenticatedFactoryGitHubAccountId?: number;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;

@@ -165,6 +165,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and fails closed if the backend is unavailable.',
   "gateway.roles.definitions.*.agents":
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
+  "gateway.roles.definitions.*.workerProfiles":
+    "Optional exact Cloud worker profile IDs this role may dispatch its own sessions to. Missing or disabled profiles are unavailable, and profile management remains administrator-only.",
+  "gateway.roles.definitions.*.verifiedIdentityWrite":
+    "Grant operator.write only to a verified trusted-proxy or Tailscale identity with this current durable profile role. The grant is connection-only, does not upgrade device pairing, and remains capped by the proxy scope header and role scope ceiling.",
   "gateway.roles.definitions.*.modelPolicy":
     "Optional model ceiling for this role's requests and descendants. An empty object allows only the source agent's configured primary and fallback models; omitting the policy leaves model access unchanged. Model aliases resolve before enforcement, and denied models cannot be used by retries or fallbacks. With config reload enabled, changes confined to existing roles' model policies apply when committed without restarting permitted work. Other role changes hot-apply and reconnect clients with current authority.",
   "gateway.roles.definitions.*.modelPolicy.sourceAgent":

@@ -62,6 +62,9 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.roles.definitions.*.sessions.others": "Operator Role Access to Other Sessions",
   "gateway.roles.definitions.*.sandbox": "Operator Role Sandbox Isolation",
   "gateway.roles.definitions.*.agents": "Operator Role Allowed Agents",
+  "gateway.roles.definitions.*.workerProfiles": "Operator Role Cloud Worker Profiles",
+  "gateway.roles.definitions.*.verifiedIdentityWrite":
+    "Operator Role Verified Identity Write Grant",
   "gateway.roles.definitions.*.modelPolicy": "Operator Role Model Policy",
   "gateway.roles.definitions.*.modelPolicy.sourceAgent": "Operator Role Model Source Agent",
   "gateway.roles.definitions.*.modelPolicy.allow": "Operator Role Allowed Models",

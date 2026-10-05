@@ -269,6 +269,7 @@ export async function adoptTailscaleProfileAvatar(
   options: OpenClawStateDatabaseOptions = {},
   fetchOptions: TailscaleAvatarFetchOptions = {},
 ) {
+  fetchOptions.assertCurrent?.();
   const first = captureOpenClawStateWorkerContext({
     ...options,
     path: options.database?.path ?? options.path,
@@ -279,11 +280,13 @@ export async function adoptTailscaleProfileAvatar(
     type: "userProfiles.avatar.inspect",
     input: { profileId },
   });
+  fetchOptions.assertCurrent?.();
   const initial = requireAvatarProfile(before.profile, profileId);
   if (before.hasAvatar || !profilePic) {
     return initial;
   }
   const avatar = await fetchTailscaleAvatar(profilePic, fetchOptions);
+  fetchOptions.assertCurrent?.();
   // Fetching does not retain database admission; close/reopen preserves the selected path.
   const context = captureOpenClawStateWorkerContext({
     ...options,
@@ -322,6 +325,7 @@ export async function adoptTailscaleProfileAvatar(
             nativeLocations: [context.admission.databasePath],
             admission: createSqliteWorkerOperationAdmission((request, grant) => {
               context.admission.assertCurrent();
+              fetchOptions.assertCurrent?.();
               if (request.stage !== "transaction" || !isUserProfileAvatarAdmission(request.facts)) {
                 throw new Error("Unexpected profile avatar transaction admission");
               }

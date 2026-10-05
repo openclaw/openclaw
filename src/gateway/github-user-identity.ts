@@ -30,6 +30,7 @@ const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const GITHUB_IDENTITY_CACHE_MS = 15 * 60_000;
 const GITHUB_IDENTITY_CACHE_LIMIT = 200;
 const GITHUB_ETAG_MAX_LENGTH = 1_024;
+const FACTORY_GITHUB_PRINCIPAL = /^github:microsoft\.ghe\.com:([1-9][0-9]*)$/u;
 
 type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
 type ResolvedCloudflareAccessIdentity =

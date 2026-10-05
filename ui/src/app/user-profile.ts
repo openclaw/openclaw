@@ -1,6 +1,9 @@
+import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/index.ts";
 import type { PresenceEntry } from "../api/types.ts";
 
-export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
+export type AuthenticatedUser = NonNullable<PresenceEntry["user"]> & {
+  authenticatedGitHubIdentity?: UsersSelfResult["authenticatedGitHubIdentity"];
+};
 export type PresencePayload = { presence: readonly PresenceEntry[] };
 
 export function sameSelfUser(
@@ -12,7 +15,15 @@ export function sameSelfUser(
     left?.identity?.id === right?.identity?.id &&
     left?.email === right?.email &&
     left?.name === right?.name &&
-    left?.avatarUrl === right?.avatarUrl
+    left?.avatarUrl === right?.avatarUrl &&
+    left?.authenticatedGitHubIdentity?.host === right?.authenticatedGitHubIdentity?.host &&
+    left?.authenticatedGitHubIdentity?.accountId ===
+      right?.authenticatedGitHubIdentity?.accountId &&
+    left?.authenticatedGitHubIdentity?.login === right?.authenticatedGitHubIdentity?.login &&
+    left?.authenticatedGitHubIdentity?.profileUrl ===
+      right?.authenticatedGitHubIdentity?.profileUrl &&
+    left?.authenticatedGitHubIdentity?.gitCoauthorEligible ===
+      right?.authenticatedGitHubIdentity?.gitCoauthorEligible
   );
 }
 

@@ -102,6 +102,8 @@ type GatewayHttpRequestAuthCheckParams = Omit<GatewayHttpRequestAuthParams, "res
 export type AuthorizedControlUiReadRequest = AuthenticatedHttpUserProfile &
   Pick<AuthorizedGatewayHttpRequest, "hasCurrentClientAuthority" | "revalidate"> & {
     authMethod: NonNullable<GatewayAuthResult["method"]>;
+    /** Principal from this request's admitted auth result, never a caller projection. */
+    authenticatedUserId?: string;
     operatorScopes: string[];
   };
 
@@ -358,7 +360,12 @@ export async function authorizeControlUiReadRequestOrReply(
     return null;
   }
   return bindHttpResponseAuthority(
-    { authMethod, operatorScopes, ...authenticatedProfile },
+    {
+      authMethod,
+      authenticatedUserId: normalizeOptionalString(authResult.user),
+      operatorScopes,
+      ...authenticatedProfile,
+    },
     params.res,
     hasCurrentClientAuthority,
   );
@@ -527,6 +534,7 @@ export async function checkGatewayHttpRequestAuth(
     requestAuth: {
       hasCurrentClientAuthority: () =>
         hasCurrentClientAuthority() &&
+        authenticatedProfile.hasCurrentProfileAuthority?.() !== false &&
         hasCurrentGatewayOperatorAccess(authenticatedProfile.operatorAccessAuthority),
       authMethod: authResult.method,
       ...(authResult.user ? { user: authResult.user } : {}),

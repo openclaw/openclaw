@@ -39,6 +39,7 @@ export type GatewayClient = Pick<
   | "clientIp"
   | "pairedClientId"
   | "authenticatedUserId"
+  | "authenticatedFactoryGitHubAccountId"
   | "authenticatedUserIsTailscaleProvider"
   | "authenticatedGitHubIdentitySync"
   | "preparedSessionProfile"

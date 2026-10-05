@@ -23,6 +23,7 @@ import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileDir,
   resolveSystemGitHubIdentityStatus,
+  resolveVerifiedSystemNativeGitHubAccount,
 } from "./github-tool-identity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,6 +82,39 @@ describe("GitHub tool identity", () => {
       );
     });
     oauthMocks.inspect.mockReset().mockReturnValue({ state: "missing" });
+  });
+
+  it("projects only the native enterprise account matching a trusted immutable id", async () => {
+    processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) => {
+      if (argv[0] === "git") {
+        return commandResult();
+      }
+      if (argv.join(" ") === "gh auth token --hostname microsoft.ghe.com") {
+        return commandResult("native-token");
+      }
+      throw new Error("Unexpected credential subprocess");
+    });
+    const config = {
+      gateway: {
+        github: { host: "microsoft.ghe.com", apiBaseUrl: "https://api.microsoft.ghe.com" },
+      },
+    };
+    const request = { config, sourceConfig: config, host: "microsoft.ghe.com" };
+    expect(await resolveVerifiedSystemNativeGitHubAccount({ ...request, accountId: 101 })).toEqual({
+      accountId: 101,
+      login: "native-user",
+      avatarUrl: null,
+    });
+    expect(
+      await resolveVerifiedSystemNativeGitHubAccount({ ...request, accountId: 202 }),
+    ).toBeNull();
+    expect(
+      await resolveVerifiedSystemNativeGitHubAccount({
+        ...request,
+        host: "github.com",
+        accountId: 101,
+      }),
+    ).toBeNull();
   });
 
   it("gives a managed agent override complete precedence", async () => {

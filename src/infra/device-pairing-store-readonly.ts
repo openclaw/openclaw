@@ -5,7 +5,11 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { DeviceBootstrapBoundContextInput } from "./device-bootstrap.worker-types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
-import { captureDevicePairingPublication } from "./device-pairing-publication.js";
+import {
+  captureDevicePairingPublication,
+  DevicePairingPublicationUnavailableError,
+  getPublishedOperatorPairingIdentity,
+} from "./device-pairing-publication.js";
 import type {
   DevicePairingNodeSnapshot,
   DevicePairingReadCommand,
@@ -118,6 +122,19 @@ export async function loadPairedDevicePairingStoreRecordReadOnly(
     throw new Error("Unexpected pairing lookup reply");
   }
   return reply.device;
+}
+
+/** Reuse admitted pairing facts; only an unavailable publication needs worker preparation. */
+export async function prepareOperatorPairingIdentity(deviceId: string, baseDir?: string) {
+  try {
+    return getPublishedOperatorPairingIdentity(deviceId, baseDir);
+  } catch (error) {
+    if (!(error instanceof DevicePairingPublicationUnavailableError)) {
+      throw error;
+    }
+  }
+  await loadPairedDevicePairingStoreRecordReadOnly(deviceId, baseDir);
+  return getPublishedOperatorPairingIdentity(deviceId, baseDir);
 }
 
 export async function loadPendingDevicePairingStoreRecordReadOnly(

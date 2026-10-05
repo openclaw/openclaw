@@ -10,6 +10,8 @@ import {
   type AuthenticatedUser,
 } from "./user-profile.ts";
 
+const FACTORY_PRINCIPAL = /^github:microsoft\.ghe\.com:([1-9][0-9]*)$/u;
+
 export function createGatewaySelfProfile(options: {
   getSnapshot: () => ApplicationGatewaySnapshot;
   getConnection: () => ApplicationGatewayConnection;
@@ -40,13 +42,18 @@ export function createGatewaySelfProfile(options: {
       selfProfileRequest === request;
     const request: Promise<UserProfile | null> = requestClient
       .request<UsersSelfResult>("users.self", {})
-      .then(({ profile }) => {
+      .then(({ profile, authenticatedGitHubIdentity }) => {
         if (!isCurrent()) {
           return null;
         }
         const currentSelf = options.getSnapshot().selfUser;
         const currentProfile = currentSelf?.id === profile.id ? currentSelf : null;
         const newerDisplay = currentProfile && currentSelf !== selfAtStart ? currentProfile : null;
+        const principal = authenticatedGitHubIdentity
+          ? `github:${authenticatedGitHubIdentity.host}:${authenticatedGitHubIdentity.accountId}`
+          : undefined;
+        const profileName = profile.displayName?.trim() || authenticatedGitHubIdentity?.login;
+        const currentName = newerDisplay ? newerDisplay.name : profileName;
         const presence = resolveSelfPresenceUser(
           readPresenceEntries(hello.snapshot) ?? [],
           requestClient.instanceId,
@@ -67,10 +74,11 @@ export function createGatewaySelfProfile(options: {
         const selfUser = {
           id: profile.id,
           identity: { type: "profile" as const, id: profile.id },
-          name: newerDisplay ? newerDisplay.name : (profile.displayName ?? undefined),
+          name: currentName === principal ? profileName : currentName,
           email: profile.emails[0],
           // Refresh our timestamp fallback without replacing a precise presence/upload revision.
           avatarUrl,
+          ...(authenticatedGitHubIdentity ? { authenticatedGitHubIdentity } : {}),
         };
         if (!sameSelfUser(options.getSnapshot().selfUser, selfUser)) {
           options.publish(selfUser);
@@ -98,6 +106,12 @@ export function createGatewaySelfProfile(options: {
   };
   return {
     load: loadSelfProfile,
+    needsRefresh: () => {
+      const self = options.getSnapshot().selfUser;
+      return (
+        !self || FACTORY_PRINCIPAL.test(self.name ?? "") || FACTORY_PRINCIPAL.test(self.email ?? "")
+      );
+    },
     applyPresence: (payload: unknown) => {
       const snapshot = options.getSnapshot();
       const current = snapshot.selfUser;
@@ -121,10 +135,12 @@ export function createGatewaySelfProfile(options: {
         fallbackAvatarUrl = undefined;
         options.publish(presence);
       } else if (presence.id === current?.id) {
+        const verified = current.authenticatedGitHubIdentity;
+        const principal = verified ? `github:${verified.host}:${verified.accountId}` : undefined;
         const updated = {
           ...current,
           // An omitted presence name clears the display name; profile facts stay canonical.
-          name: presence.name,
+          name: verified && presence.name === principal ? current.name : presence.name,
           avatarUrl: presence.avatarUrl ?? current.avatarUrl,
         };
         if (!sameSelfUser(current, updated)) {

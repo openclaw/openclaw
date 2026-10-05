@@ -25,6 +25,11 @@ type IdentitySectionProps = {
   config?: ApplicationConfigCapability;
   profile: UserProfile;
   canWrite?: boolean;
+  authenticatedGitHubIdentity?: {
+    login: string;
+    profileUrl: string;
+    gitCoauthorEligible?: boolean;
+  };
   avatarUrl: string | null;
   displayName: string;
   gitCoauthorEnabled: boolean;
@@ -144,7 +149,7 @@ export function renderIdentitySection(props: IdentitySectionProps) {
           `,
         })}
         ${
-          isOwnerProfile
+          isOwnerProfile || (props.authenticatedGitHubIdentity && !emails)
             ? nothing
             : renderSettingsRow({
                 title: t("profilePage.identity.linkedEmails"),
@@ -167,7 +172,15 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                   target=${EXTERNAL_LINK_TARGET}
                   rel=${buildExternalLinkRel()}
                 >
-                  <img class="settings-account__avatar" src=${githubIdentity.avatarUrl} alt="" />
+                  ${
+                    githubIdentity.avatarUrl
+                      ? html`<img
+                          class="settings-account__avatar"
+                          src=${githubIdentity.avatarUrl}
+                          alt=""
+                        />`
+                      : nothing
+                  }
                   <span class="settings-row__value settings-row__value--mono"
                     >@${githubIdentity.login}</span
                   >
@@ -186,11 +199,13 @@ export function renderIdentitySection(props: IdentitySectionProps) {
           title: t("profilePage.identity.gitCoauthor"),
           description: isOwnerProfile
             ? t("profilePage.identity.ownerGitCoauthorDescription")
-            : githubIdentity
+            : coauthorEligible
               ? t("profilePage.identity.gitCoauthorDescription")
-              : t("profilePage.identity.gitCoauthorUnavailable"),
-          checked: Boolean(githubIdentity && props.gitCoauthorEnabled),
-          disabled: !canWrite || props.busy !== null || !githubIdentity,
+              : props.authenticatedGitHubIdentity
+                ? t("profilePage.identity.enterpriseGitCoauthorUnavailable")
+                : t("profilePage.identity.gitCoauthorUnavailable"),
+          checked: coauthorEligible && props.gitCoauthorEnabled,
+          disabled: !canWrite || props.busy !== null || !coauthorEligible,
           onChange: props.onGitCoauthorChange,
         })}
         ${

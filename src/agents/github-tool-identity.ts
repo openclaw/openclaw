@@ -378,6 +378,33 @@ export async function resolveSystemGitHubIdentityStatus(
   });
 }
 
+/** Resolve a human account only when native GitHub auth matches the trusted caller id. */
+export async function resolveVerifiedSystemNativeGitHubAccount(params: {
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  accountId: number;
+  host: string;
+}): Promise<{ accountId: number; login: string; avatarUrl: string | null } | null> {
+  const host = resolveConfiguredGitHubHost(params.config);
+  const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(params.config);
+  if (host !== params.host) {
+    return null;
+  }
+  const identity = resolveSystemGitHubToolIdentity(params);
+  if (identity.source !== "system-detected") {
+    return null;
+  }
+  const token = await readNativeGitHubToken(
+    githubIdentityProbeEnvironment(params, identity),
+    false,
+    host,
+  );
+  const probe = token ? await verifyGitHubCredential(token, { apiBaseUrl }) : undefined;
+  return probe?.status === "available" && probe.account.accountId === params.accountId
+    ? probe.account
+    : null;
+}
+
 async function resolveGitHubIdentityFacts(
   params: Pick<GitHubIdentityPreparation, "config" | "sourceConfig" | "env"> & {
     cwd: string;

@@ -61,6 +61,68 @@ describe("createApplicationGateway connection ownership", () => {
     current().opts.onHello?.(HELLO);
   }
 
+  it("retains safe request outcomes without Debug through reconnect, retiring changed authority", () => {
+    connect();
+    const first = current();
+    const timing = {
+      id: "wire-request-1",
+      method: "sessions.github.options",
+      ok: false,
+      errorCode: "FORBIDDEN",
+      startedAtMs: 1,
+      endedAtMs: 3,
+      durationMs: 2,
+      params: { token: "synthetic-private-token", message: "private-input" },
+      errorMessage: "private-error",
+    };
+    first.opts.onRequestTiming?.(timing);
+    expect(gateway.eventLog).toHaveLength(1);
+    const unsubscribe = gateway.subscribeEventLog(() => {});
+    for (const method of ["chat.send", "sessions.github.options", "sessions.github.status"]) {
+      first.opts.onRequestTiming?.({ ...timing, method });
+    }
+    expect(gateway.eventLog).toHaveLength(4);
+    expect(gateway.eventLog[0]).toMatchObject({
+      event: "gateway.request",
+      payload: {
+        requestId: "wire-request-1",
+        method: "sessions.github.status",
+        ok: false,
+        errorCode: "FORBIDDEN",
+        startedAtMs: 1,
+        endedAtMs: 3,
+        durationMs: 2,
+      },
+    });
+    expect(JSON.stringify(gateway.eventLog)).not.toContain("private");
+    first.opts.onRequestTiming?.({ ...timing, method: "config.get" });
+    expect(gateway.eventLog).toHaveLength(4);
+    first.opts.onRequestTiming?.({ ...timing, errorCode: "private-code" });
+    expect(gateway.eventLog[0]).toMatchObject({ payload: { errorCode: "unclassified" } });
+    first.opts.onEvent?.(createGatewayEvent("gateway.request", { private: "remote-payload" }));
+    const retainedCount = gateway.eventLog.length - 1;
+    unsubscribe();
+    expect(gateway.eventLog).toHaveLength(retainedCount);
+    expect(JSON.stringify(gateway.eventLog)).not.toContain("private");
+    first.opts.onClose?.({ code: 1006, reason: "transport closed", willRetry: true });
+    first.opts.onRequestTiming?.({ ...timing, errorCode: "CLIENT_CLOSED" });
+    expect(gateway.eventLog[0]).toMatchObject({ payload: { errorCode: "CLIENT_CLOSED" } });
+    gateway.connect();
+    const before = gateway.eventLog;
+    first.opts.onRequestTiming?.(timing);
+    expect(gateway.eventLog).toBe(before);
+    current().opts.onRequestTiming?.({ ...timing, ok: true, errorCode: undefined });
+    expect(gateway.eventLog[0]).toMatchObject({ payload: { ok: true } });
+    current().opts.onHello?.({ ...HELLO, auth: { ...HELLO.auth, recoveryScope: "other-owner" } });
+    expect(gateway.eventLog).toEqual([]);
+    current().opts.onRequestTiming?.(timing);
+    expect(gateway.eventLog).toHaveLength(1);
+    const retiring = current();
+    vi.spyOn(retiring, "stop").mockImplementation(() => retiring.opts.onRequestTiming?.(timing));
+    gateway.connect({ token: "synthetic-other-credential" });
+    expect(gateway.eventLog).toEqual([]);
+  });
+
   function unavailable(reason: string, details: Record<string, unknown>, code = 1013) {
     return {
       code,

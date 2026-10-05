@@ -335,7 +335,7 @@ export function mergeProfiles(
 export function linkEmail(
   email: string,
   targetProfileId: string,
-  options: UserProfileMutationOptions = {},
+  options: UserProfileMutationOptions & { preserveExistingBinding?: boolean } = {},
 ): UserProfileListItem {
   const normalizedEmail = normalizeEmail(email);
   const now = Date.now();
@@ -350,6 +350,14 @@ export function linkEmail(
       const existingAlias = selectUserProfileEmailAlias(db, normalizedEmail);
       if (existingAlias?.profile_id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("merge");
+      }
+      // Automatic provider enrichment cannot move another person's login or merge their roles.
+      if (
+        options.preserveExistingBinding &&
+        existingAlias &&
+        existingAlias.profile_id !== target.id
+      ) {
+        throw new Error("Verified email is already bound to another profile");
       }
       if (existingAlias?.profile_id === target.id) {
         return selectUserProfileListItemById(db, target.id);

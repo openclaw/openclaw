@@ -215,6 +215,106 @@ function gitHubTailscalePeople(
 }
 
 describe("gateway identity scope grants", () => {
+  test("grants verified engineers write without a write-capable device and removes it after demotion on reconnect", async () => {
+    const engineer = "github:microsoft.ghe.com:101";
+    const observer = "github:microsoft.ghe.com:202";
+    await configureGatewayAuth(
+      {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+          allowLoopback: true,
+          deviceAutoApprove: { enabled: true, scopes: ["operator.read"] },
+        },
+      },
+      {
+        roles: {
+          default: "observer",
+          definitions: {
+            observer: { sessions: { others: "view" }, agents: [], scopes: ["operator.read"] },
+            engineer: {
+              sessions: { others: "view" },
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              verifiedIdentityWrite: true,
+              workerProfiles: ["approved-cloud"],
+            },
+          },
+        },
+      },
+    );
+    const profile = ensureProfileForEmail(engineer);
+    setUserProfileRole(profile.id, "engineer");
+
+    await withGatewayServer(async ({ port }) => {
+      const connectAs = async (principal: string, label: string) => {
+        const identityPath = deviceIdentityPath(label);
+        const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+        const ws = await openWs(port, {
+          ...TRUSTED_PROXY_HEADERS,
+          "x-forwarded-user": principal,
+          "x-openclaw-scopes": "operator.read,operator.write",
+        });
+        const connected = await connectReq(ws, {
+          skipDefaultAuth: true,
+          scopes: ["operator.read", "operator.write"],
+          client: CONTROL_UI_CLIENT,
+          deviceIdentityPath: identityPath,
+          browserOrigin: BROWSER_ORIGIN,
+        });
+        expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+        return { ws, scopes: responseAuth(connected)?.scopes, deviceId: identity.deviceId };
+      };
+
+      const active = await connectAs(engineer, "engineer-write-grant");
+      try {
+        expect(active.scopes).toEqual(["operator.read", "operator.write"]);
+        expect((await getPairedDevice(active.deviceId))?.approvedScopes).toEqual(["operator.read"]);
+        expect((await rpcReq(active.ws, "sessions.create", { agentId: "main" })).ok).toBe(true);
+        expect((await rpcReq(active.ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+      } finally {
+        active.ws.close();
+      }
+
+      const capped = await openWs(port, {
+        ...TRUSTED_PROXY_HEADERS,
+        "x-forwarded-user": engineer,
+        "x-openclaw-scopes": "operator.read",
+      });
+      try {
+        const connected = await connectReq(capped, {
+          skipDefaultAuth: true,
+          scopes: ["operator.read"],
+          client: CONTROL_UI_CLIENT,
+          deviceIdentityPath: deviceIdentityPath("engineer-proxy-cap"),
+          browserOrigin: BROWSER_ORIGIN,
+        });
+        expect(responseAuth(connected)?.scopes).toEqual(["operator.read"]);
+      } finally {
+        capped.close();
+      }
+
+      const guest = await connectAs(observer, "observer-write-denial");
+      try {
+        expect(guest.scopes).toEqual(["operator.read"]);
+        expect((await rpcReq(guest.ws, "sessions.create", { agentId: "main" })).ok).toBe(false);
+      } finally {
+        guest.ws.close();
+      }
+
+      setUserProfileRole(profile.id, "observer");
+      invalidateOperatorRolePolicy(profile.id);
+      const demoted = await connectAs(engineer, "engineer-demoted");
+      try {
+        expect(demoted.scopes).toEqual(["operator.read"]);
+        expect((await rpcReq(demoted.ws, "sessions.create", { agentId: "main" })).ok).toBe(false);
+      } finally {
+        demoted.ws.close();
+      }
+    });
+  });
+
   test("denies missing person access, retires grant or alias authority, and preserves staff", async () => {
     await configureGatewayAuth(proxyAuth(), {
       roles: {

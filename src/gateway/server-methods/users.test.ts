@@ -21,6 +21,22 @@ const setUserProfileRole = vi.hoisted(() => vi.fn());
 const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
+const resolveVerifiedSystemNativeGitHubAccount = vi.hoisted(() => vi.fn());
+const resolveFactoryGitHubCoauthorEligibility = vi.hoisted(() => vi.fn());
+
+vi.mock("../../state/user-profile-reads.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-reads.js")>()),
+  readCanonicalUserProfileListItem: async (profileId: string) => getUserProfileListItem(profileId),
+}));
+vi.mock("../../state/user-profile-github-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-github-identity.js")>()),
+  resolveFactoryGitHubCoauthorEligibility,
+}));
+
+vi.mock("../../agents/github-tool-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/github-tool-identity.js")>()),
+  resolveVerifiedSystemNativeGitHubAccount,
+}));
 const prepareUserProfileRoleAuthority = vi.hoisted(() => vi.fn());
 const readResidentUserProfileRevision = vi.hoisted(() =>
   vi.fn<typeof import("../../state/user-profile-list.js").readResidentUserProfileRevision>(),
@@ -129,11 +145,13 @@ describe("users gateway methods", () => {
   beforeEach(() => {
     ensureProfileIdForEmail.mockReset();
     getUserProfileListItem.mockReset();
+    resolveVerifiedSystemNativeGitHubAccount.mockReset();
     prepareUserProfileRoleAuthority.mockReset();
     prepareUserProfileRoleAuthority.mockImplementation(async (profileId: string) => ({
       profileId,
       isCurrent: () => true,
     }));
+    resolveFactoryGitHubCoauthorEligibility.mockReset();
     linkEmail.mockReset();
     mergeProfiles.mockReset();
     listProfiles.mockReset();
@@ -244,6 +262,78 @@ describe("users gateway methods", () => {
       }
     },
   );
+
+  it("projects the exact authenticated Factory GitHub account without storing a public GitHub alias", async () => {
+    const principal = "github:microsoft.ghe.com:1358766";
+    const factoryProfile = { ...profile, displayName: principal, emails: [principal] };
+    getUserProfileListItem.mockReturnValue(factoryProfile);
+    const factoryClient = {
+      authenticatedUserId: principal,
+      authenticatedFactoryGitHubAccountId: 1358766,
+      authenticatedUserProfile: { profileId: profile.id },
+      connect: { scopes: ["operator.write"] },
+    };
+    resolveVerifiedSystemNativeGitHubAccount.mockResolvedValue({
+      accountId: 1358766,
+      login: "Galin-Iliev",
+      avatarUrl: null,
+    });
+    const config = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+      },
+    };
+    const respond = await runUsersHandler("users.self", {}, factoryClient, {
+      getRuntimeConfig: () => config,
+    });
+    expect(resolveVerifiedSystemNativeGitHubAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 1358766, host: "microsoft.ghe.com" }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      profile: { ...factoryProfile, displayName: "Galin-Iliev", emails: [] },
+      authenticatedGitHubIdentity: {
+        host: "microsoft.ghe.com",
+        accountId: 1358766,
+        login: "Galin-Iliev",
+        profileUrl: "https://microsoft.ghe.com/Galin-Iliev",
+        gitCoauthorEligible: false,
+      },
+    });
+    expect(validateUsersSelfResult(respond.mock.calls[0]?.[1])).toBe(true);
+    expect(profile.githubIdentity).toBeNull();
+
+    getUserProfileListItem.mockReturnValue({
+      ...factoryProfile,
+      displayName: "Chosen name",
+      hasAvatar: true,
+    });
+    const chosen = await runUsersHandler("users.self", {}, factoryClient, {
+      getRuntimeConfig: () => config,
+    });
+    expect(chosen).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        profile: expect.objectContaining({
+          displayName: "Chosen name",
+          emails: [],
+          hasAvatar: true,
+        }),
+      }),
+    );
+
+    resolveVerifiedSystemNativeGitHubAccount.mockClear();
+    await runUsersHandler(
+      "users.self",
+      {},
+      {
+        ...factoryClient,
+        authenticatedUserId: "github:microsoft.ghe.com:1358766.evil",
+        authenticatedFactoryGitHubAccountId: undefined,
+      },
+      { getRuntimeConfig: () => config },
+    );
+    expect(resolveVerifiedSystemNativeGitHubAccount).not.toHaveBeenCalled();
+  });
 
   function connectedProfileClient(kind: string) {
     return {

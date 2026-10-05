@@ -148,6 +148,7 @@ an access policy supplied by a plugin.
           sessions: { others: "write" },
           agents: ["roboclaw"],
           scopes: ["operator.read", "operator.write", "operator.approvals"],
+          workerProfiles: ["approved-cloud"],
         },
         guest: {
           sessions: { others: "view" },
@@ -183,6 +184,22 @@ with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
 `gateway.roles.default` is required whenever roles are configured and must name
 an existing definition. Omitting `gateway.roles` entirely leaves solo and
 shared-secret deployments unchanged.
+
+An optional `workerProfiles` list lets a write-scoped role dispatch its own
+session to those exact configured Cloud profiles with `sessions.dispatch`.
+The Gateway advertises permitted choices to the native New Session picker and
+checks the set again before allocation. An absent or disabled profile is not
+selectable. Configured project defaults, other users' sessions, profile
+management, and unrestricted placement still require administrator authority.
+
+Set `verifiedIdentityWrite: true` on a role to grant `operator.write` to a
+trusted-proxy or Tailscale operator whose verified identity resolves to a durable
+profile currently assigned that role. The grant applies only to that connection;
+it does not change device pairing. The proxy's `x-openclaw-scopes` header and the
+role's `scopes` list still cap it, and the role must include `operator.write`.
+Use the identity provider's current entitlement check before assigning or
+retaining a role that receives this grant. Removing the role closes its active
+connections through `users.setRole`; a new connection uses the current role.
 
 Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
 must confirm the person's current access. For example, the Visitor Access plugin

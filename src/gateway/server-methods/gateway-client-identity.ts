@@ -23,7 +23,7 @@ export function isGatewayClientProfilePending(client: GatewayClient | null): boo
 }
 
 /** A GitHub quota failure names its cause and carries GitHub's reset deadline. */
-export function authenticatedProfileUnavailableError(cause?: unknown): ErrorShape {
+export function authenticatedProfileUnavailableError(cause?: unknown, method?: string): ErrorShape {
   // Only a real GitHub transport error may load the GitHub surface; it can be absent.
   const rateLimited =
     cause instanceof Error &&
@@ -38,7 +38,10 @@ export function authenticatedProfileUnavailableError(cause?: unknown): ErrorShap
     {
       retryable: true,
       retryAfterMs: (rateLimited && cause.retryAfterMs) || 1_000,
-      details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+      details: {
+        code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
+        ...(method ? { method } : {}),
+      },
     },
   );
 }

@@ -26,12 +26,15 @@ import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-to
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
-import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
+import {
+  createAuthenticatedGitHubIdentitySync,
+  resolveTrustedFactoryGitHubAccountId,
+} from "../../github-user-identity.js";
 import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "../../local-user-ingress.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
+import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
@@ -179,11 +182,16 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const authenticatedFactoryGitHubAccountId = resolveTrustedFactoryGitHubAccountId({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+  });
   const tailscaleLogin = authResult.tailscaleIdentity
     ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
   const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
+  const avatarOptions = { assertCurrent: profileLifecycle.assertCurrent };
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
@@ -210,15 +218,6 @@ export async function attachAuthenticatedGatewayConnect(
   }
   const preparedProfile = profileAdmission.prepared;
   const authenticatedUserProfile = preparedProfile?.profile;
-  // Identity-derived scopes must be capped only after their durable profile is known.
-  // Configured roles fail closed if profile storage or provider verification is unavailable.
-  const effectiveScopes = resolveEffectiveConnectionScopes({
-    role,
-    deviceScopes,
-    verifiedIdentity: state.authPolicy.verifiedIdentity,
-    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-    upgradeReq: context.handler.upgradeReq,
-  });
   const rolePolicy =
     role === "operator" && !sharedSecretOperatorOwner
       ? resolveOperatorRolePolicyForAssignment(
@@ -228,6 +227,18 @@ export async function attachAuthenticatedGatewayConnect(
           preparedProfile?.authority.githubLogin ?? null,
         )
       : undefined;
+  // The role assignment is read from the prepared profile before its verified-identity
+  // grant enters the same proxy cap and role ceiling as static identity scopes.
+  const effectiveScopes = resolveEffectiveConnectionScopes({
+    role,
+    deviceScopes,
+    verifiedIdentity: state.authPolicy.verifiedIdentity,
+    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+    verifiedIdentityWrite:
+      Boolean(preparedProfile && rolePolicy?.verifiedIdentityWrite) &&
+      (authResult.method === "trusted-proxy" || authResult.method === "tailscale"),
+    upgradeReq: context.handler.upgradeReq,
+  });
   const scopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes.scopes, rolePolicy.scopes)
     : effectiveScopes.scopes;
@@ -402,6 +413,7 @@ export async function attachAuthenticatedGatewayConnect(
     authPolicy: state.authPolicy,
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedFactoryGitHubAccountId ? { authenticatedFactoryGitHubAccountId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
@@ -677,23 +689,22 @@ export async function attachAuthenticatedGatewayConnect(
   await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
 
   const adoptProfileAvatar = async (profileId: string, profilePic: string) => {
-    const updated = await adoptTailscaleProfileAvatar(profileId, profilePic);
+    const updated = await adoptTailscaleProfileAvatar(profileId, profilePic, {}, avatarOptions);
     if (updated.avatarMime) {
       await profileLifecycle.attach(updated.id, updated.updatedAt, prepareLocalUserIngress);
     }
   };
-  if (nextClient.authenticatedGitHubIdentitySync) {
+  if (nextClient.authenticatedGitHubIdentitySync && !isGatewayReadonlyWork()) {
     runDetachedConnectWork(
       async () => {
         const result = await nextClient.authenticatedGitHubIdentitySync!();
-        const profile = nextClient.authenticatedUserProfile;
-        const profilePic = authResult.tailscaleIdentity?.profilePic;
-        if (!profile?.hasAvatar && profilePic) {
+        const profilePic = result.factory?.avatarUrl ?? authResult.tailscaleIdentity?.profilePic;
+        if (!nextClient.authenticatedUserProfile?.hasAvatar && profilePic) {
           try {
             await adoptProfileAvatar(result.profileId, profilePic);
           } catch (error) {
             logGateway.warn(
-              `Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`,
+              `Profile avatar adoption failed conn=${connId}: ${formatForLog(error)}`,
             );
           }
         }
