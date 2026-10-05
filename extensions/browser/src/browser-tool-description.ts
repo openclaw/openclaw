@@ -40,6 +40,7 @@ export function createBrowserToolDefinition(
       return resolveBrowserToolCapabilities({
         tabBound: Boolean(binding),
         evaluateEnabled: config?.browser?.evaluateEnabled !== false,
+        secureInputEnabled: config?.browser?.secureInputEnabled === true,
         ...(profile ? { profileCapabilities: getBrowserProfileCapabilities(profile) } : {}),
       });
     })();
@@ -128,6 +129,11 @@ function describeBrowserTool(opts: {
     ...(actions.has("upload")
       ? [
           "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",
+        ]
+      : []),
+    ...(actions.has("requestSecureInput")
+      ? [
+          "Use requestSecureInput only for operator-provided login credentials. It derives the origin and candidate fields from the live tab, returns opaque field ids, and never auto-submits the form.",
         ]
       : []),
     ...(!opts.capabilities.tabBound

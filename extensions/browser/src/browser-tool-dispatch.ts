@@ -38,6 +38,11 @@ import {
   executeScreenshotAction,
   type BrowserScreenshotOptions,
 } from "./browser-tool.screenshot.js";
+import {
+  createBrowserDomFieldInspector,
+  readSecureInputLoginHint,
+  resolveSecureInputRequest,
+} from "./browser-tool.secure-input.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 
@@ -164,6 +169,26 @@ export async function executeBrowserTabAction(context: {
         onTabActivity: touchTab,
         opts,
       });
+    case "requestSecureInput": {
+      const requestedTabId = readStringParam(params, "targetId", {
+        required: true,
+        label: "targetId",
+      });
+      const request = await resolveSecureInputRequest(
+        { tabId: requestedTabId },
+        readSecureInputLoginHint(params),
+        {
+          inspector: createBrowserDomFieldInspector({
+            baseUrl,
+            profile,
+            proxyRequest,
+            signal,
+          }),
+        },
+      );
+      await touchTab(request.tabId);
+      return jsonResult(request);
+    }
     case "navigate": {
       const targetUrl = readTargetUrlParam(params);
       const targetId = readStringParam(params, "targetId");

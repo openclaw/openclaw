@@ -22,6 +22,7 @@ export const BROWSER_FIELD_LABELS: Record<string, string> = {
   "browser.extensionRelay": "Browser Extension Relay",
   "browser.extensionRelay.allowLegacyAuth": "Allow Legacy Browser Relay Auth",
   "browser.evaluateEnabled": "Browser Evaluate Enabled",
+  "browser.secureInputEnabled": "Browser Secure Input Enabled",
   "browser.snapshotDefaults": "Browser Snapshot Defaults",
   "browser.snapshotDefaults.mode": "Browser Snapshot Mode",
   "browser.tabCleanup": "Browser Tab Cleanup",
