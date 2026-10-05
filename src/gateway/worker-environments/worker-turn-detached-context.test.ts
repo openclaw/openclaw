@@ -816,12 +816,14 @@ describe("worker detached model-context branch parity", () => {
         "worker-fallback-first-launch",
       ),
     );
+    const readsBeforeRelaunch = boundedReads.mock.calls.length;
     await launchProbe({
       ...request("worker-fallback-first-launch"),
       userTurnTranscriptRecorder: inputRecorder,
     });
-    // The model-fallback relaunch reads the durable suffix again.
-    expect(boundedReads.mock.calls.length).toBeGreaterThan(0);
+    // The model-fallback relaunch reads the durable suffix again; pin the cost
+    // to the relaunch itself, not to the first launch's read.
+    expect(boundedReads.mock.calls.length).toBeGreaterThan(readsBeforeRelaunch);
     boundedReads.mockRestore();
   });
 
