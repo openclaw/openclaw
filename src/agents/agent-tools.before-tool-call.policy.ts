@@ -25,6 +25,7 @@ import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import {
   checkClientVoiceToolConfirmationPolicy,
   consumeClientVoiceToolConfirmationPolicy,
+  prepareClientVoiceToolConfirmationPolicy,
 } from "../talk/client-voice-confirmation.js";
 import {
   isClientVoiceSessionConfirmable,
@@ -189,6 +190,17 @@ export async function runBeforeToolCallHook(args: {
           })
         : undefined;
     const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
+    if (voiceRun && !isCodeModeExecToolKind(args.toolKind)) {
+      await prepareClientVoiceToolConfirmationPolicy({
+        ...voiceRun,
+        runId: args.ctx?.runId,
+        toolName,
+        toolParams: normalizedParams,
+        config: args.ctx?.config ?? getRuntimeConfig(),
+        abortSignal: args.signal,
+        isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun),
+      });
+    }
     // Nested catalog calls are gated individually; the script wrapper is not itself an action.
     const voiceConfirmation = isCodeModeExecToolKind(args.toolKind)
       ? { allowed: true as const }

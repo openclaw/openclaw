@@ -25,11 +25,44 @@ describe("talk config validation fail-closed behavior", () => {
     });
   });
 
+  it.each([true, false])("loads shell read-only classification opt-in %s", async (value) => {
+    await withTempHomeConfig(
+      { agents: { entries: { main: {} } }, talk: { shellReadOnlyClassification: value } },
+      async () => {
+        expect(getRuntimeConfig().talk?.shellReadOnlyClassification).toBe(value);
+      },
+    );
+  });
+
+  it("loads a configured shell read-only probability", async () => {
+    await withTempHomeConfig(
+      { agents: { entries: { main: {} } }, talk: { shellReadOnlyMinProbability: 0.95 } },
+      async () => {
+        expect(getRuntimeConfig().talk?.shellReadOnlyMinProbability).toBe(0.95);
+      },
+    );
+  });
+
   it.each([
     {
       name: "invalid silence timeout",
       talk: { silenceTimeoutMs: true },
       message: /silenceTimeoutMs|talk/i,
+    },
+    {
+      name: "non-boolean shell read-only classification",
+      talk: { shellReadOnlyClassification: "true" },
+      message: /shellReadOnlyClassification/,
+    },
+    {
+      name: "zero shell read-only probability",
+      talk: { shellReadOnlyMinProbability: 0 },
+      message: /shellReadOnlyMinProbability/,
+    },
+    {
+      name: "shell read-only probability above one",
+      talk: { shellReadOnlyMinProbability: 1.01 },
+      message: /shellReadOnlyMinProbability/,
     },
     {
       name: "provider absent from providers",

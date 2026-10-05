@@ -64,6 +64,8 @@ See [Configuration - agents](/gateway/config-agents) for:
 - `talk.*` (Talk mode)
   - `talk.consultThinkingLevel`: thinking level override for the full OpenClaw agent run behind Control UI Talk realtime consults
   - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
+  - `talk.shellReadOnlyClassification`: opt-in for voice shell-command classification (default off); requires the owning agent's Decision model, independent of Decision assistance
+  - `talk.shellReadOnlyMinProbability`: minimum Decision-model read-only probability that lets an unrecognized voice shell command skip spoken confirmation (default `0.9`)
   - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on Android, iOS, and macOS, and for iOS system-voice fallback
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
   - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`

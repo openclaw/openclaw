@@ -242,6 +242,8 @@ export const TalkSchema = z
     realtime: TalkRealtimeSchema.optional(),
     consultThinkingLevel: z.enum(ALL_THINKING_LEVELS).optional(),
     consultFastMode: z.boolean().optional(),
+    shellReadOnlyClassification: z.boolean().optional(),
+    shellReadOnlyMinProbability: z.number().gt(0).max(1).optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),

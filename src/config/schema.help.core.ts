@@ -271,6 +271,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":
     "Use this to set true or false fast mode for the regular agent run behind Talk realtime consults.",
+  "talk.shellReadOnlyClassification":
+    "Enable Decision-model read-only classification for unrecognized voice shell commands. Default: false. Requires an effective Decision model for the owning agent; independent of Decision assistance.",
+  "talk.shellReadOnlyMinProbability":
+    "Minimum read-only probability (greater than 0, at most 1) from the agent's Decision model that lets an unrecognized voice shell command skip spoken confirmation. Default: 0.9. Probabilities differ between Decision models, so validate the value on representative commands.",
   "talk.speechLocale":
     'BCP 47 locale id for Talk speech recognition on device nodes and the iOS system-voice fallback, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":

@@ -18,6 +18,8 @@ describe("talk normalization", () => {
       apiKey: "secret-key", // pragma: allowlist secret
       consultThinkingLevel: " low ",
       consultFastMode: true,
+      shellReadOnlyClassification: true,
+      shellReadOnlyMinProbability: 0.95,
       speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
@@ -27,9 +29,19 @@ describe("talk normalization", () => {
       speechLocale: "ru-RU",
       consultThinkingLevel: "low",
       consultFastMode: true,
+      shellReadOnlyClassification: true,
+      shellReadOnlyMinProbability: 0.95,
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
+  });
+
+  it("preserves an explicit shell classification opt-out and drops non-booleans", () => {
+    expect(normalizeTalkSection({ shellReadOnlyClassification: false })).toEqual({
+      shellReadOnlyClassification: false,
+    });
+    expect(normalizeTalkSection({ shellReadOnlyClassification: "true" } as never)).toBeUndefined();
+    expect(buildTalkConfigResponse({ shellReadOnlyClassification: true })).toBeUndefined();
   });
 
   it("uses new provider/providers shape directly when present", () => {

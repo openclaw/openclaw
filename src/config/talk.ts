@@ -179,6 +179,18 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (typeof consultFastMode === "boolean") {
     normalized.consultFastMode = consultFastMode;
   }
+  const shellReadOnlyClassification = source.shellReadOnlyClassification;
+  if (typeof shellReadOnlyClassification === "boolean") {
+    normalized.shellReadOnlyClassification = shellReadOnlyClassification;
+  }
+  const shellReadOnlyMinProbability = asFiniteNumberInRange(source.shellReadOnlyMinProbability, {
+    min: 0,
+    minExclusive: true,
+    max: 1,
+  });
+  if (shellReadOnlyMinProbability !== undefined) {
+    normalized.shellReadOnlyMinProbability = shellReadOnlyMinProbability;
+  }
   const silenceTimeoutMs = normalizeInteger(source.silenceTimeoutMs, 1);
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
