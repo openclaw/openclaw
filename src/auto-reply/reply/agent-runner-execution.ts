@@ -484,6 +484,12 @@ async function executeAgentTurnInternal(
     operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
     gatewayLocalUserIngress: params.followupRun.gatewayLocalUserIngress,
+    foregroundRequest:
+      !params.isHeartbeat &&
+      (!params.followupRun.run.inputProvenance ||
+        params.followupRun.run.inputProvenance.kind === "external_user")
+        ? params.followupRun.foregroundRequest
+        : undefined,
     assertSourceCurrent:
       params.followupRun.run.senderIsOwner === true
         ? captureCommandOwnerAssertion(params.followupRun.run)

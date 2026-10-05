@@ -22,6 +22,10 @@ import {
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  prepareForegroundUserRequestClaim,
+  type ForegroundUserRequest,
+} from "./foreground-request.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -55,6 +59,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
     sandboxRequired: boolean;
+    execution?: "foreground-only";
     workspace?: Readonly<{
       projects: readonly string[];
       worktreeBaseRef: string;
@@ -245,6 +250,7 @@ export type PreparedAgentRunAdmission = Readonly<{
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
+  assertForegroundRequest?: () => void;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 };
@@ -260,6 +266,7 @@ function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
   assertSourceCurrent?: () => void,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  assertForegroundRequest?: () => void,
 ): void {
   const authority = claimAgentRunDelegatedAuthority(
     context.operationalRunInstance,
@@ -268,7 +275,13 @@ function bindAdmittedRunDelegatedAuthority(
   const previousRecovery = activeNativeHookRecoveryLeases.get(context.operationalRunInstance.runId);
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   previousRecovery?.releaseOperatorAuthority?.();
-  const lease = { authority, foregroundClosed: false, assertSourceCurrent, operatorAuthority };
+  const lease = {
+    authority,
+    foregroundClosed: false,
+    assertSourceCurrent,
+    operatorAuthority,
+    assertForegroundRequest,
+  };
   delegatedAuthorityLeases.set(context, lease);
   if (!admittedContextsByAuthority.has(authority)) {
     admittedContextsByAuthority.set(authority, context);
@@ -283,6 +296,17 @@ export function getAdmittedRunDelegatedAuthority(
   return lease && !lease.foregroundClosed && validateAgentRunDelegatedAuthority(lease.authority)
     ? lease.authority
     : undefined;
+}
+
+/** Only a consumed host input capability can authorize restricted execution. */
+function assertAdmittedRunForegroundRequest(context: AdmittedRunContext): void {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease?.assertForegroundRequest || !getAdmittedRunDelegatedAuthority(context)) {
+    throw new Error(
+      "Foreground execution requires a fresh authenticated user request. Send a new message in this thread.",
+    );
+  }
+  lease.assertForegroundRequest();
 }
 
 /** Captures the operator's source lifetime from a live run, including for detached children. */
@@ -475,6 +499,7 @@ export function prepareSystemAgentRunAdmission(
 export function prepareAgentRunAdmission(params: {
   cfg: OpenClawConfig;
   admissionSource?: AdmittedRunContext["admissionSource"];
+  foregroundRequest?: ForegroundUserRequest;
   facts: Omit<ExecutionIdentityAdmissionFacts, "runtime">;
   operationalRunInstance: OperationalRunInstanceRef;
   recovery?: ExecutionIdentityRecoveryAdmission;
@@ -578,9 +603,20 @@ export function prepareAgentRunAdmission(params: {
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),
         });
-        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
+        const foregroundRequest = !params.recovery
+          ? prepareForegroundUserRequestClaim(params.foregroundRequest, operationalRunInstance)
+          : undefined;
+        bindAdmittedRunDelegatedAuthority(
+          context,
+          assertSourceCurrent,
+          operatorAuthority,
+          foregroundRequest,
+        );
         admittedContext = context;
         try {
+          if (operatorAuthority?.rolePolicy?.execution === "foreground-only") {
+            assertAdmittedRunForegroundRequest(context);
+          }
           await params.onAdmitted?.(context);
           if (closed || !getAdmittedRunDelegatedAuthority(context)) {
             throw new Error("prepared execution authority closed during admission");

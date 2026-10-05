@@ -12,6 +12,7 @@ import {
   isFreshChannelCronAuthorityTurn,
 } from "../../agents/cron-creator-authority-context.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { getForegroundUserRequest } from "../../agents/foreground-request.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
@@ -397,6 +398,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
     gatewayLocalUserIngress: getGatewayLocalUserIngress(ctx),
+    foregroundRequest:
+      !isHeartbeat &&
+      !(ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource) &&
+      (!inputProvenance || inputProvenance.kind === "external_user")
+        ? (getForegroundUserRequest(ctx) ?? getForegroundUserRequest(sessionCtx))
+        : undefined,
     channelAdmissionEvidence:
       readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,

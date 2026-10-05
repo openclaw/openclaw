@@ -5,6 +5,7 @@ import {
   type AdmittedRunOperatorAuthority,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import type { ForegroundUserRequest } from "../../agents/foreground-request.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import {
   consumeChannelAdmissionEvidence,
@@ -79,6 +80,7 @@ export function prepareChannelRunAdmission(params: {
   boundary: string;
   evidence?: ChannelAdmissionEvidence;
   gatewayLocalUserIngress?: GatewayLocalUserIngress;
+  foregroundRequest?: ForegroundUserRequest;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   onAdmitted?: (context: AdmittedRunContext) => void;
@@ -118,6 +120,7 @@ export function prepareChannelRunAdmission(params: {
           assertSourceCurrent: params.assertSourceCurrent,
           operationalRunInstance,
           operatorAuthority: params.operatorAuthority,
+          foregroundRequest: params.foregroundRequest,
           facts: {
             runId: params.runId,
             agentId: params.agentId,

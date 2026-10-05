@@ -1,3 +1,4 @@
+import { bindForegroundUserRequest } from "../../agents/foreground-request.js";
 import {
   bindCommandOwnerAuthority,
   captureCommandOwnerAssertion,
@@ -63,6 +64,20 @@ export function bindChannelParticipantInput(params: {
     batch.some((input) => JSON.stringify(input?.verifiedPrincipal) !== principalKey)
   ) {
     return;
+  }
+  if (
+    !params.context.InternalTurnSource &&
+    (!params.context.InputProvenance || params.context.InputProvenance.kind === "external_user")
+  ) {
+    bindForegroundUserRequest(params.context, () => {
+      if (
+        !params.owner.isLive() ||
+        params.owner.resolveGatewayContext?.() !== gateway ||
+        batch.some((input) => input?.requesterProfile && !input.requesterProfile.isCurrent())
+      ) {
+        throw new Error("Foreground channel input is no longer active.");
+      }
+    });
   }
   const requester = batch.at(-1)?.requesterProfile;
   if (

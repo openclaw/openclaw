@@ -1,6 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  getForegroundUserRequest,
+  prepareForegroundUserRequestClaim,
+} from "../../agents/foreground-request.js";
+import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   buildChannelInboundEventContext,
   type BuildChannelInboundEventContextParams,
@@ -18,6 +26,102 @@ const recordParticipant = vi.hoisted(() => vi.fn());
 vi.mock("../../sessions/session-participant-recording.js", () => ({
   recordSessionParticipantBestEffort: recordParticipant,
 }));
+
+it.each(["user", "source-less", "heartbeat", "system", "retired", "retired-role"] as const)(
+  "admits foreground work only from current verified channel input with audit disabled: %s",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      let live = true;
+      const gateway = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+      const owner = { channelId: "test", isLive: () => live, resolveGatewayContext: () => gateway };
+      const sessionKey = "agent:main:test:dm:foreground";
+      const ingress = await createHostChannelIngressRuntime(owner).resolveStable({
+        channelId: "test",
+        accountId: "local",
+        identity: { authentication: "verified" },
+        subject: { stableId: "sender" },
+        conversation: { kind: "direct", id: "foreground" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey,
+          messageId: kind === "source-less" ? undefined : "input",
+          inboundEventKind: "user_request",
+        },
+        dmPolicy: "open",
+        groupPolicy: "disabled",
+        allowFrom: ["*"],
+        useDefaultPairingStore: false,
+      });
+      const context = await createHostChannelInboundEventContextBuilder(
+        (params: BuildChannelInboundEventContextParams) => {
+          const built = buildChannelInboundEventContext(params);
+          if (kind === "heartbeat") {
+            built.InternalTurnSource = "heartbeat";
+          }
+          if (kind === "system") {
+            built.InputProvenance = { kind: "internal_system", sourceTool: "fixture" };
+          }
+          return built;
+        },
+        owner,
+      )({
+        channel: "test",
+        accountId: "local",
+        messageId: kind === "source-less" ? undefined : "input",
+        from: "test:foreground",
+        sender: { id: "sender" },
+        conversation: { kind: "direct", id: "foreground" },
+        route: { agentId: "main", routeSessionKey: sessionKey },
+        reply: { to: "test:foreground" },
+        message: { rawBody: "hello" },
+        channelIngress: ingress,
+      });
+      expect(readChannelContextAdmissionEvidence(context)).toBeUndefined();
+      live = !kind.startsWith("retired");
+      const request = getForegroundUserRequest({ ...context });
+      const admission = prepareChannelRunAdmission({
+        cfg: {},
+        runId: `channel-${kind}`,
+        agentId: "main",
+        ingressKind: "channel",
+        boundary: "test",
+        foregroundRequest: request,
+        operatorAuthority:
+          kind === "retired-role" || kind === "source-less"
+            ? createAdmittedRunOperatorAuthority({
+                profileId: "source",
+                scopes: ["operator.write"],
+                assertCurrent() {},
+                rolePolicy: {
+                  sessionAccessCap: "none",
+                  sandboxRequired: true,
+                  agents: "*",
+                  execution: "foreground-only",
+                },
+              })
+            : undefined,
+      });
+      try {
+        if (kind === "retired-role") {
+          await expect(admission.admit("embedded")).rejects.toThrow("no longer active");
+        } else {
+          const admitted = await admission.admit("embedded");
+          const claim = prepareForegroundUserRequestClaim(request, admitted.operationalRunInstance);
+          if (kind === "retired") {
+            expect(expectDefined(claim, "channel input claim")).toThrow("no longer active");
+          } else if (kind === "user" || kind === "source-less") {
+            expect(expectDefined(claim, "channel input claim")).not.toThrow();
+          } else {
+            expect(claim).toBeUndefined();
+          }
+        }
+      } finally {
+        live = false;
+        await admission.close();
+      }
+    });
+  },
+);
 
 it.each([
   "qualified",

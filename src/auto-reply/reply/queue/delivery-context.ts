@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { combineForegroundUserRequests } from "../../../agents/foreground-request.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
@@ -191,6 +192,7 @@ type FollowupRuntimeMetadata = Pick<
   | "explicitSkillSelections"
   | "channelAdmissionEvidence"
   | "gatewayLocalUserIngress"
+  | "foregroundRequest"
   | "toolsAllow"
   | "disableTools"
   | "abortSignal"
@@ -276,6 +278,7 @@ export function collectRuntimeMetadata(
     channelAdmissionEvidence: combineChannelAdmissionEvidence(
       items.map((item) => item.channelAdmissionEvidence),
     ),
+    foregroundRequest: combineForegroundUserRequests(items.map((item) => item.foregroundRequest)),
     gatewayLocalUserIngress: combineGatewayLocalUserIngress(
       items.map((item) => item.gatewayLocalUserIngress),
     ),
@@ -317,6 +320,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     media: source.media,
     channelAdmissionEvidence: source.channelAdmissionEvidence,
     gatewayLocalUserIngress: source.gatewayLocalUserIngress,
+    foregroundRequest: source.foregroundRequest,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,

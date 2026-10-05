@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentRunContext } from "../../agents/command/run-context.js";
 import {
+  getForegroundUserRequest,
+  prepareForegroundUserRequestClaim,
+} from "../../agents/foreground-request.js";
+import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
@@ -12,10 +16,16 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../local-user-ingress.js";
+import type { GatewayClient } from "../server-methods/client-types.js";
 import * as sessionChange from "../server-methods/session-change-event.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
+import { captureAgentTurnPrincipal } from "./principal.js";
 import type { AgentTurnPrincipal } from "./types.js";
 
 const dispatchAgentRunFromGateway = vi.hoisted(() => vi.fn());
@@ -175,6 +185,71 @@ describe("startAgentRunExecution Gateway ownership", () => {
   beforeEach(() => {
     dispatchAgentRunFromGateway.mockReset();
   });
+
+  it.each([
+    "connected",
+    "invalidated-before",
+    "aborted-before",
+    "invalidated-after",
+    "aborted-after",
+  ] as const)(
+    "retains live foreground connection custody while preserving admitted staff work (%s)",
+    async (state) => {
+      const execution = createExecution();
+      const connection = new AbortController();
+      const client: GatewayClient = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "webchat-ui", mode: "webchat", version: "test", platform: "test" },
+        },
+        connectionSignal: connection.signal,
+      };
+      attachGatewayLocalUserIngress(
+        client,
+        prepareGatewayLocalUserIngress({
+          authMethod: "trusted-proxy",
+          authenticatedUserExpected: true,
+          isLocalClient: false,
+          profile: { profileId: "foreground-user" },
+        }),
+      );
+      execution.params.client = captureAgentTurnPrincipal(client);
+      execution.params.isOneShotModelRun = false;
+      if (state === "invalidated-before") {
+        client.invalidated = true;
+      }
+      if (state === "aborted-before") {
+        connection.abort();
+      }
+      dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+        const request = getForegroundUserRequest(resolveAgentRunContext(dispatch.ingressOpts));
+        if (state.endsWith("-before")) {
+          // Ordinary accepted work dispatches, but cannot supply a restricted run's capability.
+          expect(request).toBeUndefined();
+          return;
+        }
+        const claim = prepareForegroundUserRequestClaim(request, {
+          runId: execution.params.runId,
+          instanceId: "foreground-owner",
+        });
+        expect(claim).toBeDefined();
+        expect(claim).not.toThrow();
+        if (state === "invalidated-after") {
+          client.invalidated = true;
+        }
+        if (state === "aborted-after") {
+          connection.abort();
+        }
+        if (state !== "connected") {
+          expect(claim).toThrow("connection is no longer active");
+        }
+      });
+      await startAgentRunExecution(execution.params);
+      expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+      expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "preserves access across liveness and invalidates creation (new session: %s)",

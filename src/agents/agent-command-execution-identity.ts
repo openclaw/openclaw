@@ -27,6 +27,7 @@ import type {
   AgentCommandIngressOpts,
   AgentCommandOpts,
 } from "./command/types.js";
+import { getForegroundUserRequest, type ForegroundUserRequest } from "./foreground-request.js";
 import { commitMainSessionRecovery } from "./main-session-recovery/main-session-recovery-store.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery/main-session-recovery-types.js";
 
@@ -51,6 +52,7 @@ function prepareAgentCommandRunAdmission(
     cfg: OpenClawConfig;
     ingress: AgentCommandAdmissionIngress;
     operationalRunInstance: OperationalRunInstanceRef;
+    foregroundRequest?: ForegroundUserRequest;
     runId: string;
     onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
     assertSourceCurrent?: () => void;
@@ -66,6 +68,7 @@ function prepareAgentCommandRunAdmission(
   return prepareAgentRunAdmission({
     cfg: params.cfg,
     operationalRunInstance: params.operationalRunInstance,
+    foregroundRequest: spawnFacts ? undefined : params.foregroundRequest,
     facts: executionIdentitySpawnAdmission({
       operation: "attach",
       value: {
@@ -166,6 +169,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
     cfg: prepared.cfg,
     ingress: params.ingress,
     operationalRunInstance,
+    foregroundRequest: getForegroundUserRequest(opts.runContext ?? opts),
     runId: prepared.runId,
     assertSourceCurrent: opts.assertSourceCurrent,
     operatorAuthority: opts.operatorAuthority,

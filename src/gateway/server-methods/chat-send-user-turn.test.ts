@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -9,9 +10,14 @@ import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
+import {
+  getForegroundUserRequest,
+  prepareForegroundUserRequestClaim,
+} from "../../agents/foreground-request.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
+import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
 import { resolveReplyDirectiveRouting } from "../../auto-reply/reply/get-reply-directives-routing.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
@@ -35,6 +41,10 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../local-user-ingress.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   createUserTurnInputController,
@@ -51,6 +61,102 @@ function requesterProfile(text: string) {
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each([
+    "user",
+    "system",
+    "synthetic",
+    "unverified",
+    "disconnected-before",
+    "invalidated-before",
+    "disconnected-after",
+  ] as const)(
+    "carries only authenticated user input from the real chat producer into admission: %s",
+    async (kind) => {
+      const { controller } = createUserTurnInputController("hello");
+      const connection = new AbortController();
+      const client = {
+        connectionSignal: connection.signal,
+        invalidated: kind === "invalidated-before",
+        authenticatedUserProfile: {
+          profileId: "source",
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        internal: kind === "synthetic" ? { syntheticClient: true as const } : undefined,
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: createClientInfo(),
+          scopes: ["operator.write"],
+        },
+      };
+      if (kind !== "unverified") {
+        attachGatewayLocalUserIngress(
+          client,
+          prepareGatewayLocalUserIngress({
+            authMethod: "token",
+            authenticatedUserExpected: true,
+            isLocalClient: false,
+            profile: { profileId: "source" },
+          }),
+        );
+      }
+      if (kind === "disconnected-before") {
+        connection.abort();
+      }
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          inboundMessage: "hello",
+          clientInfo: createClientInfo(),
+          suppressCommandInterpretation: false,
+          systemInputProvenance:
+            kind === "system" ? { kind: "internal_system", sourceTool: "fixture" } : undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: {
+          agentId: "main",
+          clientRunId: `foreground-${kind}`,
+          sessionKey: "agent:main:main",
+        },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments(),
+        client,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+      if (kind === "disconnected-after") {
+        connection.abort();
+      }
+      const request = getForegroundUserRequest(finalizeInboundContext({ ...prepared.ctx }));
+      const admission = prepareChannelRunAdmission({
+        cfg: {},
+        runId: `foreground-${kind}`,
+        agentId: "main",
+        ingressKind: "gateway-client",
+        boundary: "test",
+        foregroundRequest: request,
+      });
+      try {
+        const context = await admission.admit("embedded");
+        const claim = prepareForegroundUserRequestClaim(request, context.operationalRunInstance);
+        if (kind === "disconnected-after") {
+          // Accepted staff work retains its existing source owner after disconnect.
+          // Tightening this same run to an immutable foreground session still fails.
+          expect(expectDefined(claim, "chat input claim")).toThrow("no longer active");
+        } else if (kind === "user") {
+          expect(expectDefined(claim, "chat input claim")).not.toThrow();
+        } else {
+          expect(claim).toBeUndefined();
+        }
+      } finally {
+        await admission.close();
+      }
+    },
+  );
+
   it.each([
     { profileId: "profile-ada", synthetic: false, verified: true, allowed: true },
     { profileId: "profile-other", synthetic: false, verified: true, allowed: false },
