@@ -32,6 +32,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunnerRegistry: () => null,
 }));
 
+// mock-isolation: Egress registration is simulated so these env-shaping tests never register live proxy grants.
 vi.mock("../secrets/egress-proxy/registry.js", () => ({
   isSecretEgressProxyActive: () => mocks.egressActive,
   registerSecretEgressProxyProcess: (bindings: unknown) => {

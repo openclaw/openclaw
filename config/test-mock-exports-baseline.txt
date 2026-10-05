@@ -2260,7 +2260,6 @@
 ["src/agents/bash-tools.exec.store-env.test.ts","../infra/shell-env.js","8470cab07e2a645804c4f83510ae6c5cdb527025bfd6b87b2a640ab188e4678b",1]
 ["src/agents/bash-tools.exec.store-env.test.ts","../plugins/hook-runner-global.js","bc3183998a68b8cb499e9e9c27592a84ad4d7b04bf8bffeb2de784f04aaadf78",1]
 ["src/agents/bash-tools.exec.store-env.test.ts","../process/supervisor/index.js","981f0d11355c6185081e4aae0d97dca6d518771ae8bae4cacaeccb0e79c71c54",1]
-["src/agents/bash-tools.exec.store-env.test.ts","../secrets/egress-proxy/registry.js","170b6db59c83e938e5f510e94b8783139ecaa2171fbeca492972a09f02b49158",1]
 ["src/agents/bash-tools.exec.store-env.test.ts","./bash-tools.exec-host-gateway.js","3e70fcee4c2da2a018c42bd836cf4b16ba6aeb4aa9f14d94fe1981277c078a67",1]
 ["src/agents/bash-tools.exec.store-env.test.ts","./bash-tools.exec-host-node.js","ceaf3ca9e4798520b580981cf055c34312c8aa8d74a9e69e2a95975626aa2611",1]
 ["src/agents/bash-tools.notify-on-exit-ack.test.ts","../process/supervisor/index.js","0ec176e47f9e5feea60bfb9b85334c0931cad8e5b4bb09074ad0e5060588774d",1]
