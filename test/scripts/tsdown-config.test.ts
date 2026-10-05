@@ -24,7 +24,7 @@ import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worke
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { WORKER_BUNDLE_CHUNK_PATH_PATTERN } from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import buildConfigs from "../../tsdown.config.ts";
+import buildConfigs, { E2E_TYPED_RUNTIME_DECLARATION_SOURCES } from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -1192,10 +1192,10 @@ console.log("relocated Bash parser works without native grammar package");
       ]),
     );
     expect(
-      declarationSources.filter(
-        (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
-      ),
-    ).toEqual(["src/index.ts"]);
+      declarationSources
+        .filter((source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"))
+        .toSorted(),
+    ).toEqual(["src/index.ts", ...E2E_TYPED_RUNTIME_DECLARATION_SOURCES].toSorted());
     expect(
       declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
     ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);
