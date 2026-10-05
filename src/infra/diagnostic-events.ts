@@ -27,6 +27,7 @@ import type {
   DiagnosticChildProcessSpawnFields,
   DiagnosticMemoryPressureFields,
   DiagnosticAsyncQueueDroppedFields,
+  DiagnosticWorkerRequestFields,
 } from "./diagnostic-process-types.js";
 import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
 import type {
@@ -53,7 +54,6 @@ import {
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import type { DiagnosticWorkerRequestFields } from "./worker-request-diagnostics.js";
 
 export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 

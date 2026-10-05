@@ -2,18 +2,10 @@ import { basename } from "node:path";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasInternalDiagnosticEventInterest } from "./diagnostic-event-listener-presence.js";
 import { emitTrustedDiagnosticEvent } from "./diagnostic-events.js";
-
-export type WorkerRequestKind =
-  | "identity"
-  | "avatar"
-  | "catalog"
-  | "transcript"
-  | "sqlite_read"
-  | "sqlite_writer"
-  | "state_read"
-  | "cron"
-  | "compute"
-  | "other";
+import type {
+  DiagnosticWorkerRequestFields,
+  WorkerRequestKind,
+} from "./diagnostic-process-types.js";
 
 export type WorkerRequestObservation = { started(): void; completed(): void };
 
@@ -27,6 +19,9 @@ export function classifyWorkerRequest(commandType: PropertyKey): string {
   if (commandType === "database.domain.execute") {
     return "domain_execute";
   }
+  if (commandType.startsWith("pluginState.")) {
+    return "plugin_state";
+  }
   if (commandType.startsWith("session.history.")) {
     return "transcript_read";
   }
@@ -38,16 +33,6 @@ export function classifyWorkerRequest(commandType: PropertyKey): string {
   }
   return commandType.startsWith("cron.") ? "cron" : "execute";
 }
-
-export type DiagnosticWorkerRequestFields = {
-  type: "worker.request";
-  kind: WorkerRequestKind;
-  requestClass: string;
-  phase: "queued" | "started" | "completed";
-  queueDepth: number;
-  queueWaitMs?: number;
-  durationMs?: number;
-};
 
 const queued = resolveGlobalSingleton(
   Symbol.for("openclaw.workerRequestQueueDepth"),
@@ -88,6 +73,7 @@ const requestClasses = new Set([
   "sessions",
   "transcripts",
   "domain_execute",
+  "plugin_state",
   "auth_profiles",
 ]);
 

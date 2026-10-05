@@ -331,9 +331,9 @@ before dispatch removes the queued request without adding a duration sample.
 Kinds are `identity`, `avatar`, `catalog`, `transcript`, `sqlite_read`,
 `sqlite_writer`, `state_read`, `cron`, `compute`, or `other`. Request classes are
 `task`, `open`, `close`, `execute`, `transcript_read`, `sessions`, `transcripts`,
-`domain_execute`, `auth_profiles`, `cron`, or `other`. Unknown commands collapse to
+`domain_execute`, `plugin_state`, `auth_profiles`, `cron`, or `other`. Unknown commands collapse to
 these fixed families; session IDs, database paths, and caller names are never
-labels. This bounds the three metric families to 230 retained label sets, even
+labels. This bounds the three metric families to 250 retained label sets, even
 if every kind/class combination occurs; the exporter's shared series cap still
 applies.
 
