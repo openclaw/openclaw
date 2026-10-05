@@ -9,7 +9,7 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
-  countSessionsNeedingTranscriptIndexReconcile,
+  listSessionsNeedingTranscriptIndexReconcile,
 } from "./session-transcript-index.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
@@ -51,7 +51,7 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
           switch (command.type) {
             case "preflight":
               deleteOrphanedTranscriptIndexRowsInTransaction(db);
-              return countSessionsNeedingTranscriptIndexReconcile(db);
+              return listSessionsNeedingTranscriptIndexReconcile(db).length;
             case "claim":
               return claimPreparedSessionTranscriptProjectionInTransaction(
                 db,
