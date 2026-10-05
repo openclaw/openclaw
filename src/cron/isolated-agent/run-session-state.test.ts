@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
@@ -265,6 +265,45 @@ describe("createPersistCronSessionEntry", () => {
         },
       }),
     );
+  });
+
+  it("lets run finalization, not a stale snapshot, replace per-call context totals", async () => {
+    const lifecycleRevision = "00000000-0000-4000-8000-000000000003";
+    const existingEntry = makeSessionEntry({
+      lifecycleRevision,
+      totalTokens: 900,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    });
+    const cronSession = {
+      ...makeCronSession({ ...existingEntry }),
+      initialSessionEntry: existingEntry,
+      lifecycleRevision,
+    } as MutableCronSession;
+    const sessionKey = "agent:main:cron:job";
+    const persistedStore: Record<string, SessionEntry> = { [sessionKey]: existingEntry };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+    });
+
+    // A per-call publication lands before the next candidate persists its snapshot.
+    persistedStore[sessionKey] = { ...existingEntry, totalTokens: 185_000 };
+    await persist();
+    expect(persistedStore[sessionKey]?.totalTokens).toBe(185_000);
+
+    persistedStore[sessionKey] = { ...persistedStore[sessionKey]!, totalTokens: 190_000 };
+    // Run finalization records the run's final context total.
+    cronSession.sessionEntry.totalTokens = 120_000;
+    cronSession.contextTotalsAccounted = true;
+    await persist();
+    expect(persistedStore[sessionKey]).toMatchObject({
+      totalTokens: 120_000,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    });
   });
 
   it("does not forward a workspace when no reset boundary is pending", async () => {

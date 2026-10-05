@@ -167,6 +167,10 @@ export async function finalizeCronRun(params: {
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
       prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
     }
+    // Per-call totals land on the base row only when the run uses it directly.
+    if (prepared.runSessionKey === prepared.agentSessionKey) {
+      prepared.cronSession.contextTotalsAccounted = true;
+    }
   }
   const telemetry: CronRunTelemetry = {
     model: modelUsed,

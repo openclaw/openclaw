@@ -65,6 +65,15 @@ export function createFixture(mocks: {
     waitForCompactionRetry: vi.fn(async () => undefined),
     waitForPendingEvents,
   };
+  const contextTotalTokensWriter = {
+    offer: vi.fn(),
+    close: vi.fn(async () => {
+      order.push("context-total-close");
+    }),
+    abandon: vi.fn(async () => {
+      order.push("context-total-abandon");
+    }),
+  };
   const detachBackend = vi.fn(() => order.push("detach-backend"));
   const clearTimers = vi.fn(() => order.push("clear-timers"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
@@ -134,6 +143,7 @@ export function createFixture(mocks: {
     promptActiveSession,
     stream: {
       subscription,
+      contextTotalTokensWriter,
       queueHandle,
       stopAcceptingSteerMessages: vi.fn(),
       getBeforeAgentFinalizeRevisionReason,
@@ -288,6 +298,7 @@ export function createFixture(mocks: {
   return {
     cacheTrace,
     clearTimers,
+    contextTotalTokensWriter,
     detachBackend,
     getBeforeAgentFinalizeRevisionReason,
     input,

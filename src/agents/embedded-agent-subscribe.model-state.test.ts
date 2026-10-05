@@ -579,4 +579,18 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       retryUsage ? { input: 340, output: 50, total: 390 } : { input: 100, output: 20, total: 120 },
     );
   });
+
+  it("reports every successful provider response as settled, never a failed one", async () => {
+    const onModelCallSettled = vi.fn();
+    const harness = createSubscribedSessionHarness({ runId: "run-each-call", onModelCallSettled });
+    await runUsageCalls(harness, [
+      { usage: makeUsage({ input: 1_000, output: 10 }) },
+      { usage: makeUsage({ input: 2_000, cacheRead: 500, output: 10 }) },
+      { usage: makeUsage({ input: 3_000, output: 10 }), stopReason: "error" },
+    ]);
+    expect(onModelCallSettled.mock.calls.map(([usage]) => [usage.input, usage.cacheRead])).toEqual([
+      [1_000, 0],
+      [2_000, 500],
+    ]);
+  });
 });

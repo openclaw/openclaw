@@ -71,6 +71,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onAssistantMessageStart?: () => void | Promise<void>;
   /** Assistant fragment usage before queued delivery; fragments may be intermediate. */
   onModelUsage?: (usage: NormalizedUsage | undefined) => void;
+  /** Fires synchronously for every successful provider response; must not block. */
+  onModelCallSettled?: (usage: NormalizedUsage | undefined) => void;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
     tool?: string;

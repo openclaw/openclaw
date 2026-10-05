@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   appendTranscriptEvent,
   loadTranscriptEvents,
@@ -97,10 +98,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(fixture.order).toEqual([
       "prompt",
       "finalize",
+      "context-total-close",
       "clear-timers",
       "unsubscribe",
       "detach-backend",
       "clear-active-run",
+      "context-total-abandon",
       "result",
     ]);
     expect(fixture.state).toEqual(
@@ -137,6 +140,28 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       "agent:main",
       "/tmp/session.jsonl",
     );
+  });
+
+  it("starts after-turn work only once the per-call context total has flushed", async () => {
+    const fixture = createFixture(mocks);
+    const closeStarted = createDeferredCore();
+    const flushed = createDeferredCore();
+    fixture.contextTotalTokensWriter.close.mockImplementationOnce(async () => {
+      closeStarted.resolve();
+      await flushed.promise;
+    });
+
+    const run = runEmbeddedAttemptSettledPhase(fixture.input);
+    await awaitGateBeforeSettlement(
+      closeStarted.promise,
+      run,
+      "settlement finished without flushing the per-call context total",
+    );
+    expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
+    flushed.resolve();
+    await run;
+
+    expect(mocks.completeAfterTurn).toHaveBeenCalledOnce();
   });
 
   it("persists image failure notes after after-turn transcript reconciliation", async () => {
@@ -830,6 +855,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(mocks.logError).toHaveBeenCalledWith(
       expect.stringContaining("unsubscribe failed, possible resource leak"),
     );
+    // A failed prompt drops its pending per-call total once the subscription is released.
+    expect(fixture.contextTotalTokensWriter.close).not.toHaveBeenCalled();
+    expect(fixture.order.slice(-2)).toEqual(["clear-active-run", "context-total-abandon"]);
   });
 
   it("releases the active run when backend cleanup throws during a failed prompt", async () => {

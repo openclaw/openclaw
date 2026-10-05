@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveFreshSessionTotalTokens,
+  SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -517,6 +518,52 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(read()?.totalTokens).toBe(158_653);
     });
   });
+
+  it.each([
+    {
+      name: "the finished run's total",
+      initial: {
+        totalTokens: 900,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      lastCallUsage: { input: 120_000, output: 50, total: 120_050 },
+      expected: 120_000,
+    },
+    {
+      name: "unknown when the final call has no context snapshot",
+      initial: {},
+      lastCallUsage: { input: 9_000, output: 5, contextUsage: { state: "unavailable" as const } },
+      expected: undefined,
+    },
+  ])(
+    "replaces per-call totals published during the run with $name",
+    async ({ initial, lastCallUsage, expected }) => {
+      await withSession(async ({ storePath, seed, update, read }) => {
+        const entry = await seed(initial);
+        // A per-call publication changes the row under this run's snapshot.
+        await seedSessionStore(storePath, {
+          [sessionKey]: {
+            ...entry,
+            totalTokens: 185_000,
+            totalTokensFresh: true,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+            updatedAt: 2,
+          },
+        });
+        await update({
+          result: createRunResult({
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: { input: 300_000, output: 900, total: 300_900 },
+            lastCallUsage,
+          }),
+        });
+        expect(resolveFreshSessionTotalTokens(read())).toBe(expected);
+      });
+    },
+  );
 
   it("persists a private unknown context independently of billing usage", async () => {
     await withSession(async ({ seed, update, read, sessionStore, storePath }) => {
