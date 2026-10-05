@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
@@ -16,6 +19,96 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionManager } from "./session-manager.js";
+
+it("refuses full context after a rewrite between validation and acceptance", async () => {
+  await withOpenClawTestState({ label: "full-context-validation-reply" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "full-context-rewrite",
+      sessionKey: "agent:main:full-context-rewrite",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    await source.appendMessageAsync(makeUserMessage("original", 1));
+    const validated = createDeferred();
+    const release = createDeferred();
+    // oxlint-disable-next-line typescript/unbound-method -- Forward the original pool receiver.
+    const run = WorkerTaskPoolCore.prototype.run;
+    const spy = vi.spyOn(WorkerTaskPoolCore.prototype, "run").mockImplementation(async function (
+      this: WorkerTaskPoolCore<unknown, unknown>,
+      input,
+      options,
+    ) {
+      const reply = await run.call(this, input, options);
+      if (
+        isRecord(reply) &&
+        reply.ok === true &&
+        isRecord(reply.value) &&
+        // Include the former reply so the regression exercises the pre-fix acceptance race.
+        ((isRecord(reply.value.facts) && reply.value.facts.contextValidated === true) ||
+          reply.value.kind === "context-messages-current")
+      ) {
+        validated.resolve();
+        await release.promise;
+      }
+      return reply;
+    });
+    const pending = SessionManager.readSessionContextAsync(target, (messages) => [...messages]);
+    try {
+      await awaitGateBeforeSettlement(
+        validated.promise,
+        pending,
+        "Context validation was not reached",
+      );
+      expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
+      release.resolve();
+      await expect(pending).rejects.toThrow(/transcript|context/i);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+      spy.mockRestore();
+    }
+  });
+});
+
+it("retains the full-context read owner until an awaited consumer settles", async () => {
+  await withOpenClawTestState({ label: "full-context-owner-close" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "full-context-close",
+      sessionKey: "agent:main:full-context-close",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    await source.appendMessageAsync(makeUserMessage("original", 1));
+    const consuming = createDeferred();
+    const release = createDeferred();
+    let retained: Iterable<unknown> | undefined;
+    const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
+      retained = messages;
+      consuming.resolve();
+      await release.promise;
+      return [...messages];
+    });
+    let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+    try {
+      await awaitGateBeforeSettlement(
+        consuming.promise,
+        pending,
+        "Context consumer was not reached",
+      );
+      closing = closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+      release.resolve();
+      await expect(pending).rejects.toThrow(/revoked|closed|current|admission/i);
+      expect([...retained!]).toEqual([]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending, closing]);
+    }
+  });
+});
 
 it.each(["key", "path"] as const)(
   "rejects a replaced native owner selected by %s",
@@ -123,7 +216,7 @@ it("reads full durable context through workers and preserves the deprecated sync
           logicalTurnId: "missing-source",
         },
       }),
-    ).rejects.toThrow("no longer readable");
+    ).rejects.toThrow("Session transcript changed during context read");
     expect(fs.existsSync(missing.storePath)).toBe(false);
     const alias = path.join(state.stateDir, "context-alias");
     const successor = path.join(state.stateDir, "missing-successor");

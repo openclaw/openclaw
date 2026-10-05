@@ -1,7 +1,6 @@
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
@@ -9,12 +8,6 @@ import type { readSessionTranscriptModelContext } from "./session-accessor.sqlit
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import { listSqliteTargetCandidatePathsForSessionStorePath } from "./session-sqlite-target-paths.js";
-import {
-  captureSessionStoreCandidateIdentities,
-  captureSessionStoreReadCandidate,
-  assertSessionStoreReadCandidate,
-} from "./session-store-read-candidates.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionBranchSummaryWorkerInput,
@@ -97,54 +90,23 @@ export async function resolveSessionSqliteTargetInWorker(
   return value.target;
 }
 
-export function prepareSessionTranscriptContextMessages(
+export async function readSessionTranscriptContextMessagesInWorker(
   target: SessionTranscriptRuntimeTarget,
   admission: SessionContextMessagesWorkerInput["admission"],
   signal?: AbortSignal,
+  expectedIdentity?: SessionContextMessagesWorkerInput["expectedIdentity"],
 ) {
-  const candidates = listSqliteTargetCandidatePathsForSessionStorePath(target.storePath).map(
-    (pathname) => captureSessionStoreReadCandidate(pathname),
+  signal?.throwIfAborted();
+  const value = unwrapSessionTranscriptWorkerReply(
+    await modelContextReads.run(
+      { kind: "context-messages", target, admission, expectedIdentity },
+      { timeoutMs: 60_000, signal },
+    ),
   );
-  const sources = [...captureSessionStoreCandidateIdentities(candidates).values()];
-  const assertCurrent = () => {
-    signal?.throwIfAborted();
-    for (const candidate of candidates) {
-      assertSessionStoreReadCandidate(candidate.path, [candidate]);
-    }
-    for (const source of sources) {
-      const current = readDatabasePathIdentitySync(source.canonicalPath);
-      if (current.key !== source.key || current.birthtime !== source.birthtime) {
-        throw new Error("Session context changed its captured database owner");
-      }
-    }
-  };
-  const run = async (
-    kind: SessionContextMessagesWorkerInput["kind"],
-    version?: SessionContextMessagesWorkerInput["version"],
-  ) => {
-    assertCurrent();
-    const value = unwrapSessionTranscriptWorkerReply(
-      await modelContextReads.run(
-        { kind, target, admission, sources, version },
-        { timeoutMs: 60_000, signal },
-      ),
-    );
-    assertCurrent();
-    return value;
-  };
-  return {
-    assertCurrent,
-    async readMessages() {
-      const value = await run("context-messages");
-      if (!("messages" in value)) {
-        throw new Error("Session context worker returned a different context operation");
-      }
-      return value;
-    },
-    async validate(version: SessionContextMessagesWorkerInput["version"]) {
-      await run("context-messages-current", version);
-    },
-  };
+  if (!("messages" in value)) {
+    throw new Error("Session context worker returned a different context operation");
+  }
+  return value;
 }
 
 export async function prepareSessionEntryInWorker(

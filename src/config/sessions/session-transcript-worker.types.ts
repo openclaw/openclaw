@@ -576,7 +576,6 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
   "context-messages": import("./session-history-read.types.js").SessionTranscriptContextSnapshot;
-  "context-messages-current": { kind: "context-messages-current" };
   "session-reset-recall": {
     cutoff: import("../../../packages/memory-host-sdk/src/host/session-reset-recall.js").SessionResetRecallCutoff;
   };

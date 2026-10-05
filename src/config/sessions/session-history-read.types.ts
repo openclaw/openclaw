@@ -73,9 +73,8 @@ export type SessionTranscriptEventMatch =
   | { kind: "active-assistant"; runId: string };
 
 export type SessionContextMessagesWorkerInput = {
-  kind: "context-messages" | "context-messages-current";
+  kind: "context-messages";
   target: SessionTranscriptRuntimeTarget;
   admission?: UserTurnTranscriptAdmissionReceipt;
-  version?: SessionTranscriptContextVersion;
-  sources: import("../../infra/sqlite-worker-identity.js").DatabasePathIdentity[];
+  expectedIdentity?: import("../../infra/sqlite-worker-identity.js").DatabaseFileIdentity;
 };

@@ -449,7 +449,10 @@ Read grants and disclosure retain current caller authority.
 
 `SessionManager.readSessionContextAsync` supports awaited consumption of a
 full-fidelity detached context, then validates its original source before
-disclosure. The synchronous SDK method remains deprecated until the next Plugin
+disclosure. Durable reads retain the existing history database owner across
+scanning, awaited consumption, validation, and cleanup. Final acceptance uses
+the anchor reader's writer FIFO and native mutation witness; database closure
+revokes the read before disclosure. The synchronous SDK method remains deprecated until the next Plugin
 SDK major and warns once per method. Persistent managers retain their original
 actor binding outside the opening scope until explicitly retargeted; the owning
 borrow must remain live. Release or loss refuses further database work on that

@@ -18,7 +18,6 @@ type DurableHistoryReadOperationRequest = Extract<
       | "session-preview"
       | "model-context"
       | "context-messages"
-      | "context-messages-current"
       | "transcript-watermark"
       | "transcript-message-presence"
       | "transcript-anchors"
@@ -48,7 +47,6 @@ export function isSessionHistoryReadOperation(
     case "session-preview":
     case "model-context":
     case "context-messages":
-    case "context-messages-current":
     case "transcript-watermark":
     case "transcript-message-presence":
     case "transcript-anchors":
@@ -76,7 +74,8 @@ export async function prepareSessionHistoryReadOperation(
     if (
       "expectedIdentity" in request &&
       request.expectedIdentity &&
-      request.kind !== "transcript-anchors"
+      request.kind !== "transcript-anchors" &&
+      request.kind !== "context-messages"
     ) {
       assertExistingDatabaseIdentity(
         request.kind === "model-context" ? request.target.storePath : request.database.path,
@@ -215,14 +214,9 @@ async function prepareHistoryRead(
           items: readSessionPreviewItemsReadOnly(request, retainedDatabase),
         }));
     }
-    case "context-messages":
-    case "context-messages-current": {
+    case "context-messages": {
       const [
-        {
-          readSessionTranscriptContextMessages,
-          validateSessionTranscriptContextAdmission,
-          validateSessionTranscriptContextVersion,
-        },
+        { readSessionTranscriptContextMessages },
         { resolveSqliteTranscriptReadScope, toDatabaseOptions },
         { resolveOpenClawAgentSqlitePath },
         { readDatabasePathIdentitySync },
@@ -237,23 +231,14 @@ async function prepareHistoryRead(
           const databasePath = resolveOpenClawAgentSqlitePath(
             toDatabaseOptions(resolveSqliteTranscriptReadScope(request.target)),
           );
-          const current = readDatabasePathIdentitySync(databasePath);
-          const source = request.sources.find(
-            (entry) => entry.canonicalPath === current.canonicalPath,
-          );
-          if (!source || current.key !== source.key || current.birthtime !== source.birthtime) {
+          if (request.expectedIdentity) {
+            assertExistingDatabaseIdentity(
+              databasePath,
+              request.expectedIdentity.key,
+              request.expectedIdentity.birthtime,
+            );
+          } else if (readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
             throw new Error("Session context changed its captured database owner");
-          }
-          if (source.key.startsWith("file:")) {
-            assertExistingDatabaseIdentity(databasePath, source.key, source.birthtime);
-          }
-          if (request.kind === "context-messages-current") {
-            if (request.admission) {
-              validateSessionTranscriptContextAdmission(request.target, request.admission);
-            } else {
-              validateSessionTranscriptContextVersion(request.target, request.version);
-            }
-            return { kind: "context-messages-current" as const };
           }
           return readSessionTranscriptContextMessages(
             request.target,
