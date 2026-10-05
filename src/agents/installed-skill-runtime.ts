@@ -1,3 +1,5 @@
+import path from "node:path";
+import { root as createFsSafeRoot } from "@openclaw/fs-safe/root";
 import {
   hasUnavailableSkillSecretOwners,
   isSkillSecretOwnerUnavailable,
@@ -96,6 +98,18 @@ export function prepareInstalledSkillCatalog(params: {
           readContent: sandbox?.enabled ? undefined : skill.readContent,
         },
         reader,
+        // Pin before yielding; sandbox and remote owners never gain ambient host reads.
+        companionRoot:
+          !sandbox?.enabled &&
+          !reader &&
+          (resolveSkillFileHost(skill) === "gateway" ||
+            (resolveSkillFileHost(skill) === undefined && !workspace?.loadSkills)) &&
+          path.isAbsolute(skill.filePath)
+            ? createFsSafeRoot(path.dirname(skill.filePath)).then(
+                (root) => ({ root }),
+                (error: unknown) => ({ error }),
+              )
+            : undefined,
         assertCurrent: params.assertCurrent,
         readSearchContent,
       };

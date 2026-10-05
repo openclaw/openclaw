@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { recordSkillFileHost } from "../../skills/skill-file-host.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
 import { readInstalledSkill } from "../installed-skill-catalog.js";
@@ -91,6 +92,9 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
     expect(readFile).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: runtimePath, maxBytes: 16 * 1024 }),
     );
+    await expect(
+      read.execute("companion", { name: "guide", relativePath: "companion.md" }),
+    ).rejects.toThrow("instruction-only");
     const result = await read.execute("read-guide", { name: "guide" });
     expect(result.content).toEqual([{ type: "text", text: "Complete sandbox instructions" }]);
     expect(readFile).toHaveBeenCalledWith(
@@ -136,6 +140,7 @@ it("confines cached and retargeted skill instructions to the required root at re
       { readContent: "Cached instructions must not bypass the root" },
     ),
   );
+  recordSkillFileHost(candidates[0]!, "gateway");
   let active = true;
   const assertCurrent = () => {
     if (!active) {
@@ -162,6 +167,9 @@ it("confines cached and retargeted skill instructions to the required root at re
     );
     expect(skills.every((skill) => skill.source.readContent === undefined)).toBe(true);
     await expect(readInstalledSkill(skills, "inside")).resolves.toBe("Inside instructions");
+    await expect(readInstalledSkill(skills, "inside", undefined, "SKILL.md")).rejects.toThrow(
+      "instruction-only",
+    );
     await expect(readCodeModeSkill(aliasSkill)).resolves.toBe("Inside instructions");
     await expect(readInstalledSkill(skills, "outside")).rejects.toThrow("Unknown installed skill");
     await fs.unlink(alias);

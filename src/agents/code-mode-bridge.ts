@@ -474,7 +474,7 @@ export async function runBridgeRequest(params: {
         const called = await params.runtime.callExactId(
           binding.id,
           params.request.method === "skillsRead"
-            ? { name: values[0] }
+            ? { name: values[0], ...(values[1] === undefined ? {} : { relativePath: values[1] }) }
             : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
           {
             recoverySurface: "catalog",
