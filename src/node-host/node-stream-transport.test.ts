@@ -353,7 +353,7 @@ describe("node stream close acknowledgement", () => {
     const gateway = net.createServer((socket) => {
       let buffer = Buffer.alloc(0);
       let upgraded = false;
-      socket.on("data", (chunk) => {
+      socket.on("data", (chunk: Buffer) => {
         if (upgraded) {
           gotFrame.resolve();
           return;
