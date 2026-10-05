@@ -7094,7 +7094,6 @@
 ["src/daemon/schtasks-install-rollback.test.ts","./service-operation-lock.js","d3a8ee8aa1bad3456b3213e1873ac8a9f4cafc97a29b85d4f73bada7410a9450",1]
 ["src/daemon/schtasks-owner-publication.test.ts","../infra/gateway-owner-lease.js","63e07c66332bac499a6bed01287755b92004ac03c82b15e59d80ed56baeec5cb",1]
 ["src/daemon/schtasks-runtime.test.ts","./gateway-service-probe-hosts.js","b60fdc6857b17de4c9185930c46e840f6678cbdd813e4646195fdcd153983433",1]
-["src/daemon/schtasks.start.test.ts","./schtasks-exec.js","ca8f72af7ec29b2ad16248f58e42348ffd3c70f865bd0ac146d9272110622e00",1]
 ["src/daemon/schtasks.startup-fallback.test.ts","../infra/gateway-processes.js","f9bdaff535c45e2a1ea217983fc366420204d1e4a365b04ed5041e11b378be2e",1]
 ["src/daemon/schtasks.stop.test-support.ts","../gateway/call.js","e296da7f7f3dc45a773059dc1929764ea77b4539a28166b825202a04b1644a7e",1]
 ["src/daemon/schtasks.stop.test-support.ts","../infra/gateway-owner-lease.js","63e07c66332bac499a6bed01287755b92004ac03c82b15e59d80ed56baeec5cb",1]
