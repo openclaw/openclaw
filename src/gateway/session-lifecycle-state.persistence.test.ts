@@ -64,6 +64,17 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: routing.loadSessionEntry,
 }));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => {
+    const loaded = routing.loadSessionEntry(params.key, { agentId: params.agentId }, params.cfg);
+    return { ...loaded, storeKeys: loaded.storeKeys ?? [loaded.canonicalKey] };
+  },
+}));
 
 const persistenceTestWarnings = vi.fn();
 const silentLog: SubsystemLogger = {
@@ -310,7 +321,7 @@ it.each(["success", "failed-write"])(
     const startPersisted = createDeferred();
     const terminalWrite = createDeferred();
     let persistenceSpy:
-      | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+      | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
       | undefined;
     const restartRecoveryCandidates = new Map();
     const writerStarted = createDeferred();
@@ -362,15 +373,18 @@ it.each(["success", "failed-write"])(
         restartRecoveryCandidates,
         refreshConnectedUserProfiles: vi.fn(),
       });
-      const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
+      const prepareLifecycleEvent = lifecycleState.prepareGatewaySessionLifecycleEvent;
       persistenceSpy = vi
-        .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+        .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
         .mockImplementation((params) => {
-          const persistence = persistLifecycleEvent(params);
-          if (params.event.runId === runId && params.event.data?.phase === "start") {
-            startPersisted.resolve(persistence);
-          }
-          return persistence;
+          const persist = prepareLifecycleEvent(params);
+          return () => {
+            const persistence = persist();
+            if (params.event.runId === runId && params.event.data?.phase === "start") {
+              startPersisted.resolve(persistence);
+            }
+            return persistence;
+          };
         });
       emitAgentEvent({
         runId,
@@ -393,7 +407,7 @@ it.each(["success", "failed-write"])(
       });
       await writerStarted.promise;
       if (outcome === "failed-write") {
-        persistenceSpy.mockReturnValueOnce(terminalWrite.promise);
+        persistenceSpy.mockReturnValueOnce(() => terminalWrite.promise);
       }
 
       interruption = startSessionWorkAdmissionInterruption({

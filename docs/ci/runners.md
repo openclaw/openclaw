@@ -40,6 +40,18 @@ and confirm its terminal state. If the lease-to-run match is unavailable, report
 the unresolved cleanup instead of canceling a guessed run.
 Do not retry in a loop when the pool is full.
 
+If the admission job cannot read its GitHub Actions run, it denies admission and
+reports the HTTP status, a fixed error classification, and validated GitHub request
+ID and rate-limit/retry headers when available. Error bodies are limited to 8 KiB
+within the existing 15-second request deadline; raw response messages and bodies
+are never logged. A bare `403` is reported as `forbidden`, not assumed to be a
+permission or rate-limit failure. Use the request ID to investigate the original
+GitHub response; a later successful request does not explain an earlier rejection.
+Honor `retry-after` (seconds) before a later request. When
+`x-ratelimit-remaining=0`, wait until `x-ratelimit-reset` (UTC epoch seconds).
+Admission does not retry or change token permissions, and caller cleanup remains
+required for a failed request.
+
 Idle requests are capped at 15 minutes. The existing Testbox monitor continues
 to protect active SSH commands. Stop retained leases when their task finishes;
 the idle limit is not a substitute for caller cleanup.

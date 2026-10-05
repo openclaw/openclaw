@@ -336,10 +336,11 @@ type DreamingResourceSpec<Key extends DreamingResourceKey> = {
   apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
 };
 
-const DREAMING_RESOURCE_SPECS: {
-  [Key in DreamingResourceKey]: DreamingResourceSpec<Key>;
-} = {
-  dreamingStatus: {
+const DREAMING_RESOURCE_LOADERS: Record<
+  DreamingResourceKey,
+  (state: DreamingState) => Promise<void>
+> = {
+  dreamingStatus: createDreamingResourceLoader("dreamingStatus", {
     method: "doctor.memory.status",
     clear: (state) => {
       state.dreamingStatus = null;
@@ -347,8 +348,8 @@ const DREAMING_RESOURCE_SPECS: {
     apply: (state, payload) => {
       state.dreamingStatus = payload.dreaming ?? null;
     },
-  },
-  dreamDiary: {
+  }),
+  dreamDiary: createDreamingResourceLoader("dreamDiary", {
     method: "doctor.memory.dreamDiary",
     clear: (state) => {
       state.dreamDiaryPath = null;
@@ -358,8 +359,8 @@ const DREAMING_RESOURCE_SPECS: {
       state.dreamDiaryPath = payload.path;
       state.dreamDiaryContent = payload.found ? (payload.content ?? "") : null;
     },
-  },
-  wikiImportInsights: {
+  }),
+  wikiImportInsights: createDreamingResourceLoader("wikiImportInsights", {
     method: "wiki.importInsights",
     clear: (state) => {
       state.wikiImportInsights = null;
@@ -367,8 +368,8 @@ const DREAMING_RESOURCE_SPECS: {
     apply: (state, payload) => {
       state.wikiImportInsights = payload;
     },
-  },
-  wikiOverview: {
+  }),
+  wikiOverview: createDreamingResourceLoader("wikiOverview", {
     method: "wiki.overview",
     clear: (state) => {
       state.wikiOverview = null;
@@ -376,67 +377,74 @@ const DREAMING_RESOURCE_SPECS: {
     apply: (state, payload) => {
       state.wikiOverview = payload;
     },
-  },
+  }),
 };
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Key pairs the RPC payload with its resource writer.
-export async function loadDreamingResource<Key extends DreamingResourceKey>(
-  state: DreamingState,
+function createDreamingResourceLoader<Key extends DreamingResourceKey>(
   key: Key,
-): Promise<void> {
-  const spec: DreamingResourceSpec<Key> = DREAMING_RESOURCE_SPECS[key];
-  const agentId = resolveSelectedAgentId(state);
-  const loadingKey = `${key}Loading` as const;
-  const errorKey = `${key}Error` as const;
-  const agentKey = `${key}AgentId` as const;
-  if (!agentId) {
-    return;
-  }
-  const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state[agentKey] !== agentId) {
-    spec.clear(state);
-  }
-  if (
-    (key === "wikiImportInsights" || key === "wikiOverview") &&
-    !canCallMemoryWikiMethod(state, spec.method)
-  ) {
-    delete state.resourceRequests[key];
-    state[loadingKey] = false;
-    state[errorKey] = null;
-    spec.clear(state);
-    return;
-  }
-
-  const active = state.resourceRequests[key];
-  if (active?.agentId === agentId && state[loadingKey]) {
-    return;
-  }
-
-  // Request identity, not agent identity, rejects stale A -> B -> A completions.
-  const request: DreamingResourceRequest = { agentId };
-  state.resourceRequests[key] = request;
-  state[loadingKey] = true;
-  state[errorKey] = null;
-  try {
-    const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
-    if (state.resourceRequests[key] !== request || resolveSelectedAgentId(state) !== agentId) {
+  spec: DreamingResourceSpec<Key>,
+): (state: DreamingState) => Promise<void> {
+  return async (state) => {
+    const agentId = resolveSelectedAgentId(state);
+    const loadingKey: `${Key}Loading` = `${key}Loading`;
+    const errorKey: `${Key}Error` = `${key}Error`;
+    const agentKey: `${Key}AgentId` = `${key}AgentId`;
+    if (!agentId) {
       return;
     }
-    spec.apply(state, payload);
-    state[agentKey] = agentId;
-  } catch (error) {
-    if (state.resourceRequests[key] === request && resolveSelectedAgentId(state) === agentId) {
-      state[errorKey] = formatUiError(error);
+    const client = state.client;
+    if (!client || !state.connected) {
+      return;
     }
-  } finally {
-    if (state.resourceRequests[key] === request) {
+    if (state[agentKey] !== agentId) {
+      spec.clear(state);
+    }
+    if (
+      (key === "wikiImportInsights" || key === "wikiOverview") &&
+      !canCallMemoryWikiMethod(state, spec.method)
+    ) {
       delete state.resourceRequests[key];
       state[loadingKey] = false;
+      state[errorKey] = null;
+      spec.clear(state);
+      return;
     }
-  }
+
+    const active = state.resourceRequests[key];
+    if (active?.agentId === agentId && state[loadingKey]) {
+      return;
+    }
+
+    // Request identity, not agent identity, rejects stale A -> B -> A completions.
+    const request: DreamingResourceRequest = { agentId };
+    state.resourceRequests[key] = request;
+    state[loadingKey] = true;
+    state[errorKey] = null;
+    try {
+      const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
+      if (state.resourceRequests[key] !== request || resolveSelectedAgentId(state) !== agentId) {
+        return;
+      }
+      spec.apply(state, payload);
+      state[agentKey] = agentId;
+    } catch (error) {
+      if (state.resourceRequests[key] === request && resolveSelectedAgentId(state) === agentId) {
+        state[errorKey] = formatUiError(error);
+      }
+    } finally {
+      if (state.resourceRequests[key] === request) {
+        delete state.resourceRequests[key];
+        state[loadingKey] = false;
+      }
+    }
+  };
+}
+
+export function loadDreamingResource(
+  state: DreamingState,
+  key: DreamingResourceKey,
+): Promise<void> {
+  return DREAMING_RESOURCE_LOADERS[key](state);
 }
 
 export async function runDreamDiaryAction(

@@ -136,6 +136,124 @@ it("composes suggestion FIFO, claims, release and resolution without caller SQL"
   }
 });
 
+it.each(["members", "suggestions"] as const)(
+  "refuses %s disclosure after its borrowed actor releases inside an accepted composition",
+  async (kind) => {
+    const { scope } = await fixture(`released-${kind}`);
+    await addSessionMember(scope, {
+      identityId: "alice",
+      addedBy: "private-creator",
+      addedAt: 1,
+    });
+    await addSessionSuggestionInWorker(scope, {
+      id: `private-suggestion-${kind}`,
+      authorId: "alice",
+      text: "Private suggestion",
+    });
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: actor.agentId,
+      env,
+      authority,
+      existingOnly: true,
+    });
+    assert(borrowed);
+    let releasing: Promise<void> | undefined;
+    const current: IncognitoSessionAuthority = {
+      assertCurrent() {},
+      authorize(stage) {
+        if (stage === "commit") {
+          releasing ??= borrowed.release();
+        }
+      },
+    };
+    const captured = { ...scope, incognito: { actor: borrowed, authority: current } };
+    const disclosed = vi.fn();
+    try {
+      await expect(
+        borrowed.sessions.withSharedState(async () => {
+          const value =
+            kind === "members"
+              ? await listSessionMembersInWorker(captured)
+              : await listSessionSuggestions(captured);
+          disclosed(value);
+        }),
+      ).rejects.toThrow("reference is released");
+      await releasing;
+      expect(disclosed).not.toHaveBeenCalled();
+    } finally {
+      await borrowed.release();
+    }
+  },
+);
+
+it.each(["release", "finalize"] as const)(
+  "retains a committed suggestion claim token through %s after borrower release",
+  async (settlement) => {
+    const { scope } = await fixture(`retained-${settlement}`);
+    const id = `accepted-suggestion-${settlement}`;
+    await addSessionSuggestionInWorker(scope, {
+      id,
+      authorId: "alice",
+      text: "Accepted private suggestion",
+    });
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: actor.agentId,
+      env,
+      authority,
+      existingOnly: true,
+    });
+    assert(borrowed);
+    let releasing: Promise<void> | undefined;
+    const current: IncognitoSessionAuthority = {
+      assertCurrent() {},
+      authorize(stage) {
+        if (stage === "commit") {
+          releasing ??= borrowed.release();
+        }
+      },
+    };
+    const captured = { ...scope, incognito: { actor: borrowed, authority: current } };
+    try {
+      await expect(
+        borrowed.sessions.withSharedState(async () => {
+          const claim = await claimSessionSuggestionDispatchInWorker(captured, {
+            id,
+            resolution: "dismiss",
+          });
+          assert(claim?.kind === "claimed");
+          const params = { id: claim.suggestion.id, token: claim.token };
+          if (settlement === "release") {
+            expect(await releaseSessionSuggestionDispatchInWorker(captured, params)).toBe(true);
+          } else {
+            expect(
+              await finalizeSessionSuggestionClaimInWorker(captured, {
+                ...params,
+                state: "dismissed",
+              }),
+            ).toMatchObject({ id: params.id, state: "dismissed" });
+          }
+        }),
+      ).rejects.toThrow("reference is released");
+      await releasing;
+      expect(await listSessionSuggestions(scope)).toMatchObject([
+        { state: settlement === "release" ? "pending" : "dismissed" },
+      ]);
+      if (settlement === "release") {
+        const next = await claimSessionSuggestionDispatchInWorker(scope, {
+          id,
+          resolution: "dismiss",
+        });
+        assert(next?.kind === "claimed");
+        await releaseSessionSuggestionDispatchInWorker(scope, { id, token: next.token });
+      }
+    } finally {
+      await borrowed.release();
+    }
+  },
+);
+
 it("publishes actor membership, owner, participant and category changes through their owners", async () => {
   const { scope, entry } = await fixture("sharing");
   const changes: SessionRowChange[] = [];

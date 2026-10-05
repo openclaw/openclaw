@@ -13,7 +13,6 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
@@ -25,6 +24,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as sessionStoreLookup from "./session-utils-store-lookup.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -35,38 +35,26 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 function holdSessionAuthorizationRead(sessionKey: string) {
   const readCaptured = createDeferredCore();
   const resumeRead = createDeferredCore();
-  const read = historyLane.pool.run.bind(historyLane.pool);
+  const read = sessionStoreLookup.withGatewaySessionStoreTarget;
   let held = false;
-  const workerRead = vi
-    .spyOn(historyLane.pool, "run")
-    .mockImplementation(async (prepare, options) => {
-      if (typeof prepare !== "function") {
-        return read(prepare, options);
-      }
-      let matchesAuthorization = false;
-      const reply = await read(async () => {
-        const input = await prepare();
-        matchesAuthorization =
-          input.kind === "session-exact-entries" &&
-          input.projection === "full" &&
-          input.includeMembers === true &&
-          input.includeAuthorization === true &&
-          input.sessionKeys.length === 1 &&
-          input.sessionKeys[0] === sessionKey;
-        return input;
-      }, options);
-      if (!held && matchesAuthorization) {
-        held = true;
-        readCaptured.resolve();
-        await resumeRead.promise;
-      }
-      return reply;
-    });
+  const readWithHold: typeof read = async (params, consume) => {
+    const reply = await read(params, consume);
+    if (!held && params.key === sessionKey && params.includeMembership === true) {
+      held = true;
+      readCaptured.resolve();
+      // The ordered read releases its writer FIFO before the test commits a revocation.
+      await resumeRead.promise;
+    }
+    return reply;
+  };
+  const authorizationRead = vi
+    .spyOn(sessionStoreLookup, "withGatewaySessionStoreTarget")
+    .mockImplementation(readWithHold);
   return {
     entered: readCaptured.promise,
     resume: () => resumeRead.resolve(),
     wasHeld: () => held,
-    restore: () => workerRead.mockRestore(),
+    restore: () => authorizationRead.mockRestore(),
   };
 }
 

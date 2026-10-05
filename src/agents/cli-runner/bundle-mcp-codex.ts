@@ -6,7 +6,7 @@ import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";

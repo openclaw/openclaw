@@ -2,6 +2,40 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   {
+    code: "session-observer-progress-sync-reads",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-04",
+    warningStarts: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await sessionObserver.handleEventAsync, getCompanionSnapshotAsync, and disposeAsync. Use reply_dispatch shouldSendToolSummariesAsync/shouldSendFullToolDetailsAsync and onVerboseProgressVisibilityAsync. Retain synchronous contracts until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath:
+      "/plugins/sdk-migration/how-to-migrate#await-session-observer-and-progress-visibility",
+    surfaces: [
+      "GatewayRequestHandlerOptions.context.sessionObserver.handleEvent",
+      "GatewayRequestHandlerOptions.context.sessionObserver.getCompanionSnapshot",
+      "GatewayRequestHandlerOptions.context.sessionObserver.dispose",
+      "PluginHookReplyDispatchEvent.shouldSendToolSummaries",
+      "PluginHookReplyDispatchEvent.shouldSendFullToolDetails",
+      "GetReplyOptions.onVerboseProgressVisibility",
+      "tryDispatchAcpReplyHook boolean-only event inputs",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "src/plugin-sdk/reply-runtime.contract.test.ts",
+      "src/plugin-sdk/gateway-session-observer-compat.test.ts",
+      "src/plugin-sdk/acp-runtime.test.ts",
+      "src/gateway/session-observer.test.ts",
+    ],
+    releaseNote:
+      "Session observer lifecycle and progress visibility expose awaited worker-backed methods. Released synchronous observer methods, reply-hook booleans, and visibility callbacks remain compatible; schemas, stored data, retention, and update behavior are unchanged.",
+  },
+  {
     code: "channel-inbound-sync-envelope-timestamps",
     status: "deprecated",
     owner: "sdk",

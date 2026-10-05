@@ -216,7 +216,7 @@ function resolveTtsPersonaIdFromPrefs(
   if (prefs.tts && Object.hasOwn(prefs.tts, "persona")) {
     return normalizeTtsPersonaId(prefs.tts.persona);
   }
-  return normalizeTtsPersonaId(config.persona);
+  return config.persona;
 }
 
 export function resolveTtsPersonaFromPrefs(
@@ -263,10 +263,7 @@ export function resolveTtsSettingsSnapshot(params: {
   const persona = personaId ? config.personas[personaId] : undefined;
   const prefsProvider = normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
   const personaProvider = normalizeConfiguredSpeechProviderId(persona?.provider);
-  const configuredProvider =
-    config.providerSource === "config"
-      ? (normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider)
-      : undefined;
+  const configuredProvider = config.providerSource === "config" ? config.provider : undefined;
   const providerPreference: TtsProviderPreference | undefined = prefsProvider
     ? { provider: prefsProvider, source: "prefs" }
     : personaProvider

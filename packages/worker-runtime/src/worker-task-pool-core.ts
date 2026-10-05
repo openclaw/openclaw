@@ -12,6 +12,7 @@ import {
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
 import { captureWorkerTaskContext } from "./worker-task-context.js";
+import { WorkerTaskError } from "./worker-task-error.js";
 import { serviceNativeWorkerPass, type WorkerTaskHost } from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
 import { createWorkerTaskPoolBootstrap } from "./worker-task-pool-bootstrap.js";
@@ -50,16 +51,6 @@ import type {
 const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
 
 type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed"; error: string };
-export class WorkerTaskError extends Error {
-  constructor(
-    message: string,
-    readonly code: "unavailable" | "timeout" | "failed" | "overloaded",
-  ) {
-    super(message);
-    this.name = "WorkerTaskError";
-  }
-}
-
 /** Bounded execution workers; each worker accepts one task at a time. */
 export class WorkerTaskPoolCore<Input, Output> {
   private readonly slots = new Set<Slot<Input, Output>>();
@@ -104,6 +95,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     (task, error) => this.finish(task, error),
   );
   private readonly maxWorkers: number;
+  private readonly observeTask;
   private readonly maxPendingTasks: number;
   private readonly maxPendingBytes: number;
   private pendingTasks = 0;
@@ -127,6 +119,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     private readonly publicDispatch?: WorkerTaskPoolDispatch,
     private readonly ownerOptions: WorkerTaskPoolOwnerOptions = {},
   ) {
+    this.observeTask = host.createTaskObserver?.(options.workerUrl, options.sharedCompute);
     this.maxWorkers = options.maxWorkers ?? availableParallelism();
     this.maxPendingTasks = options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS;
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_WORKER_PENDING_BYTES;
@@ -256,6 +249,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     task.admitted = true;
     this.pendingTasks++;
     this.pendingBytes += inputBytes;
+    task.observation = this.observeTask?.();
     if (options.timeoutMs !== undefined) {
       this.armTimeout(task, options.timeoutMs);
     }
@@ -400,6 +394,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.activeTasks++;
       task.slot = slot;
       task.startedAt = performance.now();
+      task.observation?.started();
       task.runInContext(() => {
         try {
           slot.worker?.ref();
@@ -680,6 +675,8 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     this.finishHostWait(task);
     task.done = true;
+    task.observation?.completed();
+    task.observation = undefined;
     task.runInContext(() => task.controller?.abort());
     clearTimeout(task.timer);
     task.deadline = undefined;

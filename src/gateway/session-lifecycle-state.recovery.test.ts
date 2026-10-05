@@ -18,13 +18,16 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
   throw new Error("Session lifecycle presentation imported plugin runtime ownership");
 });
 
+// mock-isolation: Exercise recovery reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: persistenceMocks.updateSessionEntry,
+  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: persistenceMocks.loadSessionEntry,
+// mock-isolation: Controlled entries isolate recovery projection from database admission.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (...args: unknown[]) =>
+    persistenceMocks.loadSessionEntry(...args),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({

@@ -426,11 +426,11 @@ export function deleteSessionDeliveryArtifacts(
         database.db,
         db.selectFrom("session_nodes").select("session_key"),
       ).rows.flatMap((row) =>
-        row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
+        row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key)],
       ),
     );
     sessionKeys = lookupKeys.filter(
-      (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key.trim())),
+      (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key)),
     );
   }
   const cache = getNodeSqliteKysely<AgentCacheDatabase>(database.db);

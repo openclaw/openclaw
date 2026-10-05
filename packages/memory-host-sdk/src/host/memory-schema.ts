@@ -395,9 +395,7 @@ export function ensureMemoryIndexSchema(params: {
         dropMemoryChunkFtsTriggers(params.db);
         dropMemoryPathFtsTriggers(params.db);
       }
-      const message = formatErrorMessage(err);
-      ftsAvailable = false;
-      ftsError = message;
+      ftsError = formatErrorMessage(err);
     }
   }
 

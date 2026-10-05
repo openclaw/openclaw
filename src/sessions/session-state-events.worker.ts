@@ -6,6 +6,7 @@ import {
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -30,6 +31,38 @@ export function executeSessionStateCommand(
   command: SqliteWorkerCommand<SessionStateWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): SessionStateWorkerOperations[keyof SessionStateWorkerOperations]["output"] {
+  if (command.type === "sessionState.cleanup") {
+    const input = command.input;
+    return runOpenClawStateWriteTransaction(({ db }) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const kysely = getSessionStateKysely(db);
+      if (input.kind === "delete") {
+        for (const table of ["session_state_events", "session_state_heads"] as const) {
+          executeSqliteQuerySync(
+            db,
+            kysely
+              .deleteFrom(table)
+              .where("session_key", "=", input.sessionKey)
+              .where("agent_id", "=", input.agentId),
+          );
+        }
+      }
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom("session_watch_cursors")
+          .where((eb) =>
+            input.kind === "reset"
+              ? eb("watcher_session_key", "=", input.sessionKey)
+              : eb.or([
+                  eb("watcher_session_key", "=", input.sessionKey),
+                  eb("target_session_key", "=", input.sessionKey),
+                ]),
+          ),
+      );
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+    }, options);
+  }
   if (command.type === "sessionState.sweep") {
     const { cursors, now, sessionEntryCurrentSources } = command.input;
     const admit = (stage: "transaction" | "commit") =>

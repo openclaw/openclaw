@@ -397,7 +397,7 @@ async function resolveChannelTag(
   const result = await runCommand(["git", "-C", root, "tag", "--list", "v*", "--sort=-v:refname"], {
     timeoutMs,
   }).catch(() => null);
-  const tags = result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
+  const tags = result?.code === 0 ? result.stdout.split("\n") : [];
   return selectChannelTag(tags, channel);
 }
 

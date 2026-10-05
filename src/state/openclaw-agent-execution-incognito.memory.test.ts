@@ -204,6 +204,7 @@ it("joins accepted Memory parsing before releasing its original actor borrow", a
   const { reader, scope } = await session("callback-release", authority, borrowed);
   let releasing: Promise<void> | undefined;
   let released = false;
+  let disclosed = 0;
   try {
     await expect(
       buildSessionEntry(
@@ -211,6 +212,7 @@ it("joins accepted Memory parsing before releasing its original actor borrow", a
         {
           ...scope,
           onTranscriptMessage() {
+            disclosed++;
             releasing ??= borrowed.release().then(() => {
               released = true;
             });
@@ -220,9 +222,53 @@ it("joins accepted Memory parsing before releasing its original actor borrow", a
         reader,
       ),
     ).rejects.toThrow("released");
+    expect(disclosed).toBe(1);
     await releasing;
     expect(released).toBe(true);
   } finally {
+    await borrowed.release();
+  }
+});
+
+it("refuses Memory results when final compute authorization releases the borrow", async () => {
+  const borrowed = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    env,
+    authority,
+  });
+  assert(borrowed);
+  let projected = false;
+  let retiring: Promise<void> | undefined;
+  const grant: IncognitoSessionAuthority = {
+    assertCurrent() {},
+    authorize() {
+      if (projected) {
+        retiring ??= borrowed.release();
+      }
+    },
+  };
+  const { reader, scope } = await session("final-compute-release", grant, borrowed);
+  const project = sessionFiles.buildSessionEntryFromSnapshot;
+  const projection = vi
+    .spyOn(sessionFiles, "buildSessionEntryFromSnapshot")
+    .mockImplementation(async (...args) => {
+      const result = await project(...args);
+      projected = true;
+      return result;
+    });
+  let disclosed = false;
+  try {
+    await expect(
+      borrowed.sessions.withSharedState(async () => {
+        await buildSessionEntry("actor-memory", scope, reader);
+        disclosed = true;
+      }),
+    ).rejects.toThrow("released");
+    expect(disclosed).toBe(false);
+  } finally {
+    projection.mockRestore();
+    await retiring;
     await borrowed.release();
   }
 });

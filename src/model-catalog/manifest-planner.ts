@@ -11,7 +11,7 @@ import type {
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 
 type ManifestModelCatalogPlugin = {
   providerEndpoints?: readonly import("../plugins/manifest-types.js").PluginManifestProviderEndpoint[];
@@ -91,12 +91,12 @@ export function planManifestModelCatalogRows(params: {
   const hasProviderFilter = Boolean(params.providerFilter) || params.providerFilters !== undefined;
   const providerFilters = hasProviderFilter
     ? new Set(
-        normalizeUniqueStringEntries(
-          [
-            ...(params.providerFilter !== undefined ? [params.providerFilter] : []),
-            ...(params.providerFilters ?? []),
-          ].map(normalizeModelCatalogProviderId),
-        ),
+        [
+          ...(params.providerFilter !== undefined ? [params.providerFilter] : []),
+          ...(params.providerFilters ?? []),
+        ]
+          .map(normalizeModelCatalogProviderId)
+          .filter(Boolean),
       )
     : undefined;
   const entries: ManifestModelCatalogPlanEntry[] = [];
@@ -115,8 +115,8 @@ export function planManifestModelCatalogRows(params: {
       }
       const providerAliases = aliasesByTargetProvider.get(normalizedProvider) ?? [];
       const plannedProviders = providerFilters
-        ? normalizeUniqueStringEntries([normalizedProvider, ...providerAliases]).filter(
-            (candidateProvider) => providerFilters.has(candidateProvider),
+        ? uniqueStrings([normalizedProvider, ...providerAliases]).filter((candidateProvider) =>
+            providerFilters.has(candidateProvider),
           )
         : [normalizedProvider];
       if (plannedProviders.length === 0) {
@@ -260,9 +260,7 @@ export function planManifestModelCatalogRows(params: {
 }
 
 function buildOwnedProviderSet(plugin: ManifestModelCatalogPlugin): ReadonlySet<string> {
-  return new Set(
-    normalizeUniqueStringEntries((plugin.providers ?? []).map(normalizeModelCatalogProviderId)),
-  );
+  return new Set((plugin.providers ?? []).map(normalizeModelCatalogProviderId).filter(Boolean));
 }
 
 export function buildModelCatalogProviderAliasTargets(

@@ -369,6 +369,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
   options?: {
     ordered?: boolean;
+    onReadAdmitted?: () => void;
     prepareSource?: (
       input: SessionEntryWorkerRead,
       ...source: Parameters<SessionEntryReadSourcePreparation>
@@ -376,12 +377,13 @@ export async function withSessionEntriesFromStoresInWorker<T>(
   },
 ): Promise<T> {
   if (options?.ordered) {
-    return withOrderedSessionEntriesInWorker(inputs, consume, (input, read) =>
-      withSessionStoreReaderInWorker(input, read, {
-        prepareSource:
-          options.prepareSource && ((...source) => options.prepareSource!(input, ...source)),
-      }),
-    );
+    return withOrderedSessionEntriesInWorker(inputs, consume, {
+      readStore: (input, read) =>
+        withSessionStoreReaderInWorker(input, read, {
+          prepareSource: options.prepareSource?.bind(options, input),
+        }),
+      onReadAdmitted: options.onReadAdmitted,
+    });
   }
   const reads: PreparedSessionEntryWorkerRead[] = [];
   const enter = (index: number): Promise<T> => {

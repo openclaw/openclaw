@@ -219,13 +219,12 @@ function extractRecentConversationText(
     message.provenance && typeof message.provenance === "object"
       ? (message.provenance as { sourceChannel?: unknown })
       : undefined;
+  const timestamp = normalizeTranscriptTimestamp(message.timestamp);
   return {
     ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
     text,
-    ...(normalizeTranscriptTimestamp(message.timestamp) !== undefined
-      ? { timestamp: normalizeTranscriptTimestamp(message.timestamp) }
-      : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
     ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
       ? { sourceChannel: provenance.sourceChannel.trim() }
       : {}),
@@ -590,12 +589,17 @@ export async function appendExactAssistantMessageToSessionTranscript(
   const { anchor, messageId } = appendedResult;
   if (!params.expectedSessionId) {
     try {
-      await touchSqliteAssistantAppendSessionEntry({
-        agentId: transcriptAgentId,
-        currentEntry: entry,
-        sessionKey: resolved.normalizedKey,
-        storePath,
-      });
+      const now = Date.now();
+      await updateSessionEntry(
+        { agentId: transcriptAgentId, sessionKey: resolved.normalizedKey, storePath },
+        (current) =>
+          current.sessionId !== entry.sessionId
+            ? null
+            : {
+                updatedAt: Math.max(current.updatedAt ?? 0, now),
+                sessionStartedAt: current.sessionStartedAt ?? entry.sessionStartedAt ?? now,
+              },
+      );
     } catch (err) {
       return {
         ok: false,
@@ -604,31 +608,6 @@ export async function appendExactAssistantMessageToSessionTranscript(
     }
   }
   return { ok: true, target, messageId, ...(anchor ? { anchor } : {}) };
-}
-
-async function touchSqliteAssistantAppendSessionEntry(params: {
-  agentId?: string;
-  currentEntry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  const now = Date.now();
-  await updateSessionEntry(
-    {
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    (entry) => {
-      if (entry.sessionId !== params.currentEntry.sessionId) {
-        return null;
-      }
-      return {
-        updatedAt: Math.max(entry.updatedAt ?? 0, now),
-        sessionStartedAt: entry.sessionStartedAt ?? params.currentEntry.sessionStartedAt ?? now,
-      };
-    },
-  );
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {

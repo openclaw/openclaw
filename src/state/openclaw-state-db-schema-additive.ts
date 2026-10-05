@@ -14,7 +14,6 @@ import {
   ensureOperatorApprovalResolutionRefs,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
-  repairLegacySubagentSuspensionReasons,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -291,7 +290,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   ensureColumns(db, columns.taskRequester);
   ensureColumns(db, columns.taskRunDetails);
   if (repairHistoricalRows) {
-    repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
     repairLegacySubagentRetainedResults(db);
   }

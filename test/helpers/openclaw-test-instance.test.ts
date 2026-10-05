@@ -941,17 +941,14 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it.each([0, 1])(
+  it.for([0, 1])(
     "keeps claimed port offset %i unavailable while its child starts",
-    async (offset) => {
+    async (offset, { signal }) => {
       const control = await createGatewayControl();
-      const { instance, tracePath } = await createFakeGateway(
-        "held-unrelated",
-        10_000,
-        1_500,
-        control,
-      );
-      const starting = trackOperation(instance.startGateway());
+      const { instance } = await createFakeGateway("held-unrelated", 10_000, 1_500, control, {
+        signal,
+      });
+      const starting = startGatewayForPortLifecycle(instance, signal);
       await Promise.race([control.reached, starting]);
       await drainFileLockStateForTest();
       resetFileLockStateForTest();
@@ -970,10 +967,10 @@ describe("openclaw test instance", () => {
           return candidate;
         } },
       });
-      const { createOpenClawTestInstance } = await import(${JSON.stringify(new URL("./openclaw-test-instance.ts", import.meta.url).href)});
-      const fixture = await createOpenClawTestInstance({ name: "port-claim-contender", cwd: ${JSON.stringify(path.dirname(tracePath))} });
-      try { console.log(JSON.stringify({ pid: process.pid, port: fixture.port, attempted, tempRoot: await realpath(tmpdir()) })); }
-      finally { await fixture.cleanup(); }
+      const { acquireTestPortBlock } = await import(${JSON.stringify(new URL("../../src/test-utils/port-claims.ts", import.meta.url).href)});
+      const claim = await acquireTestPortBlock({ offsets: [0, 1] });
+      try { console.log(JSON.stringify({ pid: process.pid, port: claim.port, attempted, tempRoot: await realpath(tmpdir()) })); }
+      finally { await claim.release(); }
     `;
       const runContender = async (source: string) => {
         const args = [
@@ -1060,6 +1057,7 @@ describe("openclaw test instance", () => {
           instance.port + offset,
           instance.port + (1 - offset),
         ]);
+        expect(instance.child).toMatchObject({ exitCode: null, signalCode: null });
         control.unblock();
         await Promise.allSettled([starting]);
         await instance.cleanup();

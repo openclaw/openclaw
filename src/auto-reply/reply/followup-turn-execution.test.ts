@@ -315,6 +315,82 @@ describe("executeFollowupTurn", () => {
     expect(call.resolvedVerboseLevel).toBe("off");
   });
 
+  it("refreshes awaited visibility without native reads or replacement-session verbosity", async () => {
+    const entry = {
+      sessionId: "session",
+      lifecycleRevision: "owned",
+      updatedAt: 1,
+      verboseLevel: "off" as const,
+    };
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        storePath: "/tmp/sessions.json",
+        current: () => entry,
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    const legacy = vi.fn();
+    await executeTestTurn({
+      turn,
+      defaults: {
+        opts: {
+          onVerboseProgressVisibility: legacy,
+          onVerboseProgressVisibilityAsync: async (isActive) => {
+            state.readEntry.mockResolvedValue(entry);
+            expect(await isActive()).toBe(false);
+            state.readEntry.mockResolvedValue({ ...entry, verboseLevel: "full" });
+            expect(await isActive()).toBe(true);
+            state.readEntry.mockResolvedValue({
+              ...entry,
+              lifecycleRevision: "replacement",
+              verboseLevel: "full",
+            });
+            expect(await isActive()).toBe(false);
+            expect(state.loadEntryReadOnly).not.toHaveBeenCalled();
+          },
+        },
+      },
+    });
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
+  it("rejects awaited visibility when the followup is revoked during its read", async () => {
+    const pending = Promise.withResolvers<undefined>();
+    const entered = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    const turn = createTurn();
+    turn.operation = { ...turn.operation, abortSignal: abort.signal };
+    turn.session = {
+      ...turn.session,
+      kind: "session",
+      key: "main",
+      storePath: "/tmp/sessions.json",
+    };
+    state.readEntry.mockImplementation(() => {
+      entered.resolve();
+      return pending.promise;
+    });
+    const execution = executeTestTurn({
+      turn,
+      defaults: {
+        opts: {
+          onVerboseProgressVisibilityAsync: async (isActive) => {
+            await isActive();
+          },
+        },
+      },
+    });
+    const rejected = expect(execution).rejects.toThrow("followup revoked");
+    await entered.promise;
+    abort.abort(new Error("followup revoked"));
+    pending.resolve(undefined);
+    await rejected;
+    expect(state.execute).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       initialLevel: "off",

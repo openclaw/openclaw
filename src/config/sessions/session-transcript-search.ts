@@ -86,7 +86,6 @@ export function isSessionTranscriptSearchCurrentSync(
 
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
   return query
-    .trim()
     .split(/\s+/u)
     .map(
       (token, index, tokens) =>

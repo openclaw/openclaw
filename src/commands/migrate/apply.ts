@@ -15,16 +15,8 @@ import { buildMigrationProviderOptions } from "./providers.js";
 import { applyMigrationSelections } from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
-function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes("No local OpenClaw state was found to back up") ||
-    message.includes("No OpenClaw config file was found to back up")
-  );
-}
-
 /** Creates a verified pre-migration backup, treating absent local state as empty. */
-async function createPreMigrationBackup(opts: { output?: string }): Promise<string | undefined> {
+async function createPreMigrationBackup(output: string | undefined): Promise<string | undefined> {
   try {
     const result = await backupCreateCommand(
       {
@@ -35,13 +27,17 @@ async function createPreMigrationBackup(opts: { output?: string }): Promise<stri
         },
       },
       {
-        output: opts.output,
+        output,
         verify: true,
       },
     );
     return result.archivePath;
   } catch (err) {
-    if (shouldTreatMissingBackupAsEmptyState(err)) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      message.includes("No local OpenClaw state was found to back up") ||
+      message.includes("No OpenClaw config file was found to back up")
+    ) {
       return undefined;
     }
     throw err;
@@ -92,7 +88,7 @@ export async function runMigrationApply(params: {
       }
       const backupPath = params.opts.noBackup
         ? undefined
-        : await createPreMigrationBackup({ output: params.opts.backupOutput });
+        : await createPreMigrationBackup(params.opts.backupOutput);
       if (!params.opts.noBackup) {
         tick();
       }
@@ -125,10 +121,7 @@ export async function runMigrationApply(params: {
   };
   const withBackup = params.opts.json
     ? await applyMigration()
-    : await withProgress(
-        { label: `Applying ${params.providerId} migration…` },
-        async (progress) => await applyMigration(progress),
-      );
+    : await withProgress({ label: `Applying ${params.providerId} migration…` }, applyMigration);
   writeApplyResult(params.runtime, params.opts, withBackup);
   if (!params.opts.allowPartialResult) {
     try {

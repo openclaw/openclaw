@@ -75,13 +75,14 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
-vi.mock("./agent.shared.js", () => ({
+vi.mock("./agent.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent.shared.js")>()),
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
   handleRouteError: vi.fn((_res, err) => {
     throw err;
   }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => (pwMocks.connected ? pwMocks : null)),
+  requirePwAi: vi.fn(async () => pwMocks),
   resolveProfileContext: vi.fn(() => profileContext),
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
@@ -166,6 +167,20 @@ describe("browser agent snapshot timeout routing", () => {
     );
     expect(cdpMocks.captureScreenshot).not.toHaveBeenCalled();
   });
+
+  it.each([{ ref: "e1" }, { element: "#submit" }])(
+    "uses Playwright for element screenshots with a CDP URL: %j",
+    async (body) => {
+      const response = createBrowserRouteResponse();
+      await getScreenshotHandler()?.({ params: {}, query: {}, body }, response.res);
+
+      expect(response.statusCode).toBe(200);
+      expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining(body),
+      );
+      expect(cdpMocks.captureScreenshot).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

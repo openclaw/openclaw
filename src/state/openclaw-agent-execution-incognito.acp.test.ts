@@ -85,6 +85,51 @@ it("normalizes an ACP session key while retaining a missing-entry result", async
   ).resolves.toMatchObject({ sessionKey, storeSessionKey: sessionKey, entry: undefined });
 });
 
+it.each(["read", "upsert"] as const)(
+  "rechecks ACP caller after %s composition settles",
+  async (operation) => {
+    const sessionKey = key(`settled-${operation}`);
+    await actor.sessions.create(authority, { sessionKey, entry: entry(`settled-${operation}`) });
+    await actor.acp.upsertMeta({ authority, cfg, env, sessionKey, mutate: () => meta });
+    let current = true;
+    const source: IncognitoSessionAuthority = {
+      assertCurrent() {
+        if (!current) {
+          throw new Error("ACP caller retired after settlement");
+        }
+      },
+    };
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    let first = true;
+    const completed = vi
+      .spyOn(actor.sessions, "withSharedState")
+      .mockImplementation(<T>(work: () => Promise<T>) => {
+        const revoke = first;
+        first = false;
+        return retain(work).then((result) => {
+          if (revoke) {
+            current = false;
+          }
+          return result;
+        });
+      });
+    try {
+      const target = { authority: source, cfg, env, sessionKey };
+      await expect(
+        operation === "read"
+          ? actor.acp.readEntry(target)
+          : actor.acp.upsertMeta({ ...target, mutate: () => ({ ...meta, lastActivityAt: 200 }) }),
+      ).rejects.toThrow("ACP caller retired after settlement");
+      actor.assertReadable();
+      expect((await actor.acp.readEntry({ authority, cfg, env, sessionKey }))?.acp).toMatchObject({
+        lastActivityAt: operation === "read" ? 100 : 200,
+      });
+    } finally {
+      completed.mockRestore();
+    }
+  },
+);
+
 it("orders set, link and clear through both owners with zero caller-thread SQL", async () => {
   const readComposed = async ({
     authority: boundAuthority,
