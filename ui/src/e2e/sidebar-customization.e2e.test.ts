@@ -8,6 +8,7 @@ import {
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
@@ -90,6 +91,61 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
 }
 
 suite.define(() => {
+  it.each([1440, 390])("keeps nav controls separated at %i px", async (width) => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.addInitScript(
+          (key) =>
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sidebarAgentsMode: "roster",
+                sidebarEntries: ["route:systems", "route:agents-home", "route:cron"],
+              }),
+            ),
+          controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        );
+        await page.goto(`${suite.server.baseUrl}chat`);
+        if (width < 900) {
+          await visibleDrawerButton(page).click();
+        }
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const row = sidebar.locator('[data-sidebar-entry="route:systems"]');
+        const grip = row.getByRole("button", { name: "Reorder Systems", exact: true });
+        const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
+        await row.hover();
+        await expect
+          .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        await expect
+          .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        const [gripBox, editorBox, iconBox, rowBox, linkBox, siblingBox] = await Promise.all([
+          grip.boundingBox(),
+          editor.boundingBox(),
+          row.locator(".nav-item__icon").boundingBox(),
+          row.boundingBox(),
+          row.locator(".nav-item").boundingBox(),
+          sidebar.locator('[data-sidebar-entry="route:agents-home"]').boundingBox(),
+        ]);
+        expect(gripBox).not.toBeNull();
+        expect(editorBox).not.toBeNull();
+        expect(iconBox).not.toBeNull();
+        expect(rowBox).not.toBeNull();
+        expect(linkBox).not.toBeNull();
+        expect(siblingBox).not.toBeNull();
+        expect(rowBox!.height).toBe(siblingBox!.height);
+        expect(linkBox!.height).toBe(rowBox!.height);
+        expect(editorBox!.y + editorBox!.height / 2).toBe(rowBox!.y + rowBox!.height / 2);
+        expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
+        expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
+        expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
+      },
+    );
+  });
+
   it("uses catalog labels in the hidden-section recovery rows", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -492,7 +548,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await captureUiProof(page, "01-default-pinned.png");
 
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
+      const moreButton = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await openSidebarMoreMenu(page);
@@ -695,7 +751,7 @@ suite.define(() => {
     );
   });
 
-  it("moves Home activity clear of the aligned Pages editor", async () => {
+  it("reserves the Pages editor slot without moving Home activity on hover", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -753,7 +809,7 @@ suite.define(() => {
         });
 
         const activity = home.locator(".sidebar-home-session-states");
-        const editor = sidebar.locator(".sidebar-nav__head-action");
+        const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);
@@ -781,10 +837,10 @@ suite.define(() => {
               centerDelta: Math.abs(
                 editorBox.y + editorBox.height / 2 - (homeBox.y + homeBox.height / 2),
               ),
-              gap: Math.round(editorBox.x - (activityBox.x + activityBox.width)),
+              clearOfEditor: activityBox.x + activityBox.width <= editorBox.x,
             };
           })
-          .toEqual({ activityShift: 25, centerDelta: 0, gap: 4 });
+          .toEqual({ activityShift: 0, centerDelta: 0, clearOfEditor: true });
         await captureUiProof(page, "07-home-activity-editor.png");
       },
     );

@@ -176,6 +176,10 @@ with the moved item, and the order uses the same saved preferences or Gateway
 group order as dragging. Home and sections derived from people, projects, or
 agents keep their existing fixed order.
 
+Page reorder grips appear in the leading gutter without moving the icon or label.
+The **Edit pinned items** pencil has its own space beside the first navigation row;
+hover or focus the navigation to reveal it. It stays visible on touch screens.
+
 To inspect Home’s subagents, open **Home** and select **Subagents**. The side panel lists ordinary child runs and opens their view-only transcripts without replacing Home. Swarm members remain in the parallel-tasks view. You can also use `/subagents list`, `/subagents info <id|#>`, or `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
 
 Follow-up turns in an existing subagent session keep the parent’s activity ring running, even after the original task has finished. Opening the parent refreshes its hidden subagent activity without adding subagent rows to the sidebar. The ring clears when no work remains active.
