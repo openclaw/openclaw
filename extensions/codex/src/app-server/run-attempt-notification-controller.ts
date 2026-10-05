@@ -43,6 +43,7 @@ export function createCodexAttemptNotificationController(
     deadlines,
   } = turnRuntime;
   const {
+    recordModelResponseNotification,
     scheduleTerminalDynamicToolReleaseCheck,
     reportExecutionNotification,
     maybeAnnounceFastModeAutoOff,
@@ -232,6 +233,8 @@ export function createCodexAttemptNotificationController(
       deadlines.beginSettlement(receivedAtMs);
     }
     if (scope.turnId === turnId) {
+      // Admission observes receipts before queued projection or concurrent tool responses.
+      recordModelResponseNotification(notification);
       const modelToolCallId = readRawResponseToolCallId(notification);
       if (modelToolCallId) {
         allocateCodexToolOutcomeOrdinal?.(modelToolCallId);

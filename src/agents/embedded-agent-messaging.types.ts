@@ -36,4 +36,8 @@ export type MessagingToolSourceReplyPayload = Pick<
   sourceReplyFinal?: boolean;
   /** Authored by a `canDeliverSourceReply` tool: the host sends it, so the turn is complete. */
   toolAuthored?: true;
+  /** Exact originating direct call; prevents suppression of another input's answer. */
+  toolAuthoredForToolCallId?: string;
+  /** Native harness turn identity when its assistant projection has no tool-call blocks. */
+  toolAuthoredForTurnId?: string;
 };

@@ -16,6 +16,7 @@ import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
+import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
@@ -71,8 +72,8 @@ type TerminalAuthFailureContext = {
  * evidence must be checked directly.
  */
 function hasToolAuthoredSourceReply(attempt: IncompleteTurnAttempt): boolean {
-  return (attempt.messagingToolSourceReplyPayloads ?? []).some(
-    (payload) => payload.toolAuthored === true,
+  return (attempt.messagingToolSourceReplyPayloads ?? []).some((payload) =>
+    isToolAuthoredSourceReplyForAssistant(payload, resolveCurrentAttemptAssistant(attempt)),
   );
 }
 
@@ -88,7 +89,14 @@ export function resolveIncompleteTurnPayloadText(params: {
 }): string | null {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant;
-  const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
+  const completionAttempt = {
+    ...params.attempt,
+    messagingToolSourceReplyPayloads: params.attempt.messagingToolSourceReplyPayloads?.filter(
+      (payload) =>
+        !payload.toolAuthored || isToolAuthoredSourceReplyForAssistant(payload, assistant),
+    ),
+  };
+  const hasTerminalOutput = hasAttemptTerminalState(completionAttempt);
   // Tool-use expects a post-tool continuation, so partial visible text completes
   // nothing. A length stop that did produce visible text is a partial answer and
   // is delivered with a truncation notice instead. (#76477)
@@ -122,8 +130,8 @@ export function resolveIncompleteTurnPayloadText(params: {
 
   if (
     params.attempt.hasToolMediaBlockReply ||
-    resolveSourceReplyDelivery(params.attempt) !== "missing" ||
-    hasToolAuthoredSourceReply(params.attempt)
+    resolveSourceReplyDelivery(completionAttempt) !== "missing" ||
+    hasToolAuthoredSourceReply(completionAttempt)
   ) {
     return null;
   }

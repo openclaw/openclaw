@@ -7,13 +7,13 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readCodexNotificationItem } from "./attempt-notifications.js";
+import { readCodexNotificationItem, readRawResponseToolCallId } from "./attempt-notifications.js";
 import {
   resolveTerminalDynamicToolBatchAction,
   shouldReleaseTurnAfterTerminalDynamicTool,
 } from "./dynamic-tool-execution.js";
 import { itemName } from "./event-projector-items.js";
-import type { CodexServerNotification } from "./protocol.js";
+import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -34,17 +34,42 @@ export function createCodexAttemptLifecycleController(
   } = connection;
   const { state, activeTurnItemIds, pendingOpenClawDynamicToolCompletionIds } = turnRuntime;
   type TerminalToolRelease = NonNullable<typeof state.pendingTerminalDynamicToolRelease>;
-  // A captured tool-authored final reply completes its batch: ordinary sibling results
-  // still settle, but they cannot reopen the turn for another model step.
-  const batchHadNonTerminalResult = () =>
-    state.currentTurnHadNonTerminalDynamicToolResult && !state.currentTurnHadToolAuthoredFinalReply;
-  const releaseTurnAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
+  type ModelResponse = {
+    closed: boolean;
+    calls: Map<string, TerminalToolRelease | undefined>;
+  };
+  // Raw model-call receipts precede dispatch; item/started and request registration
+  // can lag. Only rawResponse/completed closes the model's call inventory.
+  let modelResponse: ModelResponse | undefined;
+  let lastClosedResponseId: string | undefined;
+  const resolveAuthoredResponse = () => {
+    if (!modelResponse?.closed || modelResponse.calls.size === 0) {
+      return undefined;
+    }
+    const results: TerminalToolRelease[] = [];
+    for (const result of modelResponse.calls.values()) {
+      if (!result?.response.success || result.response.terminate !== true) {
+        return undefined;
+      }
+      results.push(result);
+    }
+    const payloads = results.flatMap((result) =>
+      result.response.toolAuthoredSourceReply ? [result.response.toolAuthoredSourceReply] : [],
+    );
+    const value = results[0];
+    return value && payloads.length > 0 ? { value, payloads } : undefined;
+  };
+  const releaseTurnAfterTerminalDynamicTool = (
+    value: TerminalToolRelease,
+    payloads: NonNullable<TerminalToolRelease["response"]["toolAuthoredSourceReply"]>[] = [],
+  ) => {
     if (
       !shouldReleaseTurnAfterTerminalDynamicTool({
         completed: state.completed,
         aborted: runAbortController.signal.aborted,
         responseSuccess: value.response.success,
-        currentTurnHadNonTerminalDynamicToolResult: batchHadNonTerminalResult(),
+        currentTurnHadNonTerminalDynamicToolResult:
+          payloads.length > 0 ? false : state.currentTurnHadNonTerminalDynamicToolResult,
         activeAppServerTurnRequests: state.activeAppServerTurnRequests,
         activeTurnItemIdsCount: activeTurnItemIds.size,
         pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
@@ -53,7 +78,12 @@ export function createCodexAttemptLifecycleController(
       return;
     }
     state.pendingTerminalDynamicToolRelease = undefined;
-    state.currentTurnHadToolAuthoredFinalReply = false;
+    modelResponse = undefined;
+    if (payloads.length > 0) {
+      prompt.context.attemptTools.toolBridge.telemetry.messagingToolSourceReplyPayloads.push(
+        ...payloads,
+      );
+    }
     trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
       threadId: value.call.threadId,
       turnId: value.call.turnId,
@@ -78,7 +108,8 @@ export function createCodexAttemptLifecycleController(
     if (
       state.terminalDynamicToolReleaseCheckScheduled ||
       (!state.pendingTerminalDynamicToolRelease &&
-        !state.currentTurnHadNonTerminalDynamicToolResult)
+        !state.currentTurnHadNonTerminalDynamicToolResult &&
+        !resolveAuthoredResponse())
     ) {
       return;
     }
@@ -86,9 +117,14 @@ export function createCodexAttemptLifecycleController(
     state.terminalDynamicToolReleaseCheckScheduled = true;
     const immediate = setImmediate(() => {
       state.terminalDynamicToolReleaseCheckScheduled = false;
+      const authored = resolveAuthoredResponse();
+      if (authored) {
+        releaseTurnAfterTerminalDynamicTool(authored.value, authored.payloads);
+        return;
+      }
       if (
         state.pendingTerminalDynamicToolRelease?.response.success === true &&
-        !batchHadNonTerminalResult() &&
+        !state.currentTurnHadNonTerminalDynamicToolResult &&
         state.activeAppServerTurnRequests === 0 &&
         pendingOpenClawDynamicToolCompletionIds.size === 0
       ) {
@@ -100,7 +136,8 @@ export function createCodexAttemptLifecycleController(
         activeAppServerTurnRequests: state.activeAppServerTurnRequests,
         activeTurnItemIdsCount: activeTurnItemIds.size,
         pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
-        currentTurnHadNonTerminalDynamicToolResult: batchHadNonTerminalResult(),
+        currentTurnHadNonTerminalDynamicToolResult:
+          state.currentTurnHadNonTerminalDynamicToolResult,
         hasPendingTerminalDynamicToolRelease: state.pendingTerminalDynamicToolRelease !== undefined,
       });
       if (action === "release-pending-terminal" && state.pendingTerminalDynamicToolRelease) {
@@ -108,7 +145,6 @@ export function createCodexAttemptLifecycleController(
       } else if (action === "clear-nonterminal-batch") {
         state.pendingTerminalDynamicToolRelease = undefined;
         state.currentTurnHadNonTerminalDynamicToolResult = false;
-        state.currentTurnHadToolAuthoredFinalReply = false;
       }
     });
     immediate.unref?.();
@@ -119,18 +155,63 @@ export function createCodexAttemptLifecycleController(
   };
   /** Classifies one settled dynamic tool result into the current batch's release state. */
   const recordDynamicToolResult = (value: TerminalToolRelease) => {
-    if (value.response.success && value.response.toolAuthoredFinalReply === true) {
-      state.currentTurnHadToolAuthoredFinalReply = true;
+    if (modelResponse?.calls.has(value.call.callId)) {
+      modelResponse.calls.set(value.call.callId, value);
+    }
+    if (value.response.toolAuthoredSourceReply) {
+      // A nested or unobserved call cannot borrow the outer model call's authority.
+      scheduleTerminalDynamicToolReleaseCheck();
+      return;
     }
     if (value.response.terminate === true && value.response.success) {
       scheduleTurnReleaseAfterTerminalDynamicTool(value);
-    } else if (value.response.asyncStarted === true) {
+    } else if (value.response.success && value.response.asyncStarted === true) {
       scheduleTerminalDynamicToolReleaseCheck();
     } else {
       state.currentTurnHadNonTerminalDynamicToolResult = true;
-      if (!state.currentTurnHadToolAuthoredFinalReply) {
-        state.pendingTerminalDynamicToolRelease = undefined;
+      state.pendingTerminalDynamicToolRelease = undefined;
+    }
+  };
+  const recordModelResponseNotification = (notification: CodexServerNotification) => {
+    const notificationParams = notification.params;
+    if (!isJsonObject(notificationParams)) {
+      return;
+    }
+    if (notification.method === "rawResponse/completed") {
+      const responseId = notificationParams.responseId;
+      if (typeof responseId !== "string" || !responseId || responseId === lastClosedResponseId) {
+        return;
       }
+      lastClosedResponseId = responseId;
+      if (!modelResponse || modelResponse.closed) {
+        modelResponse = { closed: false, calls: new Map() };
+      }
+      modelResponse.closed = true;
+      scheduleTerminalDynamicToolReleaseCheck();
+      return;
+    }
+    if (
+      notification.method !== "rawResponseItem/completed" ||
+      !isJsonObject(notificationParams.item)
+    ) {
+      return;
+    }
+    const callId = readRawResponseToolCallId(notification);
+    const item = notificationParams.item;
+    const startsModelResponse =
+      callId !== undefined ||
+      item.type === "reasoning" ||
+      (item.type === "message" && item.role === "assistant");
+    if (!startsModelResponse) {
+      return;
+    }
+    // Tool output receipts are deliberately excluded: they arrive after the raw
+    // response closes and must not reopen or retire that response's admission.
+    if (!modelResponse || modelResponse.closed) {
+      modelResponse = { closed: false, calls: new Map() };
+    }
+    if (callId && !modelResponse.calls.has(callId)) {
+      modelResponse.calls.set(callId, undefined);
     }
   };
   const { emitLifecycleStart, emitLifecycleTerminal, emitExecutionPhaseOnce } =
@@ -165,10 +246,10 @@ export function createCodexAttemptLifecycleController(
       emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
       return;
     }
+    const item = readCodexNotificationItem(notification.params);
     if (notification.method !== "item/started") {
       return;
     }
-    const item = readCodexNotificationItem(notification.params);
     const tool = item ? itemName(item) : undefined;
     if (item && tool) {
       emitExecutionPhaseOnce(`tool:${item.id}`, {
@@ -238,6 +319,7 @@ export function createCodexAttemptLifecycleController(
     }
   };
   return {
+    recordModelResponseNotification,
     recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
     scheduleTurnReleaseAfterTerminalDynamicTool,

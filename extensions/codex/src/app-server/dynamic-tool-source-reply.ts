@@ -29,8 +29,9 @@ export type CodexToolResultSourceReply = {
  * Resolves the source-reply facts of one Codex dynamic tool result and records whether
  * it ends the Codex turn on `response`. A final reply
  * authored by a `canDeliverSourceReply` tool, read from the result after middleware and
- * extensions, is appended to `payloads`; the host delivers it and writes its transcript
- * row after the send. Only calls in the model-only namespace qualify: Codex never
+ * extensions, stays on the response until batch settlement. The host delivers it
+ * and writes its transcript row after the send. Only calls in the model-only
+ * namespace qualify: Codex never
  * exposes that namespace to Code Mode programs, so a program's intermediate call
  * cannot end the turn or reach the conversation.
  */
@@ -45,7 +46,6 @@ export function resolveCodexToolResultSourceReply(params: {
   deliveredSourceReply: boolean;
   executedArgs: Record<string, unknown>;
   runId: string | undefined;
-  payloads: ToolAuthoredSourceReplyPayload[];
   response: CodexDynamicToolRuntimeResponse;
 }): CodexToolResultSourceReply {
   const messageToolOnly =
@@ -56,10 +56,10 @@ export function resolveCodexToolResultSourceReply(params: {
     (params.rawResult.terminate === true || params.result.terminate === true);
   const confirmed = messageToolOnly && (toolConfirmed || params.deliveredSourceReply);
   const final = confirmed ? params.executedArgs.final !== false : undefined;
-  const toolAuthoredFinal = captureCodexToolAuthoredSourceReply(params);
+  const toolAuthoredSourceReply = captureCodexToolAuthoredSourceReply(params);
   const continuesSourceReplyProgress = confirmed && final === false;
   const terminate =
-    toolAuthoredFinal === true ||
+    toolAuthoredSourceReply !== undefined ||
     ((params.rawResult.terminate === true || params.result.terminate === true) &&
       !continuesSourceReplyProgress) ||
     // Yield is an explicit owner-level turn handoff, not termination
@@ -69,15 +69,15 @@ export function resolveCodexToolResultSourceReply(params: {
     (confirmed && final === true) ||
     undefined;
   params.response.terminate = terminate;
-  if (toolAuthoredFinal === true) {
-    params.response.toolAuthoredFinalReply = true;
+  if (toolAuthoredSourceReply !== undefined) {
+    params.response.toolAuthoredSourceReply = toolAuthoredSourceReply;
   }
   return { toolConfirmed, final, terminate };
 }
 
 function captureCodexToolAuthoredSourceReply(
   params: Parameters<typeof resolveCodexToolResultSourceReply>[0],
-): boolean | undefined {
+): ToolAuthoredSourceReplyPayload | undefined {
   if (
     params.canDeliverSourceReply !== true ||
     params.resultIsError ||
@@ -92,11 +92,7 @@ function captureCodexToolAuthoredSourceReply(
     toolCallId: params.call.callId,
     idempotencyScope: params.runId ?? params.call.turnId,
   });
-  if (!payload) {
-    return undefined;
-  }
-  params.payloads.push(payload);
-  return true;
+  return payload ? { ...payload, toolAuthoredForTurnId: params.call.turnId } : undefined;
 }
 
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {

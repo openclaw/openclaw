@@ -212,6 +212,32 @@ describe("incomplete-turn terminal metadata", () => {
 describe("tool-authored source replies", () => {
   // A `canDeliverSourceReply` tool wrote the final answer; the host delivers it, so a
   // tool-use stop with no post-tool assistant text is not an incomplete turn.
+  it("does not let an earlier authored reply complete an unfinished later input", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "later-call", name: "read", arguments: {} }],
+    });
+    const result = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      attempt: makeEmbeddedRunnerAttempt({
+        lastAssistant: assistant,
+        sourceReplyDeliveryState: "missing",
+        messagingToolSourceReplyPayloads: [
+          {
+            text: "Earlier answer.",
+            sourceReplyFinal: true,
+            toolAuthored: true,
+            toolAuthoredForToolCallId: "earlier-call",
+          },
+        ],
+      }),
+    });
+    expect(result).toContain("couldn't generate a response");
+  });
+
   it("treats a final tool-authored source reply as a complete tool-use turn", () => {
     expect(
       resolveIncompleteTurnPayloadText({
@@ -229,6 +255,7 @@ describe("tool-authored source replies", () => {
               text: "Pedido SO1 creado.",
               sourceReplyFinal: true,
               toolAuthored: true,
+              toolAuthoredForToolCallId: "tool_1",
             },
           ],
           lastAssistant: buildEmbeddedRunnerAssistant({

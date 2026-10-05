@@ -13,9 +13,10 @@ export function combineExecutedToolBatches(
   batches: readonly ExecutedToolCallBatch[],
 ): ExecutedToolCallBatch {
   const messages = batches.flatMap((batch) => batch.messages);
-  const terminate =
-    batches.every((batch) => batch.terminate) ||
-    config.completesToolTurn?.({ message, toolResults: messages }) === true;
+  // Completion also commits finalized host replies; run it even if every tool
+  // already requested termination.
+  const completesToolTurn = config.completesToolTurn?.({ message, toolResults: messages }) === true;
+  const terminate = batches.every((batch) => batch.terminate) || completesToolTurn;
   return {
     messages,
     steeringMessages: [...new Set(batches.flatMap((batch) => batch.steeringMessages))],

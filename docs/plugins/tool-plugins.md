@@ -391,14 +391,21 @@ api.registerTool({
 });
 ```
 
-OpenClaw delivers the reply to the conversation the turn came from and ends the
-turn, so no further model turn restates the result. Other tool calls from the
-same model step still run to completion and are recorded. After a successful
-send, delivery records the reply as the assistant turn in the session
-transcript, with the same session checks as any other delivered reply. A reply
-needs `text`, `mediaUrl`, or `mediaUrls`; `attachments` ride along with them.
-Error results, results without a deliverable reply, and `sourceReply.final:
-false` are ignored, and the model continues as usual with `content`.
+OpenClaw waits for every tool call from the same model step to settle. The
+host skips the next model step only when the whole batch can finish without
+further model work, then delivers the admitted replies to the conversation.
+If a sibling fails, is rejected, or returns an ordinary or progress result,
+the model continues with the tool results instead; a partial success must not
+hide unfinished work or another call’s failure. Existing explicit terminal
+tools keep their own completion contract.
+
+After a successful send, delivery records the reply as the assistant turn in
+the session transcript, with the same session checks as any other delivered
+reply. A reply needs `text`, `mediaUrl`, or `mediaUrls` inside `sourceReply`;
+`attachments` ride along with them. Top-level result fields such as
+`details.message` and `details.mediaUrl` are not reply content. Removing
+`sourceReply`, leaving it empty, or returning `sourceReply.final: false` keeps
+the normal model path.
 
 OpenClaw reads the reply after tool hooks and result middleware run, so
 middleware can rewrite or withdraw it. Only the tool author can grant the
@@ -407,7 +414,15 @@ result. A call made from inside a Code Mode program returns to that program and
 is never delivered as a reply. On the Codex harness, only calls the model makes
 directly in the `direct-only` catalog can deliver, so declare
 `catalogMode: "direct-only"` as in the example; otherwise the model restates the
-result as usual.
+result as usual. A direct-only tool is not available inside a Code Mode
+program; a capable tool exposed in the ordinary catalog can still return data
+to that program, but cannot use the direct-reply fast path there.
+
+Use this capability for complete reports, confirmations, receipts, or other
+user-ready results. Leave it off for search hits, raw database rows, or
+intermediate results the model still needs to combine. Existing tools do not
+opt in automatically, and the `message` tool keeps its existing delivery
+contract.
 
 ## Configuration
 

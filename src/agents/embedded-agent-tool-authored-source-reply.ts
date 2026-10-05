@@ -1,4 +1,5 @@
 /** Capture of replies authored by `canDeliverSourceReply` tools. */
+import type { AssistantMessage } from "../llm/types.js";
 import { extractToolAuthoredSourceReplyPayload } from "./embedded-agent-messaging-extraction.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
 
@@ -28,5 +29,25 @@ export function captureToolAuthoredSourceReply(params: {
       `${params.idempotencyScope}:tool-source-reply:${params.toolCallId}`,
     sourceReplyFinal: true,
     toolAuthored: true,
+    toolAuthoredForToolCallId: params.toolCallId,
   };
+}
+
+/** Matches the final assistant for one input, never an attempt-wide presence flag. */
+export function isToolAuthoredSourceReplyForAssistant(
+  payload: MessagingToolSourceReplyPayload,
+  assistant: AssistantMessage | null | undefined,
+): boolean {
+  return (
+    payload.toolAuthored === true &&
+    Boolean(
+      assistant &&
+      assistant.stopReason !== "error" &&
+      assistant.stopReason !== "aborted" &&
+      ((payload.toolAuthoredForTurnId && payload.toolAuthoredForTurnId === assistant.turnId) ||
+        assistant.content.some(
+          (block) => block.type === "toolCall" && block.id === payload.toolAuthoredForToolCallId,
+        )),
+    )
+  );
 }
