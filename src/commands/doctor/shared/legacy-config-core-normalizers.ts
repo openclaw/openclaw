@@ -78,7 +78,7 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     );
   }
   if (changes.length > before && Array.isArray(next.channels)) {
-    next.channels = { ...next.channels };
+    next.channels = Object.fromEntries(Object.entries(next.channels));
   }
   copyConfigResolutionFactsThroughRewrite(cfg, next);
   return inheritLegacyDefaultAgentId(cfg, next);
