@@ -683,17 +683,22 @@ it.each([
       },
     });
     expect(result.status, result.output).toBe(0);
-    expect(result.outputs.run_ios_build).toBe("true");
-    expect(result.outputs.run_ios_voice_cleanup_tests).toBe(String(full));
-    expect(result.outputs.run_ios_lifecycle_tests).toBe("true");
+    const admitted = event !== "pull_request";
+    expect(result.outputs.run_ios_build).toBe(String(admitted));
+    expect(result.outputs.run_ios_voice_cleanup_tests).toBe(String(admitted && full));
+    expect(result.outputs.run_ios_lifecycle_tests).toBe(String(admitted));
     const selection: ReturnType<typeof resolveIosSimulatorTestSelection> = JSON.parse(
       result.outputs.ios_simulator_selection!,
     );
-    expect(selection.voice.selected).toBe(full);
-    expect(selection.lifecycle.selected).toBe(true);
-    expect(result.summary).toContain("iOS simulator test selection");
-    expect(result.summary).toContain(`| voice | ${full ? "yes" : "no"} |`);
-    expect(result.summary).toContain("| lifecycle | yes |");
+    expect(selection.voice.selected).toBe(admitted && full);
+    expect(selection.lifecycle.selected).toBe(admitted);
+    if (admitted) {
+      expect(result.summary).toContain("iOS simulator test selection");
+      expect(result.summary).toContain(`| voice | ${full ? "yes" : "no"} |`);
+      expect(result.summary).toContain("| lifecycle | yes |");
+    } else {
+      expect(result.summary).not.toContain("iOS simulator test selection");
+    }
     const phases = evaluateWorkflowExpression(workflow.jobs["ios-build"]?.strategy?.matrix?.phase, {
       repository: "openclaw/openclaw",
       eventName: event,
