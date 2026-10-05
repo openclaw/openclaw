@@ -445,6 +445,9 @@ extension OpenClawChatViewModel {
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
         self.presentOutboxCommands([command])
+        if let messageID = self.outboxMessageIDsByCommandID[command.id] {
+            self.markLiveUserTurn(id: messageID)
+        }
         // Health can recover between the send-gate check and the enqueue;
         // flushing here closes that gap instead of waiting for the next event.
         if self.healthOK {
