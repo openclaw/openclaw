@@ -53,6 +53,7 @@ export async function createInitialSubagentSession(params: {
   >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  inheritedToolPolicySource?: "sender";
   modelPatch: Partial<
     Extract<
       Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>,
@@ -78,6 +79,9 @@ export async function createInitialSubagentSession(params: {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
+    ...(params.inheritedToolPolicySource
+      ? { inheritedToolPolicySource: params.inheritedToolPolicySource }
+      : {}),
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...modelPatch,
@@ -238,7 +242,9 @@ export async function createInitialSubagentSession(params: {
                 ...(!params.worktree
                   ? {
                       sessionRoot: resolveUserPath(
-                        params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root,
+                        params.inheritedToolPolicySource === "sender"
+                          ? params.sessionPermissionPolicy.root
+                          : (params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root),
                       ),
                     }
                   : {}),

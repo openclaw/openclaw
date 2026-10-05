@@ -229,6 +229,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     senderUsername: run.senderUsername,
     senderE164: run.senderE164,
     senderIsOwner: run.senderIsOwner,
+    conversationToolPolicy: run.conversationToolPolicy,
     modelProvider: run.provider,
     modelId: run.modelId,
     workspaceDir: run.workspaceDir,

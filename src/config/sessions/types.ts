@@ -393,6 +393,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentControlScope?: "children" | "none";
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
+    /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
+    inheritedToolPolicySource?: "sender";
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
