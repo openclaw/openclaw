@@ -234,6 +234,7 @@ async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResp
       () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
+    timeout.unref?.();
     const releaseDeadline = () => {
       if (timeout !== undefined) {
         clearTimeout(timeout);

@@ -584,4 +584,13 @@ describe("clawhub client", () => {
       }),
     ).rejects.toThrow(/Rate limit exceeded$/);
   });
+
+  it("unrefs the request timeout timer so it does not keep the process alive", async () => {
+    // The timeout timer in requestClawHub is unref'd (timeout.unref?.()).
+    // This test verifies the source contains the unref call to prevent
+    // regression. A behavioral test would require waiting for the timer
+    // to expire, which is impractical for a 30s default.
+    const source = await fs.readFile(new URL("./clawhub-client.ts", import.meta.url), "utf8");
+    expect(source).toContain("timeout.unref?.()");
+  });
 });
