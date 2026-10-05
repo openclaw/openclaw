@@ -8,7 +8,10 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
+import {
+  isCommunityClawHubInstallRecord,
+  isTrustedOfficialPluginInstallRecord,
+} from "./official-external-install-records.js";
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import type { PluginTrust } from "./plugin-trust.js";
@@ -120,6 +123,10 @@ export function resolvePluginTrust(params: {
     })
   ) {
     reason = "trusted-official";
+  } else if (
+    isCommunityClawHubInstallRecord({ packageName: params.candidate.packageName, record })
+  ) {
+    reason = "community-install";
   } else if (
     (record.source === "npm" &&
       record.spec === undefined &&

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  isCommunityClawHubInstallRecord,
   isOfficialCatalogLookupPluginIdReplacement,
   isTrustedOfficialCatalogLookupDuplicate,
   isTrustedOfficialPluginInstallRecord,
@@ -106,6 +107,49 @@ describe("official plugin install trust", () => {
         },
       }),
     ).toBe(trusted);
+  });
+});
+
+describe("community ClawHub install records", () => {
+  const packageName = "@acme/community-demo";
+  const record: PluginInstallRecord = {
+    source: "clawhub",
+    spec: `clawhub:${packageName}@1.0.0`,
+    clawhubPackage: packageName,
+    clawhubUrl: "https://clawhub.ai/",
+    clawhubChannel: "community",
+  };
+
+  it("accepts a consistent community listing", () => {
+    expect(isCommunityClawHubInstallRecord({ packageName, record })).toBe(true);
+  });
+
+  it.each([
+    { name: "official channel", overrides: { clawhubChannel: "official" } },
+    { name: "missing channel", overrides: { clawhubChannel: undefined } },
+    { name: "custom host", overrides: { clawhubUrl: "https://example.invalid" } },
+    { name: "conflicting identity", overrides: { resolvedName: "@vendor/other" } },
+    { name: "npm source", overrides: { source: "npm" } },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "rejects $name",
+    ({ overrides }) => {
+      expect(
+        isCommunityClawHubInstallRecord({ packageName, record: { ...record, ...overrides } }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([undefined, "@acme/other"])("rejects candidate package %s", (candidate) => {
+    expect(isCommunityClawHubInstallRecord({ packageName: candidate, record })).toBe(false);
+  });
+
+  it("rejects an official catalog package recorded as community", () => {
+    expect(
+      isCommunityClawHubInstallRecord({
+        packageName: "@openclaw/acpx",
+        record: { ...record, spec: undefined, clawhubPackage: "@openclaw/acpx" },
+      }),
+    ).toBe(false);
   });
 });
 
