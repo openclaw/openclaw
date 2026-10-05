@@ -324,7 +324,7 @@ serveOwnedWorkerTasks(
         const { readSessionEntryList } = await import("./session-entry-read.worker.js");
         return {
           kind: "session-entry-list" as const,
-          entries: readSessionEntryList(request),
+          ...readSessionEntryList(request),
         };
       }
       if (request.kind === "session-store-projection") {

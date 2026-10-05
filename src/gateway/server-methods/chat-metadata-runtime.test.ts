@@ -20,47 +20,16 @@ import {
 describe("gateway chat metadata runtime", () => {
   test("retains an unsuperseded preparation failure without silently retrying", async () => {
     const failure = new Error("metadata preparation failed");
-    const beforeRefresh = vi.fn(async () => {
+    const harness = createChatMetadataHarness();
+    harness.getPreparedOwner.mockImplementation(() => {
       throw failure;
     });
-    const harness = createChatMetadataHarness(undefined, { beforeRefresh });
     try {
       await expect(harness.runtime.refresh()).rejects.toBe(failure);
       await expect(harness.runtime.read({ agentId: "main" })).rejects.toBe(failure);
-      expect(beforeRefresh).toHaveBeenCalledOnce();
+      expect(harness.getPreparedOwner).toHaveBeenCalledOnce();
     } finally {
       await harness.runtime.stop();
-    }
-  });
-
-  test("retires a superseded preparation failure while the replacement prepares fresh facts", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const failure = new Error("obsolete metadata preparation failed");
-    const beforeRefresh = vi.fn(async () => {});
-    beforeRefresh.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      throw failure;
-    });
-    const harness = createChatMetadataHarness(undefined, { beforeRefresh });
-    const oldRefresh = harness.runtime.refresh();
-    void oldRefresh.catch(() => undefined);
-    let replacement: Promise<void> | undefined;
-    try {
-      await entered.promise;
-      harness.runtime.invalidate();
-      replacement = harness.runtime.refresh();
-      const completed = Promise.all([oldRefresh, replacement]);
-      release.resolve();
-      await expect(completed).resolves.toEqual([undefined, undefined]);
-      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-        models: [expect.objectContaining({ id: "first" })],
-      });
-    } finally {
-      release.resolve();
-      await harness.runtime.stop();
-      await Promise.allSettled([oldRefresh, replacement]);
     }
   });
 
@@ -144,16 +113,18 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("refreshes lazily on the first read when configured", async () => {
-    const beforeRefresh = vi.fn(async () => {});
-    const harness = createChatMetadataHarness(undefined, { beforeRefresh, refreshOnRead: true });
+  test("prepares a projection lazily after its owner publishes", async () => {
+    const harness = createChatMetadataHarness();
 
+    await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
+      "prepared chat metadata snapshot is unavailable",
+    );
+    await harness.runtime.refresh();
     expect(harness.buildProjection).not.toHaveBeenCalled();
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
       models: [expect.objectContaining({ id: "first" })],
     });
 
-    expect(beforeRefresh).toHaveBeenCalledOnce();
     expect(harness.buildProjection).toHaveBeenCalledOnce();
   });
 
@@ -245,7 +216,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("ready reads never prepare or await a cold or pending exact profile", async () => {
-    const harness = createChatMetadataHarness(undefined, { refreshOnRead: true });
+    const harness = createChatMetadataHarness();
     const sessionEntry = {
       authProfileOverride: "test:session",
       authProfileOverrideSource: "user" as const,
@@ -339,27 +310,32 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test.each(["invalidate", "pending refresh", "failed", "stale facts"] as const)(
+  test.each(["invalidate", "pending projection", "failed", "stale auth"] as const)(
     "ready reads omit projections after %s without starting replacement work",
     async (state) => {
-      const beforeRefresh = vi.fn(async () => {});
-      const harness = createChatMetadataHarness(undefined, { refreshOnRead: true, beforeRefresh });
+      const harness = createChatMetadataHarness();
       const sessionEntry = { authProfileOverride: "test:session" };
       await harness.runtime.refresh();
       await harness.runtime.readStartup({ agentId: "main", sessionEntry });
       const release = createDeferred();
-      let refresh: Promise<void> | undefined;
+      let reading: Promise<unknown> | undefined;
       if (state === "invalidate") {
         harness.runtime.invalidate();
       } else if (state === "failed") {
         harness.runtime.fail(new Error("owner unavailable"));
+      } else if (state === "stale auth") {
+        harness.setAuthStoreRevision(2);
       } else {
-        harness.setSkillsVersion(2);
-        if (state === "pending refresh") {
-          beforeRefresh.mockImplementationOnce(() => release.promise);
-          refresh = harness.runtime.refresh();
-          await vi.waitFor(() => expect(beforeRefresh).toHaveBeenCalledTimes(2));
-        }
+        const entered = createDeferred();
+        harness.buildCommands.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return { commands: [] };
+        });
+        harness.runtime.invalidate();
+        await harness.runtime.refresh();
+        reading = harness.runtime.read({ agentId: "main" });
+        await entered.promise;
       }
       try {
         for (const entry of [undefined, sessionEntry]) {
@@ -374,7 +350,8 @@ describe("gateway chat metadata runtime", () => {
         expect(harness.buildProjection).toHaveBeenCalledTimes(2);
       } finally {
         release.resolve();
-        await refresh;
+        await reading;
+        await harness.runtime.stop();
       }
     },
   );

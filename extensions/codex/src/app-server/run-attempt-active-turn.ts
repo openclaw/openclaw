@@ -423,10 +423,11 @@ export function activateCodexAttemptTurn(
           idempotencyScope: `codex-app-server:${resourceState.thread.threadId}`,
           runId: params.runId,
           runMirrorIdentityPrefix: `${activeTurnId}:`,
+          onAssistantMessageOwned: (identity) =>
+            activeProjector.markSteeringTranscriptMessagePersisted(identity),
           config: params.config,
         });
         assertSteeringActive();
-        activeProjector.markSteeringTranscriptPersisted();
       }
       for (const item of transcriptItems) {
         const recorder = item.userTurnTranscriptRecorder;

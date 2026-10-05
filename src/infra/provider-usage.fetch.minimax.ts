@@ -251,16 +251,11 @@ function pickUsageRecord(
   const queue: Array<{ value: Record<string, unknown> | unknown[]; depth: number }> = [
     { value: root, depth: 0 },
   ];
-  const seen = new Set<object>();
   let best: { record: Record<string, unknown>; usedPercent: number } | undefined;
   let bestScore = 0;
 
   for (const { value, depth } of queue) {
     if (isRecord(value)) {
-      if (seen.has(value)) {
-        continue;
-      }
-      seen.add(value);
       const score = scoreUsageRecord(value);
       // Breadth-first order already favors shallower records and the first tied record.
       if (score > bestScore) {

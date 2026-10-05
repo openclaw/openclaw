@@ -6,7 +6,7 @@ import {
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
-import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveManagedNpmInstallPlan } from "./install-managed-npm-state.js";
 import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
@@ -44,9 +44,8 @@ function resolveTrustedNpmPackPackageName(packageName: string | undefined):
       code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
     };
   }
-  const specError = validateRegistryNpmSpec(packageName);
   const parsedSpec = parseRegistryNpmSpec(packageName);
-  if (specError || !parsedSpec || parsedSpec.selectorKind !== "none") {
+  if (!parsedSpec || parsedSpec.selectorKind !== "none") {
     return {
       ok: false,
       error: `unsupported npm pack package name: ${packageName}`,

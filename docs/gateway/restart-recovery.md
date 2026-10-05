@@ -724,6 +724,13 @@ failure cannot start the same recovery twice. Completed Control UI turns also
 retain bounded durable idempotency tombstones, allowing a reconnecting outbox
 to retire them without re-executing the request.
 
+When a pending final has no remaining queue owner and its delivery outcome is
+uncertain, recovery records a notice for the next turn on the same route when
+the saved final has a delivery context and intent ID. Settling that turn clears
+its recovery ownership together with its delivery claim, so the next agent turn
+can proceed. The notice and terminal deduplication evidence survive another
+restart; completed work is not replayed.
+
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
 delivery intent on the exact session and source turn. A confirmed provider
@@ -803,11 +810,12 @@ An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
 
-Startup skips superseded requester completion claims and logs the affected run.
+Startup retires superseded requester completion claims through the registry's
+cleanup owner before restoring the surviving claim.
 Those historical rows do not block current children in the same requester turn
 or recovery of other subagents. Saved yield intent is evaluated from the same
-current children used for the transfer. The existing cleanup owner settles historical rows;
-interrupted current children still report their restart outcome to the parent.
+current children used for the transfer. Interrupted current children still report
+their restart outcome to the parent.
 Turns with only superseded children need no requester settlement.
 
 If a parent yielded while waiting for children, its saved batch collects both

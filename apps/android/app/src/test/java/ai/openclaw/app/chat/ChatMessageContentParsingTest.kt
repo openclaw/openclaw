@@ -311,7 +311,7 @@ class ChatMessageContentParsingTest {
       val oldPin = "aa".repeat(32)
       val newPin = "bb".repeat(32)
       val failedUrl = ChatWidgetUrlResolver.resolve(oldSurface, target)
-      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin)
+      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
       var current =
         ChatWidgetSurfaceUrls(
           node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = oldPin),
@@ -346,7 +346,7 @@ class ChatMessageContentParsingTest {
       val oldPin = "aa".repeat(32)
       val newPin = "bb".repeat(32)
       val url = requireNotNull(ChatWidgetUrlResolver.resolve(surface, target))
-      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin)
+      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
       var current =
         ChatWidgetSurfaceUrls(
           node = ChatWidgetSurface(url = surface, tlsFingerprintSha256 = oldPin),
@@ -429,6 +429,7 @@ class ChatMessageContentParsingTest {
         ChatWidgetResource(
           url = requireNotNull(ChatWidgetUrlResolver.resolve(oldSurface, target)),
           tlsFingerprintSha256 = null,
+          surfaceRole = ChatWidgetSurfaceRole.OPERATOR,
         )
       var operatorRefreshCount = 0
       var current =

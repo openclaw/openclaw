@@ -2041,17 +2041,13 @@ describe("compaction-safeguard double-compaction guard", () => {
         tokensBefore: 1000,
       },
     });
-    const { result: result1 } = await runCompactionScenario(sessionManager, mockEvent, {
-      apiKey: "sk-test",
-    });
+    const { result: result1 } = await runCompactionScenario(sessionManager, mockEvent);
     const compaction1 = expectCompactionResult(result1);
     expect(compaction1.summary).toContain("## Decisions");
     expect(compaction1.summary).toContain("No prior history.");
 
     mockEvent.preparation.previousSummary = "## Decisions\nUsed approach A.";
-    const { result: result2 } = await runCompactionScenario(sessionManager, mockEvent, {
-      apiKey: "sk-test",
-    });
+    const { result: result2 } = await runCompactionScenario(sessionManager, mockEvent);
     const compaction2 = expectCompactionResult(result2);
     expect(compaction2.summary).toContain("## Decisions");
     expect(compaction2.summary).toContain("Used approach A.");

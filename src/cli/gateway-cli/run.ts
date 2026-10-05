@@ -70,7 +70,6 @@ import { sleep as defaultSleep } from "../../utils/sleep.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
-import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 import { withProgress } from "../progress.js";
 import {
   isTerminalInteractive,
@@ -1037,11 +1036,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 }
 
 /** Run foreground Gateway startup with one consent-gated invalid-config repair attempt. */
-export async function runGatewayCommand(
-  opts: GatewayRunOpts,
-  hooks: GatewayRunRuntimeHooks = {},
-  recoveryDeps?: InvalidConfigRecoveryDeps,
-) {
+export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
   if (opts.taskSupervisor) {
     const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
     await runWindowsGatewayTaskSupervisor();
@@ -1061,7 +1056,6 @@ export async function runGatewayCommand(
     const { offerInvalidConfigRecovery } = await import("../invalid-config-recovery.js");
     const recovery = await offerInvalidConfigRecovery({
       runtime: defaultRuntime,
-      deps: recoveryDeps,
       retry: async () => await runGatewayCommandOnce(opts, hooks),
     });
     if (recovery.status === "recovered") {

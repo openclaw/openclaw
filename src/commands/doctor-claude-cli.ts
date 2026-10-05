@@ -127,7 +127,6 @@ type ClaudeCliWorkspaceTarget = {
 function resolveClaudeCliWorkspaceTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  homeDir?: string;
   workspaceDir?: string;
 }): ClaudeCliWorkspaceTarget[] {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
@@ -139,7 +138,6 @@ function resolveClaudeCliWorkspaceTargets(params: {
         : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
     const projectDir = resolveClaudeCliProjectDirForWorkspace({
       workspaceDir,
-      homeDir: params.homeDir,
     });
     return {
       agentId,
@@ -155,17 +153,13 @@ export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
   deps?: {
     noteFn?: typeof note;
-    env?: NodeJS.ProcessEnv;
-    homeDir?: string;
-    isAuthenticated?: (commandPath: string, env: NodeJS.ProcessEnv) => boolean;
     workspaceDir?: string;
   },
 ) {
-  const env = deps?.env ?? process.env;
+  const env = process.env;
   const workspaceTargets = resolveClaudeCliWorkspaceTargets({
     cfg,
     env,
-    homeDir: deps?.homeDir,
     workspaceDir: deps?.workspaceDir,
   });
   if (workspaceTargets.length === 0) {
@@ -190,9 +184,7 @@ export function noteClaudeCliHealth(
   for (const envName of backend?.config.clearEnv ?? []) {
     delete authEnv[envName];
   }
-  const authenticated = commandPath
-    ? (deps?.isAuthenticated ?? isClaudeCliAuthenticated)(commandPath, authEnv)
-    : false;
+  const authenticated = commandPath ? isClaudeCliAuthenticated(commandPath, authEnv) : false;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||

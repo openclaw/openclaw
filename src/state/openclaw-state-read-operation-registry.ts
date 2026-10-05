@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { configHealthReadOperations } from "../config/io.health-state.kernel.js";
 import type { MentionReadOperations } from "../gateway/mention-inbox.worker-contract.js";
-import type { deferredPluginMigrationReadOperations } from "../infra/deferred-plugin-migrations.js";
+import type { DeferredPluginMigrationReadOperations } from "../infra/deferred-plugin-migrations.contract.js";
 import type { RestartSentinelReadOperations } from "../infra/restart-sentinel.read.worker-contract.js";
 import type { DiagnosticReadOperations } from "../infra/sqlite-audit-record.read-contract.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
@@ -24,7 +24,7 @@ type Operations = DiagnosticReadOperations &
   SessionStateReadOperations &
   SecretStoreReadOperations &
   WorkerOperations<typeof configHealthReadOperations> &
-  WorkerOperations<typeof deferredPluginMigrationReadOperations>;
+  DeferredPluginMigrationReadOperations;
 export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 

@@ -98,12 +98,6 @@ function postNativeHookRelayBridgeRecord(params: {
   const body = JSON.stringify(params.payload);
   return new Promise((resolve, reject) => {
     let settled = false;
-    const resolveOnce = (value: NativeHookRelayProcessResponse) => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
-      }
-    };
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
@@ -147,7 +141,8 @@ function postNativeHookRelayBridgeRecord(params: {
               | { ok: true; result: NativeHookRelayProcessResponse }
               | { ok: false; error?: string };
             if (parsed.ok) {
-              resolveOnce(parsed.result);
+              settled = true;
+              resolve(parsed.result);
               return;
             }
             rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));

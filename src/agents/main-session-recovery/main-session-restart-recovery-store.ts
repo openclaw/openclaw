@@ -4,7 +4,6 @@ import {
   resolveSessionWorkStartError,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   listSessionEntriesByStatus,
   loadExactSessionEntry,
@@ -22,6 +21,7 @@ import {
 import { resolveExecDefaults } from "../exec-defaults.js";
 import type { MainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import type { MainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
+import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   getMainSessionRecoveryRetryCount,
@@ -108,11 +108,10 @@ async function completePendingFinalRecoveryWithNotice(
       const pending = current.pendingFinalDelivery;
       completed = true;
       return {
-        ...buildRestartRecoveryClaimCleanupPatch({
+        ...buildMainSessionRecoverySettlementPatch({
           entry: current,
           recordTerminalSource: true,
         }),
-        abortedLastRun: false,
         endedAt,
         lifecycleRunId: undefined,
         lastRunId: resolveRestartRecoveryTerminalClientRunId(current),
@@ -131,7 +130,6 @@ async function completePendingFinalRecoveryWithNotice(
               },
             }
           : {}),
-        restartRecoveryRuns: undefined,
         runtimeMs:
           typeof current.startedAt === "number"
             ? Math.max(0, endedAt - current.startedAt)

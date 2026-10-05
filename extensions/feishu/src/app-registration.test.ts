@@ -1,15 +1,13 @@
 // Feishu tests cover app registration plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  beginAppRegistration,
-  type FeishuAppRegistrationFetch,
-  pollAppRegistration,
-  printQrCode,
-} from "./app-registration.js";
+import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
+
+type FeishuAppRegistrationFetch = typeof fetch;
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -31,6 +29,14 @@ type RegistrationFetchOptions = {
   fetchImpl: FeishuAppRegistrationFetch;
   lookupFn: LookupFn;
 };
+
+const fetchWithSsrFGuard = ssrfRuntime.fetchWithSsrFGuard;
+
+function mockRegistrationFetch(options: RegistrationFetchOptions & { timeoutMs?: number }): void {
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation((params) =>
+    fetchWithSsrFGuard({ ...params, ...options }),
+  );
+}
 
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
@@ -87,10 +93,12 @@ async function withRegistrationServer<T>(
 ): Promise<T> {
   const server = await startLocalServer(handler);
   try {
-    return await run({
+    const options = {
       fetchImpl: createLocalRedirectFetch(server.port),
       lookupFn: hermeticPublicLookup,
-    });
+    };
+    mockRegistrationFetch(options);
+    return await run(options);
   } finally {
     await server.stop();
   }
@@ -198,8 +206,8 @@ describe("Feishu app registration", () => {
         interval: Number.POSITIVE_INFINITY,
         expire_in: Number.POSITIVE_INFINITY,
       }),
-      async (options) => {
-        await expect(beginAppRegistration("feishu", options)).resolves.toMatchObject({
+      async () => {
+        await expect(beginAppRegistration("feishu")).resolves.toMatchObject({
           deviceCode: "device-code",
           userCode: "user-code",
           interval: 5,
@@ -218,12 +226,11 @@ describe("Feishu app registration", () => {
       }),
     ) as FeishuAppRegistrationFetch;
 
+    mockRegistrationFetch({ fetchImpl, lookupFn: hermeticPublicLookup });
     const poll = pollAppRegistration({
       deviceCode: "device-code",
       interval: 10_000_000,
       expireIn: 10_000_000,
-      fetchImpl,
-      lookupFn: hermeticPublicLookup,
     });
     await vi.advanceTimersByTimeAsync(0);
 
@@ -238,13 +245,15 @@ describe("Feishu app registration", () => {
     const fetchMock = vi.fn(async () => Response.json({ error: "authorization_pending" }));
     const controller = new AbortController();
     let outcome: Awaited<ReturnType<typeof pollAppRegistration>> | undefined;
+    mockRegistrationFetch({
+      fetchImpl: withFetchPreconnect(fetchMock),
+      lookupFn: hermeticPublicLookup,
+    });
     const poll = pollAppRegistration({
       deviceCode: "device-code",
       interval: 30,
       expireIn: 600,
       abortSignal: controller.signal,
-      fetchImpl: withFetchPreconnect(fetchMock),
-      lookupFn: hermeticPublicLookup,
     }).then((result) => {
       outcome = result;
     });
@@ -285,11 +294,8 @@ describe("Feishu app registration", () => {
       (_req, _res) => {},
       async (options) => {
         const started = Date.now();
-        const outcome = await beginAppRegistration("feishu", {
-          ...options,
-          // Keep the real guarded-fetch path while shortening its production deadline.
-          timeoutMs: 80,
-        }).then(
+        mockRegistrationFetch({ ...options, timeoutMs: 80 });
+        const outcome = await beginAppRegistration("feishu").then(
           (value) => ({ ok: true as const, value }),
           (error: unknown) => ({ ok: false as const, error }),
         );
@@ -320,8 +326,8 @@ describe("Feishu app registration", () => {
       (_req, res) => {
         streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
       },
-      async (options) => {
-        await expect(beginAppRegistration("feishu", options)).rejects.toThrow(
+      async () => {
+        await expect(beginAppRegistration("feishu")).rejects.toThrow(
           /feishu\.api: JSON response exceeds \d+ bytes/,
         );
       },
@@ -341,9 +347,8 @@ describe("Feishu app registration", () => {
         },
       );
 
-      await expect(
-        beginAppRegistration("feishu", { ...options, fetchImpl: recordingFetch }),
-      ).resolves.toMatchObject({
+      mockRegistrationFetch({ ...options, fetchImpl: recordingFetch });
+      await expect(beginAppRegistration("feishu")).resolves.toMatchObject({
         deviceCode: "device-code",
         userCode: "user-code",
         interval: 5,
@@ -360,8 +365,8 @@ describe("Feishu app registration", () => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end("not-valid-json{{");
       },
-      async (options) => {
-        await expect(beginAppRegistration("feishu", options)).rejects.toThrow(
+      async () => {
+        await expect(beginAppRegistration("feishu")).rejects.toThrow(
           /feishu\.api: malformed JSON response/,
         );
       },
