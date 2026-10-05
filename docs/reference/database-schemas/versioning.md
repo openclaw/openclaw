@@ -111,8 +111,10 @@ cleanup can finish after the run itself. A later scheduled occurrence replaces
 the record, immediate `force` and `if-enabled` runs never write it, and
 deleting the job deletes it. Jobs without the property admit
 their next occurrence normally, so there is no migration or backfill. Older
-readers preserve the property but ignore it, and can queue a retried
-occurrence again once its receipt is gone; the schema version is unchanged.
+readers preserve the property but ignore it: a retry they run queues the
+occurrence again, even while this build's send is still queued, so a downgrade
+during an unfinished occurrence can deliver it twice. The schema version is
+unchanged.
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the required table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
