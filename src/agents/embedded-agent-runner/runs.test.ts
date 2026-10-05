@@ -365,6 +365,40 @@ describe("embedded run ownership", () => {
     }
   });
 
+  it("distinguishes an exact non-steerable admission from stale completion authority", async () => {
+    const instance = { instanceId: "instance:completion", runId: "completion" };
+    const claim = prepareEmbeddedAgentRunCompletionClaim(sessionId, instance.runId);
+    expect(claim.resolveCurrentRegistration()).toBeUndefined();
+    expect(claim.bindOperationalRunInstance(instance)).toBe(true);
+    const handle = createRunHandle({ runId: instance.runId });
+    const identity = { agentId: "main", sessionKey, operationalRunInstance: instance };
+    await withGatewayToolCallerIdentity(identity, () =>
+      setActiveEmbeddedRun(sessionId, handle, sessionKey),
+    );
+    expect(claim.resolveCurrentRegistration()).toBeUndefined();
+    clearActiveEmbeddedRun(sessionId, handle);
+    const assertActive = vi.fn();
+    await withGatewayToolCallerIdentity(
+      {
+        ...identity,
+        embeddedRunToolAuthorityBinding: () => ({
+          source: "reply",
+          project: () => "authority",
+          assertActive,
+        }),
+      },
+      () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
+    );
+    expect(claim.resolveCurrentRegistration()?.toolAuthority.assertActive).toBe(assertActive);
+    assertActive.mockImplementation(() => {
+      throw new Error("expired authority");
+    });
+    expect(() => claim.resolveCurrentRegistration()).toThrow("backend is no longer current");
+    clearActiveEmbeddedRun(sessionId, handle);
+    prepareEmbeddedAgentRunCompletionClaim(sessionId, "replacement");
+    expect(() => claim.resolveCurrentRegistration()).toThrow("backend is no longer current");
+  });
+
   it("publishes completion authority and fences later session owners", async () => {
     const first = createRunHandle({ runId: "first" });
     const oldClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "first");

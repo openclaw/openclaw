@@ -626,6 +626,55 @@ describe("GPT-Live sideband protocol", () => {
     ).toEqual([]);
   });
 
+  it.each([false, true])(
+    "replaces a non-steerable runtime without losing newer input (newer=%s)",
+    async (newer) => {
+      const first = deferred<{ text: string }>();
+      const unsupported = deferred<void>();
+      let firstSignal: AbortSignal | undefined;
+      const runAgentConsult = vi.fn<ConsultRunner>(async ({ prompt, signal }) => {
+        if (prompt.includes("first task")) {
+          firstSignal = signal;
+          return first.promise;
+        }
+        return { text: "replacement result" };
+      });
+      const steerAgentConsult = vi.fn<NonNullable<ConsultRunner["steer"]>>(async () => {
+        await unsupported.promise;
+        throw new DOMException("Runtime does not support steering", "NotSupportedError");
+      });
+      const { controller, onFatalError, socket } = createDelegationHarness({
+        runAgentConsult,
+        steerAgentConsult,
+      });
+      delegate(controller, "first", "first task");
+      delegate(controller, "second", "second task");
+      await vi.waitFor(() => expect(steerAgentConsult).toHaveBeenCalledOnce());
+      if (newer) {
+        delegate(controller, "latest", "latest task");
+      }
+      unsupported.resolve();
+      await nextEventLoopTurn();
+      expect(firstSignal?.aborted).toBe(true);
+      expect(runAgentConsult).toHaveBeenCalledOnce();
+      first.resolve({ text: "stale result" });
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain(
+        newer ? "latest task" : "second task",
+      );
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual(
+          delegationAppend(newer ? "latest" : "second", "replacement result"),
+        ),
+      );
+      expect(
+        parseSent(socket).filter((event) => event.type === "delegation.context.append"),
+      ).toHaveLength(1);
+      expect(onFatalError).not.toHaveBeenCalled();
+      controller.stop(new Error("test complete"));
+    },
+  );
+
   it("drops queued work when steering fails", async () => {
     let appendRequesterFinal: ((text: string) => boolean) | undefined;
     const runAgentConsult = vi.fn<ConsultRunner>(async ({ requesterFinal, signal }) => {

@@ -1,6 +1,10 @@
-import { setImmediate as nextEventLoopTurn, setTimeout as delay } from "node:timers/promises";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { ACTIVE_EMBEDDED_RUNS } from "../../../agents/embedded-agent-runner/run-state.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
+import {
+  ACTIVE_EMBEDDED_RUNS,
+  EMBEDDED_RUN_COMPLETION_CLAIMS,
+} from "../../../agents/embedded-agent-runner/run-state.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
   clearActiveEmbeddedRun,
@@ -50,7 +54,9 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     ).toBe(true);
   });
 
-  it("waits for session preparation before observing backend registration readiness", async () => {
+  it("waits for session preparation before observing backend registration readiness", async ({
+    signal,
+  }) => {
     const preparing = createDeferredCore();
     const releasePreparation = createDeferredCore();
     const ensureWorkspace = workspace.ensureAgentWorkspace;
@@ -72,16 +78,21 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
-        preparing.promise,
-        parked.then(() => {
-          throw new Error("Native task completed before workspace preparation");
-        }),
-      ]);
-      // Hold a real setup boundary past the separate registration deadline.
-      await delay(1100);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          preparing.promise,
+          parked,
+          "Native task completed before workspace preparation",
+        ),
+        signal,
+      );
+      expect(EMBEDDED_RUN_COMPLETION_CLAIMS.has(SESSION_ID)).toBe(false);
+      expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
+      expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(assertions).not.toHaveBeenCalled();
     } finally {
       releasePreparation.resolve();
+      await outcome;
     }
     expect(await outcome).toEqual({ error: undefined });
     expect(assertions).toHaveBeenCalledOnce();

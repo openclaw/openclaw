@@ -15,9 +15,10 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
-vi.mock("../../agents/embedded-agent.js", () => {
+// mock-isolation: Expose a failing execution export to test lazy-loader error containment.
+vi.mock("./agent-consult-execution.js", () => {
   return {
-    get runEmbeddedAgent() {
+    get runTalkAgentTurn() {
       throw new Error("embedded agent import failed");
     },
   };

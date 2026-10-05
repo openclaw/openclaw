@@ -5,6 +5,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { withinTest } from "../../../../test/helpers/promise.js";
 import { createAttemptNestedToolActivityState } from "../../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
@@ -119,6 +120,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
 }));
 
 export const upstream = nativeUpstream;
+let nativeTestSignal: AbortSignal | undefined;
 
 const { default: openaiPlugin } = await loadBundledPluginFacade<{
   default: OpenClawPluginDefinition;
@@ -451,9 +453,16 @@ type ParkedNativeTask = NativePluginFixture &
 export async function withParkedNativeTask(
   run: (task: ParkedNativeTask) => Promise<void>,
   prompt = "Keep working until I cancel.",
-  ...embedded: [] | [session: AgentSession, finish: () => void]
+  ...embedded: [] | [session: AgentSession, finish: () => void, abortReadiness?: AbortSignal]
 ): Promise<void> {
-  const [embeddedSession, finishEmbeddedSession] = embedded;
+  const testSignal = nativeTestSignal;
+  if (!testSignal) {
+    throw new Error("Native plugin test hooks must be installed before parking a task");
+  }
+  const [embeddedSession, finishEmbeddedSession, abortReadiness] = embedded;
+  const readinessSignal = abortReadiness
+    ? AbortSignal.any([testSignal, abortReadiness])
+    : testSignal;
   const releaseBackend = createDeferredCore();
   const registered =
     createDeferredCore<
@@ -625,24 +634,14 @@ export async function withParkedNativeTask(
     await nextEventLoopTurn();
   };
   await withNativePlugin(async (fixture) => {
-    let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
-    const timeoutMs = 1000;
     const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
     const observeRegistration = vi
       .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
       .mockImplementation((sessionId, runId) => {
         const claim = prepare(sessionId, runId);
-        if (sessionId === SESSION_ID && deadline === undefined) {
-          // Workspace and session preparation precede the registration owner's lifetime.
+        if (sessionId === SESSION_ID) {
           phase = "waiting for embedded registration";
-          deadline = setTimeout(() => {
-            failed.reject(
-              new Error(
-                `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
-              ),
-            );
-          }, timeoutMs);
           registered.resolve(claim.registered);
         }
         return claim;
@@ -664,10 +663,10 @@ export async function withParkedNativeTask(
       });
       stopObservingCompletion = () => observeCompletion.mockRestore();
       session.socket.serverEvent(nativeDelegation("original-task", prompt));
-      const registration = await readiness;
+      // The claim precedes cold runtime preparation; only the test lifetime bounds readiness.
+      const registration = await withinTest(readiness, readinessSignal);
       stopObservingCompletion();
       stopObservingCompletion = undefined;
-      clearTimeout(deadline);
       if (!registration) {
         throw new Error(`registration closed before readiness; last phase: ${phase}`);
       }
@@ -689,7 +688,6 @@ export async function withParkedNativeTask(
       });
     } finally {
       stopObservingCompletion?.();
-      clearTimeout(deadline);
       // Setup can fail before the callback that would otherwise release this stream.
       try {
         finishEmbeddedSession?.();
@@ -705,7 +703,8 @@ export async function withParkedNativeTask(
 }
 
 export function installNativePluginTestHooks() {
-  beforeEach(() => {
+  beforeEach(({ signal }) => {
+    nativeTestSignal = signal;
     upstream.sockets.length = 0;
     upstream.fetch.mockReset();
     upstream.fetch.mockImplementation(async () => {
@@ -723,6 +722,7 @@ export function installNativePluginTestHooks() {
   });
 
   afterEach(() => {
+    nativeTestSignal = undefined;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });

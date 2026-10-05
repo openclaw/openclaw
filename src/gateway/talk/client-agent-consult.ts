@@ -52,14 +52,13 @@ import {
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
-  const [embeddedAgent, admission] = await Promise.all([
-    import("../../agents/embedded-agent.js"),
-    import("../../agents/admitted-run-context.js"),
-  ]);
+  const { runTalkAgentTurn } = await import("./agent-consult-execution.js");
+  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
+    await import("../../agents/admitted-run-context.js");
   return {
-    runEmbeddedAgent: embeddedAgent.runEmbeddedAgent,
-    createOperationalRunInstanceRef: admission.createOperationalRunInstanceRef,
-    prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
+    runEmbeddedAgent: runTalkAgentTurn,
+    createOperationalRunInstanceRef,
+    prepareAgentRunAdmission,
   };
 });
 
@@ -118,6 +117,8 @@ function createTalkClientAgentRuntime(params: {
         extraSystemPrompt: [runParams.extraSystemPrompt, params.getAdditionalSystemPrompt?.()]
           .filter(Boolean)
           .join("\n\n"),
+        config: params.config,
+        sessionTarget: { agentId, sessionId, sessionKey, storePath },
         preparedRunAdmission,
         // Speech is mirrored separately. Keep generated input in current-turn custody,
         // but never display it or replay it as a later user request.
@@ -524,6 +525,17 @@ export function createTalkClientAgentConsultRunner(params: {
     ) {
       throw new Error("The active Talk consult is no longer current");
     }
+    const getSteeringRegistration = () => {
+      const registration = completionClaim.resolveCurrentRegistration();
+      if (!registration) {
+        throw new DOMException(
+          "This agent runtime cannot accept in-place voice steering",
+          "NotSupportedError",
+        );
+      }
+      return registration;
+    };
+    getSteeringRegistration();
     let confirmationRetryContext: string | undefined;
     const result = await controlRealtimeVoiceAgentRun({
       sessionKey: canonicalKey,
@@ -536,10 +548,7 @@ export function createTalkClientAgentConsultRunner(params: {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
           throw new Error("The active Talk consult is no longer current");
         }
-        const registration = completionClaim.resolveCurrentRegistration();
-        if (!registration) {
-          throw new Error("The active Talk consult backend is no longer current");
-        }
+        const registration = getSteeringRegistration();
         const overlay = prepareTalkClientControlAuthority({
           config: params.config,
           sessionTarget: params.sessionTarget,

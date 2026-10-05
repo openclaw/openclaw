@@ -27,8 +27,9 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
-vi.mock("../../agents/embedded-agent.js", () => ({
-  runEmbeddedAgent: mocks.runEmbeddedAgentCore,
+// mock-isolation: Control native execution while testing browser consultation ownership.
+vi.mock("./agent-consult-execution.js", () => ({
+  runTalkAgentTurn: mocks.runEmbeddedAgentCore,
 }));
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
@@ -436,7 +437,6 @@ describe("Talk client agent consult admission", () => {
   it("rejects steering when a replacement reuses the run id from another admission", async () => {
     const secondPublished = deferred<void>();
     const finish = deferred<void>();
-    const outbound = vi.fn();
     const admittedRun = { instanceId: "instance:owner", runId: "run-talk" };
     const replacementRun = { instanceId: "instance:replacement", runId: "run-talk" };
     const firstHandle = createEmbeddedRunHandle({ runId: "run-talk" });
@@ -476,11 +476,6 @@ describe("Talk client agent consult admission", () => {
       clearActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk");
       return { payloads: [] };
     });
-    mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
-      params.getToolAuthorityOverlay?.();
-      outbound();
-      throw new Error("unexpected outbound enqueue");
-    });
     const runner = createConsultRunner({
       ownerConnId: "connection-owner",
       isRunCurrent: () => true,
@@ -494,7 +489,7 @@ describe("Talk client agent consult admission", () => {
         "backend is no longer current",
       );
       expect(replacementProject).not.toHaveBeenCalled();
-      expect(outbound).not.toHaveBeenCalled();
+      expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
       await run;

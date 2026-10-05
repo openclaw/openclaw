@@ -43,8 +43,9 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
-vi.mock("../../agents/embedded-agent.js", () => ({
-  runEmbeddedAgent: mocks.runEmbeddedAgentCore,
+// mock-isolation: Keep requester-final attachment tests independent of model execution.
+vi.mock("../talk/agent-consult-execution.js", () => ({
+  runTalkAgentTurn: mocks.runEmbeddedAgentCore,
 }));
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),

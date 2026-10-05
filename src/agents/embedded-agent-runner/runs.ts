@@ -73,18 +73,19 @@ import {
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
-  type EmbeddedRunCompletionClaim,
-  type EmbeddedRunCompletionRegistration,
   type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
   type EmbeddedAgentQueueFailureReason,
   type EmbeddedAgentQueueMessageOutcome,
 } from "./run-state.js";
+import { revokeCompletionClaim } from "./runs.completion.js";
 import {
   canSteerEmbeddedRunDuringCompaction,
   isEmbeddedRunHandleAbortable,
   isEmbeddedRunHandleSupersedable,
 } from "./runs.probes.js";
+
+export { prepareEmbeddedAgentRunCompletionClaim } from "./runs.completion.js";
 
 export type {
   EmbeddedAgentQueueHandle,
@@ -840,14 +841,6 @@ function prepareEmbeddedAgentQueueMessage(
   };
 }
 
-function revokeCompletionClaim(sessionId: string, runId?: string): void {
-  const claim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
-  if (claim && (runId === undefined || claim.runId === runId)) {
-    claim.settleRegistration(undefined);
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
-  }
-}
-
 /**
  * Abort embedded OpenClaw runs.
  *
@@ -941,96 +934,6 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
   return active;
-}
-
-export function prepareEmbeddedAgentRunCompletionClaim(
-  sessionId: string,
-  runId: string,
-): {
-  bindOperationalRunInstance: (
-    instance: NonNullable<EmbeddedRunRegistration["operationalRunInstance"]>,
-  ) => boolean;
-  claimCompletion: () => boolean;
-  claimFailure: () => boolean;
-  resolveCurrentRegistration: () => EmbeddedRunCompletionRegistration | undefined;
-  registered: Promise<EmbeddedRunCompletionRegistration | undefined>;
-} {
-  const { promise: registered, resolve: settleRegistration } = createDeferredCore<
-    EmbeddedRunCompletionRegistration | undefined
-  >();
-  const claim: EmbeddedRunCompletionClaim = {
-    runId,
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    promoted: false,
-    settleRegistration,
-  };
-  revokeCompletionClaim(sessionId);
-  EMBEDDED_RUN_COMPLETION_CLAIMS.set(sessionId, claim);
-  const consume = (allowUnregistered: boolean): boolean => {
-    if (EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim) {
-      return false;
-    }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
-    if (!claim.promoted) {
-      claim.settleRegistration(undefined);
-    }
-    return (
-      (allowUnregistered || claim.promoted) &&
-      isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)
-    );
-  };
-  const bindOperationalRunInstance = (
-    instance: NonNullable<EmbeddedRunRegistration["operationalRunInstance"]>,
-  ): boolean => {
-    if (
-      EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim ||
-      !isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration) ||
-      instance.runId !== runId ||
-      (claim.operationalRunInstance !== undefined && claim.operationalRunInstance !== instance)
-    ) {
-      return false;
-    }
-    claim.operationalRunInstance = instance;
-    return true;
-  };
-  const resolveCurrentRegistration = (): EmbeddedRunCompletionRegistration | undefined => {
-    if (
-      EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim ||
-      !isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)
-    ) {
-      return undefined;
-    }
-    const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-    const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
-    const toolAuthority = registration?.toolAuthority;
-    if (
-      !handle ||
-      handle.runId !== runId ||
-      !toolAuthority ||
-      !claim.operationalRunInstance ||
-      registration.operationalRunInstance !== claim.operationalRunInstance
-    ) {
-      return undefined;
-    }
-    try {
-      toolAuthority.assertActive();
-    } catch {
-      return undefined;
-    }
-    return EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) === claim &&
-      ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
-      ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
-      isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)
-      ? { toolAuthority }
-      : undefined;
-  };
-  return {
-    bindOperationalRunInstance,
-    claimCompletion: () => consume(false),
-    claimFailure: () => consume(true),
-    resolveCurrentRegistration,
-    registered,
-  };
 }
 
 /** Operational progress includes maintenance, including permission changes and cancellation. */

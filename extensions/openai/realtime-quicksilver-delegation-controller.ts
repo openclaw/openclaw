@@ -419,6 +419,13 @@ export class OpenAIQuicksilverDelegationController {
           ) {
             return;
           }
+          if (readErrorName(error) === "NotSupportedError") {
+            // A configured fallback can change runtimes after steering was offered.
+            // Keep newer input and use the existing joined replacement path.
+            this.pendingDelegation ??= delegation;
+            controller.abort(new Error("Realtime delegation superseded"));
+            return;
+          }
           const fatal = toErrorObject(error, "Realtime delegation steering failed");
           // The queued delegation belongs to this steering attempt. Do not let the
           // active-run finalizer relaunch it after its owner has failed.
@@ -445,7 +452,12 @@ export class OpenAIQuicksilverDelegationController {
       if (this.steeringPromise === completion) {
         this.steeringPromise = undefined;
       }
-      if (this.pendingDelegation && !this.stopped) {
+      if (
+        this.pendingDelegation &&
+        !this.stopped &&
+        !controller.signal.aborted &&
+        this.consultController === controller
+      ) {
         this.schedulePendingSteering(controller, steer);
       }
     });
