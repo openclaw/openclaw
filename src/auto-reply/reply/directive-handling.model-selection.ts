@@ -155,9 +155,6 @@ export async function resolveModelSelectionFromDirective(params: {
         config: params.cfg,
         storedCredential: true,
       });
-  const modelRaw =
-    useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
-
   if (/^[0-9]+$/.test(raw)) {
     return {
       errorText: [
@@ -169,7 +166,10 @@ export async function resolveModelSelectionFromDirective(params: {
     };
   }
 
-  const resolved = resolveSelection(modelRaw);
+  const resolved =
+    useStoredNumericProfile && storedNumericProfileSelection
+      ? storedNumericProfileSelection
+      : resolveSelection(raw);
   if (resolved.error) {
     return { errorText: resolved.error };
   }

@@ -53,7 +53,6 @@ const WhatsAppAccountSchema = z.strictObject({
   name: z.string().optional(),
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),
-  mediaMaxMb: z.number().int().positive().optional(),
 });
 
 export const WhatsAppConfigSchema = z

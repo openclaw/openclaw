@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createHarness as createBaseHarness,
@@ -196,7 +196,9 @@ describe("session observer", () => {
     expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(terminalCount);
   });
 
-  it("synthesizes terminal health when the final model request becomes stale", async () => {
+  it("synthesizes terminal health when the final model request becomes stale", async ({
+    signal,
+  }) => {
     let utilityModelRef: string | undefined = "openai/gpt-a";
     const model = createDeferred<ReturnType<typeof modelMessage>>();
     const harness = createHarness({
@@ -208,9 +210,11 @@ describe("session observer", () => {
     await flushObserver();
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
+    const terminalBroadcast = createDeferred();
+    harness.broadcastToConnIds.mockImplementationOnce(() => terminalBroadcast.resolve());
     utilityModelRef = "openai/gpt-b";
     model.resolve(modelMessage({ headline: "Stale final model", health: "done" }));
-    await flushObserver();
+    await withinTest(terminalBroadcast.promise, signal);
 
     expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
       headline: "Running tests",
