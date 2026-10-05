@@ -16,6 +16,7 @@ import { resetProcessRegistryForTests } from "../agents/bash-process-registry.te
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
+import { createPluginInstallRecordMap } from "../config/plugin-install-record-map.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -38,6 +39,7 @@ import {
   setGatewayRestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -614,7 +616,10 @@ function createReloadHandlersForTest(
 }
 
 async function createManagedRestartSequenceHarness(
-  options: { invalidateGenerationOnReconcile?: boolean } = {},
+  options: {
+    invalidateGenerationOnReconcile?: boolean;
+    resolveSharedGatewaySessionGenerationForConfig?: (config: OpenClawConfig) => string | undefined;
+  } = {},
 ) {
   const watcher = installWatcherMock();
   onTestFinished(() => watcher.restore());
@@ -680,7 +685,7 @@ async function createManagedRestartSequenceHarness(
     return makePreparedSecretsSnapshot(config);
   });
   const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
-    current: undefined,
+    current: options.resolveSharedGatewaySessionGenerationForConfig?.(initialConfig),
     required: null,
   });
   let generationInvalidated = false;
@@ -710,6 +715,12 @@ async function createManagedRestartSequenceHarness(
     commitRuntimePolicy: terminalPolicy.commitConfig,
     acceptTerminalConfig,
     sharedGatewaySessionGenerationState,
+    ...(options.resolveSharedGatewaySessionGenerationForConfig
+      ? {
+          resolveSharedGatewaySessionGenerationForConfig:
+            options.resolveSharedGatewaySessionGenerationForConfig,
+        }
+      : {}),
     requestRecoveryRestart,
   });
   await reloader.ready;
@@ -718,6 +729,7 @@ async function createManagedRestartSequenceHarness(
     hash: string,
     revision: number,
     runtimeConfig: OpenClawConfig = config,
+    afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
     const listener = writeListenerRef.current;
     if (!listener) {
@@ -728,8 +740,14 @@ async function createManagedRestartSequenceHarness(
     listener(
       createConfigWriteNotification(config, hash, revision, `runtime-${hash}`, `source-${hash}`, {
         runtimeConfig,
+        ...(afterWrite ? { afterWrite } : {}),
       }),
     );
+  };
+  const editConfigFile = (config: OpenClawConfig, hash: string) => {
+    snapshotConfig = config;
+    snapshotHash = hash;
+    watcher.emit("change", "/tmp/openclaw.json");
   };
 
   return {
@@ -737,6 +755,7 @@ async function createManagedRestartSequenceHarness(
     activateRuntimeSecrets,
     assertRestartReady: hoisted.assertOpenClawDatabasesReady,
     deferredConfig,
+    editConfigFile,
     initialConfig,
     invalidConfig,
     invalidHotConfig,
@@ -4921,6 +4940,195 @@ describe("gateway Gmail hot reload handlers", () => {
       hoisted.activeAgentRunCount.value = 0;
       await harness.reloader.stop();
     }
+  });
+
+  describe("deferred restart followed by a revert", () => {
+    const withGateway = (base: OpenClawConfig, gateway: Partial<OpenClawConfig["gateway"]>) =>
+      ({ ...base, gateway: { ...base.gateway, ...gateway } }) as OpenClawConfig;
+
+    async function deferPortRestart(
+      afterWrite?: ConfigWriteNotification["afterWrite"],
+    ): Promise<Awaited<ReturnType<typeof createManagedRestartSequenceHarness>>> {
+      vi.useFakeTimers();
+      // The ledger reader returns null-prototype maps, unlike the startup records.
+      vi.mocked(loadInstalledPluginIndexInstallRecords).mockImplementation(async () =>
+        createPluginInstallRecordMap(),
+      );
+      const harness = await createManagedRestartSequenceHarness();
+      hoisted.activeAgentRunCount.value = 1;
+      const promotion = harness.nextPromotion();
+      const portEdit = withGateway(harness.initialConfig, { port: 18790 });
+      harness.writeConfig(portEdit, "deferred-port", 1, portEdit, afterWrite);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(promotion).resolves.toBe("deferred-port");
+      expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(0);
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      return harness;
+    }
+
+    async function writeAndPromote(
+      harness: Awaited<ReturnType<typeof createManagedRestartSequenceHarness>>,
+      config: OpenClawConfig,
+      hash: string,
+      revision: number,
+    ) {
+      const promotion = harness.nextPromotion();
+      harness.writeConfig(config, hash, revision);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(promotion).resolves.toBe(hash);
+    }
+
+    async function drainUntilRestart(
+      harness: Awaited<ReturnType<typeof createManagedRestartSequenceHarness>>,
+    ) {
+      hoisted.activeAgentRunCount.value = 0;
+      await vi.advanceTimersByTimeAsync(500);
+      await waitForFast(() => expect(harness.requestRecoveryRestart).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+
+    async function expectNoRestartAfterDrain(
+      harness: Awaited<ReturnType<typeof createManagedRestartSequenceHarness>>,
+    ) {
+      await waitForFast(() => expect(harness.reloader.isConfigReloadSettled()).toBe(true));
+      hoisted.activeAgentRunCount.value = 0;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(0);
+      expect(harness.reloader.isConfigReloadSettled()).toBe(true);
+    }
+
+    afterEach(() => {
+      hoisted.activeAgentRunCount.value = 0;
+      vi.mocked(loadInstalledPluginIndexInstallRecords).mockImplementation(async () => ({}));
+    });
+
+    it("does not restart after a config write reverts to the running config", async () => {
+      const harness = await deferPortRestart();
+      try {
+        await writeAndPromote(harness, harness.initialConfig, "revert", 2);
+
+        await expectNoRestartAfterDrain(harness);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("does not restart after a file edit reverts to the running config", async () => {
+      const harness = await deferPortRestart();
+      try {
+        const promotion = harness.nextPromotion();
+        harness.editConfigFile(harness.initialConfig, "edited-revert");
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(promotion).resolves.toBe("edited-revert");
+
+        await expectNoRestartAfterDrain(harness);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("restarts after a revert to a config that differs from the running one", async () => {
+      const harness = await deferPortRestart();
+      try {
+        const otherPort = withGateway(harness.initialConfig, { port: 18791 });
+        await writeAndPromote(harness, otherPort, "other-port", 2);
+        await drainUntilRestart(harness);
+
+        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
+          ["config reload: gateway.port", undefined],
+        ]);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("keeps an explicit writer restart when the config reverts", async () => {
+      const harness = await deferPortRestart({ mode: "restart", reason: "plugin source changed" });
+      try {
+        await writeAndPromote(harness, harness.initialConfig, "revert", 2);
+        await drainUntilRestart(harness);
+
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("keeps a second restart-required edit when only the first one reverts", async () => {
+      const harness = await deferPortRestart();
+      try {
+        const portAndBind = withGateway(harness.initialConfig, { port: 18790, bind: "lan" });
+        await writeAndPromote(harness, portAndBind, "port-and-bind", 2);
+        const bindOnly = withGateway(harness.initialConfig, { bind: "lan" });
+        await writeAndPromote(harness, bindOnly, "bind-only", 3);
+        await drainUntilRestart(harness);
+
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("restarts when the revert also undoes a hot edit applied during the deferral", async () => {
+      const harness = await deferPortRestart();
+      try {
+        const portAndLogging = {
+          ...withGateway(harness.initialConfig, { port: 18790 }),
+          logging: { level: "debug" },
+        } as OpenClawConfig;
+        await writeAndPromote(harness, portAndLogging, "port-and-logging", 2);
+        await writeAndPromote(harness, harness.initialConfig, "revert", 3);
+        await drainUntilRestart(harness);
+
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("restarts and readmits running credentials after an auth mode change reverts", async () => {
+      vi.useFakeTimers();
+      const harness = await createManagedRestartSequenceHarness({
+        resolveSharedGatewaySessionGenerationForConfig: (config) =>
+          config.gateway?.auth?.mode === "password" ? "password-generation" : "token-generation",
+      });
+      try {
+        hoisted.activeAgentRunCount.value = 1;
+        const passwordAuth = withGateway(harness.initialConfig, {
+          auth: { mode: "password", password: "candidate-password" },
+        });
+        await writeAndPromote(harness, passwordAuth, "password-auth", 1);
+        expect(harness.sharedGatewaySessionGenerationState.requiredGeneration).toBe(
+          "password-generation",
+        );
+
+        await writeAndPromote(harness, harness.initialConfig, "revert", 2);
+
+        expect(harness.sharedGatewaySessionGenerationState.requiredGeneration).toBe(
+          "token-generation",
+        );
+        await drainUntilRestart(harness);
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("restarts for a new restart-required edit after a revert retired the old one", async () => {
+      const harness = await deferPortRestart();
+      try {
+        await writeAndPromote(harness, harness.initialConfig, "revert", 2);
+        const bindOnly = withGateway(harness.initialConfig, { bind: "lan" });
+        await writeAndPromote(harness, bindOnly, "bind-only", 3);
+        await drainUntilRestart(harness);
+
+        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
+          ["config reload: gateway.bind", undefined],
+        ]);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
   });
 
   it("retries managed hot reload when secrets change before publication", async () => {

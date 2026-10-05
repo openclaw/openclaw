@@ -272,7 +272,11 @@ class GatewayRestartTransaction {
       nextConfig: options?.debtConfig ?? nextConfig,
       restartOwnedPaths:
         explicitRestartPaths.length > 0 ? explicitRestartPaths : [...plan.changedPaths],
-      retainDebtAcrossConfigChanges: options?.retainDebtAcrossConfigChanges === true,
+      // A reason that is not a changed path (writer intent) is not owned by
+      // config, so reverting config must not retire it.
+      retainDebtAcrossConfigChanges:
+        options?.retainDebtAcrossConfigChanges === true ||
+        explicitRestartPaths.length < plan.restartReasons.length,
     };
   }
 
