@@ -231,7 +231,6 @@ export function createGatewayComputerService(options: {
       return runtime;
     } catch (error) {
       await retire(runtime);
-      runtime.desktop?.release();
       throw error;
     }
   };

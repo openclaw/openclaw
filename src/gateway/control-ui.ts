@@ -76,7 +76,6 @@ import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "./control-ui-csp.js";
-import type { ControlUiRootAsset } from "./control-ui-file.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -1060,58 +1059,54 @@ export async function handleControlUiHttpRequest(
     }
   }
 
-  const serve = async (prepared: ControlUiRootAsset | null): Promise<void> => {
-    if (!prepared) {
-      respondControlUiNotFound(res);
-      return;
-    }
+  while (asset) {
     // Both requested and physical index aliases retain document preparation.
     if (
       path.basename(fileRel) === "index.html" ||
-      path.basename(prepared.file.path) === "index.html"
+      path.basename(asset.file.path) === "index.html"
     ) {
       if (req.method === "HEAD") {
         const encoding = resolveControlUiHtmlEncoding(req);
         if (encoding === "not-acceptable") {
           respondControlUiNotAcceptable(res);
-          return;
+          return true;
         }
         respondHeadForControlUiFile(res, "index.html", {
           encoding: encoding === "identity" ? undefined : encoding,
         });
-        return;
+        return true;
       }
-      if (!prepared.file.body) {
-        return await serve(await readControlUiRootAsset(rootState, fileRel, true));
+      if (!asset.file.body) {
+        asset = await readControlUiRootAsset(rootState, fileRel, true);
+        continue;
       }
       await serveResolvedIndexHtml(
         req,
         res,
-        prepared.file.body.toString("utf8"),
+        asset.file.body.toString("utf8"),
         uiPath,
         basePath,
         terminalEnabled,
         opts?.config?.gateway?.controlUi?.environment,
         publicAssetBuildId,
       );
-      return;
+      return true;
     }
     const originatedAtMs = Date.now();
-    const lastModifiedMs =
-      Math.floor(Math.min(prepared.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
+    const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
     const representation = resolveControlUiRepresentation({
       req,
-      asset: prepared,
+      asset,
       contentPath: fileRel,
       precompressed: fingerprintedAsset,
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);
-      return;
+      return true;
     }
     if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
       respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
-      return;
+      return true;
     }
     const headers = {
       immutable: immutableAsset,
@@ -1126,10 +1121,12 @@ export async function handleControlUiHttpRequest(
     } else if (representation.file.body) {
       serveControlUiAsset(res, fileRel, representation.file.body, headers);
     } else {
-      await serve(await readControlUiRootAsset(rootState, fileRel, true));
+      asset = await readControlUiRootAsset(rootState, fileRel, true);
+      continue;
     }
-  };
-  await serve(asset);
+    return true;
+  }
+  respondControlUiNotFound(res);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -375,7 +375,6 @@ export function createPersonalGitHubPublicationCoordinator(
           repository: row.repository,
           baseBranch: row.base_branch,
         },
-        projectResult: projectGitHubPublicationResult,
         bindWorkspaceSnapshot: () => {
           throw new Error("My GitHub publication is missing its accepted snapshot.");
         },
@@ -393,8 +392,8 @@ export function createPersonalGitHubPublicationCoordinator(
           return execution.updateHead(facts.headCommit);
         },
         complete: (_row, result) => execution.complete(result),
-        recordEffect: execution.recordEffect.bind(execution),
-        interrupt: execution.interrupt.bind(execution),
+        recordEffect: execution.recordEffect,
+        interrupt: execution.interrupt,
       });
     } catch (error) {
       try {

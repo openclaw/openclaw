@@ -148,7 +148,11 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
     modelApplied: true,
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
-      model: resolvedModel,
+      model: choice.ref.model,
+      modelProvider: choice.ref.provider,
+      modelOverride: choice.ref.model,
+      providerOverride: choice.ref.provider,
+      modelOverrideRouteResolution: "resolved" as const,
       modelOverrideSource,
       ...(modelOrigin
         ? {
