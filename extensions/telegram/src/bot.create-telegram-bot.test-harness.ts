@@ -59,10 +59,6 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: MockFn<LoadWebMediaFn> }
   loadWebMedia: vi.fn<LoadWebMediaFn>(),
 }));
 
-export function getLoadWebMediaMock(): MockFn<LoadWebMediaFn> {
-  return loadWebMedia;
-}
-
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));

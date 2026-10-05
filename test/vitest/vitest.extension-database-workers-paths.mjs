@@ -382,7 +382,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/bot.create-telegram-bot.disabled-bindings.test.ts",
   "extensions/telegram/src/bot.create-telegram-bot.history.test.ts",
   "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-  "extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.test.ts",
   "extensions/telegram/src/bot.media.stickers-and-fragments.test.ts",
   "extensions/telegram/src/bot.test.ts",
   "extensions/telegram/src/channel.gateway.test.ts",
