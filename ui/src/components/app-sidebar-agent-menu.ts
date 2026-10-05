@@ -45,7 +45,7 @@ const sidebarMenuTypeahead = new WeakMap<
 function sidebarMenuItems(dropdown: Element | null) {
   return [
     ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
-      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-list > wa-dropdown-item:not([disabled])",
     ) ?? []),
   ];
 }
@@ -103,7 +103,9 @@ export function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
   const items = sidebarMenuItems(dropdown);
   const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
+  const search = dropdown?.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter");
   const controls = [
+    ...(search ? [search] : []),
     ...items,
     ...(footer?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []),
   ];
@@ -177,6 +179,7 @@ type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsSco
   rosterMode: boolean;
   activeName: string;
   connected: boolean;
+  onQueryChange: (query: string) => void;
   onToggleRoster: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
@@ -282,6 +285,13 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       }}
       @wa-after-show=${params.onAfterShow}
       @keydown=${(event: KeyboardEvent) => {
+        if (
+          event.target instanceof HTMLInputElement &&
+          (event.isComposing || !["ArrowDown", "ArrowUp", "Escape", "Tab"].includes(event.key))
+        ) {
+          event.stopPropagation();
+          return;
+        }
         if (moveSidebarMenuFocus(event)) {
           return;
         }
@@ -291,7 +301,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         const item =
           event.target instanceof HTMLElement
             ? event.target.closest<HTMLElement>(
-                ".sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+                ".sidebar-agent-menu__agent-list > wa-dropdown-item:not([disabled])",
               )
             : null;
         if ((event.key === "Enter" || event.key === " ") && item) {
@@ -309,6 +319,25 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
       ${renderSidebarMenuTrigger({ x: position.x, y: position.top }, menuLabel)}
+      ${params.agents.length > 0 ? html`<div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>` : nothing}
+      ${
+        params.agents.length > 6
+          ? html`
+              <input
+                class="sidebar-agent-menu__filter"
+                type="search"
+                aria-label=${t("agentChip.search")}
+                placeholder=${t("agentChip.search")}
+                .value=${params.query}
+                @input=${(event: InputEvent) => {
+                  // SAFETY: This handler is attached directly to the native search input.
+                  const input = event.currentTarget as HTMLInputElement;
+                  params.onQueryChange(input.value);
+                }}
+              />
+            `
+          : nothing
+      }
       ${renderSidebarAgentMenuSwitcher({ ...params, allAgentsScope: params.rosterMode && params.agents.length > 1 })}
       ${params.agents.length > 0 ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>` : nothing}
       ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "userPlus")}

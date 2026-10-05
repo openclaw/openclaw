@@ -282,13 +282,13 @@ suite.define(() => {
           "command:agent-settings",
         ]);
         expect(
-          await workspaceMenu.locator(".sidebar-agent-menu__agent-grid wa-dropdown-item").count(),
+          await workspaceMenu.locator(".sidebar-agent-menu__agent-list wa-dropdown-item").count(),
         ).toBe(5);
         expect(await workspaceMenu.locator('[value="command:help"]').count()).toBe(0);
         expect(await workspaceMenu.locator("wa-dropdown-item[aria-checked]").count()).toBe(0);
         expect(await allAgentsTile.getAttribute("aria-current")).toBe("true");
         const agentTiles = workspaceMenu.locator(
-          ".sidebar-agent-menu__agent-grid wa-dropdown-item",
+          ".sidebar-agent-menu__agent-list wa-dropdown-item",
         );
         await expectFocused(agentTiles.first());
         await page.keyboard.press("ArrowDown");
@@ -441,7 +441,7 @@ suite.define(() => {
         await expect.poll(() => allAgentsTile.isVisible()).toBe(true);
         expect(await allAgentsTile.getAttribute("aria-current")).toBeNull();
         expect(
-          await sidebar.locator(".sidebar-agent-menu__agent-grid wa-dropdown-item").count(),
+          await sidebar.locator(".sidebar-agent-menu__agent-list wa-dropdown-item").count(),
         ).toBe(5);
         await expectFocused(activeAgentTile);
         await page.keyboard.press("Escape");
