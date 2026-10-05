@@ -95,6 +95,27 @@ export function withPluginRuntimeGatewayContextResolver<T>(
   return runWithPluginGatewayScope(scoped, run);
 }
 
+/** Long-lived host work started from a request keeps its Gateway binding, never the request's client authority. */
+export function withoutPluginRuntimeGatewayRequestAuthority<T>(run: () => T): T {
+  const current = getPluginRuntimeGatewayRequestScope();
+  if (!current) {
+    return run();
+  }
+  const {
+    client: _client,
+    signal: _signal,
+    hasCurrentClientAuthority: _hasCurrentClientAuthority,
+    context: _context,
+    revalidate: _revalidate,
+    assertNodeExecutionCurrent: _assertNodeExecutionCurrent,
+    invokeWithSessionNodeAuthority: _invokeWithSessionNodeAuthority,
+    nodePlacementGrantAuthority: _nodePlacementGrantAuthority,
+    gatewayMethodDispatchAllowed: _gatewayMethodDispatchAllowed,
+    ...detached
+  } = current;
+  return runWithPluginGatewayScope({ ...detached, isWebchatConnect: isNotWebchatConnect }, run);
+}
+
 /** Runs work against an owned registry handle while preserving any gateway request facts. */
 export function withPluginRuntimeRegistryScope<T>(
   registry: PluginRegistry | undefined,
