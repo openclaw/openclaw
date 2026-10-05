@@ -27,6 +27,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
+  isNativeAppUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
 import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
@@ -38,7 +39,6 @@ import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,
