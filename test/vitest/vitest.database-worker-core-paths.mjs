@@ -368,6 +368,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/join-intro/report-channel-room-join.test.ts",
   "src/plugin-sdk/ingress-effect-once.test.ts",
   "src/plugin-sdk/session-transcript-runtime.test.ts",
+  "src/plugin-sdk/session-transcript-runtime.guarded.test.ts",
+  "src/plugin-sdk/session-transcript-runtime.worker-preparation.test.ts",
   "src/plugin-sdk/persistent-dedupe.worker.test.ts",
   "src/acp/runtime/session-meta.legacy-migration.test.ts",
   "src/agents/mcp-oauth-refresh-issuer.test.ts",

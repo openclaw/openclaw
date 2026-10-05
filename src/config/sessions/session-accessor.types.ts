@@ -385,7 +385,10 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
   workerPreparation?: Pick<
     TranscriptMessageAppendOptions<unknown>,
     "prepareMessageAfterIdempotencyCheck" | "beforeFreshMessageCommit"
-  >;
+  > & {
+    /** Requires expectedSessionId; awaited outside the transaction after the worker's duplicate check. */
+    prepareMessageAfterIdempotencyCheckAsync?: (message: unknown) => Promise<unknown>;
+  };
   predicate?:
     | { kind: "latest-assistant-differs"; runId: string; text: string }
     | { kind: "active-entry"; entryId: string; errorMessage: string };

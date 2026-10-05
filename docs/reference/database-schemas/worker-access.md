@@ -111,6 +111,15 @@ maintenance and process-held incognito keep their existing adapters. Locked mirr
 appends and feedback remain separate cutover work. Schemas, retention, durability,
 SDK signatures, and update behavior are unchanged.
 
+Strict harness transcript appends prepare messages outside the existing agent
+writer transaction. The writer rereads idempotency and pending-input custody
+before checking fresh-message source predicates. A message committed by another
+connection during source preparation remains a replay, while fresh writes recheck
+their source rows and current host grants. Awaited message preparation retains its
+transcript version until commit and never retries an uncertain outcome. Released
+synchronous preparation retains native callback ordering until the next Plugin SDK
+major. Schemas, stored bytes, retention, and update behavior are unchanged.
+
 Explicit restart-tombstone recovery clones the transcript and changes both session
 identities atomically in the agent writer worker. Source preparation uses worker
 reads, while the Gateway retains current caller authority and invalidates prepared
