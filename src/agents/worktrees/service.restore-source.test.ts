@@ -9,9 +9,9 @@ import * as commandExec from "../../process/exec.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import * as allocation from "./allocation.js";
 import * as worktreeGit from "./git.js";
+import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import {
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
 } from "./registry.js";

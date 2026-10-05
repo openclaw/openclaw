@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   loadSessionEntryReadOnly,
@@ -16,7 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { runStartupSessionMigration } from "./server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "./server-startup-session-migration.test-support.js";
 
 const stateRoot = process.env.OPENCLAW_STATE_DIR!;
 const generation = process.argv[2];
@@ -48,6 +50,15 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
     "yielded",
     "queued",
     "recovering",
+    "dashboard-spawned",
+    "dashboard-aborted",
+    "dashboard-completed-history",
+    "dashboard-delivery-before-cleanup",
+    "dashboard-retained-wake",
+    "dashboard-requester-turn",
+    "dashboard-collector-history",
+    "dashboard-malformed-descendant",
+    "role-spawned",
     "registry-queued",
     "registry-recovering",
     "registry-completion",
@@ -57,7 +68,10 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
     "incognito-control",
   ] as const;
   const key = (kind: string) =>
-    "agent:" + (kind === "ops-running" ? "ops" : "main") + ":subagent:" + kind;
+    "agent:" +
+    (kind === "ops-running" ? "ops" : "main") +
+    (kind.startsWith("dashboard-") || kind === "role-spawned" ? ":dashboard:" : ":subagent:") +
+    kind;
   const scope = (kind: string) => ({
     agentId: kind === "ops-running" ? "ops" : "main",
     sessionKey: key(kind),
@@ -95,7 +109,9 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
             updatedAt: now,
             status: kind === "done" ? "done" : kind === "queued" ? "queued" : "running",
             ...(kind === "done" ? { endedAt: now, runtimeMs: 0 } : {}),
-            ...(kind === "recovering"
+            ...(kind.startsWith("dashboard-") ? { spawnDepth: 1 } : {}),
+            ...(kind === "role-spawned" ? { subagentRole: "leaf" as const } : {}),
+            ...(kind === "recovering" || kind === "dashboard-aborted"
               ? { abortedLastRun: true, restartRecoveryForceSafeTools: true }
               : {}),
           };
@@ -127,6 +143,51 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
               : {}),
           });
         }
+        for (const kind of [
+          "dashboard-completed-history",
+          "dashboard-delivery-before-cleanup",
+          "dashboard-retained-wake",
+          "dashboard-requester-turn",
+          "dashboard-collector-history",
+        ]) {
+          for (let index = 0; index < (kind === "dashboard-completed-history" ? 2 : 1); index++) {
+            const now = Date.now();
+            const runId = `${kind}-child-${index}`;
+            const controllerOnly = kind === "dashboard-delivery-before-cleanup";
+            registry.set(runId, {
+              runId,
+              childSessionKey: `agent:main:${index === 0 ? "subagent" : "dashboard"}:${runId}`,
+              requesterSessionKey: controllerOnly ? "agent:main:main" : key(kind),
+              ...(controllerOnly ? { controllerSessionKey: key(kind) } : {}),
+              requesterDisplayKey: "retained history",
+              task: "settled child history",
+              cleanup: "keep",
+              createdAt: now,
+              execution: {
+                status: "terminal",
+                startedAt: now,
+                endedAt: now,
+                outcome: { status: "ok" },
+              },
+              completion: { required: true },
+              delivery: { status: "delivered", deliveredAt: now },
+              ...(kind === "dashboard-delivery-before-cleanup" ? {} : { cleanupCompletedAt: now }),
+              ...(kind === "dashboard-retained-wake"
+                ? { requesterSettleWake: { status: "pending" as const, attemptCount: 0 } }
+                : {}),
+              ...(kind === "dashboard-requester-turn"
+                ? { requesterTurnRunId: "unfinished-requester" }
+                : {}),
+              ...(kind === "dashboard-collector-history"
+                ? {
+                    collect: true,
+                    collectorCompletion: { status: "done" as const },
+                    collectorLaunchCleanupPending: true,
+                  }
+                : {}),
+            });
+          }
+        }
         saveSubagentRegistryToSqlite(registry);
         // A malformed retained claim is unresolved ownership, never permission to settle its session.
         openOpenClawStateDatabase()
@@ -134,7 +195,23 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
             "INSERT INTO subagent_runs(run_id,child_session_key,requester_session_key,created_at,payload_json) VALUES(?,?,?,?,?)",
           )
           .run("malformed-owner", key("malformed-owner"), "agent:main:main", Date.now(), "{}");
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "INSERT INTO subagent_runs(run_id,child_session_key,requester_session_key,created_at,payload_json) VALUES(?,?,?,?,?)",
+          )
+          .run(
+            "malformed-descendant",
+            "agent:main:subagent:malformed-descendant",
+            key("dashboard-malformed-descendant"),
+            Date.now(),
+            "{}",
+          );
       } else if (mode === "successor" || mode === "embedded") {
+        if (layout === "default") {
+          for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+            subagentRuns.set(runId, entry);
+          }
+        }
         await replaceSessionEntry(scope("incognito-control"), {
           sessionId: "incognito",
           incognito: true,
@@ -164,7 +241,7 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
           path.join(stateDir, "before-startup.json"),
           JSON.stringify({ rows: rows(), owners: durableOwners() }),
         );
-        await runStartupSessionMigration({
+        await runStartupSessionMaintenanceForTest({
           cfg,
           env: process.env,
           log: { info: console.error, warn: console.error },
@@ -180,6 +257,7 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
   } finally {
     clearAgentRunContext("live-owner");
     clearAgentRunContext("yielded-owner");
+    subagentRuns.clear();
     closeOpenClawAgentDatabasesForTest();
     await lock.release();
     closeOpenClawStateDatabaseForTest();

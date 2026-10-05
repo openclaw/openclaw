@@ -187,7 +187,7 @@ async function withFixture(
       agents: {
         ownership: "explicit",
         defaults: { model: { primary: "openai/gpt-5.5" } },
-        list: [{ id: "main", agentDir: state.agentDir(), workspace: state.workspaceDir }],
+        entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
       },
       tools: { web: { search: { enabled: false } } },
       ...(options.mcpResolver

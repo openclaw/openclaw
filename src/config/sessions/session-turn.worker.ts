@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
@@ -12,6 +13,7 @@ import { prepareSessionEntryReplacementPublication } from "./session-accessor.sq
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -48,7 +50,17 @@ function inCustody<T>(
     ? runWithSessionPendingInputWorkerCustody(
         input.custody,
         input.relocation,
-        () => context.admit("transaction", { kind: "session-turn-custody" }),
+        () =>
+          context.admit("transaction", {
+            kind: "session-turn-custody",
+            authority: input.custody!.preparedAuthority
+              ? readSessionPendingInputAuthorityFacts(
+                  context.open(),
+                  input.custody!.sessionKey,
+                  input.custody!.agentId,
+                )
+              : undefined,
+          }),
         owned,
       ).value
     : owned();
@@ -181,6 +193,16 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
         projectionNeedsReconcile,
         sequences: committed.result.appendedMessages.map(readCommittedTranscriptMessageSequence),
         custody: readSessionPendingInputWorkerReceipt(database),
+        authority:
+          input.custody?.preparedAuthority &&
+          input.custody.databasePath ===
+            (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path)
+            ? readSessionPendingInputAuthorityFacts(
+                database,
+                input.custody.sessionKey,
+                input.custody.agentId,
+              )
+            : undefined,
         publication: committed.identity
           ? prepareSessionEntryReplacementPublication(
               {

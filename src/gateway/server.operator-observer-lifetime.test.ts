@@ -14,6 +14,7 @@ import * as questionChannel from "../infra/question-channel-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -37,6 +38,13 @@ async function startObserverGateway() {
     captured.resolve(context);
     respond(true, { captured: true });
   };
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "observer-proof",
+      name: "test.observer-context",
+      handler: registry.gatewayHandlers["test.observer-context"],
+    }),
+  );
   setTestPluginRegistry(registry);
   let gateway: GatewayHarness | undefined;
   let admin: WebSocket | undefined;

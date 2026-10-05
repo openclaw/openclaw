@@ -2,13 +2,6 @@
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { isRecord } from "../utils.js";
 
-const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
-  "hooks.token",
-  "hooks.gmail.pushToken",
-  "hooks.mappings[].sessionKey",
-  "auth-profiles.oauth.*",
-] as const;
-
 const CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS = [
   "hooks.token",
   "hooks.gmail.pushToken",
@@ -31,24 +24,19 @@ const bundledChannelUnsupportedSecretRefSurfacePatterns = [
 ];
 
 const unsupportedSecretRefSurfacePatterns = [
-  ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
+  ...CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS,
+  "auth-profiles.oauth.*",
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
 ];
 
 // Candidate scanning only sees openclaw.json; auth-profile-only surfaces are audited elsewhere.
-const unsupportedSecretRefConfigCandidatePatterns = [
+const unsupportedSecretRefConfigCandidateTokens = [
   ...CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS,
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
-];
-
-const parsedPatternCache = new Map<string, PatternToken[]>();
+].map(parseUnsupportedSecretRefSurfacePattern);
 
 function parseUnsupportedSecretRefSurfacePattern(pattern: string): PatternToken[] {
-  const cached = parsedPatternCache.get(pattern);
-  if (cached) {
-    return cached;
-  }
-  const parsed = pattern
+  return pattern
     .split(".")
     .filter((segment) => segment.length > 0)
     .map<PatternToken>((segment) => {
@@ -66,8 +54,6 @@ function parseUnsupportedSecretRefSurfacePattern(pattern: string): PatternToken[
         key: segment,
       };
     });
-  parsedPatternCache.set(pattern, parsed);
-  return parsed;
 }
 
 function collectPatternCandidates(params: {
@@ -108,15 +94,11 @@ function collectPatternCandidates(params: {
     return;
   }
 
-  if (!isRecord(params.current)) {
+  if (!isRecord(params.current) || !Object.hasOwn(params.current, token.key)) {
     return;
   }
-
+  const value = params.current[token.key];
   if (token.kind === "array") {
-    if (!Object.hasOwn(params.current, token.key)) {
-      return;
-    }
-    const value = params.current[token.key];
     if (!Array.isArray(value)) {
       return;
     }
@@ -131,19 +113,12 @@ function collectPatternCandidates(params: {
     return;
   }
 
-  if (!Object.hasOwn(params.current, token.key)) {
-    return;
-  }
   collectPatternCandidates({
     ...params,
-    current: params.current[token.key],
+    current: value,
     tokenIndex: params.tokenIndex + 1,
     pathSegments: [...params.pathSegments, token.key],
   });
-}
-
-function listUnsupportedSecretRefSurfacePatterns(): string[] {
-  return [...unsupportedSecretRefSurfacePatterns];
 }
 
 type UnsupportedSecretRefConfigCandidate = {
@@ -159,10 +134,10 @@ function collectUnsupportedSecretRefConfigCandidates(
   }
 
   const candidates: UnsupportedSecretRefConfigCandidate[] = [];
-  for (const pattern of unsupportedSecretRefConfigCandidatePatterns) {
+  for (const tokens of unsupportedSecretRefConfigCandidateTokens) {
     collectPatternCandidates({
       current: raw,
-      tokens: parseUnsupportedSecretRefSurfacePattern(pattern),
+      tokens,
       tokenIndex: 0,
       pathSegments: [],
       candidates,
@@ -172,6 +147,6 @@ function collectUnsupportedSecretRefConfigCandidates(
 }
 
 export const unsupportedSecretRefSurfacePolicy = {
-  listPatterns: listUnsupportedSecretRefSurfacePatterns,
+  listPatterns: () => [...unsupportedSecretRefSurfacePatterns],
   collectConfigCandidates: collectUnsupportedSecretRefConfigCandidates,
 };

@@ -12,8 +12,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
-type GatewayCliDependencies = Parameters<typeof registerGatewayCli>[1];
-
 type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
@@ -103,10 +101,10 @@ vi.mock("../commands/gateway-status.js", () => ({
 
 let gatewayProgram: Command;
 
-function createGatewayProgram(deps?: GatewayCliDependencies) {
+function createGatewayProgram() {
   const program = new Command();
   program.exitOverride();
-  registerGatewayCli(program, deps);
+  registerGatewayCli(program);
   return program;
 }
 

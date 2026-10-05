@@ -39,6 +39,7 @@ describe("resolveConfiguredSetupModelForAgent", () => {
       const cfg: OpenClawConfig = {
         meta: { migrations: { utilityModelSeparation: true } },
         agents: {
+          ownership: "explicit",
           defaults: { utilityModel },
           entries: { ops: { utilityModel: "local-utility/ops" }, disabled: { utilityModel: "" } },
         },
@@ -168,7 +169,7 @@ describe("resolveUtilityModelRefForAgent", () => {
       cfg: {
         agents: {
           defaults: { utilityModel: "openai/gpt-5.4-mini" },
-          list: [{ id: "ops", utilityModel: "" }],
+          entries: { ops: { utilityModel: "" } },
         },
       },
       agentId: "ops",
@@ -178,7 +179,7 @@ describe("resolveUtilityModelRefForAgent", () => {
       cfg: {
         agents: {
           defaults: { utilityModel: "openai/gpt-5.4-mini" },
-          list: [{ id: "ops", utilityModel: "" }],
+          entries: { ops: { utilityModel: "" } },
         },
       },
       expected: "openai/gpt-5.4-mini",

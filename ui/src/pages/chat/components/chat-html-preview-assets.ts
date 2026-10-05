@@ -1,6 +1,7 @@
 import type { SessionsFilesAssetsResult } from "@openclaw/gateway-protocol";
 import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterTypes } from "parse5";
 import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 
 type Asset = SessionsFilesAssetsResult["assets"][number];
 type LoadedAsset = Extract<Asset, { content: string }>;
@@ -154,9 +155,7 @@ function retainedAttributes(
 }
 
 function decodeText(asset: LoadedAsset): string {
-  return new TextDecoder().decode(
-    Uint8Array.from(atob(asset.content), (char) => char.charCodeAt(0)),
-  );
+  return new TextDecoder().decode(base64ToBytes(asset.content));
 }
 
 function dataUrl(asset: LoadedAsset, ref: string): string | undefined {

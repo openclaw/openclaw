@@ -355,7 +355,6 @@ export async function checkClawHubSkillTrust(
     subject: {
       kind: "skill",
       packageName: params.slug,
-      workspaceDir: params.workspaceDir,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
     },
     version: params.version,

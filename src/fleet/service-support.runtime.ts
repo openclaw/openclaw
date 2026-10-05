@@ -36,6 +36,9 @@ const CELL_CONFIG_FILENAME = "openclaw.json";
 const HEALTH_TIMEOUT_MS = 1_000;
 const CELL_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
 const FLEET_OPERATION_HEARTBEAT_MS = 60_000;
+// Match the compose healthcheck while allowing slow-starting cells a full minute.
+const CELL_VERIFY_TIMEOUT_MS = 60_000;
+const CELL_VERIFY_POLL_MS = 1_000;
 
 export type FleetHealthResult =
   | { status: "ok"; url: string; httpStatus: number }
@@ -491,11 +494,9 @@ export async function verifyReplacementHealthy(params: {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   checkpoint: () => Promise<void>;
-  timeoutMs: number;
-  pollMs: number;
   context: "upgrade" | "restore" | "create";
 }): Promise<void> {
-  const deadline = params.now() + params.timeoutMs;
+  const deadline = params.now() + CELL_VERIFY_TIMEOUT_MS;
   for (;;) {
     const replacement = await params.containers.inspect(
       params.record.runtime,
@@ -523,7 +524,7 @@ export async function verifyReplacementHealthy(params: {
       throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
     }
     await params.checkpoint();
-    await params.sleep(params.pollMs);
+    await params.sleep(CELL_VERIFY_POLL_MS);
   }
 }
 

@@ -37,7 +37,7 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
     let updated = "";
     let lastEnd = 0;
     matches.forEach((match, index) => {
-      const matchStart = match.index ?? 0;
+      const matchStart = match.index;
       const matchEnd = matchStart + match[0].length;
       const betweenMatches = params.original.slice(lastEnd, matchStart);
       if (index === 0) {

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
@@ -14,6 +16,10 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  CORE_WORKER_LAUNCH_TOOL_NAMES,
+  resolveCoreToolExecutionLocation,
+} from "../../agents/tool-catalog.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
@@ -30,7 +36,6 @@ import {
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -46,6 +51,7 @@ import {
   placements,
   openSessionManager,
   readWorkerTurnTranscriptStorageRows,
+  root,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -281,7 +287,7 @@ describe("worker turn execution", () => {
   );
 
   it.each([false, true])(
-    "launches only supervisor-admitted tools and authorizes the same set (declared: %s)",
+    "preserves prepared context and limits launch authority to supervisor tools (declared: %s)",
     async (declared) => {
       await seedActivePlacement();
       const launchToolNames = resolveNodeWorkerLaunchToolNames({
@@ -289,7 +295,7 @@ describe("worker turn execution", () => {
         capacity: { total: 1, available: 1 },
         environmentSession: 1,
         capturedExecPolicy: true,
-        ...(declared ? { launchToolNames: WORKER_TOOL_NAMES } : {}),
+        ...(declared ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] } : {}),
       });
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
@@ -314,20 +320,68 @@ describe("worker turn execution", () => {
         },
       });
       const input = turn("launch-tool-negotiation");
+      const agentWorkspace = path.join(root, "agent-bootstrap");
+      await mkdir(agentWorkspace);
+      await Promise.all([
+        writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions."),
+        writeFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent identity."),
+        writeFile(path.join(agentWorkspace, "USER.md"), "Canonical user context."),
+        writeFile(path.join(agentWorkspace, "TOOLS.md"), "Canonical tool instructions."),
+        writeFile(path.join(root, "AGENTS.md"), "Selected execution project instructions."),
+        writeFile(path.join(root, "SOUL.md"), "Unselected execution identity must stay private."),
+      ]);
       try {
         await expect(
-          provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+          provider.executeTurn(
+            { ...sessionTarget, runId: input.runId },
+            {
+              ...input,
+              config: {
+                ...input.config,
+                agents: {
+                  defaults: { ...input.config.agents.defaults, workspace: agentWorkspace },
+                },
+              },
+              currentInboundContext: { text: "Current sender: fixture-sender" },
+            },
+            vi.fn(),
+          ),
         ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         expect(launchTurn).toHaveBeenCalledOnce();
         const request = launchTurn.mock.calls[0]![0];
         expect(parseWorkerLaunchPlan(request.plan)).toEqual(request.plan);
+        const { systemPrompt, prompt, runtimeContext } = request.plan.assignment;
+        expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+        expect(systemPrompt).toContain("Canonical agent instructions.");
+        expect(systemPrompt).toContain("Canonical agent identity.");
+        expect(systemPrompt).toContain("Canonical user context.");
+        expect(systemPrompt).not.toContain("Canonical tool instructions.");
+        expect(systemPrompt).toContain("Selected execution project instructions.");
+        expect(systemPrompt).not.toContain("Unselected execution identity must stay private.");
+        expect(systemPrompt).toContain("Working directory: /worker/workspace");
+        expect(prompt).toMatch(
+          /^\[[^\]]+\d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] Inspect this workspace$/u,
+        );
+        expect(runtimeContext).toContainEqual({
+          kind: "conversation-data",
+          text: "Current sender: fixture-sender",
+        });
         const allowed = request.plan.assignment.toolAuthority.allowedToolNames;
         expect(allowed.length).toBeGreaterThan(0);
         expect(allowed.filter((name) => !launchToolNames.includes(name))).toEqual([]);
-        expect(allowed.includes("presence")).toBe(declared);
+        expect(
+          allowed.every((name) => resolveCoreToolExecutionLocation(name) === "placement"),
+        ).toBe(true);
+        expect(allowed.includes("ls")).toBe(declared);
+        expect(allowed).not.toContain("sessions_list");
+        const authorized = authorize.mock.calls[0]?.[1];
+        expect(authorized).toEqual(
+          expect.arrayContaining([...allowed, "sessions_list", "github_identity_status"]),
+        );
+        expect(authorized).not.toContain("github_publish");
         expect(authorize).toHaveBeenCalledExactlyOnceWith(
           request.turnClaim,
-          allowed,
+          authorized,
           expect.any(Function),
         );
       } finally {
@@ -367,7 +421,8 @@ describe("worker turn execution", () => {
           {
             ...input,
             abortSignal: abort.signal,
-            onExecutionStarted: async () => {
+            onExecutionStarted: async (info) => {
+              expect(info?.backend).toBe("cloud-worker");
               // Earlier workspace recovery and externally owned writes retain their own ordering.
               hydration.mockClear();
               acquireTurnCredential.mockClear();
@@ -753,6 +808,7 @@ describe("worker turn execution", () => {
                   custom: {
                     baseUrl: "https://example.invalid/v1",
                     api: "openai-completions",
+                    apiKey: "synthetic-worker-api-key",
                     models: [
                       {
                         id: "plain",

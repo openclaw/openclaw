@@ -148,7 +148,9 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
-Rooted background runs, including skill workshop reviews and isolated cron jobs, reuse the agent's prepared plugin generation when their bootstrap workspace resolves to that agent's canonical workspace. Their execution directory and filesystem confinement remain at the task root, including during compaction. Runs without a canonical bootstrap workspace retain their own workspace-scoped generation.
+Runs outside the agent's canonical workspace reuse the agent's prepared plugin generation instead of loading the plugins again. Rooted background runs, including skill workshop reviews and isolated cron jobs, qualify when their bootstrap workspace resolves to that agent's canonical workspace. In a Gateway, every other run workspace also qualifies because it resolves to the same boot inventory. Their execution directory and filesystem confinement remain at the task root, including during compaction. Hosts without that shared inventory, such as direct CLI runs in another workspace, retain their own workspace-scoped generation.
+
+Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
 
 Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
 
@@ -389,7 +391,8 @@ and preserves the same cleanup contract for shipped `owner.sqlite` markers.
 Cleanup rechecks directory and token identity before removal. Live leases,
 unreadable entries, symlinks, and invalid tokens preserve files. An aged instance
 left without a token by interrupted allocation or older partial cleanup is
-reclaimed after a successful rename probe. Allocation creates the token before
+reclaimed only after a complete process and open-file census proves inactivity,
+followed by a successful rename probe. Allocation creates the token before
 creating payload, and disposal removes payload before its token.
 The token belongs to its capture instance; captures do not create a global
 coordination database.
@@ -411,13 +414,16 @@ Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
 the current system temporary directory. Roots must be older than one hour and
 have no custody token. On macOS and Linux, cleanup rechecks that each legacy root belongs
 to the current UID immediately before its rename, preserving other users' captures even in
-privileged runs. Windows has no equivalent UID check, so privileged Windows cleanup keeps
-the age and rename-probe rules below.
-A complete process census that finds another OpenClaw
-producer preserves legacy roots. When the census is unavailable, including on
-Windows, cleanup uses age and a rename probe instead; sharing violations leave
-locked roots for a later cycle. This is best-effort cleanup of reconstructible
-legacy scratch, not proof that an older producer has stopped using it.
+privileged runs. A live OpenClaw producer preserves tokenless roots. On Linux,
+cleanup also inspects process file descriptors, working directories, and mapped
+files, including holders that are not OpenClaw processes. Only a complete census
+with no holder permits removal. Restricted procfs mounts (`hidepid` restrictions
+or `subset=pid`) preserve roots with a `restricted-procfs` warning. Unreadable or incomplete inspection preserves
+the roots and emits one warning per sweep with the reason; cleanup retries on a
+later sweep without interrupting loading or updates. Platforms without complete
+open-file inspection, including macOS and Windows, preserve tokenless roots.
+Managed instances with custody tokens continue to use their native lease on all
+platforms. A rename probe alone never establishes inactivity.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
 have no owner record proving whether their producer is still alive. Doctor reports
@@ -466,6 +472,10 @@ acquired by that context. The first catalog request prepares registrations for t
 agent's known configured and credential providers together; only the requested
 providers run catalog hooks. Newly observed owners extend that context without
 discarding earlier owners. Replacement releases them after admitted work settles.
+After successful physical cleanup, retired plugin instances release their registry
+references while preserving revocation. Native module exports no longer retain the
+disposed registry through instance ownership, and stale calls remain rejected. Pending or failed
+cleanup retains its custody.
 Successfully disposed registrations leave their plugin caches.
 
 Catalog observation is passive. Inventory requests can ask the catalog owner to
@@ -564,7 +574,9 @@ When using Jiti's TypeScript path settings, keep the original tsconfig files and
 configuration dependencies available while the plugin is active. Loaded modules
 retain their selected path mappings; previously unvisited modules may read those
 configuration files on first use. Newly loaded instances select the current
-path settings.
+path settings. On Windows, explicit and relative tsconfig paths still resolve
+managed imports from the instance's captured source, including lazy imports
+after source files are edited.
 
 Registry retirement revokes managed execution separately from physical resource
 release. An acquired inspection can release its execution authority while a

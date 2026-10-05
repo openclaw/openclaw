@@ -1,5 +1,4 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -138,15 +137,13 @@ const feishuDmPolicy = createChannelDmPolicy({
 
 type WizardPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 
-const loadAppRegistrationModule = createLazyRuntimeModule(() => import("./app-registration.js"));
-
 async function runScanToCreate(
   prompter: WizardPrompter,
   domain: FeishuDomain,
   beforePersistentEffect?: () => Promise<void>,
 ): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
-    await loadAppRegistrationModule();
+    await import("./app-registration.js");
   try {
     await initAppRegistration(domain);
   } catch {
@@ -267,7 +264,7 @@ async function runNewAppFlow(params: {
     }
 
     if (appId && appSecretProbeValue) {
-      const { getAppOwnerOpenId } = await loadAppRegistrationModule();
+      const { getAppOwnerOpenId } = await import("./app-registration.js");
       scanOpenId = await getAppOwnerOpenId({
         appId,
         appSecret: appSecretProbeValue,

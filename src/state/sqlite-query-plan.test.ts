@@ -1,13 +1,22 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
-import type { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  hasOrphanedTranscriptIndexRows,
+} from "../config/sessions/session-transcript-index.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import {
+  migrateSessionWatchCursorProvenance,
+  needsSessionWatchCursorProvenanceMigration,
+} from "./openclaw-state-db-session-watch-migration.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -60,6 +69,147 @@ afterEach(() => {
 });
 
 describe("sqlite hot query plans", () => {
+  it("bounds absent legacy watch detection and migration by the cursor index", () => {
+    const { db } = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+    const plans: string[] = [];
+    const prototype = requireNodeSqlite().StatementSync.prototype;
+    const observers = (["get", "all", "iterate"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver: StatementSync, params) {
+            if (/^select .* from "session_watch_cursors" /i.test(receiver.sourceSQL)) {
+              plans.push(explainQueryPlan(db, receiver.sourceSQL, params));
+            }
+            return Reflect.apply(target, receiver, params);
+          },
+        }),
+      );
+    });
+    try {
+      expect(needsSessionWatchCursorProvenanceMigration(db, 4)).toBe(false);
+      expect(migrateSessionWatchCursorProvenance(db)).toEqual({
+        addedColumn: false,
+        migratedAmbientWatches: 0,
+        removedLegacySentinels: 0,
+      });
+    } finally {
+      observers.forEach((observer) => observer.mockRestore());
+    }
+    expect(plans).toHaveLength(2);
+    for (const plan of plans) {
+      expect(plan).toMatch(
+        /SEARCH session_watch_cursors .*\(watcher_session_key>\? AND watcher_session_key<\?\)/,
+      );
+      expect(plan).not.toContain("SCAN");
+    }
+  });
+
+  it.each(["missing", "production", "stale"])(
+    "checks orphan-query plans and preserves live rows with %s statistics",
+    (statistics) => {
+      const { db } = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+      });
+      // Multiple events per owner exercise the cost that a one-row fixture hides.
+      db.exec(`
+        PRAGMA foreign_keys = OFF;
+        WITH RECURSIVE events(n) AS (
+          VALUES(0) UNION ALL SELECT n + 1 FROM events WHERE n < 191
+        )
+        INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+          SELECT 'session-' || (n / 64), n % 64, '{}', 1 FROM events;
+        INSERT INTO session_transcript_active_events
+          (session_id, active_position, event_seq, context_eligible)
+          SELECT session_id, seq, seq, 1 FROM transcript_events;
+        PRAGMA foreign_keys = ON;
+      `);
+      if (statistics !== "missing") {
+        db.exec(`
+          ANALYZE;
+          DELETE FROM sqlite_stat1;
+          INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES
+            ('transcript_events', 'sqlite_autoindex_transcript_events_1', '4763052 401 1'),
+            ('session_transcript_active_events', 'sqlite_autoindex_session_transcript_active_events_1', '4747766 401 1'),
+            ('session_transcript_active_events', 'idx_agent_transcript_active_event_seq', '4747766 401 1'),
+            ('session_transcript_active_events', 'idx_agent_transcript_active_messages', '3774978 401 1'),
+            ('session_transcript_active_events', 'idx_agent_transcript_context_pending', '0 0');
+        `);
+        if (statistics === "stale") {
+          db.exec("UPDATE sqlite_stat1 SET stat = '1 1 1'");
+        }
+        db.exec("ANALYZE sqlite_schema");
+      }
+
+      const statements: { sql: string; kind: "read" | "delete" }[] = [];
+      const tracker = trackSqliteStatementExecutions(db, ["read", "delete"], (sql) => {
+        const kind = sql.startsWith("delete") ? "delete" : "read";
+        statements.push({ sql, kind });
+        return kind;
+      });
+      try {
+        expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+        db.exec("BEGIN IMMEDIATE");
+        deleteOrphanedTranscriptIndexRowsInTransaction(db);
+        db.exec("COMMIT");
+        expect(tracker.counts).toEqual({ read: 3, delete: 3 });
+      } finally {
+        tracker.restore();
+      }
+      const activeStatements = statements.filter((statement) =>
+        statement.sql.includes('from "session_transcript_active_events"'),
+      );
+      expect(activeStatements).toHaveLength(2);
+      for (const { sql, kind } of activeStatements) {
+        const params = kind === "read" ? [1] : [];
+        const plan = explainQueryPlan(db, sql, params);
+        expect(plan).not.toContain("CORRELATED");
+        expect(plan).toContain("USING COVERING INDEX");
+        if (kind === "delete" && statistics === "production") {
+          expect(plan).toMatch(/SEARCH session_transcript_active_events .*\(session_id=\?\)/);
+        }
+        if (statistics === "production") {
+          const program = db.prepare(`EXPLAIN ${sql}`).all(...params);
+          for (const table of ["session_transcript_active_events", "transcript_events"]) {
+            const roots = new Set(
+              db
+                .prepare("SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND tbl_name = ?")
+                .all(table)
+                .map((row) => row.rootpage),
+            );
+            const cursors = new Set(
+              program
+                .filter((op) => op.opcode === "OpenRead" && roots.has(op.p2))
+                .map((op) => op.p1),
+            );
+            // SCAN alone is ambiguous: SeekGT jumps over duplicate session keys.
+            expect(program.some((op) => op.opcode === "SeekGT" && cursors.has(op.p1))).toBe(true);
+          }
+        }
+      }
+      db.exec(`
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO session_transcript_active_events
+          (session_id, active_position, event_seq, context_eligible)
+          VALUES ('orphan', 0, 0, 1);
+        PRAGMA foreign_keys = ON;
+      `);
+      expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
+      db.exec("BEGIN IMMEDIATE");
+      deleteOrphanedTranscriptIndexRowsInTransaction(db);
+      db.exec("COMMIT");
+      expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+      expect(
+        db.prepare("SELECT count(*) AS n FROM session_transcript_active_events").get(),
+      ).toEqual({
+        n: 192,
+      });
+    },
+  );
+
   it("searches failed delivery ranges with and without planner statistics", () => {
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },

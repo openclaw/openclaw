@@ -11,6 +11,7 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
@@ -71,21 +72,47 @@ export async function withSessionEntryWorker<T>(
   signal?: AbortSignal,
   prepare?: SessionEntryWorkerPreparation,
   onTransaction?: (facts: unknown) => void,
+  onAdmission?: (
+    admission: SqliteWorkerOperationAdmission,
+    retained: RetainedWorkerTransactionAdmission,
+    request: SqliteWorkerAdmissionRequest,
+    grant: () => boolean,
+  ) => boolean,
+  releaseSource?: () => void | Promise<void>,
 ): Promise<T> {
-  const execution =
-    retainedExecution ??
-    captureOpenClawAgentDatabaseExecution(
-      options,
-      databaseIdentity
-        ? {
-            expectedIdentity: {
-              kind: "file",
-              physicalIdentity: databaseIdentity,
-              nativeLocation: options.path,
-            },
-          }
-        : {},
-    );
+  let execution: OpenClawAgentDatabaseExecution;
+  let env: SessionEntryCommitContext["env"];
+  try {
+    env = Object.freeze({ ...(options.env ?? process.env) });
+    execution =
+      retainedExecution ??
+      captureOpenClawAgentDatabaseExecution(
+        options,
+        databaseIdentity
+          ? {
+              expectedIdentity: {
+                kind: "file",
+                physicalIdentity: databaseIdentity,
+                nativeLocation: options.path,
+              },
+            }
+          : {},
+      );
+  } catch (error) {
+    try {
+      await releaseSource?.();
+    } catch (cleanupError) {
+      throw retainSqliteWorkerErrorCode(
+        createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "Session writer acquisition and source cleanup failed",
+          error,
+        ),
+        error,
+      );
+    }
+    throw error;
+  }
   const assertRetainedIdentity = () => {
     if (!retainedExecution) {
       return;
@@ -111,7 +138,7 @@ export async function withSessionEntryWorker<T>(
   };
   let assertNativeCurrent: (() => void) | undefined;
   const context: SessionEntryCommitContext = {
-    env: Object.freeze({ ...(options.env ?? process.env) }),
+    env,
     assertCurrent() {
       execution.assertCurrent();
       assertRetainedIdentity();
@@ -131,6 +158,9 @@ export async function withSessionEntryWorker<T>(
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
           assertHeld();
+          if (onAdmission?.(admission, retained, request, grant)) {
+            return;
+          }
           if (request.stage === "commit") {
             onCommit?.(admission, retained, request.facts);
           } else if (request.stage === "transaction") {
@@ -179,6 +209,7 @@ export async function withSessionEntryWorker<T>(
   }
   const cleanupErrors: unknown[] = [];
   for (const cleanup of [
+    () => releaseSource?.(),
     () => preparation?.release(),
     () => (retainedExecution ? undefined : execution.release()),
   ]) {

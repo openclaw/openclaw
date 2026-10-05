@@ -23,7 +23,6 @@ import {
   resolveAssistantTextTail,
   streamCausalInsertIndex,
   streamCausalInterval,
-  streamCausalTimestamp,
   type StreamCausalBoundaryState,
 } from "./stream-causal-boundary.ts";
 import {
@@ -417,27 +416,22 @@ function currentToolStreamMessageIndex(
   state: StreamReconciliationState,
   startIndex: number,
   endIndex: number,
-  toolCallId?: string,
+  toolCallId: string,
   runId?: string,
 ): number {
   const liveToolRefs = resolveLiveToolStreamRefs(state);
-  const selectedToolIdentity = toolCallId
-    ? resolveMatchingLiveToolIdentity({ id: toolCallId, ...(runId ? { runId } : {}) }, liveToolRefs)
-    : undefined;
-  const liveToolIds = selectedToolIdentity
-    ? new Set([selectedToolIdentity])
-    : toolCallId
-      ? new Set<string>()
-      : new Set(liveToolRefs.map((ref) => ref.identity));
-  if (liveToolIds.size === 0) {
+  const selectedToolIdentity = resolveMatchingLiveToolIdentity(
+    { id: toolCallId, ...(runId ? { runId } : {}) },
+    liveToolRefs,
+  );
+  if (!selectedToolIdentity) {
     return -1;
   }
   for (let index = startIndex; index < endIndex; index++) {
     if (
-      extractToolMessageRefs(messages[index]).some((ref) => {
-        const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
-        return identity !== undefined && liveToolIds.has(identity);
-      })
+      extractToolMessageRefs(messages[index]).some(
+        (ref) => resolveMatchingLiveToolIdentity(ref, liveToolRefs) === selectedToolIdentity,
+      )
     ) {
       return index;
     }
@@ -517,12 +511,8 @@ export function materializeVisibleStreamState(
     const streamMessage = {
       role: "assistant",
       content: [{ type: "text", text: part.text }],
-      timestamp: streamCausalTimestamp(
-        nextMessages,
-        insertIndex,
-        part.timestamp,
-        messageTimestampMs,
-      ),
+      // User intervals own placement; retiming the saved stream would reorder live tools.
+      timestamp: part.timestamp,
       openclawStreamFallback: {
         replacementText: part.replacementText,
         source: part.source,

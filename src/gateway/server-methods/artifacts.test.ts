@@ -81,7 +81,7 @@ async function invokeArtifactHandler(
 ) {
   const responder = createResponder();
   const defaultContext = {
-    getRuntimeConfig: () => ({ agents: { entries: { main: { default: true } } } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
   };
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
@@ -163,7 +163,7 @@ describe("artifacts RPC handlers", () => {
         id: "session-alias-main-key",
         context: runtimeContext({
           session: { mainKey: "primary" },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
         }),
       },
     );
@@ -184,7 +184,7 @@ describe("artifacts RPC handlers", () => {
           session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
             defaults: { sessionStore: { agentId: "ops" } },
           },
         }),
@@ -208,7 +208,7 @@ describe("artifacts RPC handlers", () => {
         id: "global-run-agent-scope",
         context: runtimeContext({
           session: { scope: "global" },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
         }),
       },
     );
@@ -236,7 +236,7 @@ describe("artifacts RPC handlers", () => {
         context: runtimeContext({
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         }),
       },
@@ -264,7 +264,7 @@ describe("artifacts RPC handlers", () => {
         context: runtimeContext({
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         }),
       },

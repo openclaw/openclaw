@@ -114,19 +114,15 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
 }
 
 function scopeCandidatesForUrl(url: string): string[] {
-  try {
-    const host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-    const looksLikeGraph =
-      host.endsWith("graph.microsoft.com") ||
-      host.endsWith("sharepoint.com") ||
-      host.endsWith("1drv.ms") ||
-      host.includes("sharepoint");
-    return looksLikeGraph
-      ? ["https://graph.microsoft.com", "https://api.botframework.com"]
-      : ["https://api.botframework.com", "https://graph.microsoft.com"];
-  } catch {
-    return ["https://api.botframework.com", "https://graph.microsoft.com"];
-  }
+  const host = normalizeLowercaseStringOrEmpty(URL.parse(url)?.hostname);
+  const looksLikeGraph =
+    host.endsWith("graph.microsoft.com") ||
+    host.endsWith("sharepoint.com") ||
+    host.endsWith("1drv.ms") ||
+    host.includes("sharepoint");
+  return looksLikeGraph
+    ? ["https://graph.microsoft.com", "https://api.botframework.com"]
+    : ["https://api.botframework.com", "https://graph.microsoft.com"];
 }
 
 function canonicalizeInlineBase64Payload(value: string): string | undefined {
@@ -413,9 +409,5 @@ export async function downloadMSTeamsAttachments(params: {
 }
 
 function safeHostForLog(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "invalid-url";
-  }
+  return URL.parse(url)?.host ?? "invalid-url";
 }

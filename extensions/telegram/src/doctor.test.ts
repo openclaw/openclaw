@@ -660,7 +660,8 @@ describe("telegram doctor", () => {
           apiRoot: "https://api.telegram.org/bot123456:ABC",
           accounts: {
             work: {
-              apiRoot: "https://proxy.example.test/custom/bot234567:DEF/",
+              apiRoot:
+                "https://proxy.example.test/custom/%62ot234567%3ADEF/?query=ignored#fragment",
             },
           },
         },
@@ -668,7 +669,7 @@ describe("telegram doctor", () => {
     } as unknown as OpenClawConfig;
 
     expect(await collectPreviewWarnings(cfg)).toContain(
-      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.",
+      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. Telegram refuses this value until it is repaired.",
     );
 
     const repaired = await repairConfig(cfg);

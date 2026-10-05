@@ -70,7 +70,7 @@ const config: OpenClawConfig = {
         browser: { enabled: false },
       },
     },
-    list: [{ id: "main", default: true, workspace: path.join(root, "workspace") }],
+    entries: { main: { workspace: path.join(root, "workspace") } },
   },
   tools: { elevated: { enabled: false }, sandbox: { tools: { allow: ["read"] } } },
   skills: { load: { watch: false } },

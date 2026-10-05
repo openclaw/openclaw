@@ -31,13 +31,6 @@ import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 
-type GatewayRequestContextClient = GatewayClient & {
-  socket: { close: (code: number, reason: string) => void };
-  usesSharedGatewayAuth?: boolean;
-  invalidated?: boolean;
-  invalidatedReason?: string;
-};
-
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 
 type GatewayRequestContextRuntime = Pick<
@@ -182,20 +175,14 @@ type GatewayRequestContextParams = {
   logHealth: GatewayRequestContext["logHealth"];
 };
 
-const ALL_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
-  GATEWAY_CLIENT_IDS.CONTROL_UI,
-]);
-
 const EXEC_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
   GATEWAY_CLIENT_IDS.MACOS_APP,
   GATEWAY_CLIENT_IDS.IOS_APP,
   GATEWAY_CLIENT_IDS.ANDROID_APP,
 ]);
 
-const PLUGIN_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([GATEWAY_CLIENT_IDS.TUI]);
-
 function canDeliverApprovals(
-  gatewayClient: GatewayRequestContextClient,
+  gatewayClient: GatewayClient,
   approvalKind: "exec" | "plugin" | "system-agent",
 ): boolean {
   if (gatewayClient.invalidated) {
@@ -211,13 +198,13 @@ function canDeliverApprovals(
   // Stable ids preserve shipped clients while explicit caps describe newer non-UI bridges.
   return (
     gatewayClient.internal?.approvalRuntime === true ||
-    ALL_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
+    gatewayClient.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI ||
     hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.APPROVALS) ||
     (approvalKind === "exec" &&
       (EXEC_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
         hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.EXEC_APPROVALS))) ||
     (approvalKind === "plugin" &&
-      (PLUGIN_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
+      (gatewayClient.connect.client.id === GATEWAY_CLIENT_IDS.TUI ||
         hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS)))
   );
 }
@@ -254,6 +241,19 @@ export function createGatewayRequestContext(
     disconnectSessionsForDevice: disconnectDeviceTransports,
   } = runtime.watchNodeHttpRuntime;
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator(runtime.scheduler);
+  const getClientConnIds: NonNullable<GatewayRequestContext["getClientConnIds"]> = (filter) => {
+    const connIds = new Set<string>();
+    for (const gatewayClient of clients) {
+      if (
+        gatewayClient.connId &&
+        !gatewayClient.invalidated &&
+        (!filter || filter(gatewayClient))
+      ) {
+        connIds.add(gatewayClient.connId);
+      }
+    }
+    return connIds;
+  };
   const context: GatewayRequestContext = {
     trackExecution: (run) => connectionWork.track(run),
     deps: runtime.deps,
@@ -357,38 +357,14 @@ export function createGatewayRequestContext(
       }
       return false;
     },
-    getApprovalClientConnIds: (opts = {}) => {
-      const connIds = new Set<string>();
-      for (const gatewayClient of clients) {
-        if (!gatewayClient.connId) {
-          continue;
-        }
-        if (opts.excludeConnId && gatewayClient.connId === opts.excludeConnId) {
-          continue;
-        }
-        if (!canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec")) {
-          continue;
-        }
-        if (opts.filter && !opts.filter(gatewayClient, opts.record)) {
-          continue;
-        }
-        connIds.add(gatewayClient.connId);
-      }
-      return connIds;
-    },
-    getClientConnIds: (filter) => {
-      const connIds = new Set<string>();
-      for (const gatewayClient of clients) {
-        if (!gatewayClient.connId || gatewayClient.invalidated) {
-          continue;
-        }
-        if (filter && !filter(gatewayClient)) {
-          continue;
-        }
-        connIds.add(gatewayClient.connId);
-      }
-      return connIds;
-    },
+    getApprovalClientConnIds: (opts = {}) =>
+      getClientConnIds(
+        (gatewayClient) =>
+          (!opts.excludeConnId || gatewayClient.connId !== opts.excludeConnId) &&
+          canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec") &&
+          (!opts.filter || opts.filter(gatewayClient, opts.record)),
+      ),
+    getClientConnIds,
     hasConnectedClientsForDevice: (deviceId: string) => {
       for (const gatewayClient of clients) {
         if (gatewayClient.connect.device?.id === deviceId && !gatewayClient.invalidated) {

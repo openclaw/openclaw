@@ -62,70 +62,69 @@ function expectWithoutHostSql(action: () => void) {
   }
 }
 
-it.each([false, true])(
-  "enforces host birthtime identity after same-inode replacement (registered=%s)",
-  async (registered) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = state.statePath("sharing-birthtime.sqlite");
-      const cfg = {
-        ...rolePolicyConfig(),
-        agents: { entries: { main: {} } },
-        session: { store: storePath },
-      };
-      const sessionKey = "agent:main:birthtime-replacement";
-      const scope = { agentId: "main", storePath, sessionKey };
-      replaceSessionEntrySync(scope, {
-        sessionId: "original",
-        lifecycleRevision: "original-lifecycle",
-        updatedAt: 1,
-        visibility: "read-only",
-        sandbox: "required",
-        createdActor: { type: "human", source: "profile", id: "creator" },
-      });
-      await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
-      const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-      const client = sharingPolicyClient({
-        user: "requester",
-        scopes: ["operator.read", "operator.write"],
-      });
-      const policy = { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" as const };
-      const authorize = () =>
-        authorizePreparedSessionMutation(
-          { cfg, client, sessionKey, agentId: "main" },
-          prepared.readCurrent(cfg),
-          { policy, aliases: new Set(["requester"]) },
+it("enforces host birthtime identity across same-inode replacement and registration", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("sharing-birthtime.sqlite");
+    const cfg = {
+      ...rolePolicyConfig(),
+      agents: { entries: { main: {} } },
+      session: { store: storePath },
+    };
+    const sessionKey = "agent:main:birthtime-replacement";
+    const scope = { agentId: "main", storePath, sessionKey };
+    replaceSessionEntrySync(scope, {
+      sessionId: "original",
+      lifecycleRevision: "original-lifecycle",
+      updatedAt: 1,
+      visibility: "read-only",
+      sandbox: "required",
+      createdActor: { type: "human", source: "profile", id: "creator" },
+    });
+    await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
+    const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+    const client = sharingPolicyClient({
+      user: "requester",
+      scopes: ["operator.read", "operator.write"],
+    });
+    const policy = { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" as const };
+    const authorize = () =>
+      authorizePreparedSessionMutation(
+        { cfg, client, sessionKey, agentId: "main" },
+        prepared.readCurrent(cfg),
+        { policy, aliases: new Set(["requester"]) },
+      );
+    const original = fs.statSync(storePath, { bigint: true });
+    const statSync = fs.statSync;
+    let replaced = false;
+    const stat = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const file = statSync(...args);
+      if (replaced && String(args[0]) === storePath && file && "birthtimeNs" in file) {
+        file.birthtimeNs = original.birthtimeNs + 1n;
+      }
+      return file;
+    });
+    try {
+      syncBuiltinESMExports();
+      expect(authorize()).toBeNull();
+      replaced = true;
+      const replacement = fs.statSync(storePath, { bigint: true });
+      expect([replacement.dev, replacement.ino]).toEqual([original.dev, original.ino]);
+      expect(replacement.birthtimeNs).not.toBe(original.birthtimeNs);
+      const assertOriginal = () =>
+        assertExistingDatabaseIdentity(
+          storePath,
+          `file:${original.dev}:${original.ino}`,
+          readDatabaseIdentityBirthtime(original),
         );
-      const original = fs.statSync(storePath, { bigint: true });
-      const statSync = fs.statSync;
-      let replaced = false;
-      const stat = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
-        const file = statSync(...args);
-        if (replaced && String(args[0]) === storePath && file && "birthtimeNs" in file) {
-          file.birthtimeNs = original.birthtimeNs + 1n;
-        }
-        return file;
-      });
-      try {
-        syncBuiltinESMExports();
-        expect(authorize()).toBeNull();
-        replaced = true;
-        const replacement = fs.statSync(storePath, { bigint: true });
-        expect([replacement.dev, replacement.ino]).toEqual([original.dev, original.ino]);
-        expect(replacement.birthtimeNs).not.toBe(original.birthtimeNs);
-        const assertOriginal = () =>
-          assertExistingDatabaseIdentity(
-            storePath,
-            `file:${original.dev}:${original.ino}`,
-            readDatabaseIdentityBirthtime(original),
-          );
-        // Linux cannot distinguish native birthtime from Node's ctime fallback.
-        if (process.platform === "linux") {
-          expect(assertOriginal).not.toThrow();
-        } else {
-          expect(assertOriginal).toThrow(
-            "SQLite database file identity changed before existing-only open",
-          );
-        }
+      // Linux cannot distinguish native birthtime from Node's ctime fallback.
+      if (process.platform === "linux") {
+        expect(assertOriginal).not.toThrow();
+      } else {
+        expect(assertOriginal).toThrow(
+          "SQLite database file identity changed before existing-only open",
+        );
+      }
+      for (const registered of [false, true]) {
         if (registered) {
           registerOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
         }
@@ -134,14 +133,14 @@ it.each([false, true])(
         } else {
           expect(authorize).toThrow(unavailableMessage);
         }
-      } finally {
-        stat.mockRestore();
-        syncBuiltinESMExports();
-        prepared.release();
       }
-    });
-  },
-);
+    } finally {
+      stat.mockRestore();
+      syncBuiltinESMExports();
+      prepared.release();
+    }
+  });
+});
 
 it("refuses a worker sharing result whose captured birthtime differs from its retained source", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

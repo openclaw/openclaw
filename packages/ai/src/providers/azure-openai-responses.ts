@@ -189,7 +189,7 @@ function buildParams(
   context: Context,
   options: AzureOpenAIResponsesOptions | undefined,
   deploymentName: string,
-  replayMode: OpenAIResponsesReplayMode = "checkpoint",
+  replayMode: OpenAIResponsesReplayMode,
 ) {
   const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
     sessionId: options?.sessionId,

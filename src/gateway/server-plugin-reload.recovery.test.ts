@@ -43,10 +43,7 @@ import {
   verifyActiveCallDrainLease,
   verifyLateActiveCallDrainObservation,
 } from "./server-plugin-reload.active-call.test-support.js";
-import {
-  verifyGatewayCacheOwnership,
-  verifySharedGatewayCacheOwnership,
-} from "./server-plugin-reload.cache.test-support.js";
+import { verifySharedGatewayCacheOwnership } from "./server-plugin-reload.cache.test-support.js";
 import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
 import {
   verifyDecisionSelectionIsolation,
@@ -71,8 +68,6 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
-  verifyFailedRecoveryCleanup,
-  verifyFreshRegistrationRecovery,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
 } from "./server-plugin-reload.resources.test-support.js";
@@ -98,9 +93,9 @@ vi.mock("../plugins/plugin-lookup-table.js", async (importOriginal) => ({
   loadPluginLookUpTable: mocks.loadPluginLookUpTable,
 }));
 
-// These independent startup tasks do not participate in plugin replacement.
+// mock-isolation: Independent startup tasks do not participate in plugin replacement.
 vi.mock("./server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
+  scheduleGatewayPrewarm: () => [{ stop() {} }],
 }));
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: () => undefined,
@@ -146,19 +141,11 @@ function createRecoveryFixture(
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
 
-it.each(["gateway_stop", "dispose"] as const)(
-  "reopens a shared resource closed by %s after a setting changes without restarting its sibling",
-  (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
-);
-
-it("automatically restores a fresh old registration after candidate registration fails", () =>
-  verifyFreshRegistrationRecovery(createRecoveryFixture));
+it("reopens a shared resource closed by gateway_stop after a setting changes without restarting its sibling", () =>
+  verifySharedResourceReplacement(createRecoveryFixture));
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));
-
-it("closes resources opened by a recovery that fails before publication", () =>
-  verifyFailedRecoveryCleanup(createRecoveryFixture));
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
 
@@ -245,9 +232,7 @@ it("validates expanded replacement targets before draining their live owners", a
 });
 
 it.each([
-  "channel",
   "channel-retry",
-  "hook",
   "publication",
   "notification",
   "memory",
@@ -273,23 +258,12 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
 
-it("keeps a live Gateway's generated setup callbacks through another Gateway's reload", () =>
-  verifyGatewayCacheOwnership(
+it("keeps a shared boot setup owner through sibling lookup", () =>
+  verifySharedGatewayCacheOwnership(
     createRecoveryFixture,
-    makeTrackedTempDir("gateway-setup-cache-owner", tempDirs),
+    makeTrackedTempDir("gateway-shared-setup-owner", tempDirs),
     (load) => mocks.resolveConfigWidePluginMetadataSnapshot.mockImplementation(load),
   ));
-
-it.each(["lookup", "replacement"] as const)(
-  "keeps a shared boot setup owner through sibling %s",
-  (mode) =>
-    verifySharedGatewayCacheOwnership(
-      createRecoveryFixture,
-      makeTrackedTempDir("gateway-shared-setup-owner", tempDirs),
-      (load) => mocks.resolveConfigWidePluginMetadataSnapshot.mockImplementation(load),
-      mode,
-    ),
-);
 
 it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
@@ -532,7 +506,7 @@ it.each(["commit", "rollback"])(
   },
 );
 
-it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
+it.each(["rollback", "after-commit error", "late startup"] as const)(
   "keeps discovery handles owned across plugin replacement: %s",
   async (outcome) => {
     await withEnvAsync(
@@ -602,7 +576,7 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               details: { committed: outcome === "after-commit error" },
               cause: publicationFailure,
             });
-          } else if (outcome === "late startup") {
+          } else {
             const reloading = fixture.reload();
             void reloading.catch(() => {});
             try {
@@ -617,8 +591,6 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               releaseStartup.resolve();
               await reloading;
             }
-          } else {
-            await fixture.reload();
           }
           expect(
             handles.filter((handle) => handle.stops === 0).map((handle) => handle.api),

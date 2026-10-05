@@ -48,7 +48,7 @@ it("prepares current placement facts off the host thread and retries failed refr
     const options = {
       cfg: {
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: { model: "unit-test/model", utilityModel: "" },
         },
       },
@@ -343,7 +343,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       const projection = await createSessionRowProjection({
         cfg: {
           agents: {
-            list: [{ id: "main", default: true }],
+            entries: { main: {} },
             defaults: { model: "unit-test/model", utilityModel: "" },
           },
         },
@@ -416,7 +416,7 @@ it("prepares board membership and recap freshness from the physical target and r
     const cfg = {
       agents: {
         defaults: { utilityModel: "test/utility" },
-        list: [{ id: "main" }, { id: "work" }],
+        entries: { main: {}, work: {} },
       },
     };
     const storePath = openOpenClawAgentDatabase({ agentId: "main" }).path;

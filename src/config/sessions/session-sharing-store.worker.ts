@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -109,6 +110,13 @@ export function bindSqliteWorkerBackend(
           runSqliteWorkerTransactionSync(
             context,
             () => {
+              if (command.type === "involvement") {
+                return updatePreparedSessionProfileInvolvement(
+                  scope,
+                  command.input.params,
+                  command.input.profiles,
+                );
+              }
               if (command.type === "owner.assign") {
                 ownerResult = { value: assignSessionOwner(scope, command.input.params) };
                 return ownerResult;

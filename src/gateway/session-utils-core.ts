@@ -3,6 +3,7 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
@@ -20,6 +21,13 @@ import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
+
+export function matchesSessionArchiveFilter(
+  entry: Pick<SessionEntry, "archivedAt">,
+  archived: SessionsListParams["archived"],
+) {
+  return archived === "all" || (entry.archivedAt !== undefined) === (archived === true);
+}
 
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
@@ -231,9 +239,8 @@ export function readStoreChildSessionLinks(params: {
 }): SessionChildLink[] | undefined {
   const children: SessionChildLink[] = [];
   // One store pass discovers both persisted navigation and runtime-only controller links.
-  for (const key of Object.keys(params.store)) {
-    const entry = params.store[key];
-    if (!entry || key === params.key || !params.key) {
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (key === params.key || !params.key) {
       continue;
     }
     const runs = params.subagentRunsByChildSessionKey.get(key.trim()) ?? [];

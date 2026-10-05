@@ -2,6 +2,7 @@ import { mkdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
@@ -22,7 +23,10 @@ import { captureCanonicalSessionReaderContinuation } from "./session-canonical-k
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import { captureSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
-import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "./session-entry-read-runtime.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 
@@ -39,6 +43,41 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   };
   return { database, scope };
 }
+
+it("reads session projections in the worker and observes the next foreign commit", async () => {
+  await withOpenClawTestState({ label: "readonly-entry-projection-boundary" }, async ({ env }) => {
+    const { database, scope } = createEntryFixture(env);
+    const before = await readSessionEntryReadOnlyInWorker(scope);
+    expect(before).toMatchObject({ sessionId: "original" });
+    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+    try {
+      peer
+        .prepare(
+          `INSERT INTO session_participants
+           (session_key, identity_namespace, actor_id, contribution_count)
+           VALUES (?, ?, ?, 1)`,
+        )
+        .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "foreign-participant");
+      const sql = observeHostDataSql();
+      try {
+        const after = await readSessionEntryReadOnlyInWorker(scope);
+        expect(after).toMatchObject({
+          sessionId: "original",
+          participants: [{ identity: { type: "profile", id: "foreign-participant" } }],
+          participantCount: 1,
+        });
+        expect(before?.participants).toBeUndefined();
+        expect(
+          sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    } finally {
+      peer.close();
+    }
+  });
+});
 
 it.each([false, true])(
   "returns unreadable-store data only after its connection closes (close failure: %s)",

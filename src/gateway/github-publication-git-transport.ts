@@ -366,7 +366,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
   return await withSettledLocalWorkspacePath(params, async (custody) => {
-    const admittedPaths = await custody?.canonicalPaths();
+    const admittedPaths = await custody?.canonicalPaths?.();
     const bound = {
       ...params,
       assertCurrent: () => {

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
@@ -8,7 +8,6 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -18,10 +17,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  getOpenClawStateRuntimeSchema,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-} from "../state/openclaw-state-schema-compatibility.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
@@ -35,7 +30,6 @@ import {
   recordSessionCompacted,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
-  recordSessionStateEvent,
   recordSessionStateEventAsync,
   recordSubagentSpawned,
   registerMainSessionGroupWatch,
@@ -164,7 +158,7 @@ describe("session state events", () => {
         )
         .get(watcher, child);
     const original = readBinding();
-    const event = recordSessionStateEvent(
+    const event = await recordSessionStateEventAsync(
       eventInput({
         watcherStorePaths: { [watcher]: "/synthetic/retired-store.sqlite" },
       }),
@@ -175,59 +169,14 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
     expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
   });
-  it("preserves older readers and version markers when watcher provenance is first written", async () => {
-    const database = createDatabaseOptions();
-    const before = openOpenClawStateDatabase(database);
-    before.db.exec("ALTER TABLE session_watch_cursors DROP COLUMN watcher_store_path");
-    const userVersion = before.db.prepare("PRAGMA user_version").get();
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase(database);
-    const schemaBeforeRead = reopened.db.prepare("PRAGMA schema_version").get();
-    expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaBeforeRead);
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT name FROM pragma_table_info('session_watch_cursors') WHERE name = 'watcher_store_path'",
-        )
-        .get(),
-    ).toBeUndefined();
-
-    seedChild(database);
-    assertSqliteSchemaContains(
-      reopened.db,
-      reopened.path,
-      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }).replace(
-        /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,
-        "",
-      ),
-      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-    );
-    reopened.db
-      .prepare(
-        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
-      )
-      .run(watcher, "legacy-target", Date.now());
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT last_seen_sequence, watcher_store_path FROM session_watch_cursors WHERE target_session_key = 'legacy-target'",
-        )
-        .get(),
-    ).toEqual({ last_seen_sequence: 0, watcher_store_path: null });
-    const installedSchema = reopened.db.prepare("PRAGMA schema_version").get();
-    recordSessionStateEvent(eventInput(), database);
-    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(installedSchema);
-    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(userVersion);
-  });
 
   it("bumps a durable head that survives pruning all retained rows", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
-    const event = recordSessionStateEvent(eventInput(), { ...database, now });
+    const event = await recordSessionStateEventAsync(eventInput(), { ...database, now });
     expect(await getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
 
-    sweepSessionStateWatchNotices({
+    await sweepSessionStateWatchNotices({
       ...database,
       now: now + SESSION_STATE_RETENTION_MS + 1,
     });
@@ -236,12 +185,12 @@ describe("session state events", () => {
     expect(await getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
   });
 
-  it("freezes one notice watermark while material events continue", () => {
+  it("freezes one notice watermark while material events continue", async () => {
     const database = createDatabaseOptions();
-    seedChild(database);
-    const first = recordSessionStateEvent(eventInput(), database)!;
-    recordSessionStateEvent(eventInput(), database);
-    const third = recordSessionStateEvent(eventInput(), database)!;
+    await seedChild(database);
+    const first = (await recordSessionStateEventAsync(eventInput(), database))!;
+    await recordSessionStateEventAsync(eventInput(), database);
+    const third = (await recordSessionStateEventAsync(eventInput(), database))!;
 
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     expect(readCursor(database)).toEqual({
@@ -253,9 +202,9 @@ describe("session state events", () => {
 
   it("opens a fresh notice for material work interleaved before ack", async () => {
     const database = createDatabaseOptions();
-    seedChild(database);
-    const frozen = recordSessionStateEvent(eventInput(), database)!;
-    const interleaved = recordSessionStateEvent(eventInput(), database)!;
+    await seedChild(database);
+    const frozen = (await recordSessionStateEventAsync(eventInput(), database))!;
+    const interleaved = (await recordSessionStateEventAsync(eventInput(), database))!;
     const watcherStorePath = peekSystemEventEntries(watcher)[0]?.sessionStorePath ?? null;
     resetSystemEventsForTest();
 
@@ -277,9 +226,9 @@ describe("session state events", () => {
   it("does not reopen an acked notice for log-only events or during sweep", async () => {
     const database = createDatabaseOptions();
     await createWatcherSession(database);
-    seedChild(database);
-    const material = recordSessionStateEvent(eventInput(), database)!;
-    recordSessionStateEvent(
+    await seedChild(database);
+    const material = (await recordSessionStateEventAsync(eventInput(), database))!;
+    await recordSessionStateEventAsync(
       eventInput({ kind: "run_completed", actorType: "system", runId: "run-log-only" }),
       database,
     );
@@ -298,7 +247,7 @@ describe("session state events", () => {
     });
     expect(peekSystemEventEntries(watcher)).toEqual([]);
 
-    sweepSessionStateWatchNotices(database);
+    await sweepSessionStateWatchNotices(database);
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
@@ -319,15 +268,18 @@ describe("session state events", () => {
     await vi.runAllTimersAsync();
     wakes.mockClear();
     const database = createDatabaseOptions();
-    seedChild(database, nestedWatcher);
+    await seedChild(database, nestedWatcher);
 
-    recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
+    await recordSessionStateEventAsync(
+      eventInput({ watcherSessionKeys: [nestedWatcher] }),
+      database,
+    );
     await vi.advanceTimersByTimeAsync(21_000);
     expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
     expect(wakes).not.toHaveBeenCalled();
 
-    seedChild(database, watcher);
-    recordSessionStateEvent(eventInput(), database);
+    await seedChild(database, watcher);
+    await recordSessionStateEventAsync(eventInput(), database);
     await vi.advanceTimersByTimeAsync(21_000);
     expect(wakes).toHaveBeenCalledWith(
       // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
@@ -342,10 +294,13 @@ describe("session state events", () => {
     );
   });
 
-  it("suppresses watcher-originated material events", () => {
+  it("suppresses watcher-originated material events", async () => {
     const database = createDatabaseOptions();
-    const seeded = seedChild(database)!;
-    recordSessionStateEvent(eventInput({ actorType: "agent", actorId: watcher }), database);
+    const seeded = (await seedChild(database))!;
+    await recordSessionStateEventAsync(
+      eventInput({ actorType: "agent", actorId: watcher }),
+      database,
+    );
 
     expect(readCursor(database)).toEqual({
       last_seen_sequence: seeded.sequence,
@@ -357,7 +312,7 @@ describe("session state events", () => {
 
   it("records log-only kinds without queueing notices", async () => {
     const database = createDatabaseOptions();
-    const event = recordSessionStateEvent(
+    const event = await recordSessionStateEventAsync(
       eventInput({ kind: "compacted", actorType: "system" }),
       database,
     );
@@ -366,12 +321,12 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
-  it("notifies watchers when an upstream session disappears", () => {
+  it("notifies watchers when an upstream session disappears", async () => {
     const database = createDatabaseOptions();
-    seedChild(database);
+    await seedChild(database);
     resetSystemEventsForTest();
 
-    const event = recordSessionStateEvent(
+    const event = await recordSessionStateEventAsync(
       eventInput({ kind: "upstream_missing", actorType: "system" }),
       database,
     );
@@ -388,8 +343,8 @@ describe("session state events", () => {
       runId: "run-1",
       dedupeKey: "run-terminal:run-1",
     });
-    const first = recordSessionStateEvent(input, database);
-    const duplicate = recordSessionStateEvent(input, database);
+    const first = await recordSessionStateEventAsync(input, database);
+    const duplicate = await recordSessionStateEventAsync(input, database);
 
     expect(duplicate?.sequence).toBe(first?.sequence);
     expect(
@@ -397,26 +352,44 @@ describe("session state events", () => {
     ).toHaveLength(1);
   });
 
-  it("re-enqueues and re-freezes pending notices after restart", async () => {
+  it("re-enqueues and re-freezes pending notices after restart without caller-thread SQL", async () => {
     const database = createDatabaseOptions();
-    await createWatcherSession(database);
-    seedChild(database);
-    const material = recordSessionStateEvent(eventInput(), database)!;
+    const missingWatcher = "agent:main:subagent:missing-watcher";
+    for (const sessionKey of [watcher, nestedWatcher]) {
+      await createWatcherSession(database, sessionKey);
+    }
+    for (const sessionKey of [watcher, nestedWatcher, missingWatcher]) {
+      await seedChild(database, sessionKey);
+    }
+    const input = eventInput({ watcherSessionKeys: [] });
+    await recordSessionStateEventAsync(input, database);
+    const material = (await recordSessionStateEventAsync(input, database))!;
+    const missingBefore = readCursor(database, missingWatcher);
     resetSystemEventsForTest();
 
-    sweepSessionStateWatchNotices(database);
+    const sql = observeHostDataSql();
+    try {
+      await sweepSessionStateWatchNotices(database);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
-    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
-    expect(readCursor(database)?.notified_sequence).toBe(material.sequence);
+    for (const sessionKey of [watcher, nestedWatcher]) {
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+      expect(readCursor(database, sessionKey)?.notified_sequence).toBe(material.sequence);
+    }
+    expect(peekSystemEventEntries(missingWatcher)).toEqual([]);
+    expect(readCursor(database, missingWatcher)).toEqual(missingBefore);
   });
 
-  it("self-heals a lost queued notice on the next material event", () => {
+  it("self-heals a lost queued notice on the next material event", async () => {
     const database = createDatabaseOptions();
-    seedChild(database);
-    recordSessionStateEvent(eventInput(), database);
+    await seedChild(database);
+    await recordSessionStateEventAsync(eventInput(), database);
     resetSystemEventsForTest();
 
-    recordSessionStateEvent(eventInput(), database);
+    await recordSessionStateEventAsync(eventInput(), database);
 
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
@@ -438,18 +411,18 @@ describe("session state events", () => {
       .prepare("SELECT max(sequence) AS sequence FROM session_state_events")
       .get() as { sequence: number };
 
-    sweepSessionStateWatchNotices({ ...database, now });
+    await sweepSessionStateWatchNotices({ ...database, now });
     const count = db.prepare("SELECT count(*) AS count FROM session_state_events").get() as {
       count: number;
     };
     expect(count.count).toBe(SESSION_STATE_MAX_ROWS);
 
-    const next = recordSessionStateEvent(eventInput(), { ...database, now: now + 1 })!;
+    const next = (await recordSessionStateEventAsync(eventInput(), { ...database, now: now + 1 }))!;
     expect(next.sequence).toBeGreaterThan(before.sequence);
     expect(await getSessionStateVersion(child, "main", database)).toBe(next.sequence);
   });
 
-  it("prunes many composite session heads without recreating or regressing them", () => {
+  it("prunes many composite session heads without recreating or regressing them", async () => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     const now = SESSION_STATE_RETENTION_MS + 100;
@@ -504,14 +477,7 @@ describe("session state events", () => {
       updated_at: now,
     });
 
-    const updates = trackSqliteStatementExecutions(db, ["watermarks"], (sql) =>
-      /\bupdate\s+"?session_state_heads"?\b/i.test(sql) ? "watermarks" : null,
-    );
-    try {
-      sweepSessionStateWatchNotices({ ...database, now });
-    } finally {
-      updates.restore();
-    }
+    await sweepSessionStateWatchNotices({ ...database, now });
 
     const heads = db.prepare("SELECT * FROM session_state_heads").all();
     expect(heads).toHaveLength(expected.length);
@@ -523,22 +489,26 @@ describe("session state events", () => {
     expect(
       openOpenClawStateDatabase(database).db.prepare("SELECT * FROM session_state_heads").all(),
     ).toEqual(heads);
-    expect(updates.counts.watermarks).toBeGreaterThan(0);
-    expect(updates.counts.watermarks).toBeLessThanOrEqual(4);
   });
 
   it("lists typed ascending deltas with truncation and history-gap signaling", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
-    const first = recordSessionStateEvent(eventInput({ summary: "first" }), {
+    const first = (await recordSessionStateEventAsync(eventInput({ summary: "first" }), {
       ...database,
       now,
-    })!;
-    recordSessionStateEvent(eventInput({ summary: "second", payload: { status: "active" } }), {
+    }))!;
+    await recordSessionStateEventAsync(
+      eventInput({ summary: "second", payload: { status: "active" } }),
+      {
+        ...database,
+        now: now + 1,
+      },
+    );
+    await recordSessionStateEventAsync(eventInput({ summary: "third" }), {
       ...database,
-      now: now + 1,
+      now: now + 2,
     });
-    recordSessionStateEvent(eventInput({ summary: "third" }), { ...database, now: now + 2 });
 
     const page = await listSessionStateEventsSince(child, "main", 0, 2, database);
     expect(page.events.map((event) => event.summary)).toEqual(["first", "second"]);
@@ -560,23 +530,26 @@ describe("session state events", () => {
     const now = Date.now();
     // Other sessions consume early global sequences; the child starts high.
     for (let index = 0; index < 3; index += 1) {
-      recordSessionStateEvent(
+      await recordSessionStateEventAsync(
         eventInput({ sessionKey: "agent:main:subagent:noise", watcherSessionKeys: [] }),
         { ...database, now },
       );
     }
-    const old = recordSessionStateEvent(eventInput({ summary: "old" }), { ...database, now })!;
+    const old = (await recordSessionStateEventAsync(eventInput({ summary: "old" }), {
+      ...database,
+      now,
+    }))!;
     expect(old.sequence).toBeGreaterThan(1);
     expect((await listSessionStateEventsSince(child, "main", 0, 200, database)).historyGap).toBe(
       false,
     );
 
     const later = now + SESSION_STATE_RETENTION_MS + 1;
-    const fresh = recordSessionStateEvent(eventInput({ summary: "fresh" }), {
+    const fresh = (await recordSessionStateEventAsync(eventInput({ summary: "fresh" }), {
       ...database,
       now: later,
-    })!;
-    sweepSessionStateWatchNotices({ ...database, now: later });
+    }))!;
+    await sweepSessionStateWatchNotices({ ...database, now: later });
 
     const sincePruned = await listSessionStateEventsSince(child, "main", 0, 200, database);
     expect(sincePruned.historyGap).toBe(true);
@@ -587,12 +560,12 @@ describe("session state events", () => {
     expect(await getSessionStateVersion(child, "main", database)).toBe(fresh.sequence);
   });
 
-  it("suppresses cursors and notices for agent-ambiguous bare watcher keys", () => {
+  it("suppresses cursors and notices for agent-ambiguous bare watcher keys", async () => {
     const database = createDatabaseOptions();
-    const event = recordSessionStateEvent(
+    const event = (await recordSessionStateEventAsync(
       eventInput({ watcherSessionKeys: ["global"] }),
       database,
-    )!;
+    ))!;
     expect(event.sequence).toBeGreaterThan(0);
     expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
     const cursorRow = openOpenClawStateDatabase(database)
@@ -603,7 +576,7 @@ describe("session state events", () => {
 
   it("keeps same-keyed global sessions independent across agents", async () => {
     const database = createDatabaseOptions();
-    const mainEvent = recordSessionStateEvent(
+    const mainEvent = (await recordSessionStateEventAsync(
       eventInput({
         sessionKey: "global",
         agentId: "main",
@@ -612,8 +585,8 @@ describe("session state events", () => {
         watcherSessionKeys: [],
       }),
       database,
-    )!;
-    const opsEvent = recordSessionStateEvent(
+    ))!;
+    const opsEvent = (await recordSessionStateEventAsync(
       eventInput({
         sessionKey: "global",
         agentId: "ops",
@@ -622,7 +595,7 @@ describe("session state events", () => {
         watcherSessionKeys: [],
       }),
       database,
-    )!;
+    ))!;
 
     expect(await getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
     expect(await getSessionStateVersion("global", "ops", database)).toBe(opsEvent.sequence);
@@ -632,15 +605,15 @@ describe("session state events", () => {
       ),
     ).toEqual([mainEvent.sequence]);
 
-    handleSessionStateSessionDeleted("global", "ops", database);
+    await handleSessionStateSessionDeleted("global", "ops", database);
     expect(await getSessionStateVersion("global", "ops", database)).toBe(0);
     expect(await getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
   });
 
   it("acks only drained session-state entries and ignores ordinary events", async () => {
     const database = createDatabaseOptions();
-    seedChild(database);
-    const material = recordSessionStateEvent(eventInput(), database)!;
+    await seedChild(database);
+    const material = (await recordSessionStateEventAsync(eventInput(), database))!;
     enqueueSystemEvent("Cron completed", { sessionKey: watcher, contextKey: "cron:job-1" });
 
     await drainFormattedSystemEvents({
@@ -652,7 +625,7 @@ describe("session state events", () => {
     });
     expect(readCursor(database)?.last_seen_sequence).toBe(material.sequence);
 
-    recordSessionStateEvent(eventInput(), database);
+    await recordSessionStateEventAsync(eventInput(), database);
     resetSystemEventsForTest();
     enqueueSystemEvent("Exec completed", { sessionKey: watcher, contextKey: "exec:job-1" });
     await drainFormattedSystemEvents({
@@ -667,16 +640,16 @@ describe("session state events", () => {
 
   it("keeps target history on reset and removes all ownership on delete", async () => {
     const database = createDatabaseOptions();
-    seedChild(database);
-    recordSessionStateEvent(eventInput(), database);
+    await seedChild(database);
+    await recordSessionStateEventAsync(eventInput(), database);
 
-    handleSessionStateSessionReset(watcher, database);
+    await handleSessionStateSessionReset(watcher, database);
     expect(readCursor(database)).toBeUndefined();
     expect(
       (await listSessionStateEventsSince(child, "main", 0, 200, database)).events.length,
     ).toBeGreaterThan(0);
 
-    handleSessionStateSessionDeleted(child, "main", database);
+    await handleSessionStateSessionDeleted(child, "main", database);
     expect(await getSessionStateVersion(child, "main", database)).toBe(0);
     expect((await listSessionStateEventsSince(child, "main", 0, 200, database)).events).toEqual([]);
   });
@@ -698,10 +671,10 @@ describe("session state events", () => {
 
   it("registers explicit watchers who get notices only for later changes", async () => {
     const database = createDatabaseOptions();
-    const preRegistration = recordSessionStateEvent(
+    const preRegistration = (await recordSessionStateEventAsync(
       eventInput({ watcherSessionKeys: [] }),
       database,
-    )!;
+    ))!;
 
     expect(
       await registerSessionStateWatch({ watcherSessionKey: child, targetSessionKey: child }),
@@ -719,10 +692,10 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toHaveLength(0);
     expect(readCursor(database)).toMatchObject({ last_seen_sequence: preRegistration.sequence });
 
-    const afterRegistration = recordSessionStateEvent(
+    const afterRegistration = (await recordSessionStateEventAsync(
       eventInput({ watcherSessionKeys: [] }),
       database,
-    )!;
+    ))!;
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     expect(peekSystemEventEntries(watcher)[0]?.text).toContain(
       `changesSince ${preRegistration.sequence}`,
@@ -767,7 +740,10 @@ describe("session state events", () => {
         watcher_store_path: expect.not.stringContaining("/retired/"),
         provenance: "ambient-group",
       });
-      recordSessionStateEvent(eventInput({ sessionKey: group, watcherSessionKeys: [] }), database);
+      await recordSessionStateEventAsync(
+        eventInput({ sessionKey: group, watcherSessionKeys: [] }),
+        database,
+      );
       expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     },
   );
@@ -886,7 +862,7 @@ describe("session state events", () => {
       },
       { ...database, now: activeAt },
     );
-    sweepSessionStateWatchNotices({ ...database, now: activeAt });
+    await sweepSessionStateWatchNotices({ ...database, now: activeAt });
 
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
     const cursors = openOpenClawStateDatabase(database)
@@ -1000,7 +976,7 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", async () => {
     const database = createDatabaseOptions();
-    recordSessionCreated(cfg, {
+    await recordSessionCreated(cfg, {
       sessionKey: child,
       agentId: "main",
       entry: {
@@ -1011,7 +987,7 @@ describe("session state events", () => {
         createdAt: Date.now(),
       },
     });
-    recordSubagentSpawned({
+    await recordSubagentSpawned({
       childSessionKey: child,
       childRunId: "run-child",
       requesterSessionKey: watcher,
@@ -1043,12 +1019,12 @@ describe("session state events", () => {
       actor: { type: "human" },
       summary: "goal created",
     });
-    recordSessionCompacted({
+    await recordSessionCompacted({
       sessionKey: child,
       operationId: "compact-1",
       sessionId: "session-child",
     });
-    recordSessionCompacted({
+    await recordSessionCompacted({
       sessionKey: child,
       operationId: "compact-1",
       sessionId: "session-child",

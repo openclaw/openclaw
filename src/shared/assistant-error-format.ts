@@ -1,5 +1,8 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -89,10 +92,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
 }
 
 export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -143,10 +143,6 @@ export function extractErrorHttpStatus(raw: string): { code: number; rest: strin
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-
   if (
     HTML_ERROR_PREFIX_RE.test(trimmed) &&
     HTML_CLOSE_RE.test(trimmed) &&
@@ -171,9 +167,6 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
 
 export function isGenericProviderInternalError(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
   return (
     GENERIC_PROVIDER_INTERNAL_ERROR_RE.test(trimmed) &&
     (/help\.openai\.com/i.test(trimmed) || SUPPORT_REQUEST_ID_RE.test(trimmed))
@@ -181,10 +174,7 @@ export function isGenericProviderInternalError(raw: string): boolean {
 }
 
 export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }

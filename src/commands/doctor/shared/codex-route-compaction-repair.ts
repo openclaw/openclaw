@@ -1,7 +1,7 @@
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { ensureRecord } from "../../../config/legacy.shared.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   canAutoMigrateLegacyLosslessCompaction,
   collectLegacyLosslessCompactionConfigs,
@@ -32,8 +32,8 @@ import type {
 } from "./codex-route-types.js";
 
 export function rewriteAgentCompactionRefs(params: {
-  cfg: OpenClawConfig;
-  preRepairCfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
+  preRepairCfg: OpenClawConfigWithLegacyRoster;
   hits: CodexRouteHit[];
   agent: MutableRecord;
   path: string;
@@ -222,7 +222,7 @@ function removeUnsupportedCodexCompactionOverrides(params: {
 }
 
 export function maybeMigrateLegacyLosslessCompactionConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
 }): string[] {
   const root = params.cfg as MutableRecord;
@@ -303,7 +303,7 @@ export function maybeMigrateLegacyLosslessCompactionConfig(params: {
 }
 
 function preserveMigratedLosslessCodexRuntimePolicy(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   hits: readonly LegacyLosslessCompactionConfig[];
   summaryModel: string | undefined;
   changes: string[];
@@ -369,7 +369,7 @@ function ensureLosslessLlmPolicy(params: {
 }
 
 function removeMigratedLosslessCompactionKey(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   path: string;
   key: CompactionOverrideKey;
   changes: string[];
@@ -395,7 +395,7 @@ function removeMigratedLosslessCompactionKey(params: {
 }
 
 function readCompactionOwnerForPath(
-  cfg: OpenClawConfig,
+  cfg: OpenClawConfigWithLegacyRoster,
   ownerPath: string,
 ): MutableRecord | undefined {
   if (ownerPath === "agents.defaults") {
@@ -406,7 +406,7 @@ function readCompactionOwnerForPath(
     return readMutablePath(cfg as MutableRecord, ownerPath);
   }
   const label = ownerPath.slice(prefix.length);
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = cfg.agents?.list ?? [];
   return (
     asMutableRecord(agents.find((agent) => agent.id === label)) ??
     asMutableRecord(Number.isInteger(Number(label)) ? agents[Number(label)] : undefined)

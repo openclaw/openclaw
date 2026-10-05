@@ -81,6 +81,13 @@ describe("diagnostic stability recorder", () => {
       count: 2,
       intervalMs: 60_000,
     });
+    emitDiagnosticEvent({
+      type: "worker.request",
+      kind: "transcript",
+      requestClass: "task",
+      phase: "queued",
+      queueDepth: 1,
+    });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

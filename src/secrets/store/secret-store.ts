@@ -36,7 +36,6 @@ import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreEnvName,
   assertSecretStoreValue,
-  normalizeScope,
   normalizeSecretAllowedHosts,
   parseSecretAllowedHosts,
   type SecretStoreKind,
@@ -361,7 +360,6 @@ export function updateSecretStoreAllowedHosts(params: {
 }): void {
   assertSecretStoreEnvName(params.name);
   const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
@@ -376,8 +374,8 @@ export function updateSecretStoreAllowedHosts(params: {
             updated_at_ms: now,
             updated_by: params.updatedBy,
           })
-          .where("scope_kind", "=", scopeKind)
-          .where("scope_id", "=", scopeId)
+          .where("scope_kind", "=", "team")
+          .where("scope_id", "=", "")
           .where("name", "=", params.name)
           .where("kind", "=", "secret")
           .where("deleted_at_ms", "is", null),

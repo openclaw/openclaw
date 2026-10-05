@@ -33,7 +33,6 @@ function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: 
 }
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
-const WikiLintSchema = Type.Object({}, { additionalProperties: false });
 const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
 );
@@ -153,11 +152,7 @@ export function createWikiSearchTool(
       const results = await searchMemoryWiki({
         config,
         appConfig,
-        agentId: memoryContext.agentId,
-        agentSessionKey: memoryContext.agentSessionKey,
-        sandboxed: memoryContext.sandboxed,
-        conversationRecall: memoryContext.conversationRecall,
-        memoryContext: memoryContext.memoryContext,
+        ...memoryContext,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
@@ -179,7 +174,7 @@ export function createWikiLintTool(
     label: "Wiki Lint",
     description:
       "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.",
-    parameters: WikiLintSchema,
+    parameters: WikiStatusSchema,
     execute: async () => {
       await syncMemoryWikiImportedSources({ config, appConfig, signal });
       const result = await lintMemoryWikiVault(config, signal ? { signal } : undefined);
@@ -254,11 +249,7 @@ export function createWikiGetTool(
       const result = await getMemoryWikiPage({
         config,
         appConfig,
-        agentId: memoryContext.agentId,
-        agentSessionKey: memoryContext.agentSessionKey,
-        sandboxed: memoryContext.sandboxed,
-        conversationRecall: memoryContext.conversationRecall,
-        memoryContext: memoryContext.memoryContext,
+        ...memoryContext,
         lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

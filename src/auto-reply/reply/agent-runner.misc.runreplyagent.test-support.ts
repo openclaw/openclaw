@@ -140,10 +140,12 @@ vi.mock("../../runtime.js", () => {
   };
 });
 
+// mock-isolation: Keep the process-wide followup queue and drain registry outside runner cases.
 vi.mock("./queue.js", () => {
   return {
     admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
+    kickFollowupDrainIfIdle: vi.fn(),
     parkSteerCandidate: vi.fn(() => ({
       admit: async () => "steer",
       accepted: vi.fn(),

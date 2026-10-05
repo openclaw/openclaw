@@ -36,16 +36,12 @@ type NextcloudTalkBotResponseFeatureProbe = {
 };
 
 function normalizeUrlForMatch(value: string | undefined): string {
-  if (!value?.trim()) {
-    return "";
-  }
-  try {
-    const url = new URL(value.trim());
+  const trimmed = value?.trim() ?? "";
+  const url = URL.parse(trimmed);
+  if (url) {
     url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return value.trim().replace(/\/$/, "");
   }
+  return (url?.toString() ?? trimmed).replace(/\/$/, "");
 }
 
 function formatMissingResponseFeatureMessage(bot: NextcloudTalkBotAdminEntry, features?: number) {
@@ -113,7 +109,9 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         },
       },
       auditContext: "nextcloud-talk.bot-response-preflight",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+      policy: ssrfPolicyFromPrivateNetworkOptIn(
+        account.config.network?.dangerouslyAllowPrivateNetwork,
+      ),
       timeoutMs,
     });
     try {

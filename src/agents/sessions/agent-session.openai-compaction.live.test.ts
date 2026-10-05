@@ -78,9 +78,6 @@ function createResourceLoader(): ResourceLoader {
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
     extendResources: () => {},
     reload: async () => {},
   };
@@ -167,13 +164,12 @@ async function createLiveSession() {
   });
   const contextChunk = buildContextChunk(STRESS_PROFILE.chunkChars);
   const { session } = await createAgentSession({
+    systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
     cwd,
-    agentDir,
     model,
     thinkingLevel: "medium",
-    noTools: "all",
+    tools: [],
     resourceLoader: createResourceLoader(),
-    authStorage,
     modelRegistry,
     sessionManager,
     settingsManager,

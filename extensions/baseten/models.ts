@@ -108,8 +108,16 @@ function projectLiveModel(
   const inputPrice = readPerTokenPrice(pricing.prompt);
   const outputPrice = readPerTokenPrice(pricing.completion);
   const cacheReadPrice = readPerTokenPrice(pricing.input_cache_read);
-  const supportsReasoningEffort = features.has("reasoning_effort");
+  // These current DeepSeek rows omit feature flags documented by Baseten's serving API.
+  const hasDocumentedSparseFeatures =
+    ["deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4-Pro-0813"].includes(id) &&
+    ["tools", "reasoning", "json_mode", "structured_outputs"].every((feature) =>
+      features.has(feature),
+    );
   const fallbackCompat = fallback?.compat ?? buildBasetenModelCompat(id);
+  const supportsReasoningEffort =
+    features.has("reasoning_effort") ||
+    (hasDocumentedSparseFeatures && fallbackCompat.supportsReasoningEffort === true);
   const compat = hasLiveFeatures
     ? applyLiveReasoningEffortCompat(fallbackCompat, supportsReasoningEffort)
     : fallbackCompat;
@@ -121,7 +129,7 @@ function projectLiveModel(
       ? features.has("reasoning") || supportsReasoningEffort
       : (fallback?.reasoning ?? false),
     input: hasLiveFeatures
-      ? features.has("vision")
+      ? features.has("vision") || (hasDocumentedSparseFeatures && fallback?.input.includes("image"))
         ? ["text", "image"]
         : ["text"]
       : (fallback?.input ?? ["text"]),

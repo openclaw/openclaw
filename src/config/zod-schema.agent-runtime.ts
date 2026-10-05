@@ -658,6 +658,13 @@ const AgentToolsSchema = z
     fs: ToolFsSchema,
     /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
     loopDetection: ToolLoopDetectionSchema,
+    /** Explicit outbound destinations; does not grant session reads or bypass global/sandbox policy. */
+    agentToAgent: z
+      .strictObject({
+        /** Agent ids or * globs for sessions_send. Omitted inherits visibility; [] denies cross-agent sends. */
+        send: z.array(z.string()).optional(),
+      })
+      .optional(),
     /** Message tool configuration for this agent. */
     message: MessageToolConfigSchema,
     sandbox: NestedToolPolicySchema,

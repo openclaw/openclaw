@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
@@ -173,6 +174,7 @@ export async function sendGatewayHello(
         : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
       events,
       capabilities: [
+        SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         // Configured UI roots may serve an older route contract than this Gateway.
@@ -211,6 +213,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
         GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
         GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS,
+        GATEWAY_SERVER_CAPS.SENDER_RESTRICTED_HIDDEN_HELPERS,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,

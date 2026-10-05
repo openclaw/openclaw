@@ -1,8 +1,10 @@
 import type { Model } from "@openclaw/llm-core";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { raceWithTimeout } from "../../../retry/src/index.js";
 import { getAiTransportHost } from "../host.js";
 export { redactIdentifier, sha256Hex } from "@openclaw/normalization-core/node-crypto";
+export { createAbortError } from "../../../retry/src/index.js";
 export { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "../internal/retry-after.js";
 export { parsePositiveInteger } from "./positive-integer.js";
 
@@ -30,12 +32,6 @@ export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel)
     }
   }
   return headers ? ({ ...model, headers } as TModel) : model;
-}
-
-export function createAbortError(message: string, options?: ErrorOptions): Error {
-  const error = new Error(message, options);
-  error.name = "AbortError";
-  return error;
 }
 
 export function estimateStringChars(text: string): number {
@@ -70,23 +66,9 @@ async function readChunkWithIdleTimeout(
   timeoutMs: number,
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ?? new Error("Read timed out")),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await raceWithTimeout(reader.read(), timeoutMs, () => {
+    throw onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ?? new Error("Read timed out");
+  });
 }
 
 export async function readResponseTextSnippet(

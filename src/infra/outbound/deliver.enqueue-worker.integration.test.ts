@@ -173,43 +173,23 @@ describe("enqueue publication custody through the real sender", () => {
     }
   });
 
-  it("releases staged media after a known serialization failure and still permits best-effort delivery", async () => {
-    const { stateDir, mediaUrl } = await source();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const send = installSender();
-    const reply = holdEnqueueReply();
-    const identity = {
-      name: "synthetic",
-      toJSON() {
-        throw new Error("known JSON preparation failure");
-      },
-    };
-    try {
-      await deliverOutboundPayloads({
-        ...deliveryParams(stateDir),
-        payloads: [{ mediaUrl }],
-        identity,
-      });
-      expect(send).toHaveBeenCalledOnce();
-      expect(reply.attempts()).toBe(0);
-      await expectReleasedMedia(stateDir);
-    } finally {
-      reply.restore();
-    }
-  });
-
-  it.each(["media", "text"] as const)(
-    "cleans a fully rolled-back native enqueue and preserves best-effort live sending (%s)",
-    async (kind) => {
+  it.each([
+    { failure: "serialization", kind: "media", attempts: 0 },
+    { failure: "native rollback", kind: "media", attempts: 1 },
+    { failure: "native rollback", kind: "text", attempts: 1 },
+  ] as const)(
+    "releases $kind staging after $failure and permits best-effort live sending",
+    async ({ failure, kind, attempts }) => {
       const { stateDir, mediaUrl } = await source();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      await fs.mkdir(path.join(stateDir, "delivery-queue-media"), { recursive: true });
-      const databasePath = openOpenClawStateDatabase().path;
-      const armPath = path.join(stateDir, "arm-rollback");
-      const preloadPath = path.join(stateDir, "enqueue-rollback.cjs");
-      await fs.writeFile(
-        preloadPath,
-        `
+      if (failure === "native rollback") {
+        await fs.mkdir(path.join(stateDir, "delivery-queue-media"), { recursive: true });
+        const databasePath = openOpenClawStateDatabase().path;
+        const armPath = path.join(stateDir, "arm-rollback");
+        const preloadPath = path.join(stateDir, "enqueue-rollback.cjs");
+        await fs.writeFile(
+          preloadPath,
+          `
 const { isMainThread } = require("node:worker_threads");
 if (!isMainThread) {
   const fs = require("node:fs");
@@ -234,16 +214,17 @@ if (!isMainThread) {
   };
 }
 `,
-      );
-      for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
-        vi.stubEnv(key, value);
+        );
+        for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
+          vi.stubEnv(key, value);
+        }
+        const warmId = await enqueueDelivery(
+          { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
+          stateDir,
+        );
+        await ackDelivery(warmId, stateDir);
+        await fs.writeFile(armPath, "armed");
       }
-      const warmId = await enqueueDelivery(
-        { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
-        stateDir,
-      );
-      await ackDelivery(warmId, stateDir);
-      await fs.writeFile(armPath, "armed");
       const send = installSender();
       const queued = vi.fn();
       const reply = holdEnqueueReply();
@@ -259,16 +240,26 @@ if (!isMainThread) {
           }
         },
       );
+      const identity = {
+        name: "synthetic",
+        toJSON() {
+          throw new Error("known JSON preparation failure");
+        },
+      };
       try {
         await deliverOutboundPayloads({
           ...deliveryParams(stateDir),
           payloads: kind === "media" ? [{ mediaUrl }] : [{ text: "synthetic retained text" }],
           onDeliveryIntent: queued,
+          ...(failure === "serialization" ? { identity } : {}),
         });
         expect(admissionFailure).toMatchObject({
-          message: "synthetic enqueue transaction rejected",
+          message:
+            failure === "serialization"
+              ? "known JSON preparation failure"
+              : "synthetic enqueue transaction rejected",
         });
-        expect(reply.attempts()).toBe(1);
+        expect(reply.attempts()).toBe(attempts);
         expect(send).toHaveBeenCalledOnce();
         expect(queued).not.toHaveBeenCalled();
         await expectReleasedMedia(stateDir);

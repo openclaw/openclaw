@@ -80,7 +80,6 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           {
             type: "cache.read",
             input: {
-              enabled: true,
               providerIdentities: generation.identities,
               hashes: chunks.map((chunk) => chunk.hash),
             },

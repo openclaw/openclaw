@@ -11,6 +11,8 @@ import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import {
@@ -28,7 +30,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
@@ -38,10 +40,11 @@ import {
 } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
-import type { SessionMetadataWorkerOperations } from "./session-manager-metadata.worker.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   adoptCommittedMessagePayload,
   canonicalizeSessionEntry,
+  adoptPersistedMessage,
   transcriptAppendNeedsReload,
   type PersistRecordOptions,
   type PersistRecordResult,
@@ -49,15 +52,14 @@ import {
 } from "./session-manager-persistence-entry.js";
 import {
   committedTranscriptViewError,
-  isSqliteTranscriptMutationConflict,
   SessionEntryCommittedError,
+  receiveSessionManagerCommit,
 } from "./session-manager-persistence-error.js";
 import type { SessionEntry, SessionHeader, SessionLeafControl } from "./session-manager-types.js";
 import {
   withSessionManagerWrite,
   type SessionManagerWriteAdmission,
 } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerPersistence extends SessionManagerCore {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
@@ -65,6 +67,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length > 0,
+    );
   }
 
   /** Local branch selections revoke pending writes; committed view adoption does not. */
@@ -145,7 +150,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       ...writeTarget,
       storePath: database.path,
     };
-    if (database.db.isTransaction) {
+    if ("db" in database && database.db.isTransaction) {
       throw new Error("Asynchronous session writes must own their transaction");
     }
     const initialWriter = this.#initialWriter;
@@ -160,6 +165,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       }
     };
     const assertCurrent = () => {
+      writeAdmission.assertCurrent();
       assertBinding();
       assertNavigation?.();
       initialWriter?.assertActive();
@@ -180,7 +186,12 @@ export class SessionManagerPersistence extends SessionManagerCore {
             expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt,
           ...(initialWriter && !initialWriter.committedFence ? { initializeEntry: true } : {}),
         }),
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof SessionEntryCommittedError) {
+          this.invalidateTranscriptView(error);
+        }
+        throw error;
+      });
       try {
         assertCurrent();
         if (initialWriter?.committedFence) {
@@ -230,16 +241,21 @@ export class SessionManagerPersistence extends SessionManagerCore {
       assertCurrent,
       async (worker) => {
         if (this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)) {
-          const committed = await worker.execute({
-            type: "session.metadata.initialize",
-            input: {
-              scope: captured,
-              entry: { sessionId: captured.sessionId, updatedAt: Date.now() },
-              ...(initialWriter && !initialWriter.committedFence
-                ? { initialWriterRunId: initialWriter.writerRunId }
-                : {}),
-            },
-          });
+          const initialization = await receiveSessionManagerCommit(
+            "session.metadata.initialize",
+            () =>
+              worker.execute({
+                type: "session.metadata.initialize",
+                input: {
+                  scope: captured,
+                  entry: { sessionId: captured.sessionId, updatedAt: Date.now() },
+                  ...(initialWriter && !initialWriter.committedFence
+                    ? { initialWriterRunId: initialWriter.writerRunId }
+                    : {}),
+                },
+              }),
+          );
+          const committed = initialization.value;
           try {
             if (committed.fence) {
               initialWriter?.recordCommitted(committed.fence);
@@ -250,11 +266,17 @@ export class SessionManagerPersistence extends SessionManagerCore {
             if (committed.identity) {
               publishCommittedSessionIdentity(
                 captured.agentId,
-                readOpenClawAgentDatabaseIdentity(database).identity,
+                "db" in database
+                  ? readOpenClawAgentDatabaseIdentity(database).identity
+                  : database.identity.incarnation,
                 committed.identity.previous,
                 committed.identity.current,
               );
             }
+          }
+          if (initialization.failure) {
+            this.invalidateTranscriptView(initialization.failure);
+            throw initialization.failure;
           }
           if (!committed.owned) {
             if (captured.expectedWriterRunId !== undefined) {
@@ -270,34 +292,37 @@ export class SessionManagerPersistence extends SessionManagerCore {
           mutationAt: number | null | undefined,
           intent?: "active-branch",
         ) => {
-          const result = await worker.execute({
-            type: "session.metadata.append",
-            input: {
-              scope: captured,
-              event: bytes,
-              ...(event.type === "message" ? { message: wireMessage } : {}),
-              options: {
-                ...(intent ? { appendIntent: intent } : {}),
-                ...(mutationAt !== undefined ? { expectedMutationAt: mutationAt } : {}),
+          const receipt = await receiveSessionManagerCommit("session.metadata.append", () =>
+            worker.execute({
+              type: "session.metadata.append",
+              input: {
+                scope: captured,
+                event: bytes,
+                ...(event.type === "message" ? { message: wireMessage } : {}),
+                options: {
+                  ...(intent ? { appendIntent: intent } : {}),
+                  ...(mutationAt !== undefined ? { expectedMutationAt: mutationAt } : {}),
+                },
+                ...(event.type !== "session"
+                  ? {
+                      view: {
+                        loadedVersion: this.transcriptVersion,
+                        limits: this.boundedContextLimits,
+                        admission,
+                      },
+                    }
+                  : {}),
               },
-              ...(event.type !== "session"
-                ? {
-                    view: {
-                      loadedVersion: this.transcriptVersion,
-                      limits: this.boundedContextLimits,
-                      admission,
-                    },
-                  }
-                : {}),
-            },
-          });
-          if (result.projectionNeedsReconcile) {
+            }),
+          );
+          const result = receipt.value;
+          if (result.projectionNeedsReconcile && !receipt.failure) {
             startSessionTranscriptIndexReconcile({
               ...options,
               preferredSessionId: captured.sessionId,
             });
           }
-          return result;
+          return { ...result, failure: receipt.failure };
         };
         let loadedVersion = this.transcriptVersion;
         const append = async (initialMutationAt: number | null | undefined) => {
@@ -307,8 +332,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
             if (!header || header.type !== "session") {
               throw new Error("Session transcript header was not persisted");
             }
-            const headerSnapshot = (await appendEvent(header, JSON.stringify(header), mutationAt))
-              .snapshot;
+            const headerReceipt = await appendEvent(header, JSON.stringify(header), mutationAt);
+            const headerSnapshot = headerReceipt.snapshot;
             if (!headerSnapshot.ok || !headerSnapshot.value.result?.appended) {
               throw new Error("Session transcript header was not persisted", {
                 cause: headerSnapshot.ok ? undefined : headerSnapshot.error,
@@ -321,6 +346,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
               this.transcriptMutationAt = committed.after.updatedAt;
             }
             this.persistenceHeaderPending = false;
+            if (headerReceipt.failure) {
+              this.invalidateTranscriptView(headerReceipt.failure);
+              throw headerReceipt.failure;
+            }
             mutationAt = this.transcriptMutationAt;
           }
           loadedVersion = this.transcriptVersion;
@@ -338,6 +367,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           return {
             committed: { ...snapshot.value, result: snapshot.value.result },
             reload: outcome.reload,
+            failure: outcome.failure,
           };
         };
         let outcome;
@@ -349,7 +379,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           if (
             !retryMutationConflicts ||
             expectedMutationAt !== undefined ||
-            !isSqliteTranscriptMutationConflict(error)
+            !(error instanceof SqliteTranscriptMutationConflictError)
           ) {
             throw error;
           }
@@ -391,7 +421,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
           reload: reload?.ok ? reload.value : undefined,
           committedVersion: committed.after,
           viewFailure:
-            reload?.ok === false ? committedTranscriptViewError(reload.error) : undefined,
+            outcome.failure ??
+            (reload?.ok === false ? committedTranscriptViewError(reload.error) : undefined),
         };
       },
       { beforeFreshMessageCommit },
@@ -400,7 +431,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
-    warnSessionPersistenceDeprecation("SessionManager.persist", "persistAsync");
+    prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);
   }
 
@@ -418,6 +449,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       if (
         !admission ||
         (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
+          "db" in admission.database &&
           !(canonical.type === "compaction" && compactionPersistence))
       ) {
         return this.persistRecord(canonical, options);
@@ -461,6 +493,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
           throw new SessionTranscriptWriterClaimReboundError();
         }
         assertOwned();
+        if (committed.viewFailure) {
+          throw committed.viewFailure;
+        }
         if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
           this.transcriptVersion = committed.committedVersion;
           this.transcriptMutationAt = committed.committedVersion.updatedAt;
@@ -672,39 +707,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
         cause: outcome.error,
       });
     }
-    const result = outcome.value.result;
     this.transcriptVersion = outcome.value.after;
-    if (!result) {
-      throw new Error(`Session transcript message was not persisted: ${entry.id}`);
-    }
-    if (result.appended) {
+    if (outcome.value.result?.appended) {
       this.transcriptMutationAt = outcome.value.after.updatedAt;
     }
-    const effectiveParentId = adoptCommittedMessagePayload(
-      entry,
-      result,
-      options?.idempotencyLookup,
-    );
-    if (result.messageId !== entry.id) {
-      // A concurrent keyed user is adopted only after reloading its current path.
-      if (!result.anchor) {
-        throw new Error(`Session transcript anchor was not returned: ${result.messageId}`);
-      }
-      return {
-        adoptedMessageId: result.messageId,
-        anchor: result.anchor,
-        appended: result.appended,
-        effectiveParentId,
-      };
-    }
-    const reloadAfterAppend =
-      result.appended && transcriptAppendNeedsReload(outcome.value.before, loadedVersion);
-    return {
-      ...(result.anchor ? { anchor: result.anchor } : {}),
-      lifecycleRevision: outcome.value.lifecycleRevision,
-      appended: result.appended,
-      effectiveParentId,
-      ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
-    };
+    return adoptPersistedMessage(entry, outcome.value, options?.idempotencyLookup, loadedVersion);
   }
 }

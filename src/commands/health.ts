@@ -6,11 +6,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { withProgress } from "../cli/progress.js";
-import {
-  createConfigReadError,
-  formatInvalidConfigDetails,
-  isConfigReadFailure,
-} from "../config/io.invalid-config.js";
+import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -41,7 +37,12 @@ import {
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
+import {
+  formatConfigReloadHealthLine,
+  formatContextEngineHealthLine,
+  formatDeliveryQueueHealthLine,
+  formatHealthChannelLines,
+} from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
@@ -120,22 +121,6 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
     eventLoop.cpuCoreRatio
   }`;
-}
-
-export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
-  const quarantined = summary.contextEngines?.quarantined ?? [];
-  if (quarantined.length === 0) {
-    return null;
-  }
-  const engines = quarantined.map((entry) => entry.engineId).join(", ");
-  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
-}
-
-export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
-  if (summary.configReload?.hotReloadStatus !== "disabled") {
-    return null;
-  }
-  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
 }
 
 export async function healthCommand(
@@ -436,7 +421,7 @@ export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
     pluginValidation: "core-only",
   });
   if (isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    throw createConfigReadError(snapshot);
   }
   return snapshot.runtimeConfig ?? snapshot.config;
 }

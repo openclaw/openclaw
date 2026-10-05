@@ -2,7 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 import type { PluginsReloadOptions } from "./plugins-reload-command.js";
@@ -39,10 +39,9 @@ export type PluginDoctorOptions = {
   json?: boolean;
 };
 
-const loadPluginsRuntime = createLazyRuntimeModule(() => import("./plugins-cli.runtime.js"));
-const pluginAction = createLazyRuntimeMethodBinder(loadPluginsRuntime);
+const pluginAction = createLazyRuntimeMethodBinder(() => import("./plugins-cli.runtime.js"));
 const authoringAction = createLazyRuntimeMethodBinder(
-  createLazyRuntimeModule(() => import("./plugins-authoring-command.js")),
+  () => import("./plugins-authoring-command.js"),
 );
 
 export function registerPluginsCli(program: Command) {
@@ -96,7 +95,7 @@ export function registerPluginsCli(program: Command) {
     .argument("<ids...>", "Plugin ids")
     .option("--accept-capabilities", "Accept each plugin's declared capabilities", false)
     .action(async (ids: string[], opts: { acceptCapabilities?: boolean }) => {
-      const { runPluginsEnableCommand } = await loadPluginsRuntime();
+      const { runPluginsEnableCommand } = await import("./plugins-cli.runtime.js");
       for (const id of ids) {
         await runPluginsEnableCommand(id, opts);
       }
@@ -107,7 +106,7 @@ export function registerPluginsCli(program: Command) {
     .description("Disable one or more plugins in config")
     .argument("<ids...>", "Plugin ids")
     .action(async (ids: string[]) => {
-      const { runPluginsDisableCommand } = await loadPluginsRuntime();
+      const { runPluginsDisableCommand } = await import("./plugins-cli.runtime.js");
       for (const id of ids) {
         await runPluginsDisableCommand(id);
       }

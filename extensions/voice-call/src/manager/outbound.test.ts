@@ -642,12 +642,9 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
     expect(call.state).toBe("hangup-bot");
-    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(
-      { maxDurationTimers: ctx.maxDurationTimers },
-      "call-1",
-    );
+    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(ctx, "call-1");
     expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      { transcriptWaiters: ctx.transcriptWaiters },
+      ctx,
       "call-1",
       "Call ended: hangup-bot",
     );
@@ -676,11 +673,7 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
     expect(call.state).toBe("timeout");
-    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      { transcriptWaiters: ctx.transcriptWaiters },
-      "call-1",
-      "Call ended: timeout",
-    );
+    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(ctx, "call-1", "Call ended: timeout");
   });
 
   it("handles missing, disconnected, and already-ended calls", async () => {

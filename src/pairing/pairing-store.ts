@@ -27,6 +27,7 @@ export const CHANNEL_PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 export const CHANNEL_PAIRING_PENDING_MAX = 3;
 
 export type PairingRequest = PairingRequestRecord;
+export { readChannelAllowFromStore } from "./pairing-store.read.js";
 
 /** Stable opaque id for approving a request without exposing its human pairing code. */
 export function resolveChannelPairingRequestId(
@@ -157,14 +158,7 @@ async function updateAllowFromStoreEntry(
   );
 }
 
-export async function readChannelAllowFromStore(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string,
-): Promise<string[]> {
-  return readChannelAllowFromStoreSync(channel, env, accountId);
-}
-
+/** @deprecated Use readChannelAllowFromStore; retained for the v2026.9.8 SDK until the next Plugin SDK major. */
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
@@ -271,17 +265,15 @@ export async function upsertChannelPairingRequest(params: {
       const existingIndex = requests.findIndex(
         (request) => request.id === id && requestMatchesAccountId(request, accountId),
       );
-      const existingCodes = new Set(
-        requests.map((request) => (normalizeOptionalString(request.code) ?? "").toUpperCase()),
-      );
+      const existingCodes = new Set(requests.map((request) => request.code.toUpperCase()));
 
       if (existingIndex >= 0) {
-        const existing = requests[existingIndex];
-        const code = normalizeOptionalString(existing?.code) || generateUniqueCode(existingCodes);
+        const existing = requests[existingIndex]!;
+        const code = existing.code;
         requests[existingIndex] = {
           id,
           code,
-          createdAt: existing?.createdAt ?? now,
+          createdAt: existing.createdAt,
           lastSeenAt: now,
           meta,
         };

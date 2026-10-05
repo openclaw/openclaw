@@ -200,7 +200,7 @@ describe("occupancy-driven transcript lifecycle", () => {
   it("keeps admitted history with its original agent after the room is reassigned", async () => {
     const h = harness();
     const configFor = (agentId: string): OpenClawConfig => ({
-      agents: { list: [{ id: "agent-a", default: true }, { id: "agent-b" }] },
+      agents: { entries: { "agent-a": {}, "agent-b": {} } },
       bindings: [{ agentId, match: { channel: "room", peer: { kind: "channel", id: "voice" } } }],
     });
     await h.run(

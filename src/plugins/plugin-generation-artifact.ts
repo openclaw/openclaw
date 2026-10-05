@@ -10,7 +10,10 @@ import {
   createPluginSourceLinkCapture,
 } from "./plugin-generation-file-capture.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
-import { createPluginGenerationSourceLookup } from "./plugin-generation-source-lookup.js";
+import {
+  createPluginGenerationSourceLookup,
+  createPluginResolvedModuleCapture,
+} from "./plugin-generation-source-lookup.js";
 import {
   createPluginNativeAdmission,
   type PluginNativeRecovery,
@@ -226,6 +229,9 @@ export function capturePluginGenerationArtifact(
     const scannedDirectories = new Set<string>();
     const captureFile = (source: string, options?: JitiOptions): void => {
       const existingSource = capturedPaths.get(path.resolve(source));
+      if (existingSource) {
+        assertModuleAvailable(existingSource);
+      }
       if (
         existingSource &&
         (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource))
@@ -467,6 +473,7 @@ export function capturePluginGenerationArtifact(
             : undefined;
         const known = inputFilename && capturedPaths.get(path.resolve(inputFilename));
         if (execute && known) {
+          assertModuleAvailable(known);
           return { target: capturedPluginModuleUrl(known, specifier, conditions) };
         }
         const name = packageName(specifier);
@@ -482,9 +489,11 @@ export function capturePluginGenerationArtifact(
             conditions.includes("require") ? "require" : "import",
             conditions,
           );
-          if (mapped && capturedPaths.has(path.resolve(mapped))) {
+          const captured = mapped && capturedPaths.get(path.resolve(mapped));
+          if (captured) {
             captureDependencies();
-            return { target: pathToFileURL(capturedPaths.get(path.resolve(mapped))!) };
+            assertModuleAvailable(captured);
+            return { target: pathToFileURL(captured) };
           }
         }
         const dependencyPrepared = prepareDependency(specifier);
@@ -525,6 +534,7 @@ export function capturePluginGenerationArtifact(
         if (!captured) {
           return undefined;
         }
+        assertModuleAvailable(captured);
         return { target: capturedPluginModuleUrl(captured, specifier, conditions) };
       };
       const moduleCapture: PluginModuleCapture = {
@@ -685,26 +695,14 @@ export function capturePluginGenerationArtifact(
         );
         return result.value ? { ...result.value, additions: result.additions } : undefined;
       },
-      captureResolvedModule: (filename: string) => {
-        const known = capturedPaths.get(path.resolve(filename));
-        if (known) {
-          assertModuleAvailable(known);
-          return known;
-        }
-        return captureAdmitted(() => {
-          const captured = findPluginCapturedPackage(packages, filename, directory);
-          // import.meta.url can name a deferred peer through a private dependency link.
-          const original = captured
-            ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))
-            : filename;
-          const source = captureExecutableFile(original);
-          const target = source ? capturedPaths.get(source) : undefined;
-          if (target) {
-            capturedPaths.set(path.resolve(filename), target);
-          }
-          return target;
-        }).value;
-      },
+      captureResolvedModule: createPluginResolvedModuleCapture({
+        capturedPaths,
+        assertModuleAvailable,
+        captureAdmitted,
+        captureExecutableFile,
+        packages,
+        directory,
+      }),
       dispose: () => {
         sourceCapture.dispose();
         clearCaptures();

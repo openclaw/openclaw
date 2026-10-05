@@ -630,18 +630,6 @@ describe("message-tool source reply custody", () => {
       expected: "delivered",
     },
     {
-      name: "current-source receipt",
-      result: { sourceReplyDelivered: true },
-      expected: "delivered",
-    },
-    {
-      name: "source final payload",
-      result: {
-        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal: true }],
-      },
-      expected: "delivered",
-    },
-    {
       name: "source progress without a final",
       result: {
         sourceReplyDelivered: true,

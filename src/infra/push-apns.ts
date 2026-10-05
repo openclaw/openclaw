@@ -12,13 +12,6 @@ import {
   createApnsResponseBodyCapture,
   getApnsResponseBodyCaptureText,
 } from "./push-apns-http2.js";
-import {
-  createApnsAlertPayload,
-  createApnsApprovalAlertPayload,
-  createApnsApprovalResolvedPayload,
-  createApnsBackgroundPayload,
-  resolvePluginApprovalAlertBody,
-} from "./push-apns-payloads.js";
 import { apnsSendInvalidatedError, requireCurrentApnsSend } from "./push-apns-send-current.js";
 import {
   isLikelyApnsToken,
@@ -86,6 +79,92 @@ type ApnsRequestResponse = { status: number; apnsId?: string; body: string };
 type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestResponse>;
 
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
+const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
+
+function createApnsAlertPayload(params: { nodeId: string; title: string; body: string }): object {
+  return {
+    aps: {
+      alert: {
+        title: params.title,
+        body: params.body,
+      },
+      sound: "default",
+    },
+    openclaw: {
+      kind: "push.test",
+      nodeId: params.nodeId,
+      ts: Date.now(),
+    },
+  };
+}
+
+function createApnsBackgroundPayload(params: { nodeId: string; wakeReason?: string }): object {
+  const reason = params.wakeReason ?? "node.invoke";
+  return {
+    aps: {
+      "content-available": 1,
+    },
+    openclaw: {
+      kind: "node.wake",
+      nodeId: params.nodeId,
+      ts: Date.now(),
+      ...(reason ? { reason } : {}),
+    },
+  };
+}
+
+function createApnsApprovalAlertPayload(params: {
+  kind: ChannelApprovalKind;
+  approvalId: string;
+  gatewayDeviceId: string;
+  title: string;
+  body: string;
+  category: string;
+}): object {
+  return {
+    aps: {
+      alert: {
+        title: params.title,
+        body: params.body,
+      },
+      sound: "default",
+      category: params.category,
+      "content-available": 1,
+    },
+    openclaw: {
+      kind: `${params.kind}.approval.requested`,
+      approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
+      ts: Date.now(),
+    },
+  };
+}
+
+function resolvePluginApprovalAlertBody(description: string): string {
+  const body = normalizeOptionalString(description) ?? "";
+  if (body.length <= PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH) {
+    return body;
+  }
+  return `${truncateUtf16Safe(body, PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+function createApnsApprovalResolvedPayload(params: {
+  kind: ChannelApprovalKind;
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
+  return {
+    aps: {
+      "content-available": 1,
+    },
+    openclaw: {
+      kind: `${params.kind}.approval.resolved`,
+      approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
+      ts: Date.now(),
+    },
+  };
+}
 
 function parseReason(body: string): string | undefined {
   const trimmed = body.trim();
@@ -102,13 +181,6 @@ function parseReason(body: string): string | undefined {
   }
 }
 
-function shouldInvalidateApnsRegistration(result: { status: number; reason?: string }): boolean {
-  if (result.status === 410) {
-    return true;
-  }
-  return result.status === 400 && result.reason?.trim() === "BadDeviceToken";
-}
-
 export function shouldClearStoredApnsRegistration(params: {
   registration: ApnsRegistration;
   result: { status: number; reason?: string };
@@ -123,7 +195,8 @@ export function shouldClearStoredApnsRegistration(params: {
   ) {
     return false;
   }
-  return shouldInvalidateApnsRegistration(params.result);
+  const { status, reason } = params.result;
+  return status === 410 || (status === 400 && reason?.trim() === "BadDeviceToken");
 }
 
 async function sendApnsRequest(params: ApnsRequestParams): Promise<ApnsRequestResponse> {
@@ -253,35 +326,6 @@ async function sendApnsRequest(params: ApnsRequestParams): Promise<ApnsRequestRe
   });
 }
 
-function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_APNS_TIMEOUT_MS, 1000);
-}
-
-function resolveDirectSendContext(params: {
-  auth: ApnsAuthConfig;
-  registration: DirectApnsRegistration;
-}): {
-  token: string;
-  topic: string;
-  environment: ApnsEnvironment;
-  bearerToken: string;
-} {
-  const token = normalizeApnsToken(params.registration.token);
-  if (!isLikelyApnsToken(token)) {
-    throw new Error("invalid APNs token");
-  }
-  const topic = normalizeApnsTopic(params.registration.topic);
-  if (!isValidApnsTopic(topic)) {
-    throw new Error("topic required");
-  }
-  return {
-    token,
-    topic,
-    environment: params.registration.environment,
-    bearerToken: getApnsBearerToken(params.auth),
-  };
-}
-
 function toPushResult(params: {
   registration: ApnsRegistration;
   response: ApnsRequestResponse | ApnsRelayPushResponse;
@@ -362,10 +406,7 @@ export async function sendApnsAlert(params: ApnsAlertParams): Promise<ApnsPushRe
     body: params.body,
   });
 
-  return await sendApnsPush(
-    { transport: params, payload, pushType: "alert", priority: "10" },
-    params,
-  );
+  return await sendApnsPush({ transport: params, payload, pushType: "alert" }, params);
 }
 
 export async function sendApnsBackgroundWake(
@@ -376,10 +417,7 @@ export async function sendApnsBackgroundWake(
     wakeReason: params.wakeReason,
   });
 
-  return await sendApnsPush(
-    { transport: params, payload, pushType: "background", priority: "5" },
-    params,
-  );
+  return await sendApnsPush({ transport: params, payload, pushType: "background" }, params);
 }
 
 async function sendApnsPush(
@@ -387,12 +425,12 @@ async function sendApnsPush(
     transport: ApnsTransportParams;
     payload: object;
     pushType: ApnsPushType;
-    priority: "10" | "5";
   },
   // Approval notifications have no lifecycle controls, including extra JS input fields.
   controls?: ApnsLifecycleControls,
 ): Promise<ApnsPushResult> {
   const transport = params.transport;
+  const priority = params.pushType === "alert" ? "10" : "5";
   const lifecycleControls = {
     ...(controls?.signal ? { signal: controls.signal } : {}),
     ...(controls?.isCurrent ? { isCurrent: controls.isCurrent } : {}),
@@ -406,7 +444,7 @@ async function sendApnsPush(
       relayHandle: registration.relayHandle,
       payload: params.payload,
       pushType: params.pushType,
-      priority: params.priority,
+      priority,
       gatewayIdentity: relayParams.relayGatewayIdentity,
       requestSender: relayParams.relayRequestSender,
       ...lifecycleControls,
@@ -414,21 +452,33 @@ async function sendApnsPush(
     return toPushResult({ registration, response });
   }
   const { auth, registration, timeoutMs, requestSender } = transport as DirectApnsTransportParams;
-  const context = resolveDirectSendContext({ auth, registration });
+  const token = normalizeApnsToken(registration.token);
+  if (!isLikelyApnsToken(token)) {
+    throw new Error("invalid APNs token");
+  }
+  const topic = normalizeApnsTopic(registration.topic);
+  if (!isValidApnsTopic(topic)) {
+    throw new Error("topic required");
+  }
+  const environment = registration.environment;
+  const bearerToken = getApnsBearerToken(auth);
   await requireCurrentApnsSend(lifecycleControls);
   const sender = requestSender ?? sendApnsRequest;
   const response = await sender({
-    ...context,
+    token,
+    topic,
+    environment,
+    bearerToken,
     payload: params.payload,
-    timeoutMs: resolveApnsTimeoutMs(timeoutMs),
+    timeoutMs: resolveTimerTimeoutMs(timeoutMs, DEFAULT_APNS_TIMEOUT_MS, 1000),
     pushType: params.pushType,
-    priority: params.priority,
+    priority,
     ...lifecycleControls,
   });
   return toPushResult({
     registration,
     response,
-    tokenSuffix: context.token.slice(-8),
+    tokenSuffix: token.slice(-8),
   });
 }
 
@@ -446,7 +496,6 @@ export async function sendApnsExecApprovalAlert(
       category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
     }),
     pushType: "alert",
-    priority: "10",
   });
 }
 
@@ -464,7 +513,6 @@ export async function sendApnsPluginApprovalAlert(
       category: PLUGIN_APPROVAL_NOTIFICATION_CATEGORY,
     }),
     pushType: "alert",
-    priority: "10",
   });
 }
 
@@ -480,7 +528,6 @@ async function sendApnsApprovalResolvedWake(params: {
       gatewayDeviceId: params.transport.gatewayDeviceId,
     }),
     pushType: "background",
-    priority: "5",
   });
 }
 

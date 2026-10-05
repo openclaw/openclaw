@@ -592,7 +592,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it("normalizes endpoint roots and legacy targets before sending", async () => {
+  it("uses canonical endpoint roots when resolving legacy targets", async () => {
     fixture.responseFor = (method) =>
       method === "getChat" ? { id: -100123, type: "supergroup", title: "Resolved" } : undefined;
     await sendMessageTelegram("https://t.me/fixture", "Resolved destination", {
@@ -601,7 +601,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
         channels: {
           telegram: {
             botToken: cfg.channels.telegram.botToken,
-            apiRoot: `${cfg.channels.telegram.apiRoot}/bot${cfg.channels.telegram.botToken}/`,
+            apiRoot: cfg.channels.telegram.apiRoot,
           },
         },
       },

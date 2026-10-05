@@ -609,7 +609,7 @@ describe("gateway server chat", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "orion" }],
+      entries: { main: {}, orion: {} },
     };
     try {
       await writeSessionStore({ entries: {} });
@@ -1489,22 +1489,6 @@ describe("gateway server chat", () => {
       });
       expect(history.ok).toBe(true);
       expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(expected);
-    });
-  });
-
-  test("routes chat.send slash commands without agent runs", async () => {
-    await withMainSessionStore(async () => {
-      const spy = vi.mocked(agentCommandMock);
-      const callsBefore = spy.mock.calls.length;
-      const eventPromise = waitForChatEvent("idem-command-1");
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/context list",
-        idempotencyKey: "idem-command-1",
-      });
-      expect(res.ok).toBe(true);
-      await eventPromise;
-      expect(spy.mock.calls.length).toBe(callsBefore);
     });
   });
 

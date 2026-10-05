@@ -11,27 +11,27 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import {
+  prepareCacheTtlCheckpoint,
+  serializeCacheTtlToolResultProjections,
+  type CacheTtlCheckpoint,
+  type CacheTtlProjectionInput,
+} from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 
-export type ToolResultPromptProjectionState = {
-  replacements: Map<string, { content: ToolResultMessage["content"]; cacheTtl?: "soft" | "hard" }>;
-  frozen: Set<string>;
-  ambiguousBaseKeys: Set<string>;
-  sourceHashByKey: Map<string, string>;
-  /** Cache-TTL marks read from the transcript marker; the projection owner materializes them on the next replay. */
-  restoredCacheTtl: Map<string, RestoredCacheTtlMark>;
-  lastWrittenSnapshotHash?: string;
+export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
+  /** Null means an uncertain append requires a checkpoint, including for empty state. */
+  cacheTtlCheckpoint?: CacheTtlCheckpoint | null;
+  /** Every baseline publication, including an empty-branch restore, invalidates pending writes. */
+  cacheTtlRevision?: number;
 };
 
-type RestoredCacheTtlMark = { mode: "soft" } | { mode: "hard"; placeholder: string };
-
 type EmbeddedSessionPromptState = {
-  activeProjectKeys: string[];
+  activeAttempts: number;
   toolResults: ToolResultPromptProjectionState;
-  sentUserTurnIds: Set<string>;
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
@@ -153,6 +153,7 @@ export function prepareSessionSystemPrompt(params: {
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         restart: false,
       };
+      params.state.persistedSystemPrompt = JSON.stringify(series);
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
@@ -242,6 +243,10 @@ const sessionPromptStates = resolveGlobalSingleton(
   SESSION_PROMPT_STATES_KEY,
   () => new Map<string, EmbeddedSessionPromptState>(),
 );
+const sessionActiveProjects = resolveGlobalSingleton(
+  Symbol.for("openclaw.embeddedSessionActiveProjects"),
+  () => new Map<string, string[]>(),
+);
 
 export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
   return {
@@ -262,7 +267,8 @@ export function cloneToolResultPromptProjectionState(
     ambiguousBaseKeys: new Set(state.ambiguousBaseKeys),
     sourceHashByKey: new Map(state.sourceHashByKey),
     restoredCacheTtl: new Map(state.restoredCacheTtl),
-    lastWrittenSnapshotHash: state.lastWrittenSnapshotHash,
+    cacheTtlCheckpoint: state.cacheTtlCheckpoint,
+    cacheTtlRevision: state.cacheTtlRevision,
   };
 }
 
@@ -286,44 +292,6 @@ export function recordToolResultPromptProjection(
   });
 }
 
-/** TTL trims are re-derived; ordinary trims retain only text, never images or tool metadata. */
-export function serializeCacheTtlToolResultProjections(state: ToolResultPromptProjectionState) {
-  const marks = new Map(state.restoredCacheTtl);
-  for (const [key, projection] of state.replacements) {
-    if (projection.cacheTtl === "soft") {
-      marks.set(key, { mode: "soft" });
-    } else if (projection.cacheTtl === "hard") {
-      const placeholder = projection.content
-        .flatMap((block) => (block.type === "text" ? [block.text] : []))
-        .join("\n");
-      marks.set(key, { mode: "hard", placeholder });
-    }
-  }
-  return {
-    prunedToolResults: [...marks].map(([key, mark]) => Object.assign({ key }, mark)),
-    ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
-    frozenToolResults: [...state.sourceHashByKey].flatMap(([key, sourceHash]) => {
-      if (!state.frozen.has(key)) {
-        return [];
-      }
-      const projection = state.replacements.get(key);
-      return [
-        {
-          key,
-          sourceHash,
-          ...(!projection?.cacheTtl && projection
-            ? {
-                texts: projection.content.flatMap((block) =>
-                  block.type === "text" ? [block.text] : [],
-                ),
-              }
-            : {}),
-        },
-      ];
-    }),
-  };
-}
-
 export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
   if (existing) {
@@ -332,13 +300,38 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
     return existing;
   }
   const created: EmbeddedSessionPromptState = {
-    activeProjectKeys: [],
+    activeAttempts: 0,
     toolResults: createToolResultPromptProjectionState(),
-    sentUserTurnIds: new Set(),
   };
   sessionPromptStates.set(sessionId, created);
-  pruneMapToMaxSize(sessionPromptStates, MAX_SESSION_PROMPT_STATES);
+  for (const [key, state] of sessionPromptStates) {
+    if (sessionPromptStates.size <= MAX_SESSION_PROMPT_STATES) {
+      break;
+    }
+    if (key !== sessionId && state.activeAttempts === 0) {
+      sessionPromptStates.delete(key);
+    }
+  }
   return created;
+}
+
+/** Overlapping cleanup keeps the next attempt's state until its own settlement. */
+export function retainEmbeddedSessionPromptState(sessionId: string) {
+  const state = getEmbeddedSessionPromptState(sessionId);
+  state.activeAttempts++;
+  let active = true;
+  return {
+    state,
+    [Symbol.dispose]() {
+      if (!active) {
+        return;
+      }
+      active = false;
+      if (--state.activeAttempts === 0 && sessionPromptStates.get(sessionId) === state) {
+        sessionPromptStates.delete(sessionId);
+      }
+    },
+  };
 }
 
 export function recordRuntimeContextProjection(
@@ -361,27 +354,42 @@ export function recordRuntimeContextProjection(
   return Boolean(changed);
 }
 
-export function hashToolResultProjectionSnapshot(
-  snapshot: ReturnType<typeof serializeCacheTtlToolResultProjections>,
-): string {
-  return sha256Hex(JSON.stringify(snapshot));
-}
-
 export async function persistToolResultProjections(
   state: ToolResultPromptProjectionState,
   appendEntry: (customType: string, data: unknown) => Promise<unknown>,
+  cacheTouch?: { timestamp: number; provider: string; modelId: string },
 ): Promise<void> {
-  if (state.frozen.size === 0) {
-    return;
-  }
   const snapshot = serializeCacheTtlToolResultProjections(state);
-  const hash = hashToolResultProjectionSnapshot(snapshot);
-  if (hash === state.lastWrittenSnapshotHash) {
+  const previous = state.cacheTtlCheckpoint;
+  const revision = state.cacheTtlRevision ?? 0;
+  if (
+    previous === undefined &&
+    !cacheTouch &&
+    !snapshot.prunedToolResults.length &&
+    !snapshot.frozenToolResults.length &&
+    !snapshot.ambiguousToolResultBaseKeys.length
+  ) {
     return;
   }
-  await appendEntry("openclaw.cache-ttl", snapshot);
-  // A failed owned write must leave the snapshot eligible for persistence.
-  state.lastWrittenSnapshotHash = hash;
+  const { marker, checkpoint } = prepareCacheTtlCheckpoint(snapshot, previous ?? undefined);
+  if (!marker && !cacheTouch) {
+    return;
+  }
+  try {
+    await appendEntry("openclaw.cache-ttl", { ...cacheTouch, ...marker });
+  } catch (error) {
+    // Rejection can follow a durable commit; the next write must re-establish the full base.
+    if ((state.cacheTtlRevision ?? 0) === revision) {
+      state.cacheTtlCheckpoint = null;
+      state.cacheTtlRevision = revision + 1;
+    }
+    throw error;
+  }
+  // A branch restore during the write owns its new baseline.
+  if ((state.cacheTtlRevision ?? 0) === revision) {
+    state.cacheTtlCheckpoint = checkpoint;
+    state.cacheTtlRevision = revision + 1;
+  }
 }
 
 /** Records the prepared repository identity and snapshots this session's LRU active set. */
@@ -389,19 +397,19 @@ export function prepareEmbeddedSessionActiveProjectKeys(
   sessionId: string,
   projectKey: string | null,
 ): readonly string[] {
-  const state = getEmbeddedSessionPromptState(sessionId);
+  const keys = sessionActiveProjects.get(sessionId) ?? [];
+  sessionActiveProjects.delete(sessionId);
+  sessionActiveProjects.set(sessionId, keys);
+  pruneMapToMaxSize(sessionActiveProjects, MAX_SESSION_PROMPT_STATES);
   if (projectKey) {
-    const existing = state.activeProjectKeys.indexOf(projectKey);
+    const existing = keys.indexOf(projectKey);
     if (existing >= 0) {
-      state.activeProjectKeys.splice(existing, 1);
+      keys.splice(existing, 1);
     }
-    state.activeProjectKeys.unshift(projectKey);
-    state.activeProjectKeys.length = Math.min(
-      state.activeProjectKeys.length,
-      MAX_ACTIVE_PROJECT_KEYS,
-    );
+    keys.unshift(projectKey);
+    keys.length = Math.min(keys.length, MAX_ACTIVE_PROJECT_KEYS);
   }
-  return [...state.activeProjectKeys];
+  return [...keys];
 }
 
 export function clearEmbeddedSessionPromptStates(sessionIds: Iterable<string | undefined>): void {
@@ -409,34 +417,7 @@ export function clearEmbeddedSessionPromptStates(sessionIds: Iterable<string | u
     const normalized = sessionId?.trim();
     if (normalized) {
       sessionPromptStates.delete(normalized);
+      sessionActiveProjects.delete(normalized);
     }
   }
-}
-
-export function markSessionUserTurnsSent(
-  state: EmbeddedSessionPromptState,
-  messages: AgentMessage[],
-): void {
-  for (const message of messages) {
-    if (message.role !== "user") {
-      continue;
-    }
-    const idempotencyKey = (message as { idempotencyKey?: unknown }).idempotencyKey;
-    if (typeof idempotencyKey === "string" && idempotencyKey.length > 0) {
-      state.sentUserTurnIds.add(idempotencyKey);
-    }
-  }
-}
-
-export function hasSessionUserTurnBeenSent(
-  state: EmbeddedSessionPromptState,
-  message: AgentMessage | undefined,
-): boolean | undefined {
-  if (!message || message.role !== "user") {
-    return undefined;
-  }
-  const idempotencyKey = (message as { idempotencyKey?: unknown }).idempotencyKey;
-  return typeof idempotencyKey === "string" && idempotencyKey.length > 0
-    ? state.sentUserTurnIds.has(idempotencyKey)
-    : undefined;
 }

@@ -236,7 +236,7 @@ function context(active = false): GatewayRequestContext {
     chatAbortControllers: new Map(
       active ? [["active-run", { sessionId: sourceSessionId, sessionKey }]] : undefined,
     ),
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;
 }
@@ -422,7 +422,7 @@ function restrictedOperator(email: string, agentId: string, sandbox?: "required"
     },
   };
   const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     gateway: {
       roles: {
         default: "guest",
@@ -956,7 +956,7 @@ describe("session message-cut methods", () => {
         },
       } as GatewayClient;
       const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         gateway: {
           roles: {
             default: "guest",

@@ -23,7 +23,7 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
 } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
-import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
+import { resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 export type ResolvedMediaModelEntry = {
@@ -90,19 +90,6 @@ export function resolveMediaRuntimeTimeoutMs(timeoutMs: number | undefined): num
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS);
 }
 
-/** Resolves the provider prompt and appends length guidance for non-audio outputs. */
-function resolvePrompt(
-  capability: MediaUnderstandingCapability,
-  prompt?: string,
-  maxChars?: number,
-): string {
-  const base = prompt?.trim() || DEFAULT_PROMPT[capability];
-  if (!maxChars || capability === "audio") {
-    return base;
-  }
-  return `${base} Respond in at most ${maxChars} characters.`;
-}
-
 type MediaEntryRunParams = {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -148,15 +135,21 @@ export function resolveEntryRunOptions(params: MediaEntryRunParams): {
       cfg.tools?.media?.[capability]?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS[capability],
   );
-  const configuredPrompt =
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
-  const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
+  const configuredPrompt = (
+    entry.prompt ??
+    params.config?.prompt ??
+    cfg.tools?.media?.[capability]?.prompt
+  )?.trim();
+  const basePrompt = configuredPrompt || DEFAULT_PROMPT[capability];
   return {
     maxBytes,
     maxChars,
     timeoutMs,
-    prompt,
-    hasConfiguredPrompt: Boolean(configuredPrompt?.trim()),
+    prompt:
+      maxChars && capability !== "audio"
+        ? `${basePrompt} Respond in at most ${maxChars} characters.`
+        : basePrompt,
+    hasConfiguredPrompt: Boolean(configuredPrompt),
   };
 }
 
@@ -169,7 +162,7 @@ export function resolveScopeDecision(params: {
     scope: params.scope,
     sessionKey: params.ctx.SessionKey,
     channel: params.ctx.Surface ?? params.ctx.Provider,
-    chatType: normalizeMediaUnderstandingChatType(params.ctx.ChatType),
+    chatType: params.ctx.ChatType,
   });
 }
 

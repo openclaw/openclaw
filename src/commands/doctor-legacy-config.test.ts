@@ -5,12 +5,6 @@ import {
   normalizeLegacyStreamingAliases,
   resolveLegacyAliasStreamingMode,
 } from "../config/channel-compat-normalization.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizeLegacyBrowserConfig } from "./doctor/shared/legacy-config-core-normalizers.js";
-
-function asLegacyConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
 
 function getLegacyProperty(value: unknown, key: string): unknown {
   if (!value || typeof value !== "object") {
@@ -282,37 +276,6 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
     expect(workStreaming(res.entry)).toEqual({ chunkMode: "newline" });
     expect(res.changes).toEqual([
       "Moved channels.layered.accounts.work.chunkMode → channels.layered.accounts.work.streaming.chunkMode.",
-    ]);
-  });
-});
-
-describe("normalizeCompatibilityConfigValues browser compatibility aliases", () => {
-  it("removes a stale extension relay cdpUrl", () => {
-    const changes: string[] = [];
-    const config = normalizeLegacyBrowserConfig(
-      asLegacyConfig({
-        browser: {
-          profiles: {
-            work: {
-              driver: "extension",
-              cdpUrl: "http://127.0.0.1:18792",
-            },
-            keep: {
-              driver: "existing-session",
-            },
-          },
-        },
-      }),
-      changes,
-    );
-
-    // driver "extension" is the live Chrome extension relay driver again; only
-    // the retired relay endpoint URL gets stripped.
-    expect(config.browser?.profiles?.work?.driver).toBe("extension");
-    expect(config.browser?.profiles?.work?.cdpUrl).toBeUndefined();
-    expect(config.browser?.profiles?.keep?.driver).toBe("existing-session");
-    expect(changes).toEqual([
-      "Removed browser.profiles.work.cdpUrl (extension driver profiles own their relay endpoint).",
     ]);
   });
 });

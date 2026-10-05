@@ -3,6 +3,7 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import {
   isChatAbortTerminalPersistenceSettled,
@@ -82,10 +83,7 @@ export function resolveChatAbortRequester(
   const sessionTarget = authorization?.admittedTarget;
   const assertCurrent =
     assertCallerCurrent && authorization && sessionTarget
-      ? () => {
-          assertCallerCurrent();
-          authorization.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([assertCallerCurrent, authorization.assertCurrent])
       : undefined;
   assertCurrent?.();
   return {
@@ -281,6 +279,7 @@ export function writePreRegisteredChatAbort(params: {
   stopReason: string;
   endedAt?: number;
   attemptId?: string;
+  requestIdentity?: string;
   expectedPayload?: PreRegisteredAgentDedupePayload;
 }) {
   if (
@@ -304,6 +303,12 @@ export function writePreRegisteredChatAbort(params: {
     (pendingEntry?.payload as PreRegisteredAgentDedupePayload | undefined)?.attemptId,
   );
   const ownsPendingAttempt = !params.attemptId || pendingAttemptId === params.attemptId;
+  // Eviction removes the reservation, not the admission's immutable input identity.
+  const requestIdentity = pendingEntry
+    ? ownsPendingAttempt
+      ? pendingEntry.requestIdentity
+      : undefined
+    : params.requestIdentity;
   if (ownsPendingAttempt) {
     params.context.dedupe.delete(pendingKey);
   }
@@ -314,9 +319,7 @@ export function writePreRegisteredChatAbort(params: {
       ts: endedAt,
       ok: true,
       payload,
-      ...(ownsPendingAttempt && pendingEntry?.requestIdentity
-        ? { requestIdentity: pendingEntry.requestIdentity }
-        : {}),
+      ...(requestIdentity ? { requestIdentity } : {}),
     },
   });
   return true;

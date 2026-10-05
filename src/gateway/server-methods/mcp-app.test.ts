@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -54,7 +53,7 @@ vi.mock("../mcp-app-standalone.js", () => ({
   createMcpAppStandaloneTicket: mocks.createMcpAppStandaloneTicket,
 }));
 
-import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import {
   getMcpAppModelContext,
   leaseMcpAppModelContextForTurn,
@@ -70,6 +69,7 @@ import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
+import { runtime } from "./mcp-app.test-support.js";
 
 const view = {
   requesterId: undefined as string | undefined,
@@ -92,67 +92,6 @@ const view = {
   toolCallCount: 0,
   activeRequests: 0,
 };
-
-function runtime() {
-  const releaseLease = vi.fn();
-  const catalog: McpToolCatalog = {
-    version: 1,
-    generatedAt: 1,
-    servers: { demo: { serverName: "demo", launchSummary: "demo", toolCount: 3 } },
-    tools: [
-      { serverName: "demo", toolName: "shared" },
-      { serverName: "demo", toolName: "app-only", uiVisibility: ["app"] as Array<"app" | "model"> },
-      {
-        serverName: "demo",
-        toolName: "model-only",
-        uiVisibility: ["model"] as Array<"app" | "model">,
-      },
-    ].map((tool) =>
-      Object.assign(tool, {
-        safeServerName: "demo",
-        fallbackDescription: tool.toolName,
-        inputSchema: Type.Object({}),
-      }),
-    ),
-  };
-  return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:main",
-    configFingerprint: "gateway-bridge-fixture",
-    createdAt: 1,
-    lastUsedAt: 1,
-    dispose: vi.fn(async () => {}),
-    mcpAppsEnabled: true,
-    markUsed: vi.fn(),
-    acquireLease: vi.fn(() => releaseLease),
-    workspaceDir: "/workspace",
-    getCatalog: vi.fn(async () => catalog),
-    peekCatalog: vi.fn(() => catalog),
-    callTool: vi.fn<SessionMcpRuntime["callTool"]>(async (_serverName, toolName) => ({
-      content: [{ type: "text", text: toolName }],
-    })),
-    listTools: vi.fn<NonNullable<SessionMcpRuntime["listTools"]>>(async () => ({
-      tools: [
-        { name: "shared", inputSchema: { type: "object" } },
-        {
-          name: "app-only",
-          inputSchema: { type: "object" },
-          _meta: { ui: { visibility: ["app"] } },
-        },
-        {
-          name: "model-only",
-          inputSchema: { type: "object" },
-          _meta: { ui: { visibility: ["model"] } },
-        },
-      ],
-    })),
-    listResources: vi.fn(async () => [{ uri: "ui://demo/state", name: "state" }]),
-    listResourceTemplates: vi.fn(async () => ({ resourceTemplates: [] })),
-    readResource: vi.fn(async (_serverName: string, uri: string) => ({
-      contents: [{ uri, text: "resource" }],
-    })),
-  };
-}
 
 async function invoke(
   method: keyof typeof mcpAppHandlers,
@@ -186,6 +125,73 @@ async function invoke(
 }
 
 describe("MCP App gateway bridge", () => {
+  it.each([
+    { label: "absent", params: {} },
+    { label: "undefined", params: { cursor: undefined } },
+    { label: "empty", params: { cursor: "" } },
+    { label: "whitespace", params: { cursor: " " } },
+    { label: "padded", params: { cursor: " page-2 " } },
+    { label: "ordinary", params: { cursor: "page-2" } },
+    { label: "Unicode", params: { cursor: "a+b/=✓\u00a0🦞" } },
+  ])(
+    "preserves $label list cursors through registered handlers and App operations",
+    async ({ params }) => {
+      const cursor = params.cursor;
+      const isSecondPage = (request: { cursor?: string } | undefined) =>
+        cursor !== undefined && request?.cursor === cursor;
+      const activeRuntime = {
+        ...runtime(),
+        listResourceTemplates: vi.fn<NonNullable<SessionMcpRuntime["listResourceTemplates"]>>(
+          async (_server, request) => {
+            const second = isSecondPage(request);
+            const name = second ? "second" : "first";
+            return {
+              resourceTemplates: [{ name, uriTemplate: `fixture://${name}/{id}` }],
+              ...(second ? {} : { nextCursor: cursor ?? "page-2" }),
+            };
+          },
+        ),
+      };
+      activeRuntime.listTools.mockImplementation(async (_server, request) => {
+        const second = isSecondPage(request);
+        return {
+          tools: [{ name: second ? "app-only" : "shared", inputSchema: { type: "object" } }],
+          ...(second ? {} : { nextCursor: cursor ?? "page-2" }),
+        };
+      });
+      mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+      const binding = { sessionKey: "agent:main:main", viewId: "cv_app" };
+      for (const [method, runtimeMethod, items, firstName, secondName] of [
+        ["mcp.app.listTools", "listTools", "tools", "shared", "app-only"],
+        [
+          "mcp.app.listResourceTemplates",
+          "listResourceTemplates",
+          "resourceTemplates",
+          "first",
+          "second",
+        ],
+      ] as const) {
+        const first = await invoke(method, binding);
+        expect(first.mock.calls[0]?.[0]).toBe(true);
+        expect(first.mock.calls[0]?.[1].nextCursor).toBe(cursor ?? "page-2");
+        const response = await invoke(method, { ...binding, ...params });
+        expect(response.mock.calls[0]?.[0]).toBe(true);
+        expect(activeRuntime[runtimeMethod]).toHaveBeenLastCalledWith(
+          "demo",
+          cursor === undefined ? undefined : { cursor },
+        );
+        expect(response.mock.calls[0]?.[1][items]).toEqual([
+          expect.objectContaining({ name: cursor === undefined ? firstName : secondName }),
+        ]);
+      }
+      const resources = await invoke("mcp.app.listResources", { ...binding, ...params });
+      expect(resources.mock.calls[0]?.[1]).toEqual({
+        resources: [{ uri: "ui://demo/state", name: "state" }],
+      });
+      expect(activeRuntime.listResources).toHaveBeenLastCalledWith("demo");
+    },
+  );
+
   it.each([
     { method: "mcp.app.callTool", field: "arguments", toolName: "shared" },
     { method: "mcp.app.readResource", field: "_meta", uri: "ui://demo/state" },
@@ -557,7 +563,7 @@ describe("MCP App gateway bridge", () => {
     const config = {
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
       },
     };
     const missing = await invoke(
@@ -666,7 +672,7 @@ describe("MCP App gateway bridge", () => {
       {
         agents: {
           ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
     );

@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codeModeFailureCode } from "./code-mode-errors.js";
 import * as worker from "./code-mode-executor.js";
-import { addClientToolsToCodeModeCatalog, applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginToolWithExecute,
@@ -14,6 +14,7 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { jsonResult } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -67,6 +68,8 @@ describe("Code Mode guest execution", () => {
       pluginTool("llm-task", "Run an LLM task"),
       pluginTool("llm_task", "Run the exact-name task"),
       pluginTool("catalog", "Collide with discovery"),
+      pluginTool("store", "Collide with session store"),
+      pluginTool("load", "Collide with session load"),
       pluginTool("TextEncoder", "Collide with text encoding"),
       pluginTool("TextDecoder", "Collide with text decoding"),
       pluginTool("class", "Use a reserved word"),
@@ -100,6 +103,8 @@ describe("Code Mode guest execution", () => {
       expect.arrayContaining([
         expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
         expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^store_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^load_[a-f0-9]{8}$/u),
         expect.stringMatching(/^TextEncoder_[a-f0-9]{8}$/u),
         expect.stringMatching(/^TextDecoder_[a-f0-9]{8}$/u),
         expect.stringMatching(/^class_[a-f0-9]{8}$/u),
@@ -120,7 +125,8 @@ describe("Code Mode guest execution", () => {
     const plugin = pluginTool("shared_action", "Plugin action");
     const { ctx, tools: codeModeTools } = createGuestHarness([plugin]);
     const client = pluginTool("shared_action", "Client action");
-    addClientToolsToCodeModeCatalog({
+    addClientToolsToToolCatalog({
+      enabled: true,
       tools: [client as never],
       ...ctx,
     });

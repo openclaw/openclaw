@@ -106,7 +106,7 @@ async function readResponsePrefix(
   }
 }
 
-export type ReadResponseTextPrefixResult = {
+type ReadResponseTextPrefixResult = {
   text: string;
   size: number;
   truncated: boolean;

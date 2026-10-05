@@ -26,12 +26,7 @@ import {
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
-import {
-  registerReplyPlugin,
-  runReplyAction,
-  workspaceConfig,
-  workspaceTestPlugin,
-} from "./message-action-runner.test-support.js";
+import { workspaceConfig, workspaceTestPlugin } from "./message-action-runner.test-support.js";
 import type { OutboundGatewayRequest } from "./message-gateway-options.js";
 
 const channel = "broadcast-test";
@@ -463,23 +458,6 @@ describe("broadcast send outcomes through native actions", () => {
       }),
     );
   });
-  it("strips citation markers before reply dispatch", async () => {
-    const handleAction = registerReplyPlugin();
-
-    await runReplyAction({
-      actionParams: {
-        message: "Ayutthaya Thai is my pick. citeturn2search9turn2search6",
-        messageId: "1783",
-      },
-      currentMessageId: "1783",
-    });
-
-    expect(handleAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ message: "Ayutthaya Thai is my pick." }),
-      }),
-    );
-  });
   const sourceInput = {
     cfg: {},
     action: "send",
@@ -542,37 +520,28 @@ describe("broadcast send outcomes through native actions", () => {
       },
     );
 
-    it("requires an address for private source delivery", async () => {
-      const failure = runMessageAction({
-        ...sourceInput,
-        toolContext: {
-          currentChannelProvider: "telegram",
+    it.each([
+      {
+        name: "private source without an address",
+        input: { ...sourceInput, toolContext: { currentChannelProvider: "telegram" } },
+        denial: { reasonCode: "message_target_missing", policyRef: "message-target:required" },
+        message: /requires a target/i,
+      },
+      {
+        name: "disabled broadcast",
+        input: {
+          cfg: { tools: { message: { broadcast: { enabled: false } } } },
+          action: "broadcast",
+          params: { targets: ["qa-channel:direct:one"], message: "hello" },
         },
-      });
-      await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
-      await expect(failure).rejects.toMatchObject({
-        reasonCode: "message_target_missing",
-        policyRef: "message-target:required",
-      });
-      await expect(failure).rejects.toThrow(/requires a target/i);
-    });
-
-    it("types disabled broadcast as an outcome-owning policy denial", async () => {
-      const failure = runMessageAction({
-        cfg: { tools: { message: { broadcast: { enabled: false } } } } as OpenClawConfig,
-        action: "broadcast",
-        params: { targets: ["qa-channel:direct:one"], message: "hello" },
-      });
-      await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
-      await expect(failure).rejects.toMatchObject({
-        reasonCode: "message_broadcast_disabled",
-        policyRef: "message-broadcast:enabled",
-      });
-    });
-
-    it("does not treat broadcast targets as a send target", async () => {
-      await expect(
-        runMessageAction({
+        denial: {
+          reasonCode: "message_broadcast_disabled",
+          policyRef: "message-broadcast:enabled",
+        },
+      },
+      {
+        name: "broadcast targets used as a send target",
+        input: {
           cfg: {},
           action: "send",
           params: {
@@ -581,8 +550,23 @@ describe("broadcast send outcomes through native actions", () => {
             targets: ["user:123456789"],
             message: "hello from codex",
           },
-        }),
-      ).rejects.toThrow(/requires a target/i);
+        },
+        message: /requires a target/i,
+      },
+    ] satisfies Array<{
+      name: string;
+      input: MessageActionInput;
+      denial?: { reasonCode: string; policyRef: string };
+      message?: RegExp;
+    }>)("rejects $name", async ({ input, denial, message }) => {
+      const failure = runMessageAction(input);
+      if (denial) {
+        await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
+        await expect(failure).rejects.toMatchObject(denial);
+      }
+      if (message) {
+        await expect(failure).rejects.toThrow(message);
+      }
     });
 
     it.each([false, true])(

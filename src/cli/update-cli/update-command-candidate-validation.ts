@@ -9,11 +9,45 @@ import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-run
 import { defaultRuntime } from "../../runtime.js";
 import { prepareOpenClawStateReadSource } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import type { readUpdateCandidateSource } from "./update-command-managed-context.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+
+export async function preflightUpdateCandidatePlugins(
+  execution: Pick<MutableUpdateExecutionParams, "channel" | "opts" | "updateStepTimeoutMs">,
+  params: {
+    targetVersion: string | null;
+    candidateAdmissionChecks?: readonly string[];
+    readAdmission: () => Promise<Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>>>;
+  },
+): Promise<void> {
+  const admission = await params.readAdmission();
+  const context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
+  if (
+    params.candidateAdmissionChecks?.includes("plugin-availability") &&
+    isCandidateAdmissionContextCovered(context.env)
+  ) {
+    return;
+  }
+  const { preflightConfiguredNpmPluginTargets } =
+    await import("./update-command-plugin-preflight.js");
+  const warnings = await preflightConfiguredNpmPluginTargets({
+    config: context.configSnapshot.sourceConfig,
+    env: context.env,
+    targetVersion: params.targetVersion,
+    channel: execution.channel,
+    timeoutMs: execution.updateStepTimeoutMs,
+  });
+  await params.readAdmission();
+  for (const warning of warnings) {
+    defaultRuntime[execution.opts.json ? "error" : "log"](warning.message);
+  }
+}
 
 export async function validateUpdateCandidateWithProgress(
   params: Pick<Parameters<typeof validateUpdateCandidateCanary>[0], "root" | "config"> & {

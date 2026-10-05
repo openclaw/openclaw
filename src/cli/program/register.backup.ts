@@ -1,21 +1,16 @@
 import type { Command } from "commander";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { addGatewayClientOptions } from "../gateway-rpc.js";
-import { formatHelpExamples } from "../help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { collectOption, parseStrictPositiveIntOption } from "./helpers.js";
 
 export function registerBackupCommand(program: Command) {
   const backup = program
     .command("backup")
     .description("Create, verify, and restore backup archives and SQLite snapshots")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/backup", "docs.openclaw.ai/cli/backup")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/backup"));
 
   backup
     .command("create")

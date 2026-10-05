@@ -290,31 +290,27 @@ function resolveCommentLinkedDocumentFromUrl(params: {
     rawUrl: params.rawUrl,
     urlKind: "unknown",
   };
-  try {
-    const parsed = new URL(params.rawUrl);
-    const parsedPath = parseCommentLinkedDocumentPath(parsed.pathname);
-    if (!parsedPath) {
-      return link;
-    }
-    const { urlKind, token } = parsedPath;
-    link.urlKind = urlKind;
-    if (urlKind === "wiki") {
-      link.wikiNodeToken = token;
-    } else {
-      link.resolvedObjType = urlKind;
-      link.resolvedObjToken = token;
-    }
-    if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      normalizeCommentFileType(link.resolvedObjType)
-    ) {
-      link.isCurrentDocument =
-        params.currentDocument?.fileType === link.resolvedObjType &&
-        params.currentDocument.fileToken === link.resolvedObjToken;
-    }
-  } catch {
+  const parsed = URL.parse(params.rawUrl);
+  const parsedPath = parsed && parseCommentLinkedDocumentPath(parsed.pathname);
+  if (!parsedPath) {
     return link;
+  }
+  const { urlKind, token } = parsedPath;
+  link.urlKind = urlKind;
+  if (urlKind === "wiki") {
+    link.wikiNodeToken = token;
+  } else {
+    link.resolvedObjType = urlKind;
+    link.resolvedObjToken = token;
+  }
+  if (
+    link.resolvedObjType &&
+    link.resolvedObjToken &&
+    normalizeCommentFileType(link.resolvedObjType)
+  ) {
+    link.isCurrentDocument =
+      params.currentDocument?.fileType === link.resolvedObjType &&
+      params.currentDocument.fileToken === link.resolvedObjToken;
   }
   return link;
 }

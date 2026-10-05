@@ -93,7 +93,10 @@ export class CodexGeneratedMediaProjection {
         }
         return;
       }
-      this.recordUrl({ itemId: item.id, mediaUrl: savedPath });
+      const existing = this.mediaByItemId.get(item.id);
+      if (!existing?.mediaUrl) {
+        this.mediaByItemId.set(item.id, { ...existing, mediaUrl: savedPath });
+      }
     }
   }
 
@@ -184,12 +187,11 @@ export class CodexGeneratedMediaProjection {
         asset.fileName,
       );
       this.gatewayMaterializedItemIds.add(params.itemId);
-      this.recordUrl({
-        itemId: params.itemId,
+      // Both Codex event shapes can carry a DevBox-local savedPath; channel
+      // delivery must always use the copy materialized on this gateway.
+      this.mediaByItemId.set(params.itemId, {
+        ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
-        // Both Codex event shapes can carry a DevBox-local savedPath; channel
-        // delivery must always use the copy materialized on this gateway.
-        replaceExisting: true,
       });
     } catch (error) {
       embeddedAgentLog.warn(
@@ -258,15 +260,5 @@ export class CodexGeneratedMediaProjection {
           : target;
       }),
     };
-  }
-
-  private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
-    const existing = this.mediaByItemId.get(params.itemId);
-    if (existing?.mediaUrl && params.replaceExisting !== true) {
-      this.itemIds.add(params.itemId);
-      return;
-    }
-    this.mediaByItemId.set(params.itemId, { ...existing, mediaUrl: params.mediaUrl });
-    this.itemIds.add(params.itemId);
   }
 }

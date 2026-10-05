@@ -179,13 +179,6 @@ DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1200s}"
 BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
-if [ "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" = legacy ]; then
-  legacy_clawhub_package="@openclaw/whatsapp"
-  [ "$SCENARIO" = configured-plugin-installs ] && legacy_clawhub_package="@openclaw/matrix"
-  UPGRADE_COMPAT_ENV_ARGS+=(
-    -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE=$legacy_clawhub_package"
-  )
-fi
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 if [ "$SCENARIO" = "abandoned-update" ] && [ -z "${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-}" ]; then
   UPDATE_RESTART_MODE="auto-auth"

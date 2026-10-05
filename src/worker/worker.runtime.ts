@@ -217,18 +217,8 @@ export async function runWorkerDescriptor(
     ) {
       throw new Error("Gateway does not support the admitted worker tool surface.");
     }
-    const preparation = [
-      loadWorkerTurnRuntime(),
-      import("../agents/workspace.js").then(
-        ({ loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME }) =>
-          loadWorkspaceBootstrapFiles(workspaceDir, [DEFAULT_AGENTS_FILENAME]),
-      ),
-    ] as const;
-    const ready = Promise.all(preparation);
-    // Observe early rejection while joining every operation before environment cleanup.
-    await Promise.allSettled([ready, ...preparation]);
-    const [[{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }], bootstrapFiles] =
-      await ready;
+    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] =
+      await loadWorkerTurnRuntime();
     const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     const stream = createWorkerInferenceStreamAdapter({
       client: inference,
@@ -252,39 +242,31 @@ export async function runWorkerDescriptor(
       : undefined;
     try {
       turnStarted = true;
+      const {
+        workspaceDir: _workspace,
+        github: _github,
+        computer,
+        toolAuthority,
+        transcript: _transcript,
+        liveEvents: _liveEvents,
+        ...assignment
+      } = descriptor.assignment;
       await runWorkerEmbeddedTurn({
-        agentId: descriptor.assignment.agentId,
-        operationalRunInstance: descriptor.assignment.operationalRunInstance,
-        agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
+        ...assignment,
         cwd: workspaceDir,
         workerContainmentRoot,
-        ...(descriptor.assignment.permissionMode
-          ? { permissionMode: descriptor.assignment.permissionMode }
-          : {}),
         stateDir,
         ...(github ? { github } : {}),
         sessionId: descriptor.admission.sessionId,
         sessionKey: `worker:${descriptor.admission.sessionId}`,
-        runId: descriptor.assignment.runId,
-        prompt: descriptor.assignment.prompt,
-        suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
-        modelRef: descriptor.assignment.modelRef,
-        initialMessages: descriptor.assignment.initialMessages,
-        skillResources: descriptor.assignment.skillResources,
-        ...(descriptor.assignment.systemPrompt === undefined
-          ? {}
-          : { systemPrompt: descriptor.assignment.systemPrompt }),
-        inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        allowedToolNames: toolAuthority.allowedToolNames,
         toolSurface: hello.toolSurface,
-        bootstrapFiles,
-        execAuthority: descriptor.assignment.toolAuthority.exec,
-        ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
-        ...(descriptor.assignment.computer
+        execAuthority: toolAuthority.exec,
+        ...(computer
           ? {
               computer: {
                 contextEpoch: computerContextEpoch,
-                descriptor: descriptor.assignment.computer,
+                descriptor: computer,
                 requestComputer: (request) => connection.requestComputer(request),
               },
             }

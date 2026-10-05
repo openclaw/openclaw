@@ -46,6 +46,33 @@ function normalizePromptRouteChannel(raw?: string | null): string | undefined {
   return normalized && normalized !== "none" ? normalized : undefined;
 }
 
+/** Whether an explicit route names the stored conversation, before inheritance fills coordinates. */
+export function isStoredConversationRoute(params: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+  entry?: SessionEntry;
+}): boolean {
+  const channel = normalizeMessageChannel(params.channel);
+  const to = normalizeEffectiveReplyTarget(params.to, channel, params.threadId);
+  const persisted = deliveryContextFromSession(params.entry);
+  const persistedChannel = normalizeMessageChannel(persisted?.channel);
+  return Boolean(
+    channel &&
+    to &&
+    channelRouteTargetsMatchExact({
+      left: { channel, to, accountId: params.accountId, threadId: params.threadId },
+      right: {
+        channel: persistedChannel,
+        to: normalizeEffectiveReplyTarget(persisted?.to, persistedChannel, persisted?.threadId),
+        accountId: persisted?.accountId,
+        threadId: persisted?.threadId,
+      },
+    }),
+  );
+}
+
 /** Prepares descriptive conversation facts without borrowing execution or sender authority. */
 export function prepareReplyConversation(params: {
   ctx: ReplyConversationFields &
@@ -60,42 +87,18 @@ export function prepareReplyConversation(params: {
     ? resolveEffectiveReplyRoute({ ctx, entry: sessionEntry })
     : undefined;
   const persisted = deliveryContextFromSession(sessionEntry);
-  const currentChannel = normalizeMessageChannel(
-    groupResolution?.channel ?? ctx.OriginatingChannel,
-  );
-  const currentTo = normalizeEffectiveReplyTarget(
-    groupResolution?.id ?? ctx.OriginatingTo,
-    currentChannel,
-    ctx.MessageThreadId,
-  );
   const hasCurrentRoute = Boolean(groupResolution || ctx.OriginatingChannel || ctx.OriginatingTo);
-  // Compare the current tuple before inheritance fills omitted coordinates. An
-  // explicit different route must lose both stored room names and activation.
+  // An explicit different route must lose both stored room names and activation.
   const ownsConversation =
     !isSystemEvent ||
     !hasCurrentRoute ||
-    Boolean(
-      currentChannel &&
-      currentTo &&
-      channelRouteTargetsMatchExact({
-        left: {
-          channel: currentChannel,
-          to: currentTo,
-          accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
-        },
-        right: {
-          channel: normalizeMessageChannel(persisted?.channel),
-          to: normalizeEffectiveReplyTarget(
-            persisted?.to,
-            normalizeMessageChannel(persisted?.channel),
-            persisted?.threadId,
-          ),
-          accountId: persisted?.accountId,
-          threadId: persisted?.threadId,
-        },
-      }),
-    );
+    isStoredConversationRoute({
+      channel: groupResolution?.channel ?? ctx.OriginatingChannel,
+      to: groupResolution?.id ?? ctx.OriginatingTo,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+      entry: sessionEntry,
+    });
   const conversationEntry = ownsConversation ? sessionEntry : undefined;
   const inherited = isSystemEvent ? conversationEntry : undefined;
   const origin = sessionDeliveryOrigin(inherited);

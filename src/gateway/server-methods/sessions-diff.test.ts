@@ -13,7 +13,7 @@ import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionEntryReadOnly: vi.fn(),
+  readSessionEntryReadOnlyInWorker: vi.fn(),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -31,9 +31,14 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
 
+// mock-isolation: Diff RPC cases control session persistence independently of throwaway Git repos.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
+}));
+
+// mock-isolation: Baseline policy uses the supplied session row without opening a read worker.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: hoisted.readSessionEntryReadOnlyInWorker,
 }));
 
 function git(cwd: string, ...args: string[]): string {
@@ -263,7 +268,10 @@ describe("loadSessionDiff", () => {
         payload: expect.objectContaining({ root: repoRoot }),
       }),
     ]);
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith(
+      "global",
+      expect.objectContaining({ agentId: "ops" }),
+    );
     expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(cfg, "ops");
   });
 
@@ -1032,7 +1040,7 @@ describe("ensureSessionDiffBaseline", () => {
       sessionId: "existing-session",
       updatedAt: Date.now(),
     };
-    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
+    hoisted.readSessionEntryReadOnlyInWorker.mockResolvedValue(entry);
 
     const result = await ensureSessionDiffBaseline({
       agentId: "main",

@@ -398,9 +398,6 @@ export function streamOpenAICompletionsRequest(
         signal: options?.signal,
         error,
         cleanup: () => {
-          if (mode === "managed") {
-            output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-          }
           finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
           clearPendingCommentaryText(provisionalCommentaryTags);
           tagUnresolvedTextAsCommentary(output);

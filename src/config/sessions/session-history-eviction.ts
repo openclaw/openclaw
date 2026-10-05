@@ -32,11 +32,12 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
-  createHistoryEvictionReclamationPlan,
+  resolveSessionReclamationDatabaseOptions,
   runExclusiveSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
@@ -504,13 +505,14 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 if (protectedSessionIds.has(sessionId)) {
                   return null;
                 }
-                return createHistoryEvictionReclamationPlan({
-                  databaseOptions,
+                return {
+                  databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
                   diskBudget: { preserveRecentMs: params.maintenance.preserveRecentMs },
+                  kind: "history-eviction",
                   materializedPlans: materialized,
-                  protectedSessionIds,
+                  protectedSessionIds: [...protectedSessionIds],
                   sessionId,
-                });
+                } satisfies SqliteSessionReclamationPlan;
               }),
             "session.history.reclamation-plan",
             diagnostics,

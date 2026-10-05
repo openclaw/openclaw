@@ -19,20 +19,12 @@ function readTextFromDataUrl(dataUrl: string): string | null {
   if (!match) {
     return null;
   }
-  const metadata = match[1];
-  const payload = match[2];
-  if (metadata === undefined || payload === undefined) {
-    return null;
-  }
-  if (metadata.toLowerCase().includes(";base64")) {
-    try {
-      return new TextDecoder().decode(base64ToBytes(payload));
-    } catch {
-      return null;
-    }
-  }
+  const metadata = match[1]!;
+  const payload = match[2]!;
   try {
-    return decodeURIComponent(payload.replace(/\+/g, "%20"));
+    return metadata.toLowerCase().includes(";base64")
+      ? new TextDecoder().decode(base64ToBytes(payload))
+      : decodeURIComponent(payload.replace(/\+/g, "%20"));
   } catch {
     return null;
   }

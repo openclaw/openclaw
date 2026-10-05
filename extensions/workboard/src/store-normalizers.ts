@@ -109,38 +109,26 @@ function normalizeNotificationKinds(value: unknown): WorkboardNotificationKind[]
 
 export function normalizeNotificationSubscription(
   input: WorkboardNotificationSubscribeInput,
-  fallback?: WorkboardNotificationSubscription,
-  now = Date.now(),
 ): WorkboardNotificationSubscription {
-  const boardId = normalizeBoardId(input.boardId, fallback?.boardId) ?? "default";
-  const cardId = normalizeBoundedString(input.cardId, fallback?.cardId, 120, "card id");
-  const sessionKey = normalizeBoundedString(
-    input.sessionKey,
-    fallback?.sessionKey,
-    240,
-    "session key",
-  );
-  const runId = normalizeBoundedString(input.runId, fallback?.runId, 160, "run id");
-  const target = normalizeBoundedString(input.target, fallback?.target, 240, "notification target");
+  const now = Date.now();
+  const boardId = normalizeBoardId(input.boardId) ?? "default";
+  const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
+  const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
+  const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
+  const target = normalizeBoundedString(input.target, undefined, 240, "notification target");
   if (!cardId && !sessionKey && !runId && !target) {
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
   return {
-    id: fallback?.id ?? randomUUID(),
+    id: randomUUID(),
     boardId,
     ...(cardId ? { cardId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
-    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
-    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
-    ...(fallback?.deliveredEventIds?.length
-      ? { deliveredEventIds: fallback.deliveredEventIds }
-      : {}),
-    createdAt: fallback?.createdAt ?? now,
+    createdAt: now,
     updatedAt: now,
   };
 }

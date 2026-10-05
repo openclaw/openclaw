@@ -18,7 +18,8 @@ import {
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
-import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -132,7 +133,10 @@ function captureMcpCatalogSessionFacts(params: CapturedMcpLoopbackScope) {
   };
 }
 
-function isMcpCatalogSessionCurrent(catalog: CachedScopedTools, params: CapturedMcpLoopbackScope) {
+function isMcpCatalogSessionCurrent(
+  catalog: Pick<CachedScopedTools, "sessionFacts">,
+  params: CapturedMcpLoopbackScope,
+) {
   const current = captureMcpCatalogSessionFacts(params);
   return (
     catalog.sessionFacts?.projection === current?.projection &&
@@ -152,10 +156,7 @@ function resolveMediatedNativeTools(
         .filter((name) => NATIVE_TOOL_EXCLUDE.has(name)),
     );
   }
-  if (
-    toolsAllow === undefined ||
-    toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
-  ) {
+  if (toolsAllow === undefined) {
     return new Set();
   }
   return new Set(
@@ -173,6 +174,7 @@ async function resolveNodeExecScope(
   const shouldResolveExec =
     !params.rootedExecution &&
     !params.context.trustedInternalHandoff &&
+    !toolPolicyRestrictsTools(pickSandboxToolPolicy(params.context.conversationToolPolicy)) &&
     params.context.nodeExecAllowed === true &&
     !params.defaultMediatedToolNames?.length &&
     resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
@@ -271,22 +273,37 @@ async function withReadyMcpSession<T>(
     sessionKey,
     agentId: params.context.agentId,
   });
-  return await withReadySessionRows(
-    params.projection,
-    () => [{ agentId, key: sessionKey }],
-    () => {
-      params.assertCurrent();
-      return consume();
-    },
+  let receipt: {
+    sessionFacts: ReturnType<typeof captureMcpCatalogSessionFacts>;
+    sharingRevision: object | undefined;
+  };
+  do {
+    receipt = await withReadySessionRows(
+      params.projection,
+      () => [{ agentId, key: sessionKey }],
+      () => {
+        params.assertCurrent();
+        return {
+          sessionFacts: captureMcpCatalogSessionFacts(params),
+          sharingRevision: params.projection?.sharingRevision,
+        };
+      },
+    );
+    params.assertCurrent();
+  } while (
+    receipt.sharingRevision === undefined ||
+    receipt.sharingRevision !== params.projection.sharingRevision ||
+    !isMcpCatalogSessionCurrent(receipt, params)
   );
+  return consume();
 }
 
-function constructMcpLoopbackTools(
+async function constructMcpLoopbackTools(
   params: CapturedMcpLoopbackScope,
   mode: LoopbackToolsAllowMode,
-): CachedScopedTools {
+): Promise<CachedScopedTools> {
   params.assertCurrent();
-  // Capture the row used by this synchronous construction before a factory can reenter.
+  // Retain the row identity so construction cannot publish facts from before an awaited read.
   const sessionFacts = captureMcpCatalogSessionFacts(params);
   const { toolsAllow, webSearchDisabled, ...context } = params.context;
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
@@ -296,7 +313,9 @@ function constructMcpLoopbackTools(
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
   const mediatedNativeTools =
-    params.rootedExecution || context.trustedInternalHandoff
+    params.rootedExecution ||
+    context.trustedInternalHandoff ||
+    toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy))
       ? new Set(NATIVE_TOOL_EXCLUDE)
       : resolveMediatedNativeTools(toolsAllow, mode);
   for (const toolName of params.defaultMediatedToolNames ?? []) {
@@ -317,7 +336,7 @@ function constructMcpLoopbackTools(
     context.skillWorkshop || params.skillLibraryAuthoring
       ? { ...context.skillWorkshop, libraryAuthoring: params.skillLibraryAuthoring }
       : undefined;
-  const scoped = resolveGatewayScopedTools({
+  const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     rootedExecution: params.rootedExecution,
     messageActionTurnCapability: params.messageActionTurnCapability,
@@ -336,7 +355,9 @@ function constructMcpLoopbackTools(
     includeNodeExecTool,
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
     pairedNodeComputerUse: params.pairedComputerUseAvailability?.prepared,
-  });
+  };
+  const scoped = await resolveGatewayScopedTools(scopeOptions, params.assertCurrent);
+  params.assertCurrent();
   const tools =
     mode === "exact"
       ? applyGrantToolsAllow(scoped.tools, toolsAllow)
@@ -486,7 +507,7 @@ export class McpLoopbackToolCache {
       nodeExecParams.assertCurrent();
       const { params } = resolved;
       const cacheKey = buildMcpLoopbackToolCacheKey(params);
-      const nextEntry = await withReadyMcpSession(params, () => {
+      const nextEntry = await withReadyMcpSession(params, async () => {
         const cached = this.#entries.get(cacheKey, params.cfg);
         if (cached && isMcpCatalogSessionCurrent(cached, params)) {
           return cached;
@@ -494,10 +515,10 @@ export class McpLoopbackToolCache {
         const next =
           resolved.policyResolved && isMcpCatalogSessionCurrent(resolved.policyResolved, params)
             ? resolved.policyResolved
-            : constructMcpLoopbackTools(params, "exact");
+            : await constructMcpLoopbackTools(params, "exact");
         params.assertCurrent();
         // Revocation may overtake discovery before a grant owns any cached rows.
-        if (epoch === this.#epoch) {
+        if (epoch === this.#epoch && isMcpCatalogSessionCurrent(next, params)) {
           this.#entries.set(cacheKey, next, params.cfg);
           if (params.grantToken) {
             const scopes =

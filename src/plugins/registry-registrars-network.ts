@@ -84,6 +84,9 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       scope?: OperatorScope;
       profileAccess?: GatewayMethodProfileAccess;
       sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+      shareKey?: import("../gateway/methods/descriptor.js").GatewayReadSharing["shareKey"];
+      shareInvalidationEvents?: readonly string[];
+      shareMaxAgeMs?: number;
     },
   ) => {
     const trimmed = method.trim();
@@ -114,6 +117,18 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         scope: normalizedScope.scope,
         ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
         ...(opts?.sessionAccess ? { sessionAccess: opts.sessionAccess } : {}),
+        ...(opts?.shareKey
+          ? {
+              shareKey: (caller, params) =>
+                capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+                  scopedRuntime: true,
+                })?.() === true
+                  ? opts.shareKey!(caller, params)
+                  : null,
+              shareInvalidationEvents: opts.shareInvalidationEvents,
+              shareMaxAgeMs: opts.shareMaxAgeMs,
+            }
+          : {}),
       }),
     );
   };

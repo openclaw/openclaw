@@ -438,6 +438,34 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
+  it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      printDaemonStatus({
+        service: {
+          label: "Scheduled Task",
+          loadedText: "registered",
+          notLoadedText: "not registered",
+          runtime: { status: "stopped", state: "Disabled" },
+          command: {
+            programArguments: [],
+            environment: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway" },
+          },
+        },
+      });
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = output(runtime.error);
+    expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
+    expect(errors).toContain("openclaw gateway start");
+    expect(errors).toContain("openclaw doctor --fix");
+    expect(errors).toContain("to re-enable it");
+    expect(errors).toContain('schtasks /Query /TN "OpenClaw Custom Gateway"');
+    expect(errors).not.toContain("likely exited immediately");
+  });
+
   it("prints GUI-session recovery guidance for the service profile", () => {
     printDaemonStatus({
       service: {

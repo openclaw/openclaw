@@ -80,3 +80,30 @@ export function createVoiceCallBaseConfig(params?: {
     responseTimeoutMs: 30000,
   };
 }
+
+export function createExternalProviderConfig(params: {
+  provider: "twilio" | "telnyx" | "plivo";
+  publicUrl?: string;
+}): VoiceCallConfig {
+  const config = createVoiceCallBaseConfig({
+    provider: params.provider,
+    tunnelProvider: "none",
+  });
+  config.twilio = {
+    accountSid: "AC123",
+    authToken: "secret",
+  };
+  config.telnyx = {
+    apiKey: "key",
+    connectionId: "conn",
+    publicKey: "pub",
+  };
+  config.plivo = {
+    authId: "MA123",
+    authToken: "secret",
+  };
+  if (params.publicUrl) {
+    config.publicUrl = params.publicUrl;
+  }
+  return config;
+}

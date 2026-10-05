@@ -34,12 +34,7 @@ export function resolveNodeDesktopHostConfig(params: {
   };
 }
 
-type NodeDesktopStreamCommandParams = {
-  ticket: string;
-  attachPath: string;
-};
-
-function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamCommandParams {
+function decodeDesktopStreamParams(raw?: string | null) {
   let value: unknown;
   try {
     value = raw ? JSON.parse(raw) : undefined;
@@ -104,7 +99,7 @@ async function readVncPassword(
 
 /** Splices a node-local loopback RFB socket to a ticket-authenticated Gateway WebSocket. */
 async function runNodeDesktopStreamCommand(params: {
-  command: NodeDesktopStreamCommandParams;
+  command: ReturnType<typeof decodeDesktopStreamParams>;
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;

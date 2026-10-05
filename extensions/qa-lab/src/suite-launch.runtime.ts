@@ -23,7 +23,7 @@ import {
   type QaTransportDriver,
 } from "./qa-transport-registry.js";
 import { renderQaMarkdownReport } from "./report.js";
-import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
+import { normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,
   resolveQaScenarioRequiredProviderMode,
@@ -631,47 +631,6 @@ async function resolveSuiteExecutionPlan(
   };
 }
 
-async function runQaTestFileSuiteFromRuntime(params: {
-  env?: NodeJS.ProcessEnv;
-  preparedDockerEvidence?: dockerBatch.QaPreparedDockerEvidence;
-  kind: QaTestFileExecutionKind;
-  runParams: QaSuiteRunParams | undefined;
-  scenarios: readonly QaTestFileScenario[];
-}): Promise<QaTestFileScenarioRunResult> {
-  const runParams = params.runParams;
-  rejectFlowOnlySuiteOptionsForUnifiedRun(runParams);
-  const repoRoot = path.resolve(runParams?.repoRoot ?? process.cwd());
-  const outputDir = await resolveQaSuiteOutputDir(repoRoot, runParams?.outputDir);
-  const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
-  const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  return await runQaTestFileScenarios({
-    evidenceMode: runParams?.evidenceMode,
-    evidenceAnchors: runParams?.evidenceAnchors,
-    evidenceContinuation: runParams?.evidenceContinuation,
-    onEvidence: runParams?.onEvidence,
-    preparedDockerEvidence: params.preparedDockerEvidence,
-    ...(params.env
-      ? { env: params.env, envMode: "replace" as const }
-      : params.kind !== "script"
-        ? {
-            // The owning QA process already loaded the prepared runtime. Native
-            // child setup must not clean or rebuild those files under live gateways.
-            env: { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
-          }
-        : {}),
-    ...(runParams?.failFast ? { failFast: true } : {}),
-    ...(shouldLogQaSuiteProgress()
-      ? { progress: (message: string) => writeQaSuiteProgress(true, message) }
-      : {}),
-    repoRoot,
-    outputDir,
-    providerMode,
-    primaryModel,
-    scenarios: params.scenarios,
-    writeEvidenceFile: runParams?.writeEvidenceFile,
-  });
-}
-
 async function prepareQaSuiteNativeRuntime(repoRoot: string) {
   const argv = [
     process.execPath,
@@ -1226,20 +1185,25 @@ async function runUnifiedQaSuite(params: {
               scenarioOrder.get(scenario)!,
             ),
           );
-          const result = await runQaTestFileSuiteFromRuntime({
-            env: kind === "script" ? preparedScriptEnv : undefined,
+          const result = await runQaTestFileScenarios({
+            ...owner.input(),
+            evidenceMode: params.runParams?.evidenceMode,
+            ...(kind === "script"
+              ? preparedScriptEnv && { env: preparedScriptEnv, envMode: "replace" as const }
+              : {
+                  // Native children consume the runtime prepared before partition dispatch.
+                  env: { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+                }),
             preparedDockerEvidence: kind === "script" ? preparedDockerEvidence : undefined,
-            kind,
-            runParams: {
-              ...params.runParams,
-              ...owner.input(),
-              adapterFactories,
-              outputDir: path.join(outputDir, kind),
-              writeEvidenceFile: false,
-              providerMode,
-              primaryModel,
-              scenarioIds: testFileScenarios.map((scenario) => scenario.id),
-            },
+            ...(params.runParams?.failFast ? { failFast: true } : {}),
+            ...(shouldLogQaSuiteProgress()
+              ? { progress: (message: string) => writeQaSuiteProgress(true, message) }
+              : {}),
+            repoRoot,
+            outputDir: await resolveQaSuiteOutputDir(repoRoot, path.join(outputDir, kind)),
+            writeEvidenceFile: false,
+            providerMode,
+            primaryModel,
             scenarios: testFileScenarios,
           });
           const scenarioResults = result.results.map((scenarioResult) => ({

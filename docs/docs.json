@@ -1562,7 +1562,8 @@
                       "channels/telegram/troubleshooting"
                     ]
                   },
-                  "channels/whatsapp"
+                  "channels/whatsapp",
+                  "channels/x"
                 ]
               },
               {
@@ -3127,7 +3128,8 @@
                       "reference/session-management-compaction/maintenance",
                       "reference/session-management-compaction/schema",
                       "reference/session-management-compaction/compaction",
-                      "reference/session-management-compaction/housekeeping"
+                      "reference/session-management-compaction/housekeeping",
+                      "reference/session-management-compaction/resident-history"
                     ]
                   },
                   "reference/transcript-hygiene",

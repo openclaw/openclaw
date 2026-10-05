@@ -116,7 +116,6 @@ describe("question response custody through reply adoption", () => {
             touchActiveSessionEntry: async () => {},
             typing,
             typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-            toolAuthorityFingerprint: fingerprint,
           });
           expect(state.admission).toEqual({ status: "accepted", mode: "followup" });
         }
@@ -198,7 +197,6 @@ describe("question response custody through reply adoption", () => {
           touchActiveSessionEntry: async () => {},
           typing,
           typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-          toolAuthorityFingerprint: fingerprint,
         });
       };
       const firstSteer = startSteer(first);
@@ -295,7 +293,6 @@ describe("question response custody through reply adoption", () => {
           touchActiveSessionEntry: async () => {},
           typing,
           typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-          toolAuthorityFingerprint: fingerprint,
         });
         void adoption.catch(() => undefined);
         const tryDuplicate = () =>
@@ -693,11 +690,6 @@ describe("question response custody through reply adoption", () => {
                     mode: "never",
                     isHeartbeat: false,
                   }),
-                  toolAuthorityFingerprint:
-                    mode === "legacy-receipt" ? "incoming-authority" : fingerprint,
-                  ...(mode === "legacy-receipt"
-                    ? { pendingInputAuthorityFingerprint: fingerprint }
-                    : {}),
                 })
           ).finally(() => {
             done = true;

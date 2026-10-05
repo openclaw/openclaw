@@ -35,7 +35,7 @@ import {
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
-export type ChannelsCapabilitiesOptions = {
+type ChannelsCapabilitiesOptions = {
   agent?: string;
   channel?: string;
   account?: string;

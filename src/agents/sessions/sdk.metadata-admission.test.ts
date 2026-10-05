@@ -5,6 +5,7 @@ import {
   readSessionTranscriptWatermark,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
@@ -62,12 +63,11 @@ it("restores prepared session context without waiting for an unrelated database 
       });
     const authStorage = AuthStorage.inMemory();
     const restored = createAgentSession({
+      systemPrompt: "Test session prompt",
       cwd: state.workspaceDir,
-      agentDir: state.agentDir("main"),
       model: testModel,
       thinkingLevel: "medium" as const,
-      noTools: "all",
-      authStorage,
+      tools: [],
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory(),
@@ -169,12 +169,11 @@ it.each(["model", "thinking", "context loading"] as const)(
       expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
 
       const outcome = await createAgentSession({
+        systemPrompt: "Test session prompt",
         cwd: state.workspaceDir,
-        agentDir: state.agentDir("main"),
         model,
         thinkingLevel: "high",
-        noTools: "all",
-        authStorage,
+        tools: [],
         modelRegistry,
         sessionManager: manager,
         settingsManager: SettingsManager.inMemory({
@@ -256,13 +255,13 @@ it.each([
       const select = () => (selection === "branch" ? manager.branch(firstId) : manager.resetLeaf());
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const readContext = SessionManager.openModelContextAsync.bind(SessionManager);
+      const readContext = contextWorker.readSessionTranscriptModelContextInWorker;
       const intercepted =
         timing === "during"
           ? vi
-              .spyOn(SessionManager, "openModelContextAsync")
-              .mockImplementationOnce(async (scope, options) => {
-                const context = await readContext(scope, options);
+              .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+              .mockImplementationOnce(async (...args) => {
+                const context = await readContext(...args);
                 entered.resolve();
                 await release.promise;
                 return context;
@@ -273,12 +272,11 @@ it.each([
       }
       const authStorage = AuthStorage.inMemory();
       const pending = createAgentSession({
+        systemPrompt: "Test session prompt",
         cwd: state.workspaceDir,
-        agentDir: state.agentDir("main"),
         model: testModel,
         thinkingLevel: "off",
-        noTools: "all",
-        authStorage,
+        tools: [],
         modelRegistry: ModelRegistry.inMemory(authStorage),
         sessionManager: manager,
         settingsManager: SettingsManager.inMemory(),
@@ -287,13 +285,17 @@ it.each([
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
       );
-      if (timing === "during") {
-        await entered.promise;
-        select();
-        release.resolve();
-      }
-      const outcome = await pending;
       try {
+        if (timing === "during") {
+          const reachedReader = await Promise.race([
+            entered.promise.then(() => true),
+            pending.then(() => false),
+          ]);
+          expect(reachedReader, "SDK history completed before the reader pause").toBe(true);
+          select();
+          release.resolve();
+        }
+        const outcome = await pending;
         if (timing === "during") {
           expect(outcome.status).toBe("rejected");
           if (outcome.status === "rejected") {
@@ -319,6 +321,7 @@ it.each([
       } finally {
         release.resolve();
         intercepted?.mockRestore();
+        const outcome = await pending;
         if (outcome.status === "fulfilled") {
           outcome.value.session.dispose();
         }
@@ -327,11 +330,7 @@ it.each([
   },
 );
 
-async function createPersistenceExtensionSession(
-  manager: SessionManager,
-  cwd: string,
-  agentDir: string,
-) {
+async function createPersistenceExtensionSession(manager: SessionManager, cwd: string) {
   const resourceLoader = createResourceLoader();
   const extensions = resourceLoader.getExtensions();
   let loadedApi: ExtensionAPI | undefined;
@@ -347,12 +346,11 @@ async function createPersistenceExtensionSession(
   );
   const authStorage = AuthStorage.inMemory();
   const { session } = await createAgentSession({
+    systemPrompt: "Test session prompt",
     cwd,
-    agentDir,
     model: testModel,
     thinkingLevel: "medium" as const,
-    noTools: "all",
-    authStorage,
+    tools: [],
     modelRegistry: ModelRegistry.inMemory(authStorage),
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory(),
@@ -374,11 +372,7 @@ it("awaits extension entry, name, and label persistence before publishing their 
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const { session, api } = await createPersistenceExtensionSession(
-      manager,
-      state.workspaceDir,
-      state.agentDir("main"),
-    );
+    const { session, api } = await createPersistenceExtensionSession(manager, state.workspaceDir);
     try {
       const changes: string[] = [];
       session.subscribe((event) => {
@@ -427,7 +421,6 @@ it.each(["persistent", "detached"] as const)(
       const { session, api, runtime } = await createPersistenceExtensionSession(
         manager,
         state.workspaceDir,
-        state.agentDir("main"),
       );
       const before = manager.getEntries();
       const persistedBefore =
@@ -482,11 +475,7 @@ it("does not publish a committed session name into a manager retargeted before c
     await replacementManager.appendSessionInfoAsync("Replacement name");
     const replacementBefore = await loadTranscriptEvents(replacement);
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const { session } = await createPersistenceExtensionSession(
-      manager,
-      state.workspaceDir,
-      state.agentDir("main"),
-    );
+    const { session } = await createPersistenceExtensionSession(manager, state.workspaceDir);
     const committed = createDeferredCore<string>();
     const release = createDeferredCore();
     const append = manager.appendSessionInfoAsync.bind(manager);

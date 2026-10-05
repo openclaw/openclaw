@@ -100,6 +100,7 @@ const INTERNAL_CORE_EXPORTED_PACKAGE_DIRS = [
   "media-core",
   "normalization-core",
   "acp-core",
+  "worker-runtime",
 ] as const;
 const BUN_NATIVE_ALIAS_FILTER = new RegExp(
   `^(?:${[
@@ -293,7 +294,7 @@ export function resolvePluginNativeAliasForParent(
         first = { target, order: provider.order };
       }
     }
-    return first?.target;
+    return first ? path.normalize(first.target) : undefined;
   }
   const entries = native.aliases.get(request);
   if (!entries || !parentFilename) {

@@ -1,7 +1,11 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
@@ -70,17 +74,23 @@ export class SessionMutationFactsUnavailableError extends Error {
 function routeFacts(cfg: OpenClawConfig) {
   return {
     agents: listAgentIds(cfg),
+    storeOwner: resolveSessionStoreCompatibilityAgentId(cfg),
+    compatibilityOwner: tryResolveLegacyCompatibilityAgentId(cfg),
+    systemOwner: tryResolveAmbientOwnerAgentId(cfg),
     store: cfg.session?.store,
     mainKey: cfg.session?.mainKey,
     scope: cfg.session?.scope,
   };
 }
 
-export function captureSessionMutationRouting(cfg: OpenClawConfig) {
+export function captureSessionMutationRouting(
+  cfg: OpenClawConfig,
+  changed: () => Error = () => new SessionMutationFactsUnavailableError(),
+) {
   const route = routeFacts(cfg);
   return (current: OpenClawConfig) => {
     if (!isDeepStrictEqual(routeFacts(current), route)) {
-      throw new SessionMutationFactsUnavailableError();
+      throw changed();
     }
   };
 }

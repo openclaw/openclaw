@@ -397,8 +397,11 @@ export function hasRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
 }
 
 /** Checks the owned profile keys without copying private credential data out of the owner. */
-export function hasRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
-  const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir))?.store;
+export function hasRuntimeAuthProfileStoreSource(
+  agentDir?: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir, env))?.store;
   return Boolean(store && Object.keys(store.profiles).length > 0);
 }
 

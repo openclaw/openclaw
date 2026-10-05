@@ -7,6 +7,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage, Context } from "../../llm/types.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
@@ -15,7 +16,7 @@ import { wrapExternalContent } from "../../security/external-content.js";
 import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 
 /** Normalized PDF model preference used by tool registration and execution. */
-type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+type PdfModelConfig = Exclude<AgentModelConfig, string>;
 
 /** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {

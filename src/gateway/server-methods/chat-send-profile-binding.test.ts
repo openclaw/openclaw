@@ -19,13 +19,17 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
+  replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
@@ -59,6 +63,160 @@ function setNativeIosClient(client: FixtureClient) {
 }
 
 describe("native profile-bound input admission", () => {
+  it.each([
+    { admin: true, mainAllowed: true },
+    { admin: false, mainAllowed: true },
+    { admin: false, mainAllowed: false },
+  ])(
+    "authorizes the default-scope global alias against main (admin: $admin, allowed: $mainAllowed)",
+    async ({ admin, mainAllowed }) => {
+      const fixture = await createBrowserFollowupFixture();
+      const profile = ensureProfileForEmail("global-alias-caller@example.test");
+      const owner = ensureProfileForEmail("global-alias-owner@example.test");
+      setClientProfile(fixture.client, profile);
+      if (!admin) {
+        fixture.client.connect.scopes = ["operator.read", "operator.write"];
+      }
+      fixture.params.sessionKey = "global";
+      fixture.params.agentId = "main";
+      const createdActor = { type: "human", source: "profile", id: owner.id } as const;
+      await patchSessionEntryCore(fixture.scope, (entry) => ({
+        ...entry,
+        createdActor,
+        visibility: mainAllowed ? "shared" : "draft",
+      }));
+      const literal = { ...fixture.scope, sessionKey: "global", sessionId: "literal-global" };
+      await replaceSessionEntry(literal, {
+        sessionId: literal.sessionId,
+        updatedAt: 1,
+        createdActor,
+        visibility: mainAllowed ? "draft" : "shared",
+      });
+      const projection = admin
+        ? undefined
+        : await createSessionRowProjection({
+            cfg: fixture.context.getRuntimeConfig(),
+            modelCatalog: [],
+          });
+      if (projection) {
+        bindSessionRowProjection(fixture.context, () => projection);
+      }
+      try {
+        const respond = await fixture.send(undefined, {});
+        if (mainAllowed) {
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+          await fixture.dispatchedRecorder;
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+            total: 1,
+            items: [{ runId: fixture.params.idempotencyKey }],
+          });
+        } else {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "INVALID_REQUEST",
+              details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+            }),
+          );
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        }
+        expect(await listSessionPendingInputs(literal)).toEqual({ items: [], total: 0 });
+        expect(loadTranscriptEventsSync(literal)).toEqual([]);
+      } finally {
+        await fixture.cleanup();
+        projection?.dispose();
+        await projection?.ensureMaterialized();
+      }
+    },
+  );
+
+  it.each(["unchanged", "replaced", "hydrated"] as const)(
+    "retains the original caller through initial authorization without an expected profile (%s)",
+    async (change) => {
+      const fixture = await createBrowserFollowupFixture();
+      const source = ensureProfileForEmail("initial-chat-source@example.test");
+      const replacement = ensureProfileForEmail("initial-chat-replacement@example.test");
+      if (change === "hydrated") {
+        fixture.client.authenticatedGitHubIdentitySync = async () => {
+          setClientProfile(fixture.client, source);
+          return { profileId: source.id, updatedAt: source.updatedAt };
+        };
+      } else {
+        setClientProfile(fixture.client, source);
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const read = historyLane.pool.run.bind(historyLane.pool);
+      let held = false;
+      const workerRead = vi
+        .spyOn(historyLane.pool, "run")
+        .mockImplementation(async (prepare, options) => {
+          if (typeof prepare !== "function") {
+            return read(prepare, options);
+          }
+          let authorizationRead = false;
+          const result = await read(async () => {
+            const input = await prepare();
+            authorizationRead =
+              input.kind === "session-exact-entries" &&
+              input.includeMembers === true &&
+              input.selection === undefined &&
+              input.sessionKeys.includes(fixture.scope.sessionKey);
+            return input;
+          }, options);
+          if (!held && authorizationRead) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
+      // An empty binding selects the real router without supplying expectedProfileId.
+      const request = fixture.send(undefined, {});
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          request,
+          "chat.send settled before its initial authorization read",
+        );
+        expect(fixture.context.dedupe.size).toBe(0);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        if (change === "replaced") {
+          setClientProfile(fixture.client, replacement);
+        }
+        release.resolve();
+        const respond = await request;
+        if (change === "replaced") {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              message: "Gateway requester authority changed",
+            }),
+          );
+          expect(fixture.context.dedupe.size).toBe(0);
+          expect(fixture.context.chatAbortControllers.size).toBe(0);
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        } else {
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+          await fixture.dispatchedRecorder;
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        }
+      } finally {
+        release.resolve();
+        workerRead.mockRestore();
+        await request;
+        await fixture.cleanup();
+      }
+    },
+  );
+
   it.each(["reservation", "writer", "approval"] as const)(
     "rejects a native account merge at %s without accepting or terminalizing input",
     async (boundary) => {
@@ -81,7 +239,7 @@ describe("native profile-bound input admission", () => {
           if (!normalized.ok) {
             throw new Error(normalized.error);
           }
-          const prepared = prepareChatSendSession({
+          const prepared = await prepareChatSendSession({
             request: normalized.value,
             client: fixture.client,
             context: fixture.context,

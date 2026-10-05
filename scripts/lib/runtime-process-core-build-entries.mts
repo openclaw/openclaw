@@ -39,6 +39,7 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
+  runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat,
   runtimeProcessEntrypoints.serviceChildRelay,
   runtimeProcessEntrypoints.serviceChildGroupAnchor,
 ]);

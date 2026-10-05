@@ -35,6 +35,8 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION =
   "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need through the tool interface instead of writing the call as text, or produce the visible answer now. Do not restart from scratch.";
+const REJECTED_TOOL_CALL_RETRY_INSTRUCTION =
+  "The previous assistant turn's tool call was rejected before it ran because the provider returned incomplete or malformed tool-call arguments, so nothing ran for that call. Continue from the current state: re-issue the call you need through the tool interface with complete, valid JSON arguments, or produce the visible answer now. Do not repeat completed tool calls or restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
@@ -206,6 +208,20 @@ function isToolUseStopWithoutToolCall(
     readSettledToolCalls(assistant).length === 0 &&
     attempt.toolMetas.length === 0 &&
     attempt.itemLifecycle.startedCount === 0
+  );
+}
+
+// A pre-dispatch rejection removed the malformed calls before any of them ran.
+// Earlier calls in the attempt may have completed, so the prompt cannot be
+// replayed, but continuing from the transcript repeats nothing.
+function isToolCallRejectedBeforeDispatch(
+  assistant: EmbeddedRunAttemptResult["currentAttemptAssistant"] | null,
+): boolean {
+  return (
+    assistant?.stopReason === "error" &&
+    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
+    readSettledToolCalls(assistant).length === 0
   );
 }
 
@@ -394,14 +410,24 @@ export function resolveEmptyResponseRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  if (shouldSkipNonVisibleTurnRetry(params)) {
+  const assistantState = classifyAssistantTurn(params);
+  const assistant = assistantState.assistant ?? null;
+  // Error turns are never silent replies, so this checks model output directly:
+  // the only payload such a turn can produce is the host's own failure notice.
+  const rejectedBeforeDispatch =
+    params.attempt.itemLifecycle.completedCount > 0 &&
+    assistantState.visibleText.length === 0 &&
+    !params.attempt.hasToolMediaBlockReply &&
+    resolveSourceReplyDelivery(params.attempt) === "missing" &&
+    isToolCallRejectedBeforeDispatch(assistant);
+  // Settled earlier effects are tolerated only for a call that never ran;
+  // unfinished, async or failed work still blocks the continuation.
+  if (shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: rejectedBeforeDispatch })) {
     return null;
   }
 
-  const assistantState = classifyAssistantTurn(params);
-  const assistant = assistantState.assistant ?? null;
   const toolUseWithoutCall = isToolUseStopWithoutToolCall(params.attempt, assistant);
-  if (!assistantState.emptyResponse && !toolUseWithoutCall) {
+  if (!assistantState.emptyResponse && !toolUseWithoutCall && !rejectedBeforeDispatch) {
     return null;
   }
 
@@ -420,6 +446,9 @@ export function resolveEmptyResponseRetryInstruction(params: {
     // provider allowlist above.
     isZeroUsageEmptyStopAssistantTurn(assistant)
   ) {
+    if (rejectedBeforeDispatch) {
+      return REJECTED_TOOL_CALL_RETRY_INSTRUCTION;
+    }
     return toolUseWithoutCall
       ? TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION
       : EMPTY_RESPONSE_RETRY_INSTRUCTION;

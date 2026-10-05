@@ -120,11 +120,6 @@
   min-width: 0;
 }
 
-.installed-plugins-card__status-notice {
-  align-self: center;
-  margin-inline-start: auto;
-}
-
 .plugin-card-author {
   overflow: hidden;
   color: var(--muted);
@@ -559,8 +554,6 @@
 .skills-group__chevron svg {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 2px;
 }
 

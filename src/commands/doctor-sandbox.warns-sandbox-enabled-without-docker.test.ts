@@ -12,8 +12,6 @@ import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 const runExec = vi.fn();
 const runCommandWithTimeout = vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>();
 const note = vi.fn();
-const inspectLegacySandboxRegistryFiles = vi.fn();
-const migrateLegacySandboxRegistryFiles = vi.fn();
 const validateSandboxContainerEngineTarget = vi.fn();
 const resolveCodexHealthApi = vi.fn();
 const probeCodexWorkspaceWriteSandbox = vi.fn();
@@ -49,22 +47,12 @@ vi.mock("../agents/sandbox/docker.js", () => ({
   validateSandboxContainerEngineTarget,
 }));
 
-vi.mock("./doctor-sandbox-legacy-registry.js", () => ({
-  inspectLegacySandboxRegistryFiles,
-  migrateLegacySandboxRegistryFiles,
-}));
-
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
-const {
-  legacySandboxRegistryInspectionToHealthFinding,
-  legacySandboxRegistryInspectionToRepairEffect,
-  maybeRepairSandboxImages,
-  maybeRepairSandboxRegistryFiles,
-  noteCodexBwrapNamespaceWarnings,
-} = await import("./doctor-sandbox.js");
+const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =
+  await import("./doctor-sandbox.js");
 
 describe("sandbox health", () => {
   const mockRuntime: RuntimeEnv = {
@@ -87,8 +75,6 @@ describe("sandbox health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     validateSandboxContainerEngineTarget.mockResolvedValue(undefined);
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
     resolveCodexHealthApi.mockReturnValue({
       status: "available",
       api: { probeCodexWorkspaceWriteSandbox },
@@ -510,105 +496,5 @@ describe("sandbox health", () => {
       }
       expect(mockRuntime.error).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe("maybeRepairSandboxRegistryFiles", () => {
-  const mockPrompter = {
-    shouldRepair: false,
-  } as DoctorPrompter;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
-  });
-
-  const monolithicFile = {
-    kind: "containers",
-    path: "/tmp/openclaw/sandbox/containers.json",
-    source: "monolithic",
-    exists: true,
-    valid: true,
-    entries: 2,
-  } as const;
-
-  it.each([false, true])("handles legacy registries with repair=%s", async (shouldRepair) => {
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([monolithicFile]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([
-      { kind: "containers", status: "migrated", entries: 2 },
-    ]);
-    await maybeRepairSandboxRegistryFiles({ ...mockPrompter, shouldRepair });
-    if (shouldRepair) {
-      expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
-      expect(note).toHaveBeenCalledWith(
-        "- Migrated containers registry into 2 SQLite rows.",
-        "Doctor changes",
-      );
-    } else {
-      expect(migrateLegacySandboxRegistryFiles).not.toHaveBeenCalled();
-      expect(note).toHaveBeenCalledWith(
-        [
-          "Legacy sandbox registry files detected.",
-          "- containers monolithic: /tmp/openclaw/sandbox/containers.json (2 entries)",
-          "Run openclaw doctor --fix to migrate them to SQLite.",
-        ].join("\n"),
-        "Sandbox",
-      );
-    }
-  });
-
-  it.each([
-    { file: monolithicFile, action: "would-migrate-legacy-sandbox-registry" },
-    {
-      file: {
-        ...monolithicFile,
-        kind: "browsers",
-        path: "/tmp/openclaw/sandbox/browsers.json",
-        valid: false,
-        entries: 0,
-      },
-      action: "would-quarantine-legacy-sandbox-registry",
-    },
-    {
-      file: { ...monolithicFile, entries: 0 },
-      action: "would-remove-empty-legacy-sandbox-registry",
-    },
-  ] as const)("maps $file.source $file.kind registry to $action", ({ file, action }) => {
-    expect(legacySandboxRegistryInspectionToRepairEffect(file)).toEqual({
-      kind: "state",
-      action,
-      target: file.path,
-      dryRunSafe: false,
-    });
-    if (file.valid && file.entries > 0) {
-      const finding = legacySandboxRegistryInspectionToHealthFinding(file);
-      expect(finding).toEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/sandbox/registry-files",
-          severity: "warning",
-          path: file.path,
-          fixHint: expect.stringContaining("openclaw doctor --fix"),
-        }),
-      );
-      const shardedFile = {
-        ...file,
-        path: "/tmp/openclaw/sandbox/containers",
-        source: "sharded",
-      } as const;
-      expect(legacySandboxRegistryInspectionToHealthFinding(shardedFile)).toEqual(
-        expect.objectContaining({
-          path: "/tmp/openclaw/sandbox/containers",
-          message: expect.stringContaining(
-            "- containers sharded: /tmp/openclaw/sandbox/containers (2 entries)",
-          ),
-        }),
-      );
-      expect(legacySandboxRegistryInspectionToRepairEffect(shardedFile)).toEqual(
-        expect.objectContaining({
-          target: "/tmp/openclaw/sandbox/containers",
-        }),
-      );
-    }
   });
 });

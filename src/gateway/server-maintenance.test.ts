@@ -2,8 +2,6 @@
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -252,16 +250,16 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.runWorktreeGc).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
     expect(deps.runWorktreeGc).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(2);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(1);
     sweep.resolve();
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
   });
 
@@ -291,7 +289,7 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     const timers = startGatewayMaintenanceTimers(deps);
 
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
     expect(deps.logHealth.error).toHaveBeenCalledWith(
       expect.stringContaining("retained: cleanup-failed"),
     );
@@ -321,26 +319,6 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(2);
 
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("passes owner activity to default managed worktree cleanup", async () => {
-    vi.useFakeTimers();
-    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
-      ...new WorktreeGcProgress().result,
-      limitsSatisfied: true,
-    });
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const { runWorktreeGc: _runWorktreeGc, ...deps } = createMaintenanceTimerDeps();
-
-    const timers = startGatewayMaintenanceTimers(deps);
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-
-    expect(gc).toHaveBeenCalledWith({
-      limits: { maxCount: 100 },
-      shouldProtectOwner: expect.any(Function),
-      shouldRemoveOwner: expect.any(Function),
-    });
     await stopMaintenanceTimers(timers);
   });
 

@@ -1,9 +1,9 @@
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { chatQueueOrderKey, compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   outboxPayloadMatchesOwner,
   outboxStorageScope,
-  observeOutboxRecoveryOwner,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { readStoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
@@ -200,7 +200,7 @@ class ChatOutboxGatewayOwner {
       chatOutboxOwner(host).syncHost(host, options);
       return;
     }
-    observeOutboxRecoveryOwner(host);
+    readOfflineStorageScope(host);
     const queue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
     // Draft persistence also publishes outbox changes; an empty queue must not
     // invalidate the transcript merely because the composer changed.
@@ -706,7 +706,7 @@ function outboxOwnerKey(host: Composer): string {
   if (storage && !storageIds.has(storage)) {
     storageIds.set(storage, ++nextStorageId);
   }
-  return `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}\u0000${observeOutboxRecoveryOwner(host) ?? ""}`;
+  return `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}\u0000${readOfflineStorageScope(host) ?? ""}`;
 }
 export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   const key = outboxOwnerKey(host);
@@ -718,7 +718,7 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
 
 /** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
 export function listChatOutboxAttention(host: Composer) {
-  if (!observeOutboxRecoveryOwner(host)) {
+  if (!readOfflineStorageScope(host)) {
     return [];
   }
   const owner = owners.get(outboxOwnerKey(host));

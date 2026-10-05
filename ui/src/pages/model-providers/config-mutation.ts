@@ -144,8 +144,7 @@ export function modelProviderConfigBusy(context: ApplicationContext): boolean {
   );
 }
 
-export type ModelProviderConfigMutation = {
-  key: string;
+type ModelProviderConfigMutation = {
   raw: Record<string, unknown>;
   note: string;
   replacePaths?: string[];
@@ -302,19 +301,4 @@ export async function runModelProviderApiKeyMutation(
       owner.setBusy(false);
     }
   }
-}
-
-export function modelProviderApiKeySuccess(
-  action: "edit" | "add",
-  apiKey: string | null,
-  provider: string,
-): string {
-  return t(
-    action === "add"
-      ? "modelProviders.add.saved"
-      : apiKey === null
-        ? "modelProviders.apiKey.removed"
-        : "modelProviders.apiKey.saved",
-    { provider },
-  );
 }

@@ -155,7 +155,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       let serve: ActiveInstall["serve"];
       try {
         prepared = options.transfer.prepare({
-          node,
           gatewayNamespace: options.gatewayNamespace,
           artifact,
           ...(bundlePrewarm ? { bundlePrewarm } : {}),

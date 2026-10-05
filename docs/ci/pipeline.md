@@ -114,6 +114,7 @@ the job's uploaded artifacts.
 | `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-input changes and full manual CI           |
 | `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, one successful OpenClaw-managed capture per screenshot, and run provenance before publishing the canonical release screenshot artifact; replacement attempts cannot turn failed captures into passing evidence                     | After both screenshot shards                          |
 | `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                              |
+| `android-screenshots`            | Phone and Wear emulator captures using the same script as Play Store releases, with scene readiness and JPEG validation; retains images and synthetic fixture diagnostics                                                                                                                                | Screenshot-input PRs and full manual CI               |
 | `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                |
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                         |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                         |
@@ -124,7 +125,32 @@ run ID, pinned tooling, artifact digests, and successful captures. It preserves
 each family's producer attempt and records the reducer attempt separately;
 future-attempt artifacts remain invalid.
 
+Android screenshot capture runs phone and Wear serially on `ubuntu-24.04`, using
+the shared Android toolchain action's API 36 phone and API 34 Wear images and KVM
+setup. It calls `pnpm android:screenshots`, the script also invoked by the Android
+Fastlane release lane, without signing or store credentials. Capture failures,
+cancellations, and selected skips fail `openclaw/ci-gate`. Artifacts retain JPEGs,
+source/hash manifests, UI dumps, activity starts, and emulator/app diagnostics for
+14 days, including available evidence from failed captures.
+
+Selection covers Android app and build inputs, screenshot tooling, shared assets,
+native protocol and locale generation inputs, and CI setup. Ordinary JVM tests,
+benchmark-only changes, store listing metadata, and documentation do not select capture. Unavailable
+changed-path information selects capture. Like iOS screenshots, the lane excludes hourly main,
+compatibility targets, and partial npm release scopes. It checks pipeline integrity
+and scene readiness; it does not compare pixels against a baseline.
+
 ### Test runtime selection
+
+CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
+`scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
+Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,
+and the macOS runtime probes plus two-binary test set, against the same published
+fork tag. Neither app nor CI advances if either gate fails; Linux-only runtime
+regressions stop the shared repin too. Preserve the last jointly admitted tag
+and attach exact-tag evidence to the repin PR. Publication alone is not admission.
+Shared pin/stager changes select macOS, Linux companion, and Bun test lanes.
+See [the shared pin schema and regeneration](/platforms/mac/dev-setup#shared-bun-pin-and-repin-gate).
 
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary unit-fast lane partitions its existing file inventory: files with known
@@ -200,6 +226,7 @@ are removed from the selected inventory.
 Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
+plugin SDK alias boundaries (`src/plugins/sdk-alias.test.ts`),
 oxlint configuration (`test/scripts/oxlint-config.test.ts`), and update timeout
 diagnostics (`test/scripts/upgrade-survivor-timeout-diagnostics.test.ts`) also
 support Bun when qualified files make up the entire exact selection in their
@@ -275,8 +302,8 @@ scavenger work between short UI updates; normal reclamation and default heaps re
 
 The test-runtime setup action installs a checksum-pinned prerelease of `openclaw/bun`
 only for jobs that need it. The source commit, archive checksum, and executable
-checksum live together in `.github/actions/setup-test-bun/action.yml`.
-The action checks the release zip and manifest against `SHA256SUMS`, then checks
+checksum live together in `scripts/lib/openclaw-bun.json`, shared by CI and the apps.
+The shared stager checks the release zip and manifest against `SHA256SUMS`, then checks
 the extracted executable against the manifest. Independent archive and executable
 pins keep the selected bytes fixed even if release metadata changes.
 The fork owns the backing storage of `node:vm` cached bytecode, so compiled
@@ -284,10 +311,10 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `e167be5c8fdc8b959b707a13901af019b27bd4a3` with WebKit
-`fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261003-e167be5c8f-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `13311cf83e` pin. This build fixes idle
+The pinned build pairs Bun `c999d9cb92704b50fa8b15a3663b74e39d9b57c7` with WebKit
+`1600131e46b5af48bbda3559af8d8a3327230b6e` in prerelease
+`openclaw-v1.4.3-20261003-c999d9cb92-webkit-1600131e46`.
+WebKit advances from `fb1167ebf2` in the previous `e167be5c8f` pin. This build fixes idle
 HTTP connection shutdown and filesystem read/write argument defaults. It also
 retains newly assigned Windows environment variables in copies, resets Windows
 pipe standard I/O after completion, and preserves prepared ESM records for
@@ -332,6 +359,10 @@ It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
 function ownership, shared-environment deletion, and a module-key crash.
 The shared provider-catalog retention test is qualified on this build and runs
 on Bun; tests that assert V8 heap behavior continue to run on Node.
+UI retention tests use the local inspector's `HeapProfiler.collectGarbage` on
+both runtimes. Only an unavailable inspector method permits the older Bun GC
+fallback. The qualified UI inventory has no Node-only subset, so each native
+UI shard runs once under `bun-compatible`; `dual` still runs both runtimes.
 The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
 private fallback when that directory is unusable. `NODE` and `npm_node_execpath`
 point to the executable in either location. This lets several accounts on one

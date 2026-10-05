@@ -412,21 +412,21 @@ suite.define(() => {
             path: path.join(proofDir, "control-ui-resource-allowed.png"),
           });
         }
-        const confirmedPrompts: string[] = [];
-        controlPage.on("dialog", async (dialog) => {
-          confirmedPrompts.push(dialog.message());
-          await dialog.accept();
-        });
         await app.locator("#update-context").click();
         await waitForText(app.locator("#context-update"), "accepted");
         await app.locator("#send-message").click();
+        const confirmation = controlPage.getByRole("alertdialog");
+        await waitForTextContaining(confirmation, "summarize selection");
+        expect(
+          await controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt")),
+        ).toBeUndefined();
+        await confirmation.getByRole("button", { name: "Send", exact: true }).click();
         await waitForText(app.locator("#message"), "accepted");
         await expect
           .poll(() =>
             controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string),
           )
           .toBe("summarize selection");
-        expect(confirmedPrompts).toEqual(["Confirm:\n\nsummarize selection"]);
         const currentView = getMcpAppViewLease(viewId, runtime);
         if (!currentView) {
           throw new Error("Conformance view expired before context inspection");

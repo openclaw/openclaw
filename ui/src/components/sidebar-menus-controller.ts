@@ -1,4 +1,5 @@
 import { html, nothing, type ReactiveController } from "lit";
+import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import {
   cancelRoutePreload,
   scheduleRoutePreload,
@@ -14,6 +15,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
@@ -28,7 +30,7 @@ import type { SidebarMenusControllerHost } from "./sidebar-menus-controller-type
 
 const AGENT_MENU_HOVER_OPEN_DELAY_MS = 300;
 const AGENT_MENU_HOVER_CLOSE_DELAY_MS = 200;
-const AGENT_MENU_WIDTH_PX = 264;
+const AGENT_MENU_WIDTH_PX = 300;
 
 type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "open-click";
 
@@ -37,6 +39,7 @@ type CatalogMenuPosition = MenuPosition & { catalogId: string };
 type PositionedMenu =
   | "customize"
   | "more"
+  | "pluginNavigation"
   | "sessionSort"
   | "peopleFilter"
   | "catalogView"
@@ -57,6 +60,9 @@ type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 export class SidebarMenusController implements ReactiveController {
   customizeMenuPosition: { x: number; y: number } | null = null;
   moreMenuPosition: { x: number; y: number } | null = null;
+  pluginNavigationMenuPosition:
+    | (MenuPosition & { entry: ControlUiRegistration<ControlUiNavigationItem> })
+    | null = null;
   sessionMenu: SidebarSessionMenuState | null = null;
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
@@ -65,11 +71,13 @@ export class SidebarMenusController implements ReactiveController {
   catalogViewMenuPosition: CatalogMenuPosition | null = null;
   filterMenuView: SidebarFilterMenuView = "root";
   agentMenuPosition: { x: number; top: number } | null = null;
+  agentMenuQuery = "";
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
 
   customizeMenuTrigger: HTMLElement | null = null;
   moreMenuTrigger: HTMLElement | null = null;
+  pluginNavigationMenuTrigger: HTMLElement | null = null;
   sessionMenuTrigger: HTMLElement | null = null;
   private sessionMenuWorkVersion = 0;
   sessionGroupMenuTrigger: HTMLElement | null = null;
@@ -157,6 +165,7 @@ export class SidebarMenusController implements ReactiveController {
     const hadTransientMenu = Boolean(
       this.customizeMenuPosition ||
       this.moreMenuPosition ||
+      this.pluginNavigationMenuPosition ||
       this.sessionMenu ||
       this.catalogMenu.isOpen ||
       this.sessionGroupMenu ||
@@ -168,6 +177,7 @@ export class SidebarMenusController implements ReactiveController {
     );
     this.closePositionedMenu("customize");
     this.closePositionedMenu("more");
+    this.closePositionedMenu("pluginNavigation");
     this.closeSessionMenu();
     this.catalogMenu.close();
     this.closePositionedMenu("peopleFilter");
@@ -220,6 +230,24 @@ export class SidebarMenusController implements ReactiveController {
     this.dismissTransientMenus();
     this.moreMenuTrigger = trigger;
     this.updateState("moreMenuPosition", menuPosition(rect.left, rect.bottom + 4, 240, 420));
+  }
+
+  openPluginNavigationMenu(
+    entry: ControlUiRegistration<ControlUiNavigationItem>,
+    x: number,
+    y: number,
+    trigger: HTMLElement,
+  ) {
+    if (entry.signal.aborted || !entry.value.actions?.length) {
+      return;
+    }
+    this.loadMenuRenderer();
+    this.dismissTransientMenus();
+    this.pluginNavigationMenuTrigger = trigger;
+    this.updateState("pluginNavigationMenuPosition", {
+      ...menuPosition(x, y, 240, entry.value.actions.length * 40 + 16),
+      entry,
+    });
   }
 
   /** A row outside the current selection retargets before the menu opens. */
@@ -401,6 +429,16 @@ export class SidebarMenusController implements ReactiveController {
     if (this.agentMenuInteractionState === "open-hover") {
       this.agentMenuFocusBeforeHover = null;
       this.updateState("agentMenuInteractionState", "open-click");
+      // Promotion does not reopen the dropdown, so after-show will not move focus.
+      void this.host.updateComplete.then(() => {
+        if (this.agentMenuInteractionState !== "open-click" || this.agentMenuTrigger !== trigger) {
+          return;
+        }
+        const dropdown = this.host.querySelector<HTMLElement>(".sidebar-agent-menu");
+        if (dropdown) {
+          this.menuRenderer?.focusActiveAgentMenuItem(dropdown);
+        }
+      });
       return;
     }
     this.openAgentMenu(trigger, "open-click");
@@ -478,6 +516,9 @@ export class SidebarMenusController implements ReactiveController {
     if (this.agentMenuInteractionState !== "open-hover") {
       return;
     }
+    this.host
+      .querySelector<HTMLElement>(".sidebar-agent-menu__agent-switch--active")
+      ?.scrollIntoView?.({ block: "nearest" });
     const previous = this.agentMenuFocusBeforeHover;
     this.agentMenuFocusBeforeHover = null;
     if (previous && previous !== document.body && previous.isConnected) {
@@ -490,10 +531,15 @@ export class SidebarMenusController implements ReactiveController {
     }
   }
 
+  setAgentMenuQuery(query: string) {
+    this.updateState("agentMenuQuery", query);
+  }
+
   closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.agentMenuTrigger;
     this.clearAgentMenuHoverTimers();
     this.agentMenuTrigger = null;
+    this.agentMenuQuery = "";
     this.agentMenuFocusBeforeHover = null;
     this.updateState("agentMenuInteractionState", "closed");
     this.updateState("agentMenuPosition", null);
@@ -550,6 +596,7 @@ export class SidebarMenusController implements ReactiveController {
     return html`
       ${renderer?.renderSidebarCustomizeMenuForController(this) ?? nothing}
       ${renderer?.renderSidebarMoreMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarPluginNavigationMenuForController(this) ?? nothing}
       ${this.agentMenuAvatars.withActiveRoutes(
         () => renderer?.renderSidebarAgentMenuForController(this) ?? nothing,
       )}

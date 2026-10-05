@@ -81,20 +81,7 @@ type ParsedRegisteredPluginContent = {
 type ParsedPluginContent = ParsedTrustedPluginContent | ParsedRegisteredPluginContent;
 
 export function parseManifest(value: string): ParsedBoardManifest {
-  const parsed = JSON.parse(value) as {
-    contentOwner?: unknown;
-    registeredContentKind?: unknown;
-    netOrigins?: unknown;
-    tools?: unknown;
-    grantSemanticsVersion?: unknown;
-    presentation?: unknown;
-    heightMode?: unknown;
-    nameIdentity?: unknown;
-    mcpAppInteractive?: unknown;
-    mcpAppInstanceId?: unknown;
-    registeredInstanceId?: unknown;
-    pluginInstanceId?: unknown;
-  };
+  const parsed = JSON.parse(value) as Record<string, unknown>;
   const contentOwnerPresent = Object.hasOwn(parsed, "contentOwner");
   const contentOwner =
     parsed.contentOwner === "html" ||

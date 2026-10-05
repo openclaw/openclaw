@@ -11,6 +11,7 @@ import {
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
   resetDiagnosticEventsForTest,
+  onDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -172,6 +173,21 @@ describe("heartbeat recovery after exec preparation", () => {
         }
         if (deadlineState === "expired") {
           vi.setSystemTime(deadline! + 1);
+        }
+        if (deadlineState === "future") {
+          const attention: string[] = [];
+          const unsubscribe = onDiagnosticEvent((event) => {
+            if (event.type === "session.stalled" || event.type === "session.long_running") {
+              attention.push(event.type);
+            }
+          });
+          try {
+            await vi.advanceTimersByTimeAsync(120_000);
+            await waitForDiagnosticEventsDrained();
+            expect(attention).toEqual(["session.long_running"]);
+          } finally {
+            unsubscribe();
+          }
         }
         dispatch.resolve();
         const outcome = await recovered.promise;

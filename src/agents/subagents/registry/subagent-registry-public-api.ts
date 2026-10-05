@@ -22,7 +22,7 @@ import {
 } from "./subagent-registry-queries.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
-import { markSubagentMessageWaitInRuns } from "./subagent-registry-run-pause.js";
+import { claimSubagentYieldInRuns } from "./subagent-registry-run-pause.js";
 import {
   getSubagentRunsSnapshotForRead,
   prepareSubagentRunsSnapshotForRunIds,
@@ -33,7 +33,7 @@ import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
-  startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
+  startAnnounceCleanup: (entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
 }) {
@@ -94,9 +94,9 @@ export function createSubagentRegistryPublicApi(config: {
       {
         runs,
         onPublished: (postimages) => {
-          for (const [runId, entry] of postimages) {
+          for (const entry of postimages.values()) {
             if (entry && typeof entry.cleanupCompletedAt !== "number") {
-              startAnnounceCleanup(runId, entry);
+              startAnnounceCleanup(entry);
             }
           }
         },
@@ -342,9 +342,12 @@ export function createSubagentRegistryPublicApi(config: {
   }
 
   return {
-    markSubagentMessageWait: async (params: {
+    claimSubagentYield: async (params: {
       runId: string;
       sessionKey: string;
+      agentId: string;
+      waitForMessage: boolean;
+      hasPendingWork: () => boolean;
       acknowledgment?: string;
     }) => {
       const stateContext = captureOpenClawStateWorkerContext();
@@ -355,7 +358,7 @@ export function createSubagentRegistryPublicApi(config: {
       };
       assertCurrent();
       await restoreOnce(stateContext);
-      return await markSubagentMessageWaitInRuns({
+      return await claimSubagentYieldInRuns({
         ...params,
         runs,
         context: stateContext,

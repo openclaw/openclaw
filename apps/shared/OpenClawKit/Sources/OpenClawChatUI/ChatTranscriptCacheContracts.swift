@@ -46,17 +46,6 @@ extension OpenClawChatTranscriptCache {
     public func observeCanonicalMessageIdempotencyKeys(_: Set<String>) {}
 }
 
-/// Optional atomic merge seam for cache owners that also provide a durable
-/// outbox. Keeping this separate preserves source compatibility for read-only
-/// transcript-cache conformers.
-protocol OpenClawChatCanonicalTranscriptMerging: OpenClawChatTranscriptCache {
-    func mergeCanonicalTranscriptMessage(
-        sessionKey: String,
-        agentID: String?,
-        message: OpenClawChatMessage,
-        canonicalMessageIdempotencyKey: String) async
-}
-
 /// Durable branch ownership is scoped exactly like outbox delivery routing.
 public struct OpenClawChatOutboxScope: Hashable, Sendable {
     public let sessionKey: String

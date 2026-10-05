@@ -21,7 +21,7 @@ vi.mock("../operator-run-authority.js", () => ({
 
 import { memorySearchHandlers } from "./memory-search.js";
 
-const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+const config: OpenClawConfig = { agents: { entries: { main: {} } } };
 const reference = { providerId: "records", id: "claim:42", revision: "r3" };
 
 // A token-authenticated CLI connection: operator.read, no user profile or run authority.

@@ -93,9 +93,10 @@ export function resolveProviderRawConfig(params: {
     ? [params.providerId, params.configuredProviderId]
     : [...(params.providerAliases ?? []).toReversed(), params.providerId];
   return Object.fromEntries(
-    providerIds.flatMap((providerId) =>
-      Object.entries(readProviderConfig(params.providerConfigs, providerId) ?? {}),
-    ),
+    providerIds.flatMap((providerId) => {
+      const config = providerId ? params.providerConfigs?.[providerId] : undefined;
+      return config && typeof config === "object" ? Object.entries(config) : [];
+    }),
   );
 }
 
@@ -217,15 +218,4 @@ function selectFirstAutoProvider<TProvider extends AutoSelectableProvider>(
     }
   }
   return selected;
-}
-
-function readProviderConfig(
-  providerConfigs: Record<string, Record<string, unknown> | undefined> | undefined,
-  providerId: string | undefined,
-): Record<string, unknown> | undefined {
-  if (!providerId) {
-    return undefined;
-  }
-  const providerConfig = providerConfigs?.[providerId];
-  return providerConfig && typeof providerConfig === "object" ? providerConfig : undefined;
 }

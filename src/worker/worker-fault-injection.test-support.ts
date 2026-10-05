@@ -241,7 +241,7 @@ export class ComposedGatewayHarness {
     // Leave room for Vitest temp nesting within Darwin's Unix socket pathname limit.
     this.socketPath = path.join(root, "s");
     this.cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: {
         mainKey: "main",
         store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
@@ -492,7 +492,7 @@ export class ComposedGatewayHarness {
     this.turnSources.clear();
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
-    this.chat.dispose();
+    await this.chat.dispose();
     await new Promise<void>((resolve) => {
       this.webSocketServer.close(() => resolve());
     });

@@ -56,6 +56,8 @@ import {
 } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
@@ -266,6 +268,16 @@ describe("Goal chat admission and continuation", () => {
     const profile = ensureProfileForEmail("goal-first-message@example.test");
     const requestClient = profileClient(profile.id);
     const request = freshGoalStart("Review the sample backlog", sessionId);
+    const placements = createWorkerSessionPlacementStore();
+    context.workerSessionPlacementService = placements;
+    // The provisional run ID is not the new Goal incarnation. Its worker placement
+    // must not make the fresh local session ineligible for durable admission.
+    const provisionalPlacement = await placements.startDispatch({
+      agentId: "main",
+      sessionKey,
+      sessionId: request.idempotencyKey,
+    });
+    expect(provisionalPlacement.state).toBe("requested");
     let entryAtAck: SessionEntry | undefined;
     let messagesAtAck: ReturnType<typeof userMessages> = [];
     const creationEvents = async () =>
@@ -276,6 +288,7 @@ describe("Goal chat admission and continuation", () => {
       );
     let eventsAtAck: ReturnType<typeof creationEvents> = Promise.resolve([]);
     await withHeldModel(async () => {
+      const signal = loseSessionSignalAcknowledgement();
       const started = await rpc(
         "chat.send",
         request,
@@ -287,8 +300,14 @@ describe("Goal chat admission and continuation", () => {
           }
         },
         requestClient,
-      );
+      ).finally(signal.restore);
       const acknowledgedEvents = await eventsAtAck;
+      expect(entryAtAck, "fresh Goal commits its own local incarnation").toMatchObject({
+        sessionId: expect.any(String),
+        status: "running",
+        goal: { objective: request.message, status: "active" },
+      });
+      expect(signal.attempts()).toBe(2);
       expect(started.mock.calls).toEqual([
         [
           true,
@@ -297,11 +316,6 @@ describe("Goal chat admission and continuation", () => {
           expect.anything(),
         ],
       ]);
-      expect(entryAtAck).toMatchObject({
-        sessionId: expect.any(String),
-        status: "running",
-        goal: { objective: request.message, status: "active" },
-      });
       expect(entryAtAck?.sessionId).not.toBe(request.idempotencyKey);
       expect(messagesAtAck).toEqual([expect.objectContaining({ content: request.message })]);
       expect(acknowledgedEvents.map((event) => event.kind)).toEqual(["created", "goal_changed"]);
@@ -313,6 +327,23 @@ describe("Goal chat admission and continuation", () => {
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(await creationEvents()).toEqual(acknowledgedEvents);
       expect(acpDispatch).not.toHaveBeenCalled();
+      expect(loadSessionEntry(scope())?.sessionId).toBe(entryAtAck?.sessionId);
+      const placementFacts = await placements.readProjection([request.idempotencyKey], {
+        current: true,
+      });
+      expect(placementFacts.placements.get(request.idempotencyKey)).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        sessionId: request.idempotencyKey,
+        state: "requested",
+        generation: provisionalPlacement.generation,
+      });
+    }).finally(() => {
+      placements.retireSessionPlacement({
+        sessionId: request.idempotencyKey,
+        expectedState: "requested",
+        expectedGeneration: provisionalPlacement.generation,
+      });
     });
   });
 

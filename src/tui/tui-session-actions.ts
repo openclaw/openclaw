@@ -694,7 +694,6 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   return {
-    applyAgentsResult,
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,

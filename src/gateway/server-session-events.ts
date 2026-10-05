@@ -521,8 +521,22 @@ async function handleTranscriptUpdateBroadcast(
         read && projection
           ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
           : undefined;
-      if (message === undefined) {
-        // A committed batch or unavailable selected row must invalidate
+      const projected =
+        message === undefined
+          ? undefined
+          : projectSessionMessagePayload({
+              sessionKey,
+              ...(eventAgentId ? { agentId: eventAgentId } : {}),
+              message,
+              resolveCronJobName,
+              transcriptPosition,
+              ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+              ...(messageSeq !== undefined ? { messageSeq } : {}),
+              ...(update.runId ? { runId: update.runId } : {}),
+              sessionSnapshot,
+            });
+      if (message === undefined || projected?.requiresHistoryReset) {
+        // A committed batch, unavailable row, or page-owned projection must invalidate
         // both session-list and targeted transcript subscribers exactly once.
         params.broadcastToConnIds(
           "sessions.changed",
@@ -538,18 +552,7 @@ async function handleTranscriptUpdateBroadcast(
         );
         return;
       }
-      const projected = projectSessionMessagePayload({
-        sessionKey,
-        ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        message,
-        resolveCronJobName,
-        transcriptPosition,
-        ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(messageSeq !== undefined ? { messageSeq } : {}),
-        ...(update.runId ? { runId: update.runId } : {}),
-        sessionSnapshot,
-      });
-      if (projected.payload) {
+      if (projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
         return;
       }

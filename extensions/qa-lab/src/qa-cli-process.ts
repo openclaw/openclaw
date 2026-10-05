@@ -111,13 +111,9 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
     if (expectedPayload !== undefined) {
       return expectedPayload;
     }
-    const payload = candidates.toReversed().find((value) => !isStructuredDiagnosticJson(value));
-    if (payload !== undefined) {
-      return payload;
-    }
-    const diagnosticOnly = candidates.at(-1);
-    if (diagnosticOnly !== undefined) {
-      return diagnosticOnly;
+    if (candidates.length > 0) {
+      const payload = candidates.findLast((value) => !isStructuredDiagnosticJson(value));
+      return payload !== undefined ? payload : candidates.at(-1);
     }
 
     // Keep a line-oriented fallback for compact payloads followed by diagnostics.

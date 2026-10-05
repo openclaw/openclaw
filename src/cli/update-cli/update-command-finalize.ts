@@ -140,7 +140,7 @@ export async function updateFinalizeCommand(
                 }
                 if (resolvedInstallKind === "immutable") {
                   throw new Error(
-                    "Immutable activation and post-update maintenance are not available yet.",
+                    "Use openclaw update recover --root <installation-root> for immutable activation recovery.",
                   );
                 }
                 lifecycle.recordInstallKind(
@@ -354,11 +354,7 @@ async function updateFinalizeCommandInternal(
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
     if (prepared.installKind === "git") {
-      await withPluginLifecycleLease({}, async (lease) => {
-        await withCommandProcessScope(() =>
-          completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins"), lease }),
-        );
-      });
+      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins") });
     }
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
@@ -443,7 +439,6 @@ async function updateFinalizeCommandInternal(
           nodeRunner,
           runId: invokingRunId,
           pluginUpdate: initialPluginUpdate,
-          freshDoctorRequired: initialPluginUpdate.changed,
           yes: opts.yes === true,
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),

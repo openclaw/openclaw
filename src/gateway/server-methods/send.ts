@@ -58,11 +58,9 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { readInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
-import {
-  authorizeGatewaySessionCreation,
-  resolveSandboxedSessionCreation,
-} from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveSandboxedSessionCreation } from "../operator-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
@@ -149,7 +147,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
-      authorize: messageAuthority.agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       replayResults: messageAuthority.assertReadCurrent === undefined,
       resolveChannel: async (requestChannel) => {
@@ -526,7 +524,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
-      authorize: agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
@@ -841,7 +839,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
       conflictMessage: "poll account selections do not match",
-      authorize: agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,

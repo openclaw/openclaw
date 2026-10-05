@@ -1533,9 +1533,9 @@ describe("Anthropic provider", () => {
           user("stable question"),
           {
             role: "user",
-            content: "transient current-turn metadata",
+            content: "OpenClaw runtime context:\ntransient current-turn metadata",
             timestamp: 1,
-            runtimeContextCarrier: true,
+            runtimeContext: {},
           },
         ],
       },
@@ -1550,7 +1550,7 @@ describe("Anthropic provider", () => {
         cache_control: { type: "ephemeral" },
       },
     ]);
-    expect(messages[1]?.content).toBe("transient current-turn metadata");
+    expect(messages[1]?.content).toBe("OpenClaw runtime context:\ntransient current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

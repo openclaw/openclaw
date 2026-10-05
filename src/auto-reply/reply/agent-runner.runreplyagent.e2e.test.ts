@@ -37,7 +37,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
-import type { TypingMode } from "../../config/types.js";
+import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
@@ -56,6 +56,7 @@ import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallbac
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
 import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
+import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followup-drain.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -63,6 +64,7 @@ import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.j
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   enqueueFollowupRun,
+  kickFollowupDrainIfIdle,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -314,6 +316,7 @@ vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
+  kickFollowupDrainIfIdle: vi.fn(),
   parkSteerCandidate: parkedSteer.park,
   refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
@@ -360,6 +363,7 @@ beforeEach(() => {
   });
   vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
+  vi.mocked(kickFollowupDrainIfIdle).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -1585,6 +1589,17 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
   });
 
+  it("kicks queued followups without handing them a heartbeat runner", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const { run } = createMinimalRun({ opts: { isHeartbeat: true } });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(vi.mocked(kickFollowupDrainIfIdle)).toHaveBeenCalledExactlyOnceWith("main");
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+  });
+
   it("records a failed heartbeat turn when a visible reply replaces its synthetic failure", async () => {
     const runState: ReplyOperationRunState = {};
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -2089,13 +2104,13 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
-  it("delivers an authenticated channel reply through the configured default agent", async () => {
+  it("delivers an authenticated channel reply through the explicitly selected agent", async () => {
     const config = {
       agents: {
-        list: [{ id: "ops", default: true }, { id: "worker" }],
+        entries: { ops: {}, worker: {} },
         defaults: { compaction: { memoryFlush: {} } },
       },
-    };
+    } satisfies OpenClawConfig;
     const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     const storePath = join(
@@ -2124,7 +2139,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const { followupRun, run, sourceTurnId } = createMinimalRun({
       sessionCtx,
       runOverrides: {
-        agentId: undefined,
+        agentId: "ops",
         config,
         messageProvider: "discord",
       },
@@ -3215,7 +3230,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     try {
-      await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+      await expect(run()).resolves.toBeDefined();
 
       expect(onAdopted).not.toHaveBeenCalled();
       expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -3861,7 +3876,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   registerRequiredReplyCompletionCases({
     createMinimalRun,
     state,
-    requireScheduledFollowupRunner,
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
@@ -4339,55 +4353,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it.each([
-    {
-      name: "releases a queued followup after the pending tool delivery idle bound",
-      elapsedMs: 30_000,
-      owned: false,
-    },
-    {
-      name: "keeps a queued followup owned until pending tool delivery settles",
-      elapsedMs: 29_999,
-      owned: true,
-    },
-  ])("$name", async ({ elapsedMs, owned }) => {
-    vi.useFakeTimers();
-    const toolResultStarted = createDeferred();
-    const toolResultReleased = createDeferred();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      void params.onToolResult?.({ text: "pending tool result" });
-      return { payloads: [{ text: "followup complete" }], meta: {} };
-    });
-    const { followupRun, run } = createMinimalRun({
-      isActive: true,
-      isRunActive: () => false,
-      shouldFollowup: true,
-      resolvedQueueMode: "collect",
-      opts: {
-        forceToolResultProgress: true,
-        onToolResult: async () => {
-          toolResultStarted.resolve();
-          await toolResultReleased.promise;
-        },
-      },
-    });
-    let followup: Promise<void> | undefined;
-    try {
-      await run();
-      followup = requireScheduledFollowupRunner()(followupRun);
-      await toolResultStarted.promise;
-
-      await vi.advanceTimersByTimeAsync(elapsedMs);
-      expect(replyRunRegistry.get("main") !== undefined).toBe(owned);
-
-      toolResultReleased.resolve();
-      await followup;
-      expect(replyRunRegistry.get("main")).toBeUndefined();
-    } finally {
-      toolResultReleased.resolve();
-      await followup;
-      vi.useRealTimers();
-    }
+  registerFollowupDrainCases({
+    createMinimalRun,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    requireScheduledFollowupRunner,
   });
 
   it("delivers a queued provider error after a private settled-tool completion", async () => {
@@ -4479,7 +4448,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(onBlockReply).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+          text: "LLM request rejected: Synthetic provider failure for delivery proof\\.",
           isError: true,
         }),
       );

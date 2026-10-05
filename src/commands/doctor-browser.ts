@@ -3,17 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicSurfaceModuleSyncCore } from "../plugin-sdk/facade-loader.js";
 
 type BrowserDoctorDeps = {
-  platform?: NodeJS.Platform;
   noteFn?: typeof note;
-  env?: NodeJS.ProcessEnv;
-  getUid?: () => number;
-  resolveManagedExecutable?: (
-    resolved: unknown,
-    platform: NodeJS.Platform,
-  ) => { path: string } | null;
-  resolveChromeExecutable?: (platform: NodeJS.Platform) => { path: string } | null;
-  readVersion?: (executablePath: string) => string | null;
-  configDir?: string;
 };
 
 type BrowserNativeHostRepairResult = {

@@ -20,6 +20,7 @@ const itemStatuses = new Map<string, CodexItemStatus>([
   ["completed", "completed"],
   ["failed", "failed"],
   ["error", "failed"],
+  ["interrupted", "failed"],
   ["declined", "blocked"],
   ["inProgress", "running"],
   ["in_progress", "running"],
@@ -163,4 +164,13 @@ export function shouldClearTerminalPresentationForNativeItem(item: CodexThreadIt
     default:
       return false;
   }
+}
+
+export function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem): boolean {
+  // Sleep ends the answer segment without mutating terminal presentation.
+  return (
+    shouldClearTerminalPresentationForNativeItem(item) ||
+    item.type === "dynamicToolCall" ||
+    item.type === "sleep"
+  );
 }

@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -11,6 +12,7 @@ import {
 } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation as invocation } from "./plugin-instance-invocation.js";
 import { PluginCallToken } from "./plugin-instance-owned-values.js";
+import { withPluginInstanceRuntimeScope } from "./plugin-instance-runtime-scope.js";
 import {
   pluginInstanceState,
   pluginInvocationContext,
@@ -26,9 +28,8 @@ import type {
   PluginModuleLoaderRecovery,
 } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 const { values: valueInstances } = pluginInstanceState;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -252,6 +253,16 @@ export class PluginInstance {
     );
   }
 
+  /** Observe when a pre-stop replacement drain would pass: no retained work or calls, cleanup included. */
+  async waitForIdle(signal: AbortSignal): Promise<void> {
+    await waitForPluginInstanceSettlement(
+      this.pluginId,
+      this.waiters,
+      () => this.calls.size === 0 && this.retainedWorkCount === 0,
+      signal,
+    );
+  }
+
   /** Reserve replacement atomically before host owners invalidate or stop this instance. */
   reserveReplacement(): () => void {
     if (this.hasActiveCall) {
@@ -412,24 +423,11 @@ export class PluginInstance {
       // Deferred setup imports use the same SDK resolver facts as their initial load.
       return this.setupCache ? withPluginCache(this.setupCache, enter) : enter();
     }
-    const { record } = this.owner;
-    const generation = getPluginRuntimeGenerationRegistry();
-    // Prepared callers retain their catalog; detached work follows the same
-    // instance when publication adopts it into a replacement registry.
-    const registry =
-      this.consumers.get(token)?.registry ??
-      this.calls.get(token)?.registry ??
-      (generation?.plugins.includes(record) ? generation : this.owner.registry);
-    return withPluginRuntimePluginScope(
-      {
-        pluginId: record.id,
-        pluginSource: record.source,
-        pluginOrigin: record.origin,
-        pluginTrustedOfficialInstall: record.trustedOfficialInstall,
-      },
-      run,
-      registry,
+    return withPluginInstanceRuntimeScope(
+      this.owner,
+      this.consumers.get(token)?.registry ?? this.calls.get(token)?.registry,
       call,
+      run,
     );
   }
 
@@ -708,21 +706,12 @@ export class PluginInstance {
         moduleCleanups.push(cleanup);
         continue;
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          runCleanup(cleanup),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`Plugin ${this.pluginId} cleanup did not settle`)),
-              Math.max(0, deadline - Date.now()),
-            );
-          }),
-        ]);
+        await raceWithTimeout(runCleanup(cleanup), Math.max(0, deadline - Date.now()), () => {
+          throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
+        });
       } catch (error) {
         failures.push(error);
-      } finally {
-        clearTimeout(timer);
       }
     }
     await cleanupWork.drain();
@@ -768,6 +757,11 @@ export class PluginInstance {
     }
     if (failures.length === 0) {
       releasePluginCacheInstance(this);
+      // Native ESM exports can outlive their instance. Keep its revocation identity, not
+      // the retired registry and every inspection/prepared resource keyed by that registry.
+      if (this.owner) {
+        releasePluginInstanceRegistry(this.owner);
+      }
     }
     return terminalFailures.result(failures);
   }

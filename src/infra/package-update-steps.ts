@@ -21,7 +21,7 @@ import {
   verifyUnchangedPackageUpdateRecovery,
 } from "./package-update-lifecycle.js";
 import {
-  checkGlobalPackageUpdatePermissions,
+  checkGlobalPackageUpdateAdmission,
   classifyPackageUpdatePermissionFailure,
   resolveCanonicalPath,
   runPnpmPreflightProbe,
@@ -178,9 +178,13 @@ export async function runGlobalPackageUpdateSteps(params: {
   };
 
   try {
-    const permissions = await checkGlobalPackageUpdatePermissions(params.installTarget, params.env);
-    if (permissions) {
-      return await packageUpdateFailure(permissions);
+    const admission = await checkGlobalPackageUpdateAdmission(
+      params.installTarget,
+      params.packageName,
+      params.env,
+    );
+    if (admission) {
+      return await packageUpdateFailure(admission);
     }
     if (process.platform === "freebsd") {
       if (!params.installTarget.packageRoot) {
@@ -271,9 +275,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (bin.failedStep) {
         return await packageUpdateFailure(bin.failedStep);
       }
-      globalBinDir = bin.result
-        ? readPackageManagerProbeValue(bin.result.stdout) || undefined
-        : undefined;
+      globalBinDir = readPackageManagerProbeValue(bin.result.stdout) || undefined;
     }
     const nativeOptions = stageNative
       ? { env: effectiveInstallEnv ?? process.env, globalBinDir, installSpec: params.installSpec }
@@ -471,6 +473,17 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const verificationPackageRoot = stagedInstall.packageRoot;
+    // Additional launcher names are known only after npm stages the candidate.
+    // Inspect those destinations before validation, never unrelated prefix files.
+    const publicationAdmission = await checkGlobalPackageUpdateAdmission(
+      params.installTarget,
+      params.packageName,
+      params.env,
+      stagedInstall.layout.binDir,
+    );
+    if (publicationAdmission) {
+      return await packageUpdateFailure(publicationAdmission, [...steps, publicationAdmission]);
+    }
     await params.beforeVerifyCandidate?.(verificationPackageRoot);
     if (packageRoot && params.beforeVerifyCandidate) {
       // Admission staging owns only its private prefix. Retire old backups only

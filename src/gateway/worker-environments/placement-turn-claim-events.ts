@@ -23,6 +23,7 @@ import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
 import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
@@ -74,6 +75,7 @@ export type WorkerTurnTranscriptSource = Pick<
 
 export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
   Readonly<{
+    assertPresenceSourceCurrent?: () => void;
     run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
   }>;
 
@@ -233,6 +235,7 @@ export async function bindWorkerTurnOwner(
   const capability = Object.freeze({
     sessionTarget,
     receiptAuthority: assertActive,
+    ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T> {
       assertActive();
       const result = await callback(identity);
@@ -589,13 +592,7 @@ function closeWorkerTurnClaim(
       workerTurnOwners.delete(path);
     }
   }
-  for (const handler of workerTurnClaimClosedHandlers.get(path) ?? []) {
-    try {
-      handler(claim);
-    } catch {
-      // Settlement observation cannot roll back the authoritative store transition.
-    }
-  }
+  notifyListeners(workerTurnClaimClosedHandlers.get(path) ?? [], claim);
 }
 
 export function prepareWorkerTurnClaimClosed(

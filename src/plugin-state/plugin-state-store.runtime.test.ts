@@ -66,9 +66,9 @@ afterEach(async () => {
 });
 
 describe("plugin runtime state proxy", () => {
-  it("binds openKeyedStore to the bundled plugin id and keeps resolveStateDir", async () => {
+  it("binds keyed stores to local plugin ids and keeps resolveStateDir", async () => {
     await withOpenClawTestState({ label: "plugin-state-runtime" }, async (state) => {
-      const record = createPluginRecord("discord", "bundled");
+      const record = createPluginRecord("discord", "config");
       const { registry, runtime } = setup(record);
 
       expect(runtime.resolveStateDir()).toBe(state.stateDir);
@@ -79,7 +79,7 @@ describe("plugin runtime state proxy", () => {
         await expect(store.registerIfAbsent("k", { plugin: "discord" })).resolves.toBe(true);
         await expect(store.registerIfAbsent("k", { plugin: "duplicate" })).resolves.toBe(false);
 
-        const telegram = createPluginRecord("telegram", "bundled");
+        const telegram = createPluginRecord("telegram", "workspace");
         registry.registry.plugins.push(telegram);
         const telegramApi = registry.createApi(telegram, { config: {} });
         const telegramStore = telegramApi.runtime.state.openKeyedStore<{ plugin: string }>(
@@ -116,7 +116,7 @@ describe("plugin runtime state proxy", () => {
 
   it("fences retained operations and range reads when the owning plugin closes", async () => {
     await withOpenClawTestState({ label: "plugin-retained-runtime-closure" }, async () => {
-      const record = createPluginRecord("history-owner");
+      const record = createPluginRecord("history-owner", "config");
       const { registry, runtime } = setup(record, true);
       const sourceOptions = { namespace: "history", maxEntries: 10 };
       const retainedOptions = { namespace: "history", retention: "retained" as const };
@@ -170,7 +170,7 @@ describe("plugin runtime state proxy", () => {
 
   it("fences revoked ingress reads, admission, and recovery", async () => {
     await withOpenClawTestState({ label: "plugin-ingress-runtime-closure" }, async (state) => {
-      const record = createPluginRecord("ingress-owner");
+      const record = createPluginRecord("ingress-owner", "config");
       const { registry, runtime } = setup(record, true);
       const queue = runtime.openChannelIngressQueue<{ text: string }>({
         now: () => 10,
@@ -281,9 +281,9 @@ describe("plugin runtime state proxy", () => {
     },
   );
 
-  it("binds blob stores to the trusted plugin id", async () => {
+  it("binds blob stores to untrusted plugin ids", async () => {
     await withOpenClawTestState({ label: "plugin-blob-runtime" }, async () => {
-      const record = createPluginRecord("diffs", "global", { trustedOfficialInstall: true });
+      const record = createPluginRecord("diffs", "global");
       const { registry, runtime } = setup(record);
 
       const store = runtime.openBlobStore<{ kind: string }>(blobOptions);
@@ -330,19 +330,5 @@ describe("plugin runtime state proxy", () => {
           .get("diffs", "runtime-env", "viewer"),
       ).toEqual({ count: 1 });
     });
-  });
-
-  it.each(["workspace", "global"] as const)("rejects untrusted %s plugins", (origin) => {
-    const { runtime } = setup(createPluginRecord("external-plugin", origin));
-
-    expect(() => runtime.openKeyedStore(keyedOptions)).toThrow(
-      "openKeyedStore is only available for trusted plugins",
-    );
-    expect(() => runtime.openSyncKeyedStore(keyedOptions)).toThrow(
-      "openSyncKeyedStore is only available for trusted plugins",
-    );
-    expect(() => runtime.openBlobStore(blobOptions)).toThrow(
-      "openBlobStore is only available for trusted plugins",
-    );
   });
 });

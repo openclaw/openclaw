@@ -41,6 +41,8 @@ import type {
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import { registerRequesterSelfYieldFollowupTests } from "./subagent-registry.requester-self-yield.test-support.js";
+import { registerRequesterStartupAdmissionTests } from "./subagent-registry.requester-wake-admission.test-support.js";
 import { registerRequesterWakeReceiptBoundaryTests } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
@@ -145,7 +147,7 @@ function createGatewayContext() {
       throw new Error("Unexpected recovery notice");
     },
   };
-  const context = { recoveryRuntime } as GatewayRequestContext;
+  const context = { recoveryRuntime, chatAbortControllers: new Map() } as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
   return context;
 }
@@ -219,7 +221,7 @@ describe("requester settle wake product flow", () => {
     loadConfigMock.mockReset().mockReturnValue({
       agents: {
         defaults: { subagents: { archiveAfterMinutes: 0 } },
-        list: [{ id: "main" }, { id: "research" }],
+        entries: { main: {}, research: {} },
       },
       session: { mainKey: "main", scope: "per-sender" },
     });
@@ -360,7 +362,7 @@ describe("requester settle wake product flow", () => {
         requesterTurnRunId: params.requesterTurnRunId,
         requesterAgentIdOverride: "main",
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: { mainKey: "main", scope: "per-sender" },
         },
         callGateway: vi.fn(async () => ({
@@ -402,6 +404,31 @@ describe("requester settle wake product flow", () => {
       },
     });
   };
+
+  registerRequesterStartupAdmissionTests({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    getFixture: () => ({ testState, sessionStore, sessionStorePath }),
+    createGatewayContext,
+    flushOwnedWork,
+    getRequesterWakeCalls,
+    wakeRequester,
+  });
+
+  registerRequesterSelfYieldFollowupTests({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    createGatewayContext,
+    getLifecycleHandler: () => lifecycleHandler!,
+    callGatewayMock,
+    getAgentCalls,
+    emitCompleted,
+    flushOwnedWork,
+    flushAsync,
+    wakeRequester,
+    waitForDeliveredCleanup,
+    setReleaseAgentCallGate: (release) => {
+      releaseAgentCallGate = release;
+    },
+  });
 
   it.each(
     ["alpha", "beta"].flatMap((firstCompleted) =>

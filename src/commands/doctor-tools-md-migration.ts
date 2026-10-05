@@ -368,26 +368,18 @@ async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): P
   await syncDirectoryIfSupported(workspaceDir);
 }
 
-function archivePathForSource(
-  agentId: string,
-  source: ToolsMdSource,
-  env: NodeJS.ProcessEnv,
-): string {
-  const safeAgentId = agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
-  return path.join(
-    resolveStateDir(env),
-    "backups",
-    "tools-md-migration",
-    `${safeAgentId}-${source.sha256}.md`,
-  );
-}
-
 async function archiveSource(params: {
   agentId: string;
   source: ToolsMdSource;
   env: NodeJS.ProcessEnv;
-}): Promise<string> {
-  const archivePath = archivePathForSource(params.agentId, params.source, params.env);
+}): Promise<void> {
+  const safeAgentId = params.agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const archivePath = path.join(
+    resolveStateDir(params.env),
+    "backups",
+    "tools-md-migration",
+    `${safeAgentId}-${params.source.sha256}.md`,
+  );
   const archiveDir = path.dirname(archivePath);
   await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
   const tempPath = `${archivePath}.doctor-writing-${process.pid}-${Date.now()}`;
@@ -409,7 +401,6 @@ async function archiveSource(params: {
       throw new Error(`TOOLS.md migration archive collision at ${archivePath}`, { cause: error });
     }
   }
-  return archivePath;
 }
 
 export async function collectToolsMdMigrationFindings(

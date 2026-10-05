@@ -222,7 +222,7 @@ describe("prepared model catalog worker boundary", () => {
       agents: {
         ...fixture.config.agents,
         entries: {
-          main: { default: true, agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
+          main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
           sibling: {
             agentDir: siblingDir,
             workspace: fixture.workspaceDir,
@@ -521,7 +521,7 @@ describe("prepared model catalog worker boundary", () => {
       fixture.agentDir,
     );
 
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+    const catalog = await loadCompletedFullCatalog(fixture.snapshot);
 
     expect(catalog?.entries).toContainEqual(
       expect.objectContaining({
@@ -556,14 +556,7 @@ describe("prepared model catalog worker boundary", () => {
       ...fixture.config,
       agents: {
         ...fixture.config.agents,
-        list: [
-          {
-            id: "main",
-            default: true,
-            agentDir: fixture.agentDir,
-            workspace: fixture.workspaceDir,
-          },
-        ],
+        entries: { main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir } },
       },
     } satisfies OpenClawConfig;
     const owner = Object.freeze({

@@ -22,7 +22,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { SESSION_ROLLOVER_LINEAGE_CASES } from "../../config/sessions/session-lineage.test-support.js";
+import {
+  createSessionRolloverSpawnLineage,
+  SESSION_ROLLOVER_LINEAGE_CASES,
+} from "../../config/sessions/session-lineage.test-support.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
@@ -208,7 +211,7 @@ describe("resolveReplySessionPreprocessingState", () => {
     expect(
       await resolveReplySessionPreprocessingState({
         cfg: {
-          agents: { list: [{ id: "ops", default: true }] },
+          agents: { entries: { ops: {} } },
           session: { store: storePath, mainKey: "work" },
         },
         ctx: finalizeInboundContext({
@@ -388,7 +391,7 @@ describe("initSessionState guarded initialization", () => {
         await expect(
           initSessionState({
             cfg: {
-              agents: { list: [{ id: "main", default: true }, { id: agentId }] },
+              agents: { entries: { main: {}, [agentId]: {} } },
               session: { store: path.join(stateDir, "durable", "{agentId}", "sessions.json") },
             } as OpenClawConfig,
             ctx: {
@@ -971,7 +974,7 @@ describe("initSessionState thread forking", () => {
     });
     sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
     const promptState = getEmbeddedSessionPromptState(threadSessionKey);
-    promptState.sentUserTurnIds.add("retained-turn");
+    promptState.toolResults.frozen.add("retained-tool-result");
     enqueueFollowupRun(
       threadSessionKey,
       createQueueTestRun({ prompt: "retained followup" }),
@@ -1009,7 +1012,7 @@ describe("initSessionState thread forking", () => {
         mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
       });
       expect(getEmbeddedSessionPromptState(threadSessionKey)).toBe(promptState);
-      expect(promptState.sentUserTurnIds).toContain("retained-turn");
+      expect(promptState.toolResults.frozen).toContain("retained-tool-result");
       expect(getFollowupQueueDepth(threadSessionKey)).toBe(1);
       expect(peekSystemEvents(threadSessionKey)).toEqual(["retained event"]);
       expect(replyRunRegistry.get(threadSessionKey)).toBe(activeReply);
@@ -1605,18 +1608,7 @@ describe("initSessionState RawBody", () => {
       const sessionKey = testCase.sessionKey;
       const existingSessionId = "session-before-daily-reset-lineage";
       const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-      const spawnLineage = {
-        spawnedBy: testCase.spawnedBy,
-        spawnedBySenderIsOwner: true,
-        spawnedBySessionId: "parent-session",
-        spawnedWorkspaceDir: "/tmp/child-workspace",
-        spawnedCwd: "/tmp/task-repo",
-        spawnDepth: 1,
-        ...(testCase.subagentRole ? { subagentRole: testCase.subagentRole } : {}),
-        ...(testCase.subagentControlScope
-          ? { subagentControlScope: testCase.subagentControlScope }
-          : {}),
-      };
+      const spawnLineage = createSessionRolloverSpawnLineage(testCase);
       const threadProvenance = {
         parentSessionKey: "agent:main:main",
         parentSessionId: "parent-session",

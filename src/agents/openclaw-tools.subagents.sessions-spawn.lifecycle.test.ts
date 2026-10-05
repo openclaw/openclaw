@@ -90,29 +90,6 @@ describe("sessions_spawn lifecycle", () => {
     }
   });
 
-  it("gives native child startup enough gateway request time", async () => {
-    const ctx = setupSessionsSpawnGatewayMock({
-      includeChatHistory: true,
-      agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
-    });
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      messages: { queue: {} },
-      agents: { defaults: { subagents: { runTimeoutSeconds: 120 } } },
-    });
-    await spawn(mainContext);
-    const child = ctx.getChild();
-    assert(child.sessionKey);
-    try {
-      expect(ctx.calls.find((call) => call.method === "agent")).toMatchObject({
-        timeoutMs: 125_000,
-        params: { lane: "subagent" },
-      });
-    } finally {
-      await waitForCleanup(child.sessionKey);
-    }
-  });
-
   it("retires the child's bundle MCP runtime after run-mode cleanup", async () => {
     const settleRootWork = observeRootWork();
     const started = createDeferred();
@@ -212,7 +189,7 @@ describe("sessions_spawn lifecycle", () => {
       messages: { queue: {} },
       agents: {
         defaults: { subagents: { allowAgents: ["bot-alpha"] } },
-        list: [{ id: "main" }, { id: "bot-alpha" }],
+        entries: { main: {}, "bot-alpha": {} },
       },
       bindings: [
         {

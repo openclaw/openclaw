@@ -8,7 +8,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
-import { createCanonicalAgentConfigFixture, stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { createOllamaNodeHostCommands } from "./node-inference.js";
@@ -60,30 +60,28 @@ describe("Ollama paired-node Gateway inference", () => {
       let node: GatewayClient | undefined;
 
       try {
-        await state.writeConfig(
-          createCanonicalAgentConfigFixture({
-            gateway: {
-              mode: "local",
-              port: gatewayPort,
-              bind: "loopback",
-              auth: { mode: "token", token: gatewayToken },
-              controlUi: { enabled: false },
-              nodes: { commands: { allow: ["ollama.models", "ollama.chat"] } },
+        await state.writeConfig({
+          gateway: {
+            mode: "local",
+            port: gatewayPort,
+            bind: "loopback",
+            auth: { mode: "token", token: gatewayToken },
+            controlUi: { enabled: false },
+            nodes: { commands: { allow: ["ollama.models", "ollama.chat"] } },
+          },
+          plugins: {
+            allow: ["ollama"],
+          },
+          agents: {
+            defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+            entries: { main: { tools: { allow: ["node_inference"] } } },
+          },
+          models: {
+            providers: {
+              ollama: { api: "ollama", baseUrl: gatewayOllama.baseUrl, models: [] },
             },
-            plugins: {
-              allow: ["ollama"],
-            },
-            agents: {
-              defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
-              entries: { main: { default: true, tools: { allow: ["node_inference"] } } },
-            },
-            models: {
-              providers: {
-                ollama: { api: "ollama", baseUrl: gatewayOllama.baseUrl, models: [] },
-              },
-            },
-          }).config,
-        );
+          },
+        });
 
         const gatewayEntryArgs =
           process.env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1"

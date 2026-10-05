@@ -4,7 +4,7 @@
 import {
   spawn,
   spawnSync,
-  type SpawnOptions,
+  type ChildProcess,
   type SpawnSyncOptionsWithStringEncoding,
 } from "node:child_process";
 import fs from "node:fs";
@@ -28,7 +28,7 @@ import {
   resolveGitHead,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
-import { resolveQaCodexApiKeyEnvPatch, type ReadQaCodexApiKey } from "./lib/qa-codex-auth-env.mts";
+import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
   captureRunNodeInputState,
   type RunNodeInputState,
@@ -57,43 +57,19 @@ import {
 import { listCoreRuntimePostBuildOutputs, runRuntimePostBuild } from "./runtime-postbuild.mts";
 import { listTsdownOutputRoots } from "./tsdown-build.mts";
 
-type RunNodeChild = {
-  kill?: (signal?: NodeJS.Signals) => boolean | void;
-  on(event: string, callback: (...args: never[]) => void): unknown;
-  off?(event: string, callback: (...args: never[]) => void): unknown;
-  pid?: number;
-  stderr?: Pick<NodeJS.ReadableStream, "on">;
-  stdout?: Pick<NodeJS.ReadableStream, "on">;
-};
-
-type RunNodeSpawn = (command: string, args: string[], options: SpawnOptions) => unknown;
 type RunNodeSpawnSync = (
   command: string,
   args: string[],
   options: SpawnSyncOptionsWithStringEncoding,
 ) => { error?: NodeJS.ErrnoException; status: number | null; stdout?: string | null };
-type RunNodeWritable = {
-  isTTY?: boolean;
-  write(value: string | Uint8Array): unknown;
-};
-type RunNodeRuntimePostBuild = (
-  params?: Parameters<typeof runRuntimePostBuild>[0],
-) => void | Promise<void>;
 type RunNodeMainParams = {
-  spawn?: RunNodeSpawn;
-  spawnSync?: RunNodeSpawnSync;
-  fs?: typeof fs;
-  stderr?: RunNodeWritable;
-  stdout?: RunNodeWritable;
-  process?: NodeJS.Process;
-  signalProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean | void;
-  execPath?: string;
   cwd?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
-  runRuntimePostBuild?: RunNodeRuntimePostBuild;
-  platform?: NodeJS.Platform;
-  readCodexApiKey?: ReadQaCodexApiKey;
+  // Publication must join an asynchronous writer before releasing build ownership.
+  runRuntimePostBuild?: (
+    params?: Parameters<typeof runRuntimePostBuild>[0],
+  ) => void | Promise<void>;
 };
 type RunNodeProgress = {
   clearLine(): void;
@@ -124,10 +100,13 @@ type RunNodeMutableState = {
   outputTee: RunNodeOutputTee | null;
   runNodeProgress: RunNodeProgress | undefined;
 };
-type RunNodeLogDeps = Pick<RunNodeDeps, "env" | "stderr"> &
-  Partial<Pick<RunNodeDeps, "outputTee" | "runNodeProgress">>;
-type RunNodeLockDeps = Pick<RunNodeDeps, "cwd" | "env" | "fs" | "process" | "stderr"> & {
+type RunNodeLogDeps = Pick<RunNodeDeps, "env"> &
+  Partial<Pick<RunNodeDeps, "outputTee" | "runNodeProgress">> & {
+    stderr: Pick<NodeJS.WriteStream, "write">;
+  };
+type RunNodeLockDeps = Pick<RunNodeDeps, "cwd" | "env" | "fs" | "process"> & {
   args: readonly string[];
+  stderr: RunNodeLogDeps["stderr"];
 };
 type BuildRequirement = { shouldBuild: boolean; reason: keyof typeof BUILD_REASON_LABELS };
 type RuntimePostBuildRequirement = {
@@ -140,13 +119,6 @@ type SpawnedProcessResult = {
   forwardedSignal: NodeJS.Signals | null;
 };
 type RunNodeExit = number | NodeJS.Signals;
-
-function asRunNodeChild(value: unknown): RunNodeChild {
-  if (!value || typeof value !== "object" || !("on" in value) || typeof value.on !== "function") {
-    throw new Error("spawn implementation returned an invalid child process");
-  }
-  return value as RunNodeChild;
-}
 
 export { runNodeWatchedPaths };
 
@@ -875,7 +847,7 @@ const logRunner = (message: string, deps: RunNodeLogDeps) => {
 const RUN_NODE_PROGRESS_FRAMES = ["-", "\\", "|", "/"];
 
 const shouldUseRunNodeProgress = (deps: RunNodeDeps) =>
-  deps.stderr?.isTTY === true &&
+  deps.stderr.isTTY &&
   deps.env.OPENCLAW_RUNNER_PROGRESS !== "0" &&
   deps.env.CI !== "true" &&
   !deps.outputTee;
@@ -946,7 +918,7 @@ const withRunNodeProgress = async <T,>(
 
 const writeRunnerStream = (
   deps: RunNodeDeps,
-  stream: RunNodeWritable,
+  stream: NodeJS.WriteStream,
   chunk: string | Uint8Array,
 ) => {
   deps.runNodeProgress?.clearLine();
@@ -1054,14 +1026,14 @@ const shouldUseRunNodeChildProcessGroup = (deps: RunNodeDeps) =>
   deps.platform !== "win32" && !deps.process.stdin?.isTTY;
 
 const signalSpawnedProcess = (
-  childProcess: RunNodeChild,
+  childProcess: ChildProcess,
   signal: NodeJS.Signals,
   useProcessGroup: boolean,
   deps: RunNodeDeps,
 ) => {
   if (useProcessGroup && typeof childProcess.pid === "number") {
     try {
-      deps.signalProcess(-childProcess.pid, signal);
+      deps.process.kill(-childProcess.pid, signal);
       return;
     } catch (error) {
       if (hasErrorCode(error, "ESRCH") || hasErrorCode(error, "EPERM")) {
@@ -1077,7 +1049,7 @@ const signalSpawnedProcess = (
 };
 
 const waitForSpawnedProcess = async (
-  childProcess: RunNodeChild,
+  childProcess: ChildProcess,
   deps: RunNodeDeps,
   acceptShutdownGrace = false,
 ) => {
@@ -1186,20 +1158,18 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.e
       commandPath: ["qa", "mantis", "run"],
       mode: "command-path",
     }) !== null;
-  const nodeProcess = asRunNodeChild(
-    deps.spawn(execPath, args, {
-      cwd: deps.cwd,
-      detached: useProcessGroup,
-      env: deps.env,
-      stdio: deps.outputTee
-        ? acceptShutdownGrace
-          ? ["inherit", "pipe", "pipe", "ipc"]
-          : ["inherit", "pipe", "pipe"]
-        : acceptShutdownGrace
-          ? ["inherit", "inherit", "inherit", "ipc"]
-          : "inherit",
-    }),
-  );
+  const nodeProcess = deps.spawn(execPath, args, {
+    cwd: deps.cwd,
+    detached: useProcessGroup,
+    env: deps.env,
+    stdio: deps.outputTee
+      ? acceptShutdownGrace
+        ? ["inherit", "pipe", "pipe", "ipc"]
+        : ["inherit", "pipe", "pipe"]
+      : acceptShutdownGrace
+        ? ["inherit", "inherit", "inherit", "ipc"]
+        : "inherit",
+  });
   pipeSpawnedOutput(nodeProcess, deps);
   const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace);
   const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
@@ -1217,7 +1187,7 @@ const runOpenClaw = (deps: RunNodeDeps) =>
   );
 
 const pipeSpawnedOutput = (
-  childProcess: RunNodeChild,
+  childProcess: ChildProcess,
   deps: RunNodeDeps,
   options: { stdoutTarget?: "stdout" | "stderr" } = {},
 ) => {
@@ -1643,10 +1613,12 @@ const runQaReportFromSource = (deps: RunNodeDeps, script: QaReportScript) => {
 };
 
 function createRunNodeDeps(params: RunNodeMainParams) {
+  const postbuild: NonNullable<RunNodeMainParams["runRuntimePostBuild"]> =
+    params.runRuntimePostBuild ?? runRuntimePostBuild;
   const cwd = params.cwd ?? process.cwd();
   const distRoot = path.join(cwd, "dist");
   const args = params.args ?? process.argv.slice(2);
-  const execPath = params.execPath ?? process.execPath;
+  const execPath = process.execPath;
   const env = params.env ? { ...params.env } : { ...process.env };
   // Select this checkout's plugins over tracked installs without changing source/dist loading.
   env.OPENCLAW_DEV_SOURCE_ROOT ??= cwd;
@@ -1656,22 +1628,18 @@ function createRunNodeDeps(params: RunNodeMainParams) {
     runNodeProgress: undefined,
   };
   return {
-    spawn: params.spawn ?? spawn,
-    spawnSync: params.spawnSync ?? spawnSync,
-    fs: params.fs ?? fs,
-    stderr: params.stderr ?? process.stderr,
-    stdout: params.stdout ?? process.stdout,
-    process: params.process ?? process,
+    spawn,
+    spawnSync,
+    fs,
+    stderr: process.stderr,
+    stdout: process.stdout,
+    process,
     execPath,
     cwd,
     args,
     env,
-    platform: params.platform ?? process.platform,
-    readCodexApiKey: params.readCodexApiKey,
-    signalProcess:
-      params.signalProcess ??
-      ((pid: number, signal?: NodeJS.Signals | number) => process.kill(pid, signal)),
-    runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
+    platform: process.platform,
+    runRuntimePostBuild: postbuild,
     cancellation: new AbortController(),
     distRoot,
     distEntry: path.join(distRoot, "/entry.js"),
@@ -1719,7 +1687,6 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
       resolveQaCodexApiKeyEnvPatch({
         args: deps.args,
         env: deps.env,
-        readCodexApiKey: deps.readCodexApiKey,
       }),
     );
   }
@@ -1838,22 +1805,18 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
             );
             return await withRunNodeProgress(deps, "Building local CLI artifacts", async () => {
               deps.cancellation.signal.throwIfAborted();
-              const build = asRunNodeChild(
-                deps.spawn(
-                  deps.execPath,
-                  distArtifactEntryArgs(path.join(deps.cwd, "scripts/build-all.mts"), [
-                    "qaRuntime",
-                  ]),
-                  {
-                    cwd: deps.cwd,
-                    detached: shouldUseRunNodeChildProcessGroup(deps),
-                    env: {
-                      ...deps.env,
-                      [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
-                    },
-                    stdio: ["inherit", "pipe", "pipe"],
+              const build = deps.spawn(
+                deps.execPath,
+                distArtifactEntryArgs(path.join(deps.cwd, "scripts/build-all.mts"), ["qaRuntime"]),
+                {
+                  cwd: deps.cwd,
+                  detached: shouldUseRunNodeChildProcessGroup(deps),
+                  env: {
+                    ...deps.env,
+                    [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
                   },
-                ),
+                  stdio: ["inherit", "pipe", "pipe"],
+                },
               );
               pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
               const result = await waitForSpawnedProcess(build, deps);

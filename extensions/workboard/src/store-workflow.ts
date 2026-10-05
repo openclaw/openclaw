@@ -13,7 +13,7 @@ import {
   resolveOptionalIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendComment,
   assertCanMutateClaimedCard,
@@ -39,11 +39,9 @@ import type {
   WorkboardClaimInput,
   WorkboardClaimOptions,
   WorkboardCompleteInput,
-  WorkboardDecomposeChildInput,
   WorkboardDecomposeInput,
   WorkboardHeartbeatInput,
   WorkboardMutationScope,
-  WorkboardProofInput,
   WorkboardReassignInput,
   WorkboardReclaimInput,
   WorkboardSpecifyInput,
@@ -252,10 +250,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
     }
     const summary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
-    const proofInput =
-      input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
-        ? (input.proof as WorkboardProofInput)
-        : undefined;
+    const proofInput = isRecord(input.proof) ? input.proof : undefined;
     const proofId = normalizeBoundedString(input.proofId, undefined, 120, "proof id");
     if (input.proofId !== undefined && !proofId) {
       throw new Error("proofId must be a non-empty string.");
@@ -526,11 +521,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           }
           const parentAutomation = parent.metadata?.automation;
           const children: WorkboardCard[] = [];
-          for (const rawChild of childrenInput) {
-            if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) {
+          for (const child of childrenInput) {
+            if (!isRecord(child)) {
               throw new Error("children must be objects.");
             }
-            const child = rawChild as WorkboardDecomposeChildInput;
             const created = await this.createDirect(
               {
                 ...child,

@@ -1,6 +1,7 @@
 /** Serializes run-owned transcript callbacks and bounds teardown settlement. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "../../../infra/errors.js";
+import { settlesWithin } from "../../../shared/settle-within.js";
 import { log } from "../logger.js";
 
 const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
@@ -138,19 +139,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     );
   };
   const settleWithinTeardownBudget = async (operation: Promise<void>): Promise<void> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const settled = await Promise.race([
-      operation.then(() => true),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), TRANSCRIPT_TEARDOWN_BUDGET_MS);
-        timeout.unref?.();
-      }),
-    ]);
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    if (!settled) {
-      void operation.catch(() => {});
+    if (!(await settlesWithin(operation, TRANSCRIPT_TEARDOWN_BUDGET_MS))) {
       logTeardownBudgetExpiry();
     }
   };

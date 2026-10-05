@@ -19,11 +19,11 @@ type SessionGroupWriteResult = "completed" | "failed" | "stale";
 export async function rememberSessionCustomGroup(options: {
   name: string;
   knownCategories: readonly string[];
-  sessions: GroupMutationSessions | undefined;
+  sessions: GroupMutationSessions;
   isCurrent: () => boolean;
   onError: (message: string) => void;
 }): Promise<SessionGroupWriteResult> {
-  if (!options.sessions || options.knownCategories.includes(options.name)) {
+  if (options.knownCategories.includes(options.name)) {
     return "completed";
   }
   try {

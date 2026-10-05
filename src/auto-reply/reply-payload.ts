@@ -240,6 +240,8 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** First index of this block's physical assistant message; each content item advances the index. */
+  assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
   precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */
@@ -341,6 +343,8 @@ export type ReplyPayloadMetadata = {
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /** Host label or status about the run (truncation, restart, compaction); not the answer. */
+  hostNotice?: true;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;
@@ -526,6 +530,15 @@ export function isReplyPayloadStatusNotice(
   payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
 ): boolean {
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
+
+/** Host-generated errors, warnings, status lines and run labels; never the model's answer. */
+export function isHostNoticePayload(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    isReplyPayloadStatusNotice(payload) ||
+    getReplyPayloadMetadata(payload)?.hostNotice === true
+  );
 }
 
 /** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */

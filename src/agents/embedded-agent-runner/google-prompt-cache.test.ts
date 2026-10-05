@@ -14,6 +14,7 @@ import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redact
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
+import * as providerFetch from "../provider-transport-fetch.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 import {
   callArg,
@@ -88,7 +89,12 @@ describe("google prompt cache", () => {
     const carrier = expectDefined(buildRuntimeContextCustomMessage("Current facts"), "carrier");
     const messages: Context["messages"] = [
       { role: "user", content: "Question", timestamp: 1 },
-      { role: "user", content: carrier.content, runtimeContextCarrier: true, timestamp: 2 },
+      {
+        role: "user",
+        content: `OpenClaw runtime context:\n${carrier.content}`,
+        timestamp: 2,
+        runtimeContext: {},
+      },
     ];
     const tools = [{ name: "lookup", description: "Lookup", parameters: Type.Object({}) }];
     for (const suffix of ["Date A", "Date B", "Date B"]) {
@@ -106,7 +112,7 @@ describe("google prompt cache", () => {
         messages[0],
         {
           ...messages[1],
-          content: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${suffix}\n\nCurrent facts\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`,
+          content: `OpenClaw runtime context:\n${suffix}\n\nCurrent facts`,
         },
       ]);
     }
@@ -118,7 +124,7 @@ describe("google prompt cache", () => {
     expect(JSON.parse(body).systemInstruction).toEqual({
       parts: [{ text: "Stable policy" }],
     });
-    expect(messages[1]?.content).toBe(carrier.content);
+    expect(messages[1]?.content).toBe(`OpenClaw runtime context:\n${carrier.content}`);
     const restarted = expectDefined(await prepare(structuredClone(entries)), "reloaded wrapper");
     const nextContext = {
       systemPrompt: `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Date C`,
@@ -663,25 +669,21 @@ describe("google prompt cache", () => {
 
   it("bypasses automatic validation for explicit cachedContent", async () => {
     const fetchMock = vi.fn();
+    vi.spyOn(providerFetch, "buildGuardedModelFetch").mockReturnValue(fetchMock);
+    vi.spyOn(Date, "now").mockReturnValue(0);
 
-    const wrapped = await prepareGooglePromptCacheStreamFn(
-      {
-        apiKey: "gemini-api-key",
-        extraParams: {
-          cacheRetention: "long",
-          cachedContent: "cachedContents/operator?supplied#verbatim",
-        },
-        model: makeGoogleModel(),
-        modelId: "gemini-3.1-pro-preview",
-        provider: "google",
-        sessionManager: makeSessionManager(),
-        streamFn: vi.fn(() => "stream" as never),
+    const wrapped = await prepareGooglePromptCacheStreamFn({
+      apiKey: "gemini-api-key",
+      extraParams: {
+        cacheRetention: "long",
+        cachedContent: "cachedContents/operator?supplied#verbatim",
       },
-      {
-        buildGuardedFetch: () => fetchMock as typeof fetch,
-        now: () => 0,
-      },
-    );
+      model: makeGoogleModel(),
+      modelId: "gemini-3.1-pro-preview",
+      provider: "google",
+      sessionManager: makeSessionManager(),
+      streamFn: vi.fn(() => "stream" as never),
+    });
 
     expect(wrapped).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();

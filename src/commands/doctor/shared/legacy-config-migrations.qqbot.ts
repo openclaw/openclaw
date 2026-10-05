@@ -1,10 +1,5 @@
 // One-time QQBot migrations for the Tencent 2.0 external plugin boundary.
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
-} from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import {
   listQQBotConfigEntries,
   migrateClientSecretFile,
@@ -383,129 +378,127 @@ function migrateGroupCommandLevels(params: {
   );
 }
 
-const QQBOT_EXTERNALIZATION_RULES: LegacyConfigRule[] = [
+export const LEGACY_CONFIG_MIGRATIONS_QQBOT: LegacyConfigMigrationSpec[] = [
   {
-    path: [],
-    message:
-      'Environment-only QQBot credentials need a safe Tencent QQBot 2.0 config shell. Run "openclaw doctor --fix".',
-    match: (_value, root) => shouldCreateEnvironmentOnlyQQBotConfig(root),
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot defaultAccount/accounts.default must migrate to Tencent QQBot 2.0 account selection. Run "openclaw doctor --fix".',
-    match: (value) => {
-      const qqbot = getRecord(value);
-      return Boolean(
-        qqbot &&
-        (Object.hasOwn(qqbot, "defaultAccount") || getRecord(getRecord(qqbot.accounts)?.default)),
-      );
-    },
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot clientSecretFile must migrate to a file-backed SecretRef for Tencent QQBot 2.0. Run "openclaw doctor --fix".',
-    match: (value) =>
-      hasQQBotEntryMatching(value, (entry) => Object.hasOwn(entry, "clientSecretFile")),
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot wildcard/empty allowFrom must be separated from Tencent QQBot 2.0 native approval access. Run "openclaw doctor --fix".',
-    match: (value) =>
-      hasQQBotEntryMatching(value, (entry, inheritedEntry) => {
-        if (Object.hasOwn(entry, "execApprovals")) {
-          return false;
-        }
-        const allowFrom = normalizeLegacyAllowFrom(
-          Object.hasOwn(entry, "allowFrom") ? entry.allowFrom : inheritedEntry?.allowFrom,
-        );
-        return allowFrom.length === 0 || allowFrom.includes("*");
-      }),
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot chat allowFrom must be reconciled with the previous commands.allowFrom approval operators for Tencent QQBot 2.0. Run "openclaw doctor --fix".',
-    match: (value, root) => {
-      const commandsAllowFrom = resolveLegacyQQBotCommandsAllowFrom(root);
-      if (commandsAllowFrom === undefined) {
-        return false;
-      }
-      const commandApprovers = new Set(commandsAllowFrom.filter((id) => id !== "*"));
-      return hasQQBotEntryMatching(value, (entry, inheritedEntry) => {
-        if (
-          Object.hasOwn(entry, "execApprovals") ||
-          (!Object.hasOwn(entry, "allowFrom") && inheritedEntry?.execApprovals !== undefined)
-        ) {
-          return false;
-        }
-        const allowFrom = normalizeLegacyAllowFrom(
-          Object.hasOwn(entry, "allowFrom") ? entry.allowFrom : inheritedEntry?.allowFrom,
-        ).filter((id) => id !== "*" && id !== APPROVALS_DISABLED_SENTINEL);
-        return allowFrom.some((id) => !commandApprovers.has(id));
-      });
-    },
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot groups.*.commandLevel must migrate before Tencent QQBot 2.0 can safely handle group commands. Run "openclaw doctor --fix".',
-    match: (value) => hasQQBotEntryMatching(value, hasLegacyGroupCommandLevel),
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot streaming.nativeTransport/c2cStreamApi must migrate to Tencent QQBot 2.0 streaming.mode. Run "openclaw doctor --fix".',
-    match: (value) => hasQQBotEntryMatching(value, hasLegacyStreamingTransport),
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot allowFrom IDs must migrate to Tencent QQBot 2.0 canonical uppercase OpenIDs. Run "openclaw doctor --fix".',
-    match: (value) =>
-      hasQQBotEntryMatching(value, (entry) => {
-        const current = normalizeIds(entry.allowFrom);
-        const normalized = normalizeLegacyAllowFrom(entry.allowFrom);
-        return (
-          current.length !== normalized.length ||
-          current.some((id, index) => id !== normalized[index])
-        );
-      }),
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot execApprovals must migrate to Tencent QQBot 2.0 allowFrom semantics. Run "openclaw doctor --fix".',
-    match: (value) =>
-      hasQQBotEntryMatching(value, (entry) => Object.hasOwn(entry, "execApprovals")),
-  },
-  {
-    path: ["channels", "qqbot"],
-    message:
-      'QQBot group tools policies must migrate to Tencent QQBot 2.0 toolPolicy. Run "openclaw doctor --fix".',
-    match: (value) =>
-      hasQQBotEntryMatching(value, (entry) => {
-        const groups = getRecord(entry.groups);
-        return Boolean(
-          groups &&
-          Object.values(groups).some((groupValue) => {
-            const group = getRecord(groupValue);
-            return Boolean(
-              group && (Object.hasOwn(group, "tools") || Object.hasOwn(group, "toolsBySender")),
+    id: "qqbot.tencent-2.0-compatibility",
+    legacyRules: [
+      {
+        path: [],
+        message:
+          'Environment-only QQBot credentials need a safe Tencent QQBot 2.0 config shell. Run "openclaw doctor --fix".',
+        match: (_value, root) => shouldCreateEnvironmentOnlyQQBotConfig(root),
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot defaultAccount/accounts.default must migrate to Tencent QQBot 2.0 account selection. Run "openclaw doctor --fix".',
+        match: (value) => {
+          const qqbot = getRecord(value);
+          return Boolean(
+            qqbot &&
+            (Object.hasOwn(qqbot, "defaultAccount") ||
+              getRecord(getRecord(qqbot.accounts)?.default)),
+          );
+        },
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot clientSecretFile must migrate to a file-backed SecretRef for Tencent QQBot 2.0. Run "openclaw doctor --fix".',
+        match: (value) =>
+          hasQQBotEntryMatching(value, (entry) => Object.hasOwn(entry, "clientSecretFile")),
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot wildcard/empty allowFrom must be separated from Tencent QQBot 2.0 native approval access. Run "openclaw doctor --fix".',
+        match: (value) =>
+          hasQQBotEntryMatching(value, (entry, inheritedEntry) => {
+            if (Object.hasOwn(entry, "execApprovals")) {
+              return false;
+            }
+            const allowFrom = normalizeLegacyAllowFrom(
+              Object.hasOwn(entry, "allowFrom") ? entry.allowFrom : inheritedEntry?.allowFrom,
+            );
+            return allowFrom.length === 0 || allowFrom.includes("*");
+          }),
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot chat allowFrom must be reconciled with the previous commands.allowFrom approval operators for Tencent QQBot 2.0. Run "openclaw doctor --fix".',
+        match: (value, root) => {
+          const commandsAllowFrom = resolveLegacyQQBotCommandsAllowFrom(root);
+          if (commandsAllowFrom === undefined) {
+            return false;
+          }
+          const commandApprovers = new Set(commandsAllowFrom.filter((id) => id !== "*"));
+          return hasQQBotEntryMatching(value, (entry, inheritedEntry) => {
+            if (
+              Object.hasOwn(entry, "execApprovals") ||
+              (!Object.hasOwn(entry, "allowFrom") && inheritedEntry?.execApprovals !== undefined)
+            ) {
+              return false;
+            }
+            const allowFrom = normalizeLegacyAllowFrom(
+              Object.hasOwn(entry, "allowFrom") ? entry.allowFrom : inheritedEntry?.allowFrom,
+            ).filter((id) => id !== "*" && id !== APPROVALS_DISABLED_SENTINEL);
+            return allowFrom.some((id) => !commandApprovers.has(id));
+          });
+        },
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot groups.*.commandLevel must migrate before Tencent QQBot 2.0 can safely handle group commands. Run "openclaw doctor --fix".',
+        match: (value) => hasQQBotEntryMatching(value, hasLegacyGroupCommandLevel),
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot streaming.nativeTransport/c2cStreamApi must migrate to Tencent QQBot 2.0 streaming.mode. Run "openclaw doctor --fix".',
+        match: (value) => hasQQBotEntryMatching(value, hasLegacyStreamingTransport),
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot allowFrom IDs must migrate to Tencent QQBot 2.0 canonical uppercase OpenIDs. Run "openclaw doctor --fix".',
+        match: (value) =>
+          hasQQBotEntryMatching(value, (entry) => {
+            const current = normalizeIds(entry.allowFrom);
+            const normalized = normalizeLegacyAllowFrom(entry.allowFrom);
+            return (
+              current.length !== normalized.length ||
+              current.some((id, index) => id !== normalized[index])
             );
           }),
-        );
-      }),
-  },
-];
-
-export const LEGACY_CONFIG_MIGRATIONS_QQBOT: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
-    id: "qqbot.tencent-2.0-compatibility",
-    describe: "Migrate bundled QQBot config to Tencent QQBot 2.0 canonical fields",
-    legacyRules: QQBOT_EXTERNALIZATION_RULES,
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot execApprovals must migrate to Tencent QQBot 2.0 allowFrom semantics. Run "openclaw doctor --fix".',
+        match: (value) =>
+          hasQQBotEntryMatching(value, (entry) => Object.hasOwn(entry, "execApprovals")),
+      },
+      {
+        path: ["channels", "qqbot"],
+        message:
+          'QQBot group tools policies must migrate to Tencent QQBot 2.0 toolPolicy. Run "openclaw doctor --fix".',
+        match: (value) =>
+          hasQQBotEntryMatching(value, (entry) => {
+            const groups = getRecord(entry.groups);
+            return Boolean(
+              groups &&
+              Object.values(groups).some((groupValue) => {
+                const group = getRecord(groupValue);
+                return Boolean(
+                  group && (Object.hasOwn(group, "tools") || Object.hasOwn(group, "toolsBySender")),
+                );
+              }),
+            );
+          }),
+      },
+    ],
     apply: (raw, changes) => {
       let channels = getRecord(raw.channels);
       let qqbot = getRecord(channels?.qqbot);
@@ -536,5 +529,5 @@ export const LEGACY_CONFIG_MIGRATIONS_QQBOT: LegacyConfigMigrationSpec[] = [
         migrateGroupCommandLevels({ changes, ...item });
       }
     },
-  }),
+  },
 ];

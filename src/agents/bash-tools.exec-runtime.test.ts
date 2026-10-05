@@ -687,6 +687,57 @@ describe("runExecProcess PTY fallback", () => {
     expect(spawnInput(1).mode).toBe("child");
   });
 
+  it.each([false, true])(
+    "releases launch custody and only falls back before target initiation (initiated=%s)",
+    async (initiated) => {
+      let held = false;
+      const heldAfterHandoff: boolean[] = [];
+      const heldBeforePreparation: boolean[] = [];
+      const nativeLaunch = vi.fn();
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        if (input.mode === "pty" && !initiated) {
+          throw new Error("PTY unavailable before launch");
+        }
+        const launch = () => {
+          expect(held).toBe(true);
+          nativeLaunch();
+        };
+        if (input.initiateSpawn) {
+          input.initiateSpawn(launch);
+        } else {
+          launch();
+        }
+        heldAfterHandoff.push(held);
+        if (input.mode === "pty") {
+          throw new Error("PTY readiness failed after launch");
+        }
+        return runtimeManagedRun(input, "ok");
+      });
+      const starting = runTestExecProcess({
+        usePty: true,
+        beforeSpawn: async () => {
+          heldBeforePreparation.push(held);
+          held = true;
+          return undefined;
+        },
+        initiateSpawn: (launch) => launch(),
+        releaseSpawn: () => {
+          held = false;
+        },
+      });
+      if (initiated) {
+        await expect(starting).rejects.toThrow("PTY readiness failed after launch");
+      } else {
+        expect((await (await starting).promise).status).toBe("completed");
+      }
+      expect(nativeLaunch).toHaveBeenCalledOnce();
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(initiated ? 1 : 2);
+      expect(heldAfterHandoff).toEqual([false]);
+      expect(heldBeforePreparation).toEqual(initiated ? [false] : [false, false]);
+      expect(held).toBe(false);
+    },
+  );
+
   it("emits bounded process diagnostics without command text", async () => {
     supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
       runtimeManagedRun(input, "ok"),

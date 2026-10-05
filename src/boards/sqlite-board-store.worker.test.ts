@@ -23,6 +23,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 
@@ -320,26 +321,134 @@ it("preserves committed Boards and admits followers after publication cleanup is
   }
 });
 
+it.each(["snapshot", "metadata", "mcp"] as const)(
+  "reads the committed Board %s after an earlier queued write",
+  async (operation) => {
+    const { options, store, target } = fixture();
+    const put = (toolCallId: string) =>
+      store.putWidget({
+        ...target,
+        name: "app",
+        content: {
+          kind: "mcp-app",
+          descriptor: {
+            serverName: "server",
+            toolName: "tool",
+            uiResourceUri: "ui://app",
+            toolCallId,
+          },
+          interactive: false,
+        },
+      });
+    await put("initial");
+    const { release, held } = await holdWriter(options);
+    const written = put("updated");
+    const read =
+      operation === "snapshot"
+        ? store.getSnapshot(target)
+        : operation === "metadata"
+          ? store.getSnapshotWithHtmlViewMetadata(target).then(({ snapshot }) => snapshot)
+          : store.readWidgetMcpApp(target, "app");
+    try {
+      release.resolve();
+      await held;
+      await written;
+      expect(await read).toMatchObject(
+        operation === "mcp"
+          ? { revision: 2, descriptor: { toolCallId: "updated" } }
+          : { revision: 2, widgets: [{ name: "app", revision: 2 }] },
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled([held, written, read]);
+    }
+  },
+);
+
+it.each(["transaction", "commit"] as const)(
+  "refuses a Board read whose target changes at the %s grant",
+  async (stage) => {
+    const { options, store, target } = fixture();
+    await store.putWidget({
+      ...target,
+      name: "status",
+      content: { kind: "html", html: "private" },
+    });
+    let sessionKey = target.sessionKey;
+    const reader = new SqliteBoardStore({
+      resolveSession: () => ({ ...options, sessionKey }),
+      env: options.env,
+    });
+    const create = admission.createSqliteWorkerOperationAdmission;
+    const interception = vi
+      .spyOn(admission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        create((request, grant) => {
+          if (request.stage === stage) {
+            sessionKey = "agent:main:replacement";
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    const consume = vi.fn();
+    try {
+      await expect(reader.useSnapshot(target, consume)).rejects.toBeInstanceOf(
+        BoardValidationError,
+      );
+      expect(consume).not.toHaveBeenCalled();
+    } finally {
+      interception.mockRestore();
+    }
+    expect((await store.getSnapshot(target)).widgets).toMatchObject([{ name: "status" }]);
+  },
+);
+
+it.each(["snapshot", "document"] as const)(
+  "retains Board validation error identity from a worker %s read",
+  async (operation) => {
+    const { database, store, target } = fixture();
+    await store.putWidget({
+      ...target,
+      name: "status",
+      content: { kind: "html", html: "private" },
+    });
+    database.db
+      .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
+      .run(JSON.stringify({ contentOwner: "invalid" }), target.sessionKey);
+    const read =
+      operation === "snapshot"
+        ? store.getSnapshot(target)
+        : store.useWidgetDocument(target, "status", (document) => document);
+    await expect(read).rejects.toBeInstanceOf(BoardValidationError);
+    await expect(read).rejects.toMatchObject({ code: "invalid_operation" });
+  },
+);
+
 it.each([
-  { consumer: "write", microtasks: 0 },
-  { consumer: "write", microtasks: 2 },
-  { consumer: "read", microtasks: 2 },
+  { consumer: "write", microtasks: 0, source: "snapshot" },
+  { consumer: "write", microtasks: 2, source: "snapshot" },
+  { consumer: "read", microtasks: 2, source: "snapshot" },
+  { consumer: "write", microtasks: 2, source: "document" },
 ] as const)(
-  "queues consumer $consumer behind an earlier Board writer ($microtasks microtasks)",
-  async ({ consumer, microtasks }) => {
+  "queues $source consumer $consumer behind an earlier Board writer ($microtasks microtasks)",
+  async ({ consumer, microtasks, source }) => {
     const { options, store, target } = fixture();
     const put = (name: string) =>
       store.putWidget({ ...target, name, content: { kind: "html", html: name } });
     await put("initial");
     const { release, held } = await holdWriter(options);
-    const consumed = store.useSnapshot(target, async () => {
+    const consume = async () => {
       for (let turn = 0; turn < microtasks; turn++) {
         await Promise.resolve();
       }
       return consumer === "write"
         ? put("consumer")
         : store.useSnapshot(target, (snapshot) => snapshot);
-    });
+    };
+    const consumed =
+      source === "snapshot"
+        ? store.useSnapshot(target, consume)
+        : store.useWidgetDocument(target, "initial", consume);
     const following = put("following");
     try {
       release.resolve();

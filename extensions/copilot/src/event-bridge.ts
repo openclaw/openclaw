@@ -19,7 +19,6 @@ import {
   resolveAssistantUsage,
   resolveEventTimestamp,
   sanitizeToolDetailText,
-  type AssistantMessage,
   type AssistantProjectionChunk,
   type AssistantProjectionGroup,
   type AssistantUsageSnapshot,
@@ -92,43 +91,9 @@ interface EventBridgeSnapshot {
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 
-interface BuildAssistantMessageArgs {
-  modelRef: { api?: string; id: string; provider: string };
-  now: () => number;
-}
-
-interface EventBridgeController {
-  recordSendResult(result: SessionEvent | undefined): boolean;
-  awaitCompactionChain(): Promise<void>;
-  awaitCompactionCompletion(): Promise<void>;
-  awaitSessionIdle(): Promise<void>;
-  settleCompactionWait(): void;
-  awaitDeltaChain(): Promise<void>;
-  awaitAgentEventChain(): Promise<void>;
-  flushTranscriptProjection(): void;
-  hasObservedCompaction(): boolean;
-  hasObservedSessionIdle(): boolean;
-  isCompacting(): boolean;
-  snapshot(): EventBridgeSnapshot;
-  buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
-  finalizeAssistantTexts(): string[];
-  detach(): void;
-  completeTool(tool: {
-    toolCallId: string;
-    parentToolCallId?: string;
-    toolName: string;
-    args?: unknown;
-    result?: unknown;
-    isError: boolean;
-  }): void;
-}
-
 type MessageAccumulator = { text: string };
 
-export function attachEventBridge(
-  session: SessionLike,
-  options: EventBridgeOptions,
-): EventBridgeController {
+export function attachEventBridge(session: SessionLike, options: EventBridgeOptions) {
   const messagesById = new Map<string, MessageAccumulator>();
   const reasoningById = new Map<string, string>();
   const durableReasoningById = new Map<string, string>();
@@ -205,26 +170,14 @@ export function attachEventBridge(
     });
   });
 
-  listen("system.message", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
-      return;
-    }
-    // System/developer prompts affect native history but AgentMessage has no
-    // lossless canonical role for them, so keep native replay fail-closed.
-    options.transcriptProjection?.journal.markReplayIncomplete();
-  });
-
-  listen("skill.invoked", (event) => {
-    if (isRootSessionEvent(event) && event.ephemeral !== true) {
-      options.transcriptProjection?.journal.markReplayIncomplete();
-    }
-  });
-
-  listen("system.notification", (event) => {
-    if (isRootSessionEvent(event) && event.ephemeral !== true) {
-      options.transcriptProjection?.journal.markReplayIncomplete();
-    }
-  });
+  // These native history events have no lossless AgentMessage projection.
+  for (const eventType of ["system.message", "skill.invoked", "system.notification"] as const) {
+    listen(eventType, (event) => {
+      if (isRootSessionEvent(event) && event.ephemeral !== true) {
+        options.transcriptProjection?.journal.markReplayIncomplete();
+      }
+    });
+  }
 
   listen("assistant.message_delta", (event) => {
     if (!isRootSessionEvent(event)) {
@@ -535,7 +488,7 @@ export function attachEventBridge(
   });
 
   return {
-    recordSendResult(result) {
+    recordSendResult(result: SessionEvent | undefined) {
       if (
         !isAssistantMessageEvent(result) ||
         !isRootSessionEvent(result) ||
@@ -578,7 +531,7 @@ export function attachEventBridge(
     isCompacting() {
       return activeCompactionCount > 0;
     },
-    snapshot() {
+    snapshot(): EventBridgeSnapshot {
       return {
         assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
         completedCount,
@@ -589,7 +542,9 @@ export function attachEventBridge(
         usage: usage ? { ...usage } : undefined,
       };
     },
-    buildAssistantMessage(args) {
+    buildAssistantMessage(
+      args: Pick<Parameters<typeof buildAssistantMessage>[0], "modelRef" | "now">,
+    ) {
       const group = pendingAssistantProjection ?? lastAssistantProjection;
       return group
         ? buildAssistantProjectionGroup(
@@ -612,7 +567,14 @@ export function attachEventBridge(
     finalizeAssistantTexts() {
       return finalizeAssistantTexts(messagesById, lastAssistantEvent);
     },
-    completeTool(tool) {
+    completeTool(tool: {
+      toolCallId: string;
+      parentToolCallId?: string;
+      toolName: string;
+      args?: unknown;
+      result?: unknown;
+      isError: boolean;
+    }) {
       const owner = toolCallsById.get(tool.parentToolCallId ?? tool.toolCallId);
       if (detached || !owner?.root) {
         return;

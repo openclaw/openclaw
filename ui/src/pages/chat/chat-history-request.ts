@@ -8,16 +8,15 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../../lib/gateway-availability.ts";
+import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
-import {
-  CHAT_HISTORY_RETRY_WINDOW_MS,
-  isAgentDatabaseInspectionPendingError,
-  isRetryableChatReadError,
-  resolveChatReadRetryDelayMs,
-} from "./chat-history-retry.ts";
+import { CHAT_HISTORY_RETRY_WINDOW_MS, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
   type ChatHistoryResult,
   type ChatHistoryObservation,
@@ -141,7 +140,7 @@ async function requestChatHistory<T extends ChatHistoryResponse>(
         throw err;
       }
       onRetry(err);
-      await sleepWithAbort(resolveChatReadRetryDelayMs(err, attemptNumber++), signal);
+      await sleepWithAbort(resolveGatewayReadRetryDelayMs(err, attemptNumber++), signal);
       if (!shouldContinue() || !shouldRetry()) {
         throw err;
       }

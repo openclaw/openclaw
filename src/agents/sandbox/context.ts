@@ -25,6 +25,11 @@ import {
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagents/subagent-attachment-paths.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
+import { ensureSandboxWorkspace } from "../workspace.js";
+import {
+  timeWorktreePreparationPhase,
+  withWorktreePreparationTiming,
+} from "../worktrees/preparation-timing.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -39,7 +44,6 @@ import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
-import { ensureSandboxWorkspace } from "./workspace.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
 
@@ -271,7 +275,8 @@ async function prepareSandboxWorkspaceSelection(
         agentId: runtime.agentId,
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
-        backend: resolved.cfg.backend,
+        sandbox: resolved.cfg,
+        signal: readAdmittedRunOperatorAuthority(params.admittedRunContext)?.signal,
         assertCurrent: params.assertCurrent,
       })
     : undefined;
@@ -345,7 +350,9 @@ async function resolveProvisionedSandboxContext(
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
-  } = await ensureSandboxWorkspaceLayout(params, selected, guard);
+  } = await timeWorktreePreparationPhase("workspaceLayout", () =>
+    ensureSandboxWorkspaceLayout(params, selected, guard),
+  );
   localWorkspace?.assertCurrent();
 
   const docker = await resolveSandboxDockerUser({
@@ -426,9 +433,9 @@ async function resolveProvisionedSandboxContext(
     );
   };
 
-  const backend = localWorkspace
-    ? await localWorkspace.provision(provisionBackend)
-    : await provisionBackend();
+  const backend = await timeWorktreePreparationPhase("containerStart", () =>
+    localWorkspace ? localWorkspace.provision(provisionBackend) : provisionBackend(),
+  );
   params.assertCurrent?.();
 
   const resolvedBrowserConfig = resolvedCfg.browser.enabled
@@ -476,7 +483,7 @@ async function resolveProvisionedSandboxContext(
         })
       : null;
 
-  const sandboxContext: SandboxContext = {
+  const sandboxContext: SandboxContext & { backend: typeof backend } = {
     enabled: true,
     ...(runtime.sandboxRequired ? { required: true } : {}),
     ...(localWorkspace
@@ -536,10 +543,12 @@ export async function resolveSandboxContext(
   // registry, and filesystem-bridge setup so model fallback never retries it.
   try {
     assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
-    const context = await resolveProvisionedSandboxContext(ownedParams, resolved, {
-      assertHost: assertStateOwner,
-      beforeLegacyApply: assertCurrent,
-    });
+    const context = await withWorktreePreparationTiming("sandbox", () =>
+      resolveProvisionedSandboxContext(ownedParams, resolved, {
+        assertHost: assertStateOwner,
+        beforeLegacyApply: assertCurrent,
+      }),
+    );
     assertStateOwner();
     return context;
   } catch (error) {

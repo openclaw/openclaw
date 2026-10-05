@@ -171,8 +171,8 @@ function normalizeDockerLimit(value?: string | number) {
   return normalizeOptionalString(value);
 }
 
-function normalizeFiniteDockerNumber(value: unknown, min: number): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(min, value) : undefined;
+function normalizeFiniteDockerNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
 function formatUlimitValue(
@@ -183,15 +183,15 @@ function formatUlimitValue(
     return null;
   }
   if (typeof value === "number") {
-    const normalized = normalizeFiniteDockerNumber(value, 0);
+    const normalized = normalizeFiniteDockerNumber(value);
     return normalized === undefined ? null : `${name}=${normalized}`;
   }
   if (typeof value === "string") {
     const raw = value.trim();
     return raw ? `${name}=${raw}` : null;
   }
-  const soft = normalizeFiniteDockerNumber(value.soft, 0);
-  const hard = normalizeFiniteDockerNumber(value.hard, 0);
+  const soft = normalizeFiniteDockerNumber(value.soft);
+  const hard = normalizeFiniteDockerNumber(value.hard);
   const limits = [soft, hard].filter((limit) => limit !== undefined);
   return limits.length ? `${name}=${limits.join(":")}` : null;
 }
@@ -200,15 +200,13 @@ export function buildSandboxCreateArgs(
   params: SandboxCreateSecurityParams & {
     name: string;
     scopeKey: string;
-    createdAtMs?: number;
     labels?: Record<string, string>;
     configHash?: string;
-    includeBinds?: boolean;
   },
 ) {
   validateSandboxCreateSecurity(params);
 
-  const createdAtMs = params.createdAtMs ?? Date.now();
+  const createdAtMs = Date.now();
   const args = ["create", "--name", params.name];
   // The container engine's init owns PID 1 so orphaned children from long-running
   // tool and browser workloads are reaped instead of accumulating against pidsLimit.
@@ -270,7 +268,7 @@ export function buildSandboxCreateArgs(
       args.push("--add-host", entry);
     }
   }
-  const pidsLimit = normalizeFiniteDockerNumber(params.cfg.pidsLimit, 0);
+  const pidsLimit = normalizeFiniteDockerNumber(params.cfg.pidsLimit);
   if (pidsLimit !== undefined && pidsLimit > 0) {
     args.push("--pids-limit", String(pidsLimit));
   }
@@ -282,7 +280,7 @@ export function buildSandboxCreateArgs(
   if (memorySwap) {
     args.push("--memory-swap", memorySwap);
   }
-  const cpus = normalizeFiniteDockerNumber(params.cfg.cpus, 0);
+  const cpus = normalizeFiniteDockerNumber(params.cfg.cpus);
   if (cpus !== undefined && cpus > 0) {
     args.push("--cpus", String(cpus));
   }
@@ -296,16 +294,7 @@ export function buildSandboxCreateArgs(
       args.push("--ulimit", formatted);
     }
   }
-  if (params.includeBinds !== false) {
-    appendCustomBinds(args, params.cfg.binds);
-  }
   return { argv: args, env };
-}
-
-function appendCustomBinds(args: string[], binds: readonly string[] | undefined): void {
-  for (const bind of binds ?? []) {
-    args.push("-v", bind);
-  }
 }
 
 async function createSandboxContainer(params: {
@@ -346,7 +335,6 @@ async function createSandboxContainer(params: {
     cfg: createCfg,
     scopeKey,
     configHash: params.configHash,
-    includeBinds: false,
     bindSourceRoots: params.bindSourceRoots,
   });
   if (podmanPolicy) {
@@ -358,7 +346,9 @@ async function createSandboxContainer(params: {
       `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
     );
   }
-  appendCustomBinds(args, params.mountPlan.binds);
+  for (const bind of params.mountPlan.binds) {
+    args.push("-v", bind);
+  }
   const created = await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
     params.assertCurrent?.();
@@ -386,7 +376,7 @@ type EnsureSandboxContainerParams = {
   workspaceSource?: "managed-worktree";
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  engine?: SandboxContainerEngine;
+  engine: SandboxContainerEngine;
   podmanTarget?: SandboxContainerEngineTarget;
   scopeKey: string;
   workspaceDir: string;
@@ -398,7 +388,7 @@ type EnsureSandboxContainerParams = {
 };
 
 export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
-  const engine = params.engine ?? DOCKER_SANDBOX_ENGINE;
+  const engine = params.engine;
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const prefix =
     engine.id === "podman"
@@ -425,7 +415,7 @@ async function ensureSandboxContainerLifecycle(
   containerName: string,
   source: ContainerSourceLease | undefined,
 ) {
-  const configuredEngine = params.engine ?? DOCKER_SANDBOX_ENGINE;
+  const configuredEngine = params.engine;
   const podmanRuntimeInfo =
     configuredEngine.id === "podman" ? await resolvePodmanSandboxRuntimeInfo() : undefined;
   if (podmanRuntimeInfo) {

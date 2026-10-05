@@ -203,14 +203,8 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
       : undefined;
   const inputEmail =
     actionType === "email_text_input" && inputValue?.includes("@") ? inputValue : undefined;
-  let inputUrl: string | undefined;
-  if (actionType === "url_text_input" && inputValue) {
-    try {
-      inputUrl = new URL(inputValue).toString();
-    } catch {
-      inputUrl = undefined;
-    }
-  }
+  const inputUrl =
+    actionType === "url_text_input" && inputValue ? URL.parse(inputValue)?.toString() : undefined;
   const richTextValue = actionType === "rich_text_input" ? typed.rich_text_value : undefined;
   const richTextPreview = summarizeRichTextPreview(richTextValue);
   const inputKind =

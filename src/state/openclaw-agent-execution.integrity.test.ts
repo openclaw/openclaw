@@ -1,5 +1,8 @@
+import { fork } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -490,7 +493,7 @@ it.each([
       store.close();
     }
   }
-  const quickCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseQuickCheck");
+  const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
   try {
     if (proof === "failed") {
       await expect(generation.run(source, async () => "opened")).rejects.toThrow(
@@ -503,7 +506,7 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    expect(quickCheck).not.toHaveBeenCalled();
+    expect(integrityCheck).not.toHaveBeenCalled();
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
@@ -518,7 +521,7 @@ it.each([
     );
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
-    quickCheck.mockRestore();
+    integrityCheck.mockRestore();
     try {
       await generation.close();
     } finally {
@@ -532,3 +535,170 @@ it.each([
     expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
   }
 });
+
+it.runIf(process.platform === "linux")(
+  "classifies dead-owner admission using native WAL capabilities and provenance",
+  async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
+    const cases = [
+      "same-boot",
+      "checkpointed-wal",
+      "foreign-boot",
+      "legacy-lease",
+      "pid-reused",
+      "dirty-receipt",
+      "corrupt-page",
+      "interrupted-admission",
+    ];
+    const child = fork(
+      fileURLToPath(new URL("./openclaw-agent-db-crash.test-support.ts", import.meta.url)),
+      cases,
+      { execArgv: ["--import", "tsx"], env: { ...process.env, ...env }, silent: true },
+    );
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    type Fixture = { agentId: string; path: string; corruptionOffset: number };
+    let fixtures: Fixture[];
+    try {
+      fixtures = await new Promise<Fixture[]>((resolve, reject) => {
+        const failed = () => reject(new Error(`Crash fixture exited before opening: ${stderr}`));
+        child.once("error", reject);
+        child.once("exit", failed);
+        child.once("message", (message) => {
+          child.off("exit", failed);
+          resolve(message as Fixture[]);
+        });
+      });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
+    }
+    expect(child.signalCode).toBe("SIGKILL");
+    expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);
+    const shared = openOpenClawStateDatabase({ env });
+    for (const fixture of fixtures) {
+      const { agentId, path: pathname } = fixture;
+      const deferred = agentId === "same-boot" || agentId === "checkpointed-wal";
+      const held = shared.db
+        .prepare(
+          "SELECT lease_id, provenance, owner_pid, owner_start_time FROM agent_database_leases WHERE path=?",
+        )
+        .get(pathname);
+      expect(held).toMatchObject({
+        lease_id: expect.stringMatching(/^[a-f0-9-]+$/u),
+        provenance: expect.stringMatching(/^process-v1:[a-f0-9]{64}$/u),
+        owner_pid: child.pid,
+        owner_start_time: expect.any(Number),
+      });
+      if (agentId === "interrupted-admission") {
+        expect(readOpenClawAgentIntegrityVerification(pathname, env)).toBeUndefined();
+      } else {
+        expect(readOpenClawAgentIntegrityVerification(pathname, env)?.clean_close).toBe(0);
+      }
+      if (agentId === "checkpointed-wal") {
+        expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+      } else {
+        expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
+      }
+      if (agentId === "foreign-boot" || agentId === "corrupt-page") {
+        shared.db
+          .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
+          .run(`process-v1:${"0".repeat(64)}`, pathname);
+      } else if (agentId === "legacy-lease") {
+        shared.db
+          .prepare("UPDATE agent_database_leases SET provenance=NULL WHERE path=?")
+          .run(pathname);
+      } else if (agentId === "pid-reused") {
+        shared.db
+          .prepare("UPDATE agent_database_leases SET owner_pid=?, owner_start_time=-1 WHERE path=?")
+          .run(process.pid, pathname);
+      } else if (agentId === "dirty-receipt") {
+        shared.db.prepare("DELETE FROM agent_database_leases WHERE path=?").run(pathname);
+      }
+      if (agentId === "corrupt-page") {
+        const file = fs.openSync(pathname, "r+");
+        try {
+          // This checkpointed table has no newer WAL image to hide the invalid btree page.
+          fs.writeSync(file, Buffer.from([0]), 0, 1, fixture.corruptionOffset);
+        } finally {
+          fs.closeSync(file);
+        }
+      }
+
+      counter.path = pathname;
+      counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+      const context = captureOpenClawStateWorkerContext({ env });
+      const assertCurrent = () => context.admission.assertCurrent();
+      const source: AgentDatabaseRequestExecutionSource = {
+        assertCurrent,
+        createAdmission: (binding) => () => ({
+          nativeLocations: binding.nativeLocations,
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            binding.authorize(request);
+            assertCurrent();
+            if (!grant()) {
+              throw new Error("Crash fixture lost its current native admission");
+            }
+          }, binding.attachment),
+        }),
+      };
+      const generation = createAgentDatabaseNativeGeneration(
+        agentId,
+        pathname,
+        context,
+        assertCurrent,
+        assertCurrent,
+        undefined,
+        () => {},
+      );
+      const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
+      try {
+        if (agentId === "corrupt-page") {
+          await expect(generation.run(source, async () => "opened")).rejects.toThrow(
+            /integrity|malformed|corrupt/i,
+          );
+          expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
+          expect(integrityCheck).not.toHaveBeenCalled();
+          continue;
+        }
+        const sessionKey = `agent:${agentId}:after-crash`;
+        await expect(
+          generation.run(source, (scope) => {
+            return scope.execute({
+              type: "session.transcript.initialize",
+              input: { sessionKey, sessionId: "after-crash" },
+            });
+          }),
+        ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
+        expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual(
+          deferred ? [0, 0] : [1, 1],
+        );
+        if (deferred) {
+          expect(integrityCheck).toHaveBeenCalledExactlyOnceWith({
+            path: pathname,
+            env: expect.objectContaining(env),
+            check: "full",
+          });
+          expect(readOpenClawAgentIntegrityVerification(pathname, env)).toBeUndefined();
+        } else {
+          expect(integrityCheck).not.toHaveBeenCalled();
+        }
+      } finally {
+        integrityCheck.mockRestore();
+        await generation.close();
+      }
+      using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
+      expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
+        { store_json: '{"ok":true}' },
+      ]);
+      expect(reopened.prepare("SELECT state_key FROM auth_profile_state").all()).toEqual([
+        { state_key: "committed-wal" },
+      ]);
+    }
+  },
+);

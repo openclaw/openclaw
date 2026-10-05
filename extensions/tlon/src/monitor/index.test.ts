@@ -474,7 +474,7 @@ describe("monitorTlonProvider reply prefixes", () => {
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
     realUrbitFixture.config = {
       session: { store: join(stateDir, "sessions.json") },
-      agents: { list: [{ id: "main", identity: { name: "Test Bot" } }] },
+      agents: { entries: { main: { identity: { name: "Test Bot" } } } },
       messages: { responsePrefix: "[global]", visibleReplies: "automatic" },
       channels: {
         tlon: {

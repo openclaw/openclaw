@@ -64,12 +64,11 @@ function resolveInjectedAssistantContent(params: {
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptPath?: string;
-  storePath?: string;
-  sessionId?: string;
+  storePath: string | undefined;
+  sessionId: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
-  sessionKey?: string;
+  sessionKey: string;
   agentId?: string;
   message: string;
   label?: string;
@@ -80,11 +79,13 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   contextFreeCommand?: true;
-  now?: number;
   config?: OpenClawConfig;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<GatewayInjectedTranscriptAppendResult> {
-  const now = params.now ?? Date.now();
+  if (!params.sessionKey.trim() || !params.sessionId.trim() || !params.storePath) {
+    return { ok: false, error: "transcript identity not resolved" };
+  }
+  const now = Date.now();
   const resolvedContent = resolveInjectedAssistantContent(params);
   const displayMessage: {
     role: "assistant";
@@ -131,13 +132,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   }
 
   try {
-    if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
-      return { ok: false, error: "transcript identity not resolved" };
-    }
     if (params.abortMeta?.producerSettled) {
-      if (!params.storePath || !params.sessionId || !params.sessionKey) {
-        return { ok: false, error: "settled producer transcript identity not resolved" };
-      }
       const scope = {
         storePath: params.storePath,
         sessionId: params.sessionId,
@@ -166,10 +161,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     }
     const turn = await persistSessionTranscriptTurn(
       {
-        sessionKey: params.sessionKey ?? "",
-        ...(params.transcriptPath ? { sessionFile: params.transcriptPath } : {}),
-        ...(params.storePath ? { storePath: params.storePath } : {}),
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        sessionId: params.sessionId,
         ...(params.agentId ? { agentId: params.agentId } : {}),
       },
       {
@@ -178,7 +172,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         updateMode: "inline",
         onMessageCommitted: params.onMessageCommitted,
         ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
-        touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
+        touchSessionEntry: true,
         ...(params.config ? { config: params.config } : {}),
         messages: [
           {

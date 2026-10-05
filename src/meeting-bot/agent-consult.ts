@@ -13,7 +13,6 @@ import {
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "../talk/agent-consult-tool.js";
 import type { RealtimeVoiceTool } from "../talk/provider-types.js";
-import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type {
   MeetingAgentConsultSurface,
   MeetingPlatformRuntimeMetadata,
@@ -79,22 +78,6 @@ export function createMeetingRealtimeEngineBindings(params: {
       });
     },
   };
-}
-
-async function submitMeetingConsultWorkingResponse(params: {
-  session: RealtimeVoiceBridgeSession;
-  abortSignal?: AbortSignal;
-  callId: string;
-  label: string;
-}): Promise<void> {
-  if (params.abortSignal?.aborted || !params.session.bridge.supportsToolResultContinuation) {
-    return;
-  }
-  await params.session.submitToolResult(
-    params.callId,
-    buildRealtimeVoiceAgentConsultWorkingResponse(params.label),
-    { willContinue: true },
-  );
 }
 
 type MeetingAgentConsultContext = {
@@ -169,12 +152,13 @@ async function handleMeetingRealtimeConsultToolCall(
     await submitError(unavailableToolError);
     return;
   }
-  await submitMeetingConsultWorkingResponse({
-    session: params.session,
-    abortSignal: params.abortSignal,
-    callId,
-    label: params.surface.workingResponseLabel,
-  });
+  await (params.abortSignal?.aborted || !params.session.bridge.supportsToolResultContinuation
+    ? undefined
+    : params.session.submitToolResult(
+        callId,
+        buildRealtimeVoiceAgentConsultWorkingResponse(params.surface.workingResponseLabel),
+        { willContinue: true },
+      ));
   if (params.abortSignal?.aborted) {
     return;
   }

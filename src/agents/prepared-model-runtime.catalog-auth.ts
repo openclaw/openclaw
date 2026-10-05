@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -8,6 +9,7 @@ import { withPreparedAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeAuthProfileStores } from "./auth-profiles/persisted.js";
 import { removeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import type { AuthProfileCredential, RuntimeAuthProfileStore } from "./auth-profiles/types.js";
+import { resolveProviderConfigSecretInput } from "./model-auth-provider-config.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import type {
@@ -18,8 +20,14 @@ import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-r
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 
 type ModelServiceTierObservation = NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number];
-type AccountCatalogObservation = {
-  credential: AuthProfileCredential;
+function readDirectBinding(config: OpenClawConfig, provider: string) {
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(config, provider);
+  return { apiKey: ref ?? providerConfig?.apiKey, auth: providerConfig?.auth };
+}
+type AccountCatalogCredential =
+  | { source: "profile"; credential: AuthProfileCredential }
+  | { source: "direct"; provider: string; credential: ReturnType<typeof readDirectBinding> };
+type AccountCatalogObservation = AccountCatalogCredential & {
   result?: Promise<readonly ProviderCatalogOutcome[]>;
   outcomes?: readonly ProviderCatalogOutcome[];
   modelServiceTiers?: readonly ModelServiceTierObservation[];
@@ -41,20 +49,21 @@ function matchesServiceTierRoute(
 export function createPreparedAccountCatalogAccess(
   isCurrent: () => boolean,
   retirementSignal?: AbortSignal,
+  config: OpenClawConfig = {},
 ): PreparedAccountCatalogAccess {
   const ownerIsCurrent = () => !retirementSignal?.aborted && isCurrent();
   const accounts = new Map<string, AccountCatalogObservation>();
-  const readAccount = (profileId: string, credential: AuthProfileCredential) => {
-    const account = accounts.get(profileId);
+  const readAccount = (identityKey: string, credential: AccountCatalogCredential["credential"]) => {
+    const account = accounts.get(identityKey);
     if (account && !isDeepStrictEqual(account.credential, credential)) {
-      accounts.delete(profileId);
+      accounts.delete(identityKey);
       return undefined;
     }
     return account;
   };
-  const createAccount = (profileId: string, credential: AuthProfileCredential) => {
-    const account: AccountCatalogObservation = { credential: structuredClone(credential) };
-    accounts.set(profileId, account);
+  const createAccount = (identityKey: string, credential: AccountCatalogCredential) => {
+    const account: AccountCatalogObservation = structuredClone(credential);
+    accounts.set(identityKey, account);
     pruneMapToMaxSize(accounts, 64);
     return account;
   };
@@ -64,7 +73,14 @@ export function createPreparedAccountCatalogAccess(
       if (!ownerIsCurrent()) {
         return;
       }
-      for (const [profileId, account] of accounts) {
+      for (const [identityKey, account] of accounts) {
+        if (account.source === "direct") {
+          if (includesProvider(account.provider)) {
+            readAccount(identityKey, readDirectBinding(config, account.provider));
+          }
+          continue;
+        }
+        const profileId = identityKey.slice("profile:".length);
         const credential = authStore.profiles[profileId];
         // Shared auth refresh never loads unselected personal accounts.
         if (!credential && isUserModelAuthProfileId(profileId)) {
@@ -74,7 +90,7 @@ export function createPreparedAccountCatalogAccess(
           (includesProvider(account.credential.provider) || profileIds?.includes(profileId)) &&
           !isDeepStrictEqual(account.credential, credential)
         ) {
-          accounts.delete(profileId);
+          accounts.delete(identityKey);
         }
       }
     },
@@ -86,20 +102,46 @@ export function createPreparedAccountCatalogAccess(
         ...params,
         baseUrl: normalizeCatalogRouteBaseUrl(params.baseUrl) ?? params.baseUrl,
       };
-      const observation = accounts
-        .get(params.profileId)
-        ?.modelServiceTiers?.find((candidate) => matchesServiceTierRoute(candidate, route));
+      let account = accounts.get(params.identityKey);
+      if (account?.source === "direct") {
+        account = readAccount(params.identityKey, readDirectBinding(config, account.provider));
+      }
+      const observation = account?.modelServiceTiers?.find((candidate) =>
+        matchesServiceTierRoute(candidate, route),
+      );
       return observation && [...observation.serviceTiers];
     },
     prepareServiceTierObserver(params) {
-      if (!ownerIsCurrent()) {
+      const selected = params.selectedCredential;
+      if (!ownerIsCurrent() || selected.source === "harness") {
         return () => false;
       }
-      const captured =
-        readAccount(params.profileId, params.credential) ??
-        createAccount(params.profileId, params.credential);
+      let captured: AccountCatalogObservation;
+      if (selected.source === "profile") {
+        if (!params.credential) {
+          return () => false;
+        }
+        captured =
+          readAccount(selected.identityKey, params.credential) ??
+          createAccount(selected.identityKey, { source: "profile", credential: params.credential });
+      } else {
+        const credential = readDirectBinding(config, selected.provider);
+        captured =
+          readAccount(selected.identityKey, credential) ??
+          createAccount(selected.identityKey, {
+            source: "direct",
+            provider: selected.provider,
+            credential,
+          });
+      }
       return (observation) => {
-        if (!ownerIsCurrent() || accounts.get(params.profileId) !== captured) {
+        if (
+          !ownerIsCurrent() ||
+          accounts.get(selected.identityKey) !== captured ||
+          (captured.source === "direct" &&
+            readAccount(selected.identityKey, readDirectBinding(config, captured.provider)) !==
+              captured)
+        ) {
           return false;
         }
         const route = {
@@ -128,14 +170,18 @@ export function createPreparedAccountCatalogAccess(
         );
       }
       if (params.allowDiscovery && params.refresh) {
-        accounts.delete(params.profileId);
+        accounts.delete(`profile:${params.profileId}`);
       }
-      let observation = readAccount(params.profileId, params.credential);
+      const identityKey = `profile:${params.profileId}`;
+      let observation = readAccount(identityKey, params.credential);
       if (!observation) {
         if (!params.allowDiscovery) {
           return { outcomes: [], isCurrent: ownerIsCurrent };
         }
-        observation = createAccount(params.profileId, params.credential);
+        observation = createAccount(identityKey, {
+          source: "profile",
+          credential: params.credential,
+        });
       }
       // A response observation does not mean this account's catalog was discovered.
       if (params.allowDiscovery && !observation.result) {
@@ -147,7 +193,8 @@ export function createPreparedAccountCatalogAccess(
         return { outcomes: [], isCurrent: ownerIsCurrent };
       }
       const captured = observation;
-      const current = () => ownerIsCurrent() && accounts.get(params.profileId) === captured;
+      const current = () =>
+        ownerIsCurrent() && accounts.get(`profile:${params.profileId}`) === captured;
       let outcomes: readonly ProviderCatalogOutcome[];
       try {
         outcomes = captured.outcomes ?? (await result);
@@ -158,7 +205,7 @@ export function createPreparedAccountCatalogAccess(
             // Catalog failure cannot erase a tier actually observed on the API route.
             captured.result = undefined;
           } else {
-            accounts.delete(params.profileId);
+            accounts.delete(`profile:${params.profileId}`);
           }
         }
         throw error;

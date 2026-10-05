@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -7,7 +8,14 @@ import type {
   RuntimeSessionFactsResult,
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { resolveProjectedControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
+import { readUserProfileVersion } from "../state/user-profile-events.js";
+import {
+  resolveProjectedControlUiSessionPrTarget,
+  type ControlUiSessionPrTarget,
+} from "./control-ui-session-pr-read.js";
+import { readGatewayAccessRevision } from "./gateway-access-revision.js";
+import { operatorReadShareKey } from "./methods/read-share-keys.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { withInProcessGatewayRead } from "./server-plugin-in-process-dispatch.js";
@@ -15,10 +23,103 @@ import { canTrustedOfficialPluginRequestScopes } from "./server-plugin-subagent-
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
-import { requireSessionRowProjection } from "./session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "./session-row-projection-access.js";
 import { resolveSessionVisibility } from "./session-sharing.js";
 
 const SESSION_FACTS_LIMIT = 40;
+const SESSION_FACTS_PR_LOAD_LIMIT = 8;
+const readScopes = new WeakMap<
+  object,
+  {
+    config: object;
+    policy: object | undefined;
+    access: number;
+    profiles: number;
+    revision: object;
+    scopes: Map<string, string>;
+  }
+>();
+
+/** Reuse session-derived reads only under the same published facts and authorized viewer. */
+export async function withTrustedPluginSessionReadScope<T>(
+  run: (scope: string | undefined) => Promise<T>,
+  resolveGatewayContext?: GatewayContextResolver,
+): Promise<T> {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
+    throw new Error("Session reads are only available to bundled or trusted official plugins");
+  }
+  return await withInProcessGatewayRead(
+    {
+      method: "sessions.list",
+      scope,
+      resolveGatewayContext,
+      callerAuthorityError: "Session read caller authority is no longer active",
+    },
+    async ({ context }, assertCurrent) => {
+      const callerKey = () => operatorReadShareKey({ client: scope?.client ?? null }, {});
+      const key = callerKey();
+      let token: string | undefined;
+      let assertScopeCurrent = assertCurrent;
+      if (key !== null) {
+        const projection = requireSessionRowProjection(context);
+        do {
+          await projection.prepareSelection(true);
+          await projection.prepareMembership();
+          assertCurrent();
+        } while (projection.needsSelectionPreparation());
+        const config = context.getRuntimeConfig();
+        const policy = context.getCommittedRuntimeConfig?.();
+        const access = readGatewayAccessRevision();
+        const profiles = readUserProfileVersion();
+        const revision = projection.sharingRevision;
+        assertScopeCurrent = () => {
+          assertCurrent();
+          if (
+            callerKey() !== key ||
+            getSessionRowProjection(context) !== projection ||
+            context.getRuntimeConfig() !== config ||
+            context.getCommittedRuntimeConfig?.() !== policy ||
+            readGatewayAccessRevision() !== access ||
+            readUserProfileVersion() !== profiles
+          ) {
+            throw new Error("Session read authority changed; retry the request");
+          }
+        };
+        assertScopeCurrent();
+        if (revision !== undefined) {
+          let entry = readScopes.get(projection);
+          if (
+            !entry ||
+            entry.config !== config ||
+            entry.policy !== policy ||
+            entry.access !== access ||
+            entry.profiles !== profiles ||
+            entry.revision !== revision
+          ) {
+            entry = { config, policy, access, profiles, revision, scopes: new Map() };
+            readScopes.set(projection, entry);
+          }
+          token = entry.scopes.get(key);
+          if (!token) {
+            if (entry.scopes.size >= 64) {
+              entry.scopes.delete(entry.scopes.keys().next().value!);
+            }
+            token = randomUUID();
+            entry.scopes.set(key, token);
+          }
+        }
+      }
+      const result = await run(token);
+      // Row progress may complete an admitted snapshot; changing authority cannot disclose it.
+      assertScopeCurrent();
+      return result;
+    },
+  );
+}
 
 function safeText(value: string | undefined, limit: number): string | undefined {
   return value ? truncateUtf16Safe(redactToolPayloadText(value), limit) : undefined;
@@ -77,6 +178,10 @@ export async function readTrustedPluginSessionFacts(
           );
           const sessions: RuntimeSessionFacts[] = [];
           let unavailable = false;
+          let prLoads = 0;
+          const admitPrLoad = () => prLoads++ < SESSION_FACTS_PR_LOAD_LIMIT;
+          const prOwner = resolved.context.controlUiSessionPullRequests;
+          const prRetries: ControlUiSessionPrTarget[] = [];
           for (const key of keys) {
             const requested = resolveRequestedSessionAgentId(read.state.cfg, key);
             if (!requested.ok) {
@@ -102,13 +207,20 @@ export async function readTrustedPluginSessionFacts(
             if (!row) {
               continue;
             }
-            const target = resolveProjectedControlUiSessionPrTarget(read.state.cfg, record);
-            const pullRequests = target
-              ? resolved.context.controlUiSessionPullRequests?.readPrepared(target)
+            const prEligible = Boolean(row.worktree?.id || row.repositoryWorkspaceId);
+            const target = prEligible
+              ? resolveProjectedControlUiSessionPrTarget(read.state.cfg, record)
               : undefined;
+            const cachedPrs = target ? prOwner?.readPrepared(target, () => false) : undefined;
+            const pullRequests =
+              cachedPrs ?? (target ? prOwner?.readPrepared(target, admitPrLoad) : undefined);
             const prUnavailable =
-              !pullRequests || pullRequests.status !== "ready" || pullRequests.rateLimited;
+              prEligible &&
+              (!pullRequests || pullRequests.status !== "ready" || pullRequests.rateLimited);
             unavailable ||= prUnavailable;
+            if (target && cachedPrs && prUnavailable) {
+              prRetries.push(target);
+            }
             const digest = row.observerDigest ? record.entry.observerDigest : undefined;
             sessions.push({
               key: record.key,
@@ -119,9 +231,16 @@ export async function readTrustedPluginSessionFacts(
               agentId: record.agentId,
               label: safeText(row.label ?? row.displayName, 240),
               derivedTitle: safeText(row.derivedTitle, 240),
-              lastMessagePreview: safeText(row.lastMessagePreview, 400),
+              lastMessagePreview: safeText(
+                row.lastMessagePreview
+                  ? stripMarkdown(row.lastMessagePreview, { linkStyle: "label", stripHtml: true })
+                      .replace(/\s+/gu, " ")
+                      .trim()
+                  : undefined,
+                400,
+              ),
               run:
-                row.hasActiveRun || row.status === "running" || row.status === "queued"
+                row.hasActiveRun || row.status === "queued"
                   ? "active"
                   : row.status === "failed" ||
                       row.status === "killed" ||
@@ -140,11 +259,23 @@ export async function readTrustedPluginSessionFacts(
                   }
                 : {}),
               pullRequests:
-                pullRequests?.pullRequests.map(({ number, state }) => ({ number, state })) ?? [],
+                pullRequests?.pullRequests.map(({ number, state, url, title }) => ({
+                  number,
+                  state,
+                  ...(url ? { url } : {}),
+                  ...(title ? { title: safeText(title, 120) } : {}),
+                })) ?? [],
               ...(prUnavailable ? { pullRequestsUnavailable: true } : {}),
+              ...(pullRequests?.rateLimited || pullRequests?.status === "rate-limited"
+                ? { pullRequestsRateLimited: true }
+                : {}),
               archived: row.archived === true,
               lastActivityAt: row.lastActivityAt ?? row.updatedAt ?? 0,
             });
+          }
+          // Admit cold keys before retries so one unavailable batch cannot starve later keys.
+          for (const target of prRetries) {
+            prOwner?.readPrepared(target, admitPrLoad);
           }
           return {
             sessions,

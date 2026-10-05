@@ -1,3 +1,4 @@
+import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -56,13 +57,6 @@ export type ResolvedToolPromptFinalizer = (params: {
   prompt: string;
   messageToolAvailable: boolean;
 }) => string;
-
-type ReasoningStreamPayload = Pick<
-  ReplyPayload,
-  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
-> & {
-  requiresReasoningProgressOptIn?: boolean;
-};
 
 export type RunEmbeddedAgentParams = {
   /** Host-minted parent audience inherited by a trusted internal child run. */
@@ -147,6 +141,8 @@ export type RunEmbeddedAgentParams = {
   enableHeartbeatTool?: boolean;
   /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
   forceHeartbeatTool?: boolean;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
@@ -223,7 +219,7 @@ export type RunEmbeddedAgentParams = {
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => unknown;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -366,6 +362,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceMessageTool"
   | "enableHeartbeatTool"
   | "forceHeartbeatTool"
+  | "continuesConversation"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
   | "gitCoauthorPrompt"

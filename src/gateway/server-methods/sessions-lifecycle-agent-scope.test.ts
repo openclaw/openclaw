@@ -40,7 +40,7 @@ it.each([
     ...getRuntimeConfig(),
     agents: {
       ...getRuntimeConfig().agents,
-      entries: { main: { default: true }, research: {} },
+      entries: { main: {}, research: {} },
     },
   };
   setRuntimeConfigSnapshot(cfg);

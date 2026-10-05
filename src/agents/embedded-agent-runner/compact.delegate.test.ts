@@ -175,7 +175,7 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
       session: { store: configuredStore },
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "marketing" }],
+        entries: { main: {}, marketing: {} },
         defaults: { compaction: { mode: "default", keepRecentTokens: 1, postIndexSync: "off" } },
       },
     },
@@ -373,11 +373,19 @@ describe("direct compactor through the context-engine delegate", () => {
       const controller = new AbortController();
       let current = true;
       const reason = new Error("compaction preparation no longer current");
-      const read = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
-        read.mockRestore();
-        return historyLane.pool.run(input, options).then(async (snapshot) => {
-          received.resolve();
-          await release.promise;
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const read = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
+        let hydration = false;
+        return run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          hydration = request.kind === "transcript-hydration";
+          return request;
+        }, options).then(async (snapshot) => {
+          if (hydration) {
+            read.mockRestore();
+            received.resolve();
+            await release.promise;
+          }
           return snapshot;
         });
       });

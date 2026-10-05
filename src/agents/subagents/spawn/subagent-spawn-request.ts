@@ -209,6 +209,7 @@ export async function resolveSubagentSpawnRequest(
       : undefined;
     return resolveSpawnAdmission({
       cfg,
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       collector: collectorRuns
         ? {
             liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,

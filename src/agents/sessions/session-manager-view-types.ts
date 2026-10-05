@@ -5,14 +5,17 @@ import type { SessionTranscriptTargetBinding } from "../../config/sessions/trans
 export type SessionManagerPersistenceTarget = SessionTranscriptTargetBinding;
 export type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
 export type PreparedSessionTranscriptReload = PreparedSessionTranscriptHydration;
-export type SessionManagerBoundedContext = Pick<
+export type SessionManagerBoundedView = Pick<
   SessionTranscriptBoundedActiveContext,
   | "activeLeafEntryId"
   | "version"
   | "opaqueParents"
   | "parents"
   | "firstKeptRanges"
-  | "persistedSuffixStartSeq"
-  | "boundaryCount"
-  | "transcriptMutationAt"
-> & { limits: SessionManagerBoundedContextLimits };
+  | "cacheTtlProjectionPrefixes"
+>;
+export type SessionManagerBoundedContext = SessionManagerBoundedView &
+  Pick<
+    SessionTranscriptBoundedActiveContext,
+    "persistedSuffixStartSeq" | "boundaryCount" | "transcriptMutationAt"
+  > & { limits: SessionManagerBoundedContextLimits };

@@ -6,14 +6,14 @@ import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts
 import { log } from "./openai-transport-shared.js";
 import { redactIdentifier, redactSensitiveText, sha256Hex } from "./transport-utils.js";
 
-function stringifyUnknown(value: unknown, fallback = ""): string {
+function stringifyUnknown(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
-  return fallback;
+  return "";
 }
 
 export function safeDebugValue(value: unknown): string {

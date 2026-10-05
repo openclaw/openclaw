@@ -169,6 +169,14 @@ owning its prepared environment. Direct providers use
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
 
+When provider readiness fails, the wrapper reports the failed or missing doctor
+check names with bounded, sanitized messages and classification hints. Successful
+checks and other provider details are omitted; a count identifies additional
+failures beyond the summary limit. Errors retain the doctor exit status and
+recovery instructions, including login guidance for broker authentication failures.
+Use `crabbox doctor --provider <provider> --json` to inspect the full report locally
+before sharing it.
+
 The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
 native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
 `--provider blacksmith-testbox` prevents automatic Azure routing but does not
@@ -219,8 +227,9 @@ use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.
-  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
-  while another command owns the lease.
+  After a temporary-source run, the wrapper restores retained Blacksmith and
+  AWS lease claims to the invoking checkout. A claim transferred elsewhere is
+  left untouched. Do not sync or reclaim while another command owns the lease.
 - Wrapper reuse requires the local SSH key created by Crabbox. A missing key
   requires a fresh warmup. Leases created directly by Blacksmith remain usable
   through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.

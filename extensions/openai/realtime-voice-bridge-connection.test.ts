@@ -79,6 +79,78 @@ describe("OpenAI realtime voice bridge connection", () => {
     restoreTestEnvironment();
   });
 
+  it.each([
+    "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+    "https://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+    "ws://localhost:8080/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+    "http://localhost:8080/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+  ])(
+    "uses the configured realtime endpoint %s without minting a client secret",
+    async (baseUrl) => {
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
+      const { connecting, socket } = beginBridgeConnection(bridge);
+      openSocket(socket);
+      emitSessionUpdated(socket);
+      await connecting;
+      try {
+        const url = new URL(String(socket.args[0]));
+        const expected = new URL(baseUrl);
+        expect(url.protocol).toBe(expected.protocol.replace("http", "ws"));
+        expect(url.host).toBe(expected.host);
+        expect(url.pathname).toBe(expected.pathname);
+        expect(url.searchParams.get("realtime")).toBe("true");
+        expect(url.search).toContain("signature=a~b%20c");
+        expect(url.searchParams.getAll("model")).toEqual(["custom/realtime model"]);
+        expect(socket.args[1]).toMatchObject({
+          headers: { Authorization: "Bearer test-realtime-key" },
+        });
+        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+        expect(bridge.isConnected()).toBe(true);
+      } finally {
+        await bridge.close();
+      }
+    },
+  );
+
+  it.each([
+    "not a url",
+    "file:///private/voice",
+    "ftp://voice.example.test/realtime",
+    "https://user@voice.example.test/realtime",
+    "wss://voice.example.test/realtime#secret",
+    123,
+  ])("rejects invalid realtime baseUrl without opening a socket (%s)", (baseUrl) => {
+    expect(() =>
+      buildOpenAIRealtimeVoiceProvider().createBridge({
+        providerConfig: { apiKey: "test-realtime-key", baseUrl },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      }),
+    ).toThrow("Invalid OpenAI realtime baseUrl");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixing a realtime baseUrl with Azure routing", () => {
+    expect(() =>
+      buildOpenAIRealtimeVoiceProvider().createBridge({
+        providerConfig: {
+          apiKey: "test-realtime-key",
+          baseUrl: "wss://voice.example.test/realtime",
+          azureEndpoint: "https://example.openai.azure.com",
+        },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      }),
+    ).toThrow("cannot be combined with Azure");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const provider = buildOpenAIRealtimeVoiceProvider();

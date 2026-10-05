@@ -127,11 +127,12 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("uses the configured default agent without inventing a session key", () => {
+  it("uses the explicit agent owner without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
+        agentId: "worker",
         config: {
-          agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+          agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
           session: { store: "/tmp/{agentId}/sessions.json" },
         },
         sessionFile: "compat-session",
@@ -256,19 +257,20 @@ describe("fixed-store session bootstrap", () => {
     },
   );
 
-  it("carries the persisted owner into harness admission", () => {
-    assertAgentHarnessRunAdmission({
+  it("carries the persisted owner into harness admission", async () => {
+    await assertAgentHarnessRunAdmission({
       config,
       sessionId: "ops-session",
       sessionKey: "global",
     } as never);
 
-    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith(
+    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "ops",
         sessionKey: "global",
         storePath: "/tmp/shared-sessions.json",
       }),
+      expect.any(Function),
     );
   });
 

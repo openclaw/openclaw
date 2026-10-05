@@ -71,6 +71,26 @@ export function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
   };
 }
 
+export function startRequesterSettleWakeAttempt(
+  state: RequesterSettleWakeBatchState,
+  batchRunIds: RequesterSettleWakeBatchState["batchRunIds"],
+  admissionMarker: Pick<RequesterSettleWakeBatchState, "yieldedFinalDeliverable">,
+): RequesterSettleWakeBatchState {
+  return {
+    status: "dispatching",
+    attemptCount: state.attemptCount + 1,
+    batchRunIds,
+    ...retainedYieldIdentity(state),
+    ...admissionMarker,
+  };
+}
+
+export function deferRequesterSettleWakePreparation(
+  state: RequesterSettleWakeBatchState,
+): RequesterSettleWakeBatchState {
+  return { ...state, nextAttemptAt: Date.now() + 30_000 };
+}
+
 export function readSharedBatchState(
   batch: readonly SubagentRunRecord[],
 ): RequesterSettleWakeBatchState {

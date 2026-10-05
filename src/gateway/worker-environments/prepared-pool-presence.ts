@@ -16,6 +16,17 @@ const HUMAN_PRESENCE_RETIRE_AFTER_MS = 15 * 60 * 1_000;
 const REPOSITORY_REF_REFRESH_INTERVAL_MS = 60_000;
 const PRESENCE_RESERVE_EXPIRY_MS = Number.MAX_SAFE_INTEGER;
 
+export function matchingPreparedPoolPresenceDemand(
+  record: WorkerEnvironmentRecord,
+  demand: PreparedPoolPresenceDemand | undefined,
+): PreparedPoolPresenceDemand | undefined {
+  return demand?.profileId === record.profileId &&
+    demand.preparationKey === record.preparation?.key &&
+    demand.project.key === readWorkerProjectSnapshot(record.profileSnapshot.project)?.key
+    ? demand
+    : undefined;
+}
+
 export function isSupersededPresenceReserve(
   record: WorkerEnvironmentRecord,
   demand: PreparedPoolPresenceDemand | undefined,
@@ -27,12 +38,7 @@ export function isSupersededPresenceReserve(
   ) {
     return false;
   }
-  return (
-    !demand ||
-    record.profileId !== demand.profileId ||
-    record.preparation.key !== demand.preparationKey ||
-    readWorkerProjectSnapshot(record.profileSnapshot.project)?.key !== demand.project.key
-  );
+  return !matchingPreparedPoolPresenceDemand(record, demand);
 }
 
 export type PreparedPoolPresenceOptions = {
@@ -80,10 +86,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   const current = () => signal.throwIfAborted();
   const policy = () => {
     const source = options.resolveHumanPresenceDemand?.();
-    if (!source || !options.presenceDemandStore) {
-      return undefined;
-    }
-    return { ...source, retireAfterMs: HUMAN_PRESENCE_RETIRE_AFTER_MS };
+    return source && options.presenceDemandStore ? { ...source } : undefined;
   };
   const read = async () => {
     if (!loaded) {
@@ -155,7 +158,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
         state = {
           ...state,
           revision: state.revision + 1,
-          retireAtMs: absentAtMs + source.retireAfterMs,
+          retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS,
         };
         await write(state, expectedVersion, assertPolicyCurrent);
       }

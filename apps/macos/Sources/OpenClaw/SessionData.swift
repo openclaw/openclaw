@@ -73,10 +73,7 @@ enum SessionLoader {
             .appendingPathComponent("sessions/sessions.json").path)
 
     static func loadSnapshot(
-        activeMinutes: Int? = nil,
         limit: Int? = nil,
-        includeGlobal: Bool = true,
-        includeUnknown: Bool = true,
         control: ControlChannel = .shared) async throws -> SessionStoreSnapshot
     {
         let data: Data
@@ -85,9 +82,7 @@ enum SessionLoader {
                 limit: limit,
                 search: nil,
                 archived: false,
-                includeGlobal: includeGlobal,
-                includeUnknown: includeUnknown,
-                activeMinutes: activeMinutes)
+                includeUnknown: true)
             data = try await control.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

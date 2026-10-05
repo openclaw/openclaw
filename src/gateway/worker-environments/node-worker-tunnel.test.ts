@@ -292,6 +292,50 @@ describe("node worker tunnel manager", () => {
     }
   });
 
+  it("releases live tunnels and transfer state when shutdown cannot read the inventory", async () => {
+    const inventoryClosed = new Error("Worker environment inventory has closed");
+    let inventoryOpen = true;
+    const readInventory = <T>(value: T) => {
+      if (!inventoryOpen) {
+        throw inventoryClosed;
+      }
+      return value;
+    };
+    const record = environment();
+    const close = vi.fn(async () => {});
+    const closeAll = vi.fn(async () => {});
+    const manager = createManager(record, {
+      getEnvironment: () => readInventory(record),
+      listEnvironments: () => readInventory([record]),
+      workspaceTransfer: { ...workspaceTransfer(), close, closeAll },
+    });
+    await manager.start(startRequest());
+    // A terminal state-database failure revokes the inventory before Gateway shutdown.
+    inventoryOpen = false;
+
+    await expect(manager.stopAll()).rejects.toBe(inventoryClosed);
+    expect(manager.status(record.environmentId)).toBe("stopped");
+    expect(close).toHaveBeenCalledWith(record.environmentId);
+    expect(closeAll).toHaveBeenCalledOnce();
+  });
+
+  it.each(["current", "retiring"] as const)(
+    "rejects an owner epoch older than the %s owner",
+    async (owner) => {
+      const cleanup = createDeferred();
+      const manager = createManager(environment(), {
+        workspaceTransfer: { ...workspaceTransfer(), close: vi.fn(() => cleanup.promise) },
+      });
+      await manager.start(startRequest());
+      const stopping = owner === "retiring" ? manager.stop("environment-1", 2) : undefined;
+
+      const stale = manager.start({ ...startRequest(), ownerEpoch: 1 });
+      cleanup.resolve();
+      await expect(stale).rejects.toThrow("node worker tunnel owner epoch is stale");
+      await stopping;
+    },
+  );
+
   it("reports a cleanup failure after workspace binding initialization fails", async () => {
     tunnelWarn.mockClear();
     const record = environment();

@@ -1,11 +1,21 @@
 import type { SessionEntrySnapshot } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { SessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
 import type {
+  SessionTranscriptCorpusEntry,
+  SessionTranscriptCorpusOptions,
+  SessionTranscriptCorpusScope,
+} from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
+import type {
   SessionTranscriptProjectionSelection,
   SessionTranscriptProjectionSelectionResults,
 } from "../../gateway/session-transcript-read.types.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEvent,
+} from "./session-accessor.sqlite-projection-read.js";
 import type { SessionTranscriptStats, TranscriptEvent } from "./session-accessor.types.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -19,6 +29,24 @@ import type {
   SessionTranscriptModelContext,
   SessionTranscriptWatermark,
 } from "./session-history-read.types.js";
+import type {
+  PendingInputHistoryQuery,
+  PendingInputHistorySnapshot,
+} from "./session-pending-input-history.types.js";
+import type {
+  SessionTranscriptAccountingOptions,
+  SessionTranscriptAccountingSnapshot,
+} from "./session-transcript-accounting.types.js";
+import type {
+  SessionTranscriptAnchorFacts,
+  SessionTranscriptAnchorSelection,
+} from "./session-transcript-anchor-read.kernel.js";
+import type {
+  SessionTranscriptCurrentTurnEntryRead,
+  SessionTranscriptCurrentTurnEntryRequest,
+  SessionTranscriptMaintenanceFacts,
+  SessionTranscriptMaintenanceRead,
+} from "./session-transcript-hydration.types.js";
 import type {
   SessionTranscriptSearchParams,
   SessionTranscriptSearchResult,
@@ -43,6 +71,15 @@ type Reads = {
     output: SessionTranscriptProjectionSelectionResults[Key];
   };
 } & {
+  anchors: { input: SessionTranscriptAnchorSelection; output: SessionTranscriptAnchorFacts };
+  accounting: {
+    input: { options: SessionTranscriptAccountingOptions };
+    output: SessionTranscriptAccountingSnapshot;
+  };
+  "bounded-tail": {
+    input: { options: SessionTranscriptBoundedMessageTailOptions };
+    output: SessionTranscriptBoundedMessageTailPage;
+  };
   title: {
     input: { includeInterSession?: boolean };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -76,15 +113,51 @@ type Reads = {
     input: { limits?: { maxBytes: number; maxEvents: number }; maxEventBytes?: number };
     output: PreparedSessionTranscriptHydration;
   };
+  "current-turn-entry": {
+    input: SessionTranscriptCurrentTurnEntryRequest;
+    output: SessionTranscriptCurrentTurnEntryRead;
+  };
+  maintenance: {
+    input: { request: SessionTranscriptMaintenanceRead };
+    output: SessionTranscriptMaintenanceFacts;
+  };
+  "recent-active-events": {
+    input: { maxEvents: number };
+    output: TranscriptEvent[];
+  };
+  "latest-active-message": {
+    input: Record<never, never>;
+    output: SessionTranscriptMessageEvent | undefined;
+  };
+  "pending-inputs": {
+    input: { query: Omit<PendingInputHistoryQuery, "sessionKey" | "sessionId"> };
+    output: PendingInputHistorySnapshot;
+  };
   stats: { input: Record<never, never>; output: SessionTranscriptStats };
-  "memory-entry": { input: Record<never, never>; output: SessionEntrySnapshot };
+  "message-presence": { input: Record<never, never>; output: boolean };
+  "visitor-source": {
+    input: { offset?: number };
+    output: {
+      messages: Array<{ message: unknown; seq: number }>;
+      nextOffset?: number;
+    };
+  };
+  "memory-entry": { input: { includeMessages?: boolean }; output: SessionEntrySnapshot };
+  "memory-corpus": {
+    input: {
+      scope: SessionTranscriptCorpusScope;
+      options: SessionTranscriptCorpusOptions;
+      sessionKeys: string[];
+    };
+    output: SessionTranscriptCorpusEntry[];
+  };
   "memory-reset-recall": { input: Record<never, never>; output: SessionResetRecallCutoff };
   "native-context": {
     input: Record<never, never>;
     output: IncognitoContextReadResult<SessionTranscriptContextSnapshot>;
   };
   "native-context-current": {
-    input: Pick<SessionTranscriptContextSnapshot, "version">;
+    input: Pick<SessionTranscriptContextSnapshot, "version"> & { through?: TranscriptEntryAnchor };
     output: IncognitoContextReadResult<void>;
   };
 };
@@ -100,4 +173,17 @@ export function isIncognitoHistoryCommand(command: {
   type: string;
 }): command is SqliteWorkerCommand<IncognitoHistoryOperations> {
   return command.type.startsWith("session.history.");
+}
+
+export function incognitoHistoryKeys(
+  command: SqliteWorkerCommand<IncognitoHistoryOperations>,
+): string[] {
+  if (command.type !== "session.history.memory-corpus") {
+    return [command.input.sessionKey];
+  }
+  const keys = command.input.sessionKeys;
+  if (!keys.includes(command.input.sessionKey) || new Set(keys).size !== keys.length) {
+    throw new Error("Incognito Memory corpus must retain its selected sessions");
+  }
+  return keys;
 }

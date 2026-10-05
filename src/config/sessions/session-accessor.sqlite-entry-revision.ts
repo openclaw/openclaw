@@ -8,7 +8,6 @@ import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
   readSqliteCacheDataVersion,
-  readSqliteDataVersion,
 } from "../../infra/sqlite-schema-facts.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */
@@ -94,8 +93,7 @@ export function readSessionEntryCacheValidityToken(
   mode: "fresh" | "cached" = "fresh",
 ): SqliteSessionEntryRevision {
   return {
-    dataVersion:
-      mode === "cached" ? readSqliteCacheDataVersion(database) : readSqliteDataVersion(database),
+    dataVersion: readSqliteCacheDataVersion(database, mode),
     sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { createRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -43,6 +44,34 @@ it.each([false, true])(
     }
   },
 );
+
+it("renders restart recovery ownership changes as session guidance", async () => {
+  const replyOperation = createReplyOperation({
+    sessionKey: "agent:main:restart-claim-changed",
+    sessionId: "restart-claim-changed",
+    turnKind: "visible",
+    resetTriggered: false,
+  });
+  try {
+    const reply = await handleReplyAgentRunError(createRestartRecoveryClaimChangedError(), {
+      resolveVisibleReplyDelivery: async () => false,
+      isHeartbeat: false,
+      replyExpectation: "required",
+      isRestartRecoveryArmed: async () => false,
+      replyOperation,
+      resolvedVerboseLevel: "off",
+      returnWithQueuedFollowupDrain: (value) => value,
+      sessionCtx: {},
+    });
+
+    expect(reply?.text).toBe(
+      "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
+    );
+    expect(reply?.text).not.toContain("restart recovery claim");
+  } finally {
+    replyOperation.complete();
+  }
+});
 
 describe("resolveAdmittedRunSessionFile", () => {
   it("uses the scoped session key when one is available", () => {

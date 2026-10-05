@@ -14,13 +14,7 @@ import {
 import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
 import { gradiumTTS } from "./tts.js";
 
-type GradiumProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  voiceId: string;
-};
-
-function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): GradiumProviderConfig {
+function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.gradium) ?? asOptionalRecord(rawConfig.gradium);
   return {
@@ -33,7 +27,7 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): Gra
   };
 }
 
-function readGradiumProviderConfig(config: SpeechProviderConfig): GradiumProviderConfig {
+function readGradiumProviderConfig(config: SpeechProviderConfig) {
   return normalizeGradiumProviderConfig({
     gradium: { ...config, apiKey: trimToUndefined(config.apiKey) },
   });

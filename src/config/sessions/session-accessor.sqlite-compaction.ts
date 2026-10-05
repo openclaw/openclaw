@@ -11,7 +11,6 @@ import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlit
 import {
   ensureSessionEntryInTransaction,
   ensureSessionEntrySync,
-  type InitialSessionEntryCommit,
 } from "./session-accessor.sqlite-initial-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
@@ -34,6 +33,10 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
+import type {
+  CompactionBoundaryOperations,
+  InitialSessionEntryCommit,
+} from "./session-manager-write-contract.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -51,24 +54,6 @@ type CompactionScope = SessionTranscriptRuntimeTarget &
 type CompactionParams = {
   prepared: PreparedCompactionAppend;
   transcriptByteCompactionLatch: NonNullable<InternalSessionEntry["transcriptByteCompactionLatch"]>;
-};
-
-export type CompactionBoundaryOperations = {
-  "session.transcript.compactionBoundary": {
-    input: {
-      scope: Omit<CompactionScope, "env">;
-      prepared: Omit<PreparedCompactionAppend, "scope"> & {
-        scope: Omit<CompactionScope, "env">;
-      };
-      transcriptByteCompactionLatch: CompactionParams["transcriptByteCompactionLatch"];
-      initialWriterRunId?: string;
-    };
-    output: {
-      committed: CommittedCompactionAppend;
-      initialEntry?: InitialSessionEntryCommit;
-      projectionNeedsReconcile: boolean;
-    };
-  };
 };
 
 type CompactionWorkerContext = {

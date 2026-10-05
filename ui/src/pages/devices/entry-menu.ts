@@ -3,9 +3,12 @@ import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.
 import { icons } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 export function deviceDesktopEnvironment(props: DevicesProps, environmentId: string) {
   return props.desktopEnvironments?.find(

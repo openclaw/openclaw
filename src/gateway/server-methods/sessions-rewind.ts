@@ -19,6 +19,7 @@ import {
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
+import { forkSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -509,6 +510,7 @@ async function mutateSessionAtMessage(
       let forkRepository:
         | {
             workspaceId: string;
+            sourceWorkspaceId: string;
             store: ReturnType<typeof getSessionRepositoryWorkspaceStore>;
             source: ReturnType<typeof captureOpenClawStateWorkerContext>;
           }
@@ -526,22 +528,31 @@ async function mutateSessionAtMessage(
           const repositorySource = captureOpenClawStateWorkerContext({ path: repositories.path });
           const preparedSource = await repositories.prepare(current.entry.repositoryWorkspaceId);
           const source = preparedSource.workspace;
-          const assertRepositoryCurrent = () => {
+          if (!source) {
+            throw new Error("Repository workspace changed before session fork");
+          }
+          const assertRepositoryOwnerCurrent = () => {
             repositorySource.admission.assertCurrent();
             commitGuard();
+            if (
+              source.agentId !== current.target.agentId ||
+              source.sessionKey !== current.canonicalKey ||
+              preparedSource.current()?.revision !== source.revision
+            ) {
+              throw new Error("Repository workspace changed before session fork");
+            }
+          };
+          const assertRepositoryCurrent = () => {
+            assertRepositoryOwnerCurrent();
             const sourceEntry = loadAccessorSessionEntryForGatewayTarget({
               key: current.canonicalKey,
               cfg,
               agentId: current.target.agentId,
             }).entry;
             if (
-              !source ||
-              source.agentId !== current.target.agentId ||
-              source.sessionKey !== current.canonicalKey ||
               sourceEntry?.sessionId !== initialSessionId ||
               sourceEntry.lifecycleRevision !== initialLifecycleRevision ||
-              sourceEntry.repositoryWorkspaceId !== source.workspaceId ||
-              preparedSource.current()?.revision !== source.revision
+              sourceEntry.repositoryWorkspaceId !== source.workspaceId
             ) {
               throw new Error("Repository workspace changed before session fork");
             }
@@ -555,23 +566,26 @@ async function mutateSessionAtMessage(
           });
           forkRepository = {
             workspaceId: forked.workspaceId,
+            sourceWorkspaceId: source.workspaceId,
             store: repositories,
             source: repositorySource,
           };
-          mutationParams.commitGuard = assertRepositoryCurrent;
+          mutationParams.commitGuard = assertRepositoryOwnerCurrent;
         }
+        const forkParams = {
+          ...mutationParams,
+          entryId,
+          targetKey,
+          repositoryWorkspaceId: forkRepository?.workspaceId,
+          forkWorkspace: forkWorkspace?.value,
+          creation: { ...creation, sandbox },
+        };
         result = await (action === "fork"
-          ? forkSessionAtMessage(
-              {
-                ...mutationParams,
-                entryId,
-                targetKey,
-                repositoryWorkspaceId: forkRepository?.workspaceId,
-                forkWorkspace: forkWorkspace?.value,
-                creation: { ...creation, sandbox },
-              },
-              expectedState,
-            )
+          ? forkRepository
+            ? forkSessionAtMessageWithPreconditions(forkParams, expectedState, {
+                sourceRepositoryWorkspaceId: forkRepository.sourceWorkspaceId,
+              })
+            : forkSessionAtMessage(forkParams, expectedState)
           : action === "rewind"
             ? rewindSessionToMessage({ ...mutationParams, entryId }, expectedState)
             : switchSessionBranch({ ...mutationParams, leafEntryId: entryId }, expectedState));
@@ -653,7 +667,7 @@ async function mutateSessionAtMessage(
           assertCurrent: () => {},
         });
       } else {
-        recordSessionCreated(cfg, {
+        await recordSessionCreated(cfg, {
           sessionKey: result.key,
           agentId: current.target.agentId,
           entry: result.entry,

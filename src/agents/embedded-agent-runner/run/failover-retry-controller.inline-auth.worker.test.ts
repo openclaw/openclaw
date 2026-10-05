@@ -83,7 +83,7 @@ function observeAdmission(path: string) {
 
 async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
   const config = {
-    agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
+    agents: { entries: { main: {}, voice: {} } },
     models: {
       providers: {
         [provider]: {

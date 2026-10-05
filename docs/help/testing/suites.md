@@ -120,6 +120,10 @@ Native dependency policy:
       spawns can inherit another worker's temporary output pipe handles and
       prevent that worker's child cleanup from observing EOF. Worker counts
       and file parallelism remain unchanged.
+    - SQLite admission runs before test collection in each Vitest worker. Bun threads
+      inherit the config process's decision; OS forks initialize it locally.
+      Bun runs the existing native-close conformance probe before database pools
+      capture their policy; Node retains its runtime-provided capability.
     - The shared Vitest config fixes `isolate: false` and uses the
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
@@ -379,6 +383,50 @@ Use the ordinary local config, not the CI-only prebuilt config. The adapter uses
   - `test/vitest/vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
   - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
   - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
+
+### Advisory Bun release checks
+
+Maintainers can dispatch `openclaw-live-and-e2e-checks-reusable.yml` on `main`
+with `test_runtime=bun`. The manual input offers `node` and `bun`; reusable
+callers accept the same values as a string. Node remains the default, including
+the existing Release Checks and Full Release Validation callers.
+Reusable Bun callers must use the same repository and revision as the called
+workflow so the pin comes from that exact workflow source. Direct dispatches meet
+this requirement automatically.
+
+For the normal stable release repo/live selection:
+
+```sh
+target_sha="$(gh api repos/openclaw/openclaw/commits/main --jq .sha)"
+gh workflow run openclaw-live-and-e2e-checks-reusable.yml --ref main \
+  -f ref="$target_sha" -f test_runtime=bun -f release_test_profile=stable \
+  -f include_repo_e2e=true -f include_live_suites=true \
+  -f include_release_path_suites=false -f include_openwebui=false \
+  -f gateway_repo_e2e_use_github_hosted_runners=false \
+  -f allow_unreleased_changelog=true
+```
+
+Bun jobs are labeled advisory and report failures normally in their separate
+run. They do not replace Node release evidence or add PR jobs. The trusted
+admission checkout includes `scripts/lib/openclaw-bun.json` and its staging
+helper from the workflow revision. The existing `setup-test-bun` action installs
+that pin once and shares its executable by artifact ID with the test jobs.
+Only test steps select Bun; dependency
+installation, build preparation, packaging, and workflow tooling keep their
+current toolchain.
+
+The selector covers native live shards, live cache checks, Gateway shards,
+agent-plugin Gateway, the complete UI E2E suite (including real-Gateway files),
+and the OpenShell Vitest host. Native media shards support the same selector
+when selected by the `full` profile. The separate required PR CI real-Gateway
+job remains governed by its existing runtime policy and is not this release lane.
+
+Docker live/model, packaged-product, upgrade, and OpenWebUI lanes retain Node:
+their images and launchers own the container runtime, so a host Vitest selector
+does not switch them. External provider CLIs and the OpenShell service also keep
+their own runtimes. These lanes still run when selected but are not Bun proof.
+Use a current target containing the runtime-aware live and E2E launchers; older
+frozen release targets may not support this advisory selector.
 
 ## Which suite should I run?
 

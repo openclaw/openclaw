@@ -56,7 +56,6 @@ function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
 function createMaintenanceArtifacts() {
   return {
     archiveRemovedSessionTranscripts: async () => new Set<string>(),
-    removeRemovedSessionTrajectoryArtifacts: async () => {},
     cleanupArchivedSessionTranscripts: async () => {},
   };
 }
@@ -191,7 +190,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       removedSessionFiles: Array<[string, string | undefined]>;
       referencedSessionIds: Set<string>;
     }> = [];
-    let trajectoryCleanupReferencedIds: Set<string> | undefined;
 
     const storePath = "/tmp/openclaw-sessions/sessions.json";
     const admission = await beginSessionWorkAdmission({
@@ -212,9 +210,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
               referencedSessionIds: new Set(params.referencedSessionIds),
             });
             return new Set();
-          },
-          removeRemovedSessionTrajectoryArtifacts: async (params) => {
-            trajectoryCleanupReferencedIds = new Set(params.referencedSessionIds);
           },
           cleanupArchivedSessionTranscripts: async () => {},
         },
@@ -237,7 +232,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         referencedSessionIds: new Set(["shared-session", "active-session"]),
       },
     ]);
-    expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
   });
 
   it("reports archive retention failure without aborting file-backed maintenance", async () => {
@@ -260,7 +254,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       log: { warn, info: () => {} },
       artifacts: {
         archiveRemovedSessionTranscripts: async () => new Set(),
-        removeRemovedSessionTrajectoryArtifacts: async () => {},
         cleanupArchivedSessionTranscripts: async () => {
           throw cleanupError;
         },
@@ -301,7 +294,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         log: { warn: () => {}, info: () => {} },
         artifacts: {
           archiveRemovedSessionTranscripts: async () => new Set(),
-          removeRemovedSessionTrajectoryArtifacts: async () => {},
           cleanupArchivedSessionTranscripts: async () => {},
         },
       });

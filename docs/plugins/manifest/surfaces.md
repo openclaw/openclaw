@@ -71,7 +71,12 @@ plan its owner and receipt without loading plugin code:
 
 The array must match the migration IDs, order, `doctorOnly` flags, and phases
 exported by the doctor-contract module. The older value `true` still declares
-the dynamic module. Installed external plugin manifests remain outside the
+the dynamic module. During an in-process package update, Doctor loads the replacement
+package's callbacks in its new inventory; earlier inventories retain their original
+callbacks. A changed action list between package versions is allowed, but each
+version's manifest and module must agree.
+
+Installed external plugin manifests remain outside the
 copied-state and candidate content identity, including when they use the
 descriptor array. Candidate validation must bind those artifacts separately.
 Until then, Doctor records an explicit planning refusal instead of treating an

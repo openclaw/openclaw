@@ -17,7 +17,8 @@ export const MATRIX_SYNC_CACHE_VERSION = 1;
 const SYNC_CACHE_NAMESPACE = "sync-cache";
 const SYNC_CACHE_MAX_ENTRIES = 20_000;
 const SYNC_CACHE_MAX_CHUNKS = Math.floor((SYNC_CACHE_MAX_ENTRIES - 1) / 2);
-const SYNC_CACHE_STATE_KEY = "current";
+const SYNC_CACHE_META_KEY = "current:meta";
+const SYNC_CACHE_CHUNK_PREFIX = "current:sync:";
 // PluginState serializes this string inside a row object; 24KB leaves room for JSON escaping.
 const SYNC_CACHE_CHUNK_BYTES = 24_000;
 
@@ -88,22 +89,6 @@ function toPersistedSyncData(value: unknown): ISyncData | null {
     };
   }
 
-  // Older Matrix state files stored the raw /sync-shaped payload directly.
-  if (typeof value.next_batch === "string" && value.next_batch.trim()) {
-    const roomsData = normalizeRoomsData(value.rooms);
-    if (!roomsData) {
-      return null;
-    }
-    return {
-      nextBatch: value.next_batch,
-      accountData:
-        isRecord(value.account_data) && Array.isArray(value.account_data.events)
-          ? value.account_data.events
-          : [],
-      roomsData,
-    };
-  }
-
   return null;
 }
 
@@ -144,25 +129,22 @@ export async function readPersistedStoreFromStore(params: {
 async function readPersistedStore(
   store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">,
 ): Promise<PersistedMatrixSyncStore | null> {
-  const stateKey = SYNC_CACHE_STATE_KEY;
-  const meta = await store.lookup(metaKey(stateKey));
+  const meta = await store.lookup(SYNC_CACHE_META_KEY);
   if (!isSyncCacheMeta(meta)) {
     return null;
   }
   const chunks = await readMatrixStateChunks(
     store,
-    Array.from({ length: meta.chunkCount }, (_, index) =>
-      chunkKey(stateKey, meta.generation, index),
-    ),
+    Array.from({ length: meta.chunkCount }, (_, index) => chunkKey(meta.generation, index)),
     "sync-chunk",
   );
   const syncJson = chunks?.join("") ?? "";
   const intact =
     chunks !== null && (chunks.length === 0 || meta.syncDigest === digestText(syncJson));
-  let savedSync: ISyncData | null = null;
+  let savedSync: unknown = null;
   if (intact && chunks.length > 0) {
     try {
-      savedSync = toPersistedSyncData(JSON.parse(syncJson));
+      savedSync = JSON.parse(syncJson);
     } catch {
       savedSync = null;
     }
@@ -175,16 +157,8 @@ async function readPersistedStore(
   });
 }
 
-function metaKey(stateKey: string): string {
-  return `${stateKey}:meta`;
-}
-
-function chunkKeyPrefix(stateKey: string): string {
-  return `${stateKey}:sync:`;
-}
-
-function chunkKey(stateKey: string, generation: string, index: number): string {
-  return `${chunkKeyPrefix(stateKey)}${generation}:${index}`;
+function chunkKey(generation: string, index: number): string {
+  return `${SYNC_CACHE_CHUNK_PREFIX}${generation}:${index}`;
 }
 
 function resolveLegacySyncCachePath(storageRootDir: string): string {
@@ -209,10 +183,7 @@ function isSyncCacheMeta(value: unknown): value is MatrixSyncCacheMeta {
   );
 }
 
-function buildSyncCacheRows(
-  stateKey: string,
-  payload: PersistedMatrixSyncStore,
-): {
+function buildSyncCacheRows(payload: PersistedMatrixSyncStore): {
   meta: { key: string; value: MatrixSyncCacheMeta };
   chunks: { key: string; value: MatrixSyncCacheChunk }[];
   nextChunkKeys: Set<string>;
@@ -226,7 +197,7 @@ function buildSyncCacheRows(
     "Matrix sync cache exceeds SQLite chunk limit",
   );
   const chunks = chunkValues.map((data, index) => ({
-    key: chunkKey(stateKey, generation, index),
+    key: chunkKey(generation, index),
     value: {
       kind: "sync-chunk" as const,
       index,
@@ -237,7 +208,7 @@ function buildSyncCacheRows(
     chunks,
     nextChunkKeys: new Set(chunks.map((chunk) => chunk.key)),
     meta: {
-      key: metaKey(stateKey),
+      key: SYNC_CACHE_META_KEY,
       value: {
         kind: "meta",
         version: MATRIX_SYNC_CACHE_VERSION,
@@ -279,10 +250,9 @@ export async function writeMatrixSyncCacheStateToStore(params: {
   store: MatrixSyncCacheAsyncStore;
 }): Promise<void> {
   const { storageRootDir, store, payload } = params;
-  const stateKey = SYNC_CACHE_STATE_KEY;
-  const rows = buildSyncCacheRows(stateKey, payload);
+  const rows = buildSyncCacheRows(payload);
   return syncCacheOperations.enqueue(path.resolve(storageRootDir), () =>
-    writeMatrixStateChunks(store, rows, chunkKeyPrefix(stateKey)),
+    writeMatrixStateChunks(store, rows, SYNC_CACHE_CHUNK_PREFIX),
   );
 }
 
@@ -300,9 +270,9 @@ export async function deleteMatrixSyncCacheStateFromStore(params: {
 }): Promise<void> {
   const { storageRootDir, store } = params;
   return syncCacheOperations.enqueue(path.resolve(storageRootDir), async () => {
-    await store.delete(metaKey(SYNC_CACHE_STATE_KEY));
+    await store.delete(SYNC_CACHE_META_KEY);
     for (const row of await store.entries()) {
-      if (row.key.startsWith(chunkKeyPrefix(SYNC_CACHE_STATE_KEY))) {
+      if (row.key.startsWith(SYNC_CACHE_CHUNK_PREFIX)) {
         await store.delete(row.key);
       }
     }

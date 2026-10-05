@@ -37,17 +37,6 @@ import {
   setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
 
-type SetupCheck = {
-  id: string;
-  ok: boolean;
-  message: string;
-};
-
-type SetupStatus = {
-  ok: boolean;
-  checks: SetupCheck[];
-};
-
 function resolveMode(input: string): "off" | "serve" | "funnel" {
   const raw = normalizeOptionalLowercaseString(input) ?? "";
   if (raw === "serve" || raw === "off") {
@@ -63,10 +52,10 @@ function resolveDefaultStorePath(config: VoiceCallConfig): string {
   return path.join(base, "calls.jsonl");
 }
 
-function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig): SetupStatus {
+function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig) {
   const validation = validateProviderConfig(config);
   const webhookExposure = resolveWebhookExposureStatus(config);
-  const checks: SetupCheck[] = [
+  const checks = [
     {
       id: "plugin-enabled",
       ok: config.enabled,
@@ -118,7 +107,7 @@ function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig): 
   };
 }
 
-function writeSetupStatus(status: SetupStatus): void {
+function writeSetupStatus(status: ReturnType<typeof buildSetupStatus>): void {
   writeCliLine("Voice Call setup: %s", status.ok ? "OK" : "needs attention");
   for (const check of status.checks) {
     writeCliLine("%s %s: %s", check.ok ? "OK" : "FAIL", check.id, check.message);
@@ -185,6 +174,15 @@ export function registerVoiceCallCli(params: {
     .command("voicecall")
     .description("Voice call utilities")
     .addHelpText("after", () => `\nDocs: https://docs.openclaw.ai/cli/voicecall\n`);
+  const managerAction = (
+    command: Pick<
+      Parameters<typeof runGatewayManagerCommand>[0],
+      "gatewayCall" | "managerFallback" | "failureLabel" | "resolveGatewayPayload"
+    >,
+  ) =>
+    runWithStandaloneRuntime(createRuntime, (ensureRuntime) =>
+      runGatewayManagerCommand({ config, ensureRuntime, ...command }),
+    );
 
   root
     .command("setup")
@@ -230,21 +228,21 @@ export function registerVoiceCallCli(params: {
             process.exitCode = 1;
             return;
           }
-          if (!options.to) {
+          if (!options.to || !options.yes) {
             if (options.json) {
-              writeCliJson({ ok: true, setup, liveCall: false });
+              writeCliJson({
+                ok: true,
+                setup,
+                liveCall: false,
+                ...(options.to ? { wouldCall: options.to } : {}),
+              });
             } else {
               writeSetupStatus(setup);
-              writeCliLine("live-call: skipped (pass --to and --yes to place one)");
-            }
-            return;
-          }
-          if (!options.yes) {
-            if (options.json) {
-              writeCliJson({ ok: true, setup, liveCall: false, wouldCall: options.to });
-            } else {
-              writeSetupStatus(setup);
-              writeCliLine("live-call: dry run for %s (add --yes to place it)", options.to);
+              if (options.to) {
+                writeCliLine("live-call: dry run for %s (add --yes to place it)", options.to);
+              } else {
+                writeCliLine("live-call: skipped (pass --to and --yes to place one)");
+              }
             }
             return;
           }
@@ -267,6 +265,21 @@ export function registerVoiceCallCli(params: {
         }),
     );
 
+  const callAction =
+    (method: "voicecall.initiate" | "voicecall.start") =>
+    async (options: { to?: string; message?: string; mode?: string }) =>
+      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
+        const callId = await initiateVoiceCall({
+          ensureRuntime,
+          config,
+          method,
+          to: options.to,
+          message: options.message,
+          mode: options.mode,
+        });
+        writeCliJson({ callId });
+      });
+
   root
     .command("call")
     .description("Initiate an outbound voice call")
@@ -280,19 +293,7 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
-    .action(async (options: { message: string; to?: string; mode?: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        const callId = await initiateVoiceCall({
-          ensureRuntime,
-          config,
-          method: "voicecall.initiate",
-          to: options.to,
-          message: options.message,
-          mode: options.mode,
-        });
-        writeCliJson({ callId });
-      }),
-    );
+    .action(callAction("voicecall.initiate"));
 
   root
     .command("start")
@@ -304,71 +305,51 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
-    .action(async (options: { to: string; message?: string; mode?: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        const callId = await initiateVoiceCall({
-          ensureRuntime,
-          config,
-          method: "voicecall.start",
-          to: options.to,
-          message: options.message,
-          mode: options.mode,
-        });
-        writeCliJson({ callId });
-      }),
-    );
+    .action(callAction("voicecall.start"));
 
   root
     .command("continue")
     .description("Speak a message and wait for a response")
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
-    .action(async (options: { callId: string; message: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        const gatewayParams = { callId: options.callId, message: options.message };
-        const continueTimeoutMs = resolveContinueTimeout(config);
-        await runGatewayManagerCommand({
-          config,
-          ensureRuntime,
-          gatewayCall: async () => {
-            try {
-              return await callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
-                timeoutMs: resolveOperationTimeout(config),
-              });
-            } catch (err) {
-              if (!isUnknownMethod(err, "voicecall.continue.start")) {
-                throw err;
-              }
-              return callVoiceCallGateway("voicecall.continue", gatewayParams, {
-                timeoutMs: continueTimeoutMs,
-              });
+    .action((options: { callId: string; message: string }) => {
+      const gatewayParams = { callId: options.callId, message: options.message };
+      const continueTimeoutMs = resolveContinueTimeout(config);
+      return managerAction({
+        gatewayCall: async () => {
+          try {
+            return await callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
+              timeoutMs: resolveOperationTimeout(config),
+            });
+          } catch (err) {
+            if (!isUnknownMethod(err, "voicecall.continue.start")) {
+              throw err;
             }
-          },
-          resolveGatewayPayload: (payload) => pollContinueGateway(payload, continueTimeoutMs),
-          managerFallback: (manager) => manager.continueCall(options.callId, options.message),
-          failureLabel: "continue",
-        });
-      }),
-    );
+            return callVoiceCallGateway("voicecall.continue", gatewayParams, {
+              timeoutMs: continueTimeoutMs,
+            });
+          }
+        },
+        resolveGatewayPayload: (payload) => pollContinueGateway(payload, continueTimeoutMs),
+        managerFallback: (manager) => manager.continueCall(options.callId, options.message),
+        failureLabel: "continue",
+      });
+    });
 
   root
     .command("speak")
     .description("Speak a message without waiting for response")
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
-    .action(async (options: { callId: string; message: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        await runGatewayManagerCommand({
-          config,
-          ensureRuntime,
-          gatewayCall: () =>
-            callVoiceCallGateway("voicecall.speak", {
-              callId: options.callId,
-              message: options.message,
-            }),
-          managerFallback: (manager) => manager.speak(options.callId, options.message),
-          failureLabel: "speak",
-        });
+    .action((options: { callId: string; message: string }) =>
+      managerAction({
+        gatewayCall: () =>
+          callVoiceCallGateway("voicecall.speak", {
+            callId: options.callId,
+            message: options.message,
+          }),
+        managerFallback: (manager) => manager.speak(options.callId, options.message),
+        failureLabel: "speak",
       }),
     );
 
@@ -377,19 +358,15 @@ export function registerVoiceCallCli(params: {
     .description("Send DTMF digits to an active call")
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--digits <digits>", "DTMF digits")
-    .action(async (options: { callId: string; digits: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        await runGatewayManagerCommand({
-          config,
-          ensureRuntime,
-          gatewayCall: () =>
-            callVoiceCallGateway("voicecall.dtmf", {
-              callId: options.callId,
-              digits: options.digits,
-            }),
-          managerFallback: (manager) => manager.sendDtmf(options.callId, options.digits),
-          failureLabel: "dtmf",
-        });
+    .action((options: { callId: string; digits: string }) =>
+      managerAction({
+        gatewayCall: () =>
+          callVoiceCallGateway("voicecall.dtmf", {
+            callId: options.callId,
+            digits: options.digits,
+          }),
+        managerFallback: (manager) => manager.sendDtmf(options.callId, options.digits),
+        failureLabel: "dtmf",
       }),
     );
 
@@ -397,15 +374,11 @@ export function registerVoiceCallCli(params: {
     .command("end")
     .description("Hang up an active call")
     .requiredOption("--call-id <id>", "Call ID")
-    .action(async (options: { callId: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        await runGatewayManagerCommand({
-          config,
-          ensureRuntime,
-          gatewayCall: () => callVoiceCallGateway("voicecall.end", { callId: options.callId }),
-          managerFallback: (manager) => manager.endCall(options.callId),
-          failureLabel: "end",
-        });
+    .action((options: { callId: string }) =>
+      managerAction({
+        gatewayCall: () => callVoiceCallGateway("voicecall.end", { callId: options.callId }),
+        managerFallback: (manager) => manager.endCall(options.callId),
+        failureLabel: "end",
       }),
     );
 

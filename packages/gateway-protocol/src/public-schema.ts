@@ -1,5 +1,6 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./schema/session-processes.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
@@ -680,3 +681,5 @@ export {
 } from "./schema/sessions-activity-summary.js";
 
 export * from "./schema/sessions-involvement.js";
+
+export * from "./schema/catalog.js";

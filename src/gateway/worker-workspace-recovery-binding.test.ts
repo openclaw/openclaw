@@ -195,7 +195,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   }
   const configFor = (storePath: string): OpenClawConfig => ({
     ...support.testState.config,
-    agents: { list: [{ id: REQUEST.agentId, default: true }] },
+    agents: { entries: { [REQUEST.agentId]: {} } },
     session: { store: storePath, maintenance: { mode: "warn" } },
   });
   const configA = configFor(a.storePath);

@@ -217,10 +217,11 @@ vi.mock("../../version.js", () => ({
   },
 }));
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: () => null,
   recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: async () => null,
+  prepareLatestUpdateRestartSentinel: async () => null,
 }));
 
 vi.mock("./restart-request.js", () => ({

@@ -1,8 +1,5 @@
 import fs from "node:fs";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   type ExecPolicyOverrides,
@@ -217,7 +214,7 @@ function appendSkillCommands(
   commands: SkillCommandSpec[],
 ) {
   for (const command of commands) {
-    used.add(normalizeLowercaseStringOrEmpty(command.name));
+    used.add(command.name);
     entries.push(command);
   }
 }

@@ -12,7 +12,7 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
+import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -84,6 +84,27 @@ export function createAssistantResultStream(message: AssistantMessage) {
   return stream;
 }
 
+export function holdAssistantResponse(text: string) {
+  const response = createAssistantMessageEventStream();
+  let released = false;
+  return {
+    response,
+    isReleased: () => released,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      response.push({
+        type: "done",
+        reason: "stop",
+        message: createAssistant(testModel, [{ type: "text", text }]),
+      });
+      response.end();
+    },
+  };
+}
+
 export function createOverflowAssistant(activeModel: Model) {
   const contextWindow = activeModel.contextWindow;
   if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
@@ -123,6 +144,7 @@ export function mockInvalidThenTextSummary(recoveredText: string) {
 
 export async function createTestSession(
   options: {
+    systemPrompt?: string;
     model?: Model;
     settingsManager?: SettingsManager;
     sessionManager?: SessionManager;
@@ -152,26 +174,23 @@ export async function createTestSession(
     api: model.api,
     streamSimple: streamMocks.streamSimple,
   });
-  const sessionOptions = {
+  const result = await createAgentSession({
+    systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
     thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
-    authStorage,
-    noTools: "builtin" as const,
+    tools: options.customTools?.map((tool) => tool.name) ?? [],
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
-  };
-  const internalOptions = {
     contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
     resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
-  };
-  const result =
-    options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
-      ? await createAgentSessionForEmbeddedRunner(sessionOptions, internalOptions)
-      : await createAgentSession(sessionOptions);
+    cleanupProviderSessionResourcesOnDispose: !(
+      options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
+    ),
+  });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };
 }

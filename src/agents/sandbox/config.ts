@@ -71,7 +71,7 @@ export function resolveSandboxBrowserDockerCreateConfig(params: {
 
 export { resolveSandboxScope } from "./config-contract.js";
 
-export function resolveSandboxDockerConfig(params: {
+function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
   globalDocker?: Partial<SandboxDockerConfig>;
   agentDocker?: Partial<SandboxDockerConfig>;
@@ -127,7 +127,7 @@ export function resolveSandboxDockerConfig(params: {
   };
 }
 
-export function resolveSandboxBrowserConfig(params: {
+function resolveSandboxBrowserConfig(params: {
   scope: SandboxScope;
   globalBrowser?: Partial<SandboxBrowserConfig>;
   agentBrowser?: Partial<SandboxBrowserConfig>;
@@ -162,7 +162,7 @@ export function resolveSandboxBrowserConfig(params: {
   };
 }
 
-export function resolveSandboxPruneConfig(params: {
+function resolveSandboxPruneConfig(params: {
   scope: SandboxScope;
   globalPrune?: Partial<SandboxPruneConfig>;
   agentPrune?: Partial<SandboxPruneConfig>;
@@ -184,7 +184,7 @@ function normalizeRemoteRoot(value: string | undefined, fallback: string): strin
   return posix.replace(/\/+$/g, "") || "/";
 }
 
-export function resolveSandboxSshConfig(params: {
+function resolveSandboxSshConfig(params: {
   scope: SandboxScope;
   globalSsh?: Partial<SandboxSshSettings>;
   agentSsh?: Partial<SandboxSshSettings>;

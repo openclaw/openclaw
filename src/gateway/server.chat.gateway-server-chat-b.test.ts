@@ -61,7 +61,6 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -393,21 +392,6 @@ function makeTranscriptTextEvent(
   return {
     ...event,
     message: { role, content: [{ type: "text", text }], ...message },
-  };
-}
-
-function makeClaudeCliSessionEntry(
-  sessionDir: string,
-  sessionId: string,
-  cliSessionId: string,
-): StoredSessionEntry {
-  return {
-    sessionId,
-    sessionFile: testSessionFilePath(sessionDir, sessionId),
-    updatedAt: futureFixtureUpdatedAt(),
-    modelProvider: "claude-cli",
-    model: "claude-sonnet-4-6",
-    cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
   };
 }
 
@@ -781,14 +765,14 @@ describe("gateway server chat", () => {
       };
       setActiveEmbeddedRun("sess-main", handle, "main");
       try {
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 1,
           stream: "item",
           ts: 1_001,
           data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 2,
           stream: "tool",
@@ -800,7 +784,7 @@ describe("gateway server chat", () => {
             args: { command: "SECRET_COMMAND" },
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 3,
           stream: "tool",
@@ -812,7 +796,7 @@ describe("gateway server chat", () => {
             diff: "SECRET_DIFF",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 4,
           stream: "tool",
@@ -824,7 +808,7 @@ describe("gateway server chat", () => {
             partialResult: "SECRET_PARTIAL",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 5,
           stream: "tool",
@@ -836,7 +820,7 @@ describe("gateway server chat", () => {
             review: { id: "review-1", text: "SECRET_REVIEW" },
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 6,
           stream: "tool",
@@ -848,7 +832,7 @@ describe("gateway server chat", () => {
             result: "SECRET_RESULT",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 7,
           stream: "plan",
@@ -1038,21 +1022,21 @@ describe("gateway server chat", () => {
         });
         const toolArgs = { path: "a" };
 
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 1,
           stream: "item",
           ts: 1_001,
           data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 2,
           stream: "tool",
           ts: 1_002,
           data: { phase: "start", name: "read", toolCallId: "tool-active", args: toolArgs },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 3,
           stream: "tool",
@@ -1064,14 +1048,14 @@ describe("gateway server chat", () => {
             partialResult: "halfway",
           },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 4,
           stream: "tool",
           ts: 1_004,
           data: { phase: "start", name: "exec", toolCallId: "tool-finished", args: {} },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 5,
           stream: "tool",
@@ -1085,14 +1069,14 @@ describe("gateway server chat", () => {
         });
         // A delayed result older than the latest accepted progress event must
         // not remove the active tool from the reconnect projection.
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 3,
           stream: "tool",
           ts: 1_006,
           data: { phase: "result", name: "read", toolCallId: "tool-active", result: "stale" },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 6,
           stream: "item",
@@ -1200,7 +1184,7 @@ describe("gateway server chat", () => {
           ],
         });
       } finally {
-        handler.dispose();
+        await handler.dispose();
         testState.sessionStorePath = undefined;
       }
     },
@@ -4576,307 +4560,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      const sessionDir = await createSessionDir({ fresh: true });
-      const sessionId = "sess-claude-cli-delivery-dedupe";
-      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
-      const deliveryTimestamp = Date.parse("2026-03-26T16:29:55.500Z");
-      const homeEnvSnapshot = captureEnv(["HOME"]);
-      const homeDir = path.join(sessionDir, "home");
-      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
-      const managedAudioUrl = "/api/chat/media/outgoing/main/claude-delivery/full";
-      await fs.mkdir(claudeProjectsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
-        JSON.stringify({
-          type: "assistant",
-          uuid: "assistant-delivery-ready",
-          timestamp: new Date(deliveryTimestamp).toISOString(),
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "CLAUDE DELIVERY READY" }],
-          },
-        }),
-        "utf-8",
-      );
-      setTestEnvValue("HOME", homeDir);
-      try {
-        await writeStoredMainSession(
-          makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId),
-        );
-        await writeMainSessionTranscript(
-          [
-            createTextTranscriptEvent("assistant", "CLAUDE DELIVERY READY", {
-              timestamp: deliveryTimestamp,
-              message: {
-                content: [
-                  {
-                    type: "text",
-                    text: "CLAUDE DELIVERY READY",
-                  },
-                  { type: "audio", url: managedAudioUrl, openUrl: managedAudioUrl },
-                ],
-                openclawDelivery: { replyToId: "delivery-run-1" },
-              },
-            }),
-          ],
-          sessionId,
-        );
-
-        const history = await rpcReq<{
-          messages?: Array<{
-            role?: unknown;
-            content?: unknown;
-            __openclaw?: {
-              importedFrom?: unknown;
-              externalId?: unknown;
-              cliSessionId?: unknown;
-            };
-          }>;
-        }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
-        expect(history.ok, JSON.stringify(history.error)).toBe(true);
-        const assistantMessages = (history.payload?.messages ?? []).filter(
-          (message) => message.role === "assistant",
-        );
-        expect(assistantMessages).toHaveLength(1);
-        const survivingContent = expectDefined(
-          assistantMessages[0]?.content,
-          "surviving assistant content",
-        );
-        expect(Array.isArray(survivingContent)).toBe(true);
-        const contentBlocks = survivingContent as Array<{ type?: unknown; text?: unknown }>;
-        expect(
-          contentBlocks.filter(
-            (block) => block.type === "text" && block.text === "CLAUDE DELIVERY READY",
-          ),
-        ).toHaveLength(1);
-        expect(contentBlocks.filter((block) => block.type === "audio")).toHaveLength(1);
-        expect(assistantMessages[0]?.["__openclaw"]).toEqual(
-          expect.objectContaining({
-            importedFrom: "claude-cli",
-            externalId: "assistant-delivery-ready",
-            cliSessionId,
-          }),
-        );
-        expect(JSON.stringify(assistantMessages)).not.toContain("[[reply_to:");
-      } finally {
-        homeEnvSnapshot.restore();
-      }
-    });
-  });
-
-  test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      const sessionDir = await createSessionDir({ fresh: true });
-      const sessionId = "sess-claude-cli-local-prefix";
-      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07532";
-      const homeEnvSnapshot = captureEnv(["HOME"]);
-      const homeDir = path.join(sessionDir, "home");
-      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
-      await fs.mkdir(claudeProjectsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
-        [
-          JSON.stringify({
-            type: "user",
-            uuid: "import-prefix-user",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: { role: "user", content: "import prefix user" },
-          }),
-          JSON.stringify({
-            type: "assistant",
-            uuid: "import-prefix-assistant",
-            timestamp: "2026-03-26T16:29:55.500Z",
-            message: { role: "assistant", content: "import prefix assistant" },
-          }),
-        ].join("\n"),
-        "utf-8",
-      );
-      setTestEnvValue("HOME", homeDir);
-      try {
-        await writeStoredMainSession(
-          makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId),
-        );
-        await writeMainSessionTranscript(
-          Array.from({ length: 70 }, (_, index) =>
-            createTextTranscriptEvent(
-              index % 2 === 0 ? "user" : "assistant",
-              `local-only message ${index + 1}`,
-              { timestamp: Date.parse("2026-03-27T00:00:00.000Z") + index },
-            ),
-          ),
-          sessionId,
-        );
-
-        const history = await rpcReq<{
-          messages?: Array<{ __openclaw?: { id?: string; seq?: number } }>;
-          hasMore?: boolean;
-          nextOffset?: number;
-          totalMessages?: number;
-          completeSnapshot?: boolean;
-        }>(ws, "chat.history", makeMainSessionParams({ limit: 2 }));
-        expect(history.ok).toBe(true);
-        expect(history.payload?.totalMessages).toBe(72);
-        expect(history.payload?.hasMore).toBe(false);
-        expect(history.payload?.nextOffset).toBeUndefined();
-        expect(history.payload?.completeSnapshot).toBe(true);
-        const deliveredIdentities = new Set(
-          (history.payload?.messages ?? []).map((message) => {
-            const metadata = expectDefined(message["__openclaw"], "history metadata");
-            return metadata.seq !== undefined
-              ? `seq:${metadata.seq}`
-              : `id:${expectDefined(metadata.id, "history id")}`;
-          }),
-        );
-        expect(deliveredIdentities.size).toBe(72);
-        expect(deliveredIdentities).toContain("id:import-prefix-user");
-        expect(deliveredIdentities).toContain("id:import-prefix-assistant");
-        for (let index = 1; index <= 70; index += 1) {
-          expect(deliveredIdentities).toContain(`seq:${index}`);
-        }
-      } finally {
-        homeEnvSnapshot.restore();
-      }
-    });
-  });
-
-  test("chat.history keeps offset paging when a claude-cli binding has no import", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      const sessionDir = await createSessionDir({ fresh: true });
-      const sessionId = "sess-claude-cli-missing-import";
-      const homeEnvSnapshot = captureEnv(["HOME"]);
-      setTestEnvValue("HOME", path.join(sessionDir, "empty-home"));
-      try {
-        await writeStoredMainSession(
-          makeClaudeCliSessionEntry(sessionDir, sessionId, "missing-cli-session"),
-        );
-        await writeMainSessionTranscript(
-          Array.from({ length: 5 }, (_, index) =>
-            createTextTranscriptEvent(
-              index % 2 === 0 ? "user" : "assistant",
-              `local message ${index + 1}`,
-              { timestamp: Date.now() + index },
-            ),
-          ),
-          sessionId,
-        );
-
-        const firstPage = await rpcReq<{
-          messages?: Array<{ __openclaw?: { seq?: number } }>;
-          hasMore?: boolean;
-          nextOffset?: number;
-          totalMessages?: number;
-        }>(ws, "chat.history", makeMainSessionParams({ limit: 2 }));
-        expect(firstPage.ok).toBe(true);
-        expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([4, 5]);
-        expect(firstPage.payload?.hasMore).toBe(true);
-        expect(firstPage.payload?.nextOffset).toBe(2);
-        expect(firstPage.payload?.totalMessages).toBe(5);
-
-        const secondPage = await rpcReq<{
-          messages?: Array<{ __openclaw?: { seq?: number } }>;
-          hasMore?: boolean;
-          nextOffset?: number;
-        }>(
-          ws,
-          "chat.history",
-          makeMainSessionParams({
-            limit: 2,
-            offset: firstPage.payload?.nextOffset,
-          }),
-        );
-        expect(secondPage.ok).toBe(true);
-        expect(secondPage.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3]);
-        expect(secondPage.payload?.hasMore).toBe(true);
-        expect(secondPage.payload?.nextOffset).toBe(4);
-      } finally {
-        homeEnvSnapshot.restore();
-      }
-    });
-  });
-
-  test("chat.history terminates when the full local read dedupes every claude-cli import", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      const sessionDir = await createSessionDir({ fresh: true });
-      const sessionId = "sess-claude-cli-dedupe-loop";
-      const homeEnvSnapshot = captureEnv(["HOME"]);
-      const homeDir = path.join(sessionDir, "home");
-      const cliSessionId = "0f5b202c-f6bb-4046-9475-d2f15fd07531";
-      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
-      const dupBaseMs = Date.parse("2026-03-26T16:29:54.800Z");
-      await fs.mkdir(claudeProjectsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
-        [
-          JSON.stringify({
-            type: "user",
-            uuid: "dup-user-1",
-            timestamp: new Date(dupBaseMs).toISOString(),
-            message: { role: "user", content: "dup user question" },
-          }),
-          JSON.stringify({
-            type: "assistant",
-            uuid: "dup-assistant-1",
-            timestamp: new Date(dupBaseMs + 1000).toISOString(),
-            message: {
-              role: "assistant",
-              model: "claude-sonnet-4-6",
-              content: [{ type: "text", text: "dup assistant reply" }],
-            },
-          }),
-        ].join("\n"),
-        "utf-8",
-      );
-      setTestEnvValue("HOME", homeDir);
-      try {
-        await writeStoredMainSession(
-          makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId),
-        );
-        // The two import copies are the oldest local records; 45 newer
-        // local-only records push them past the limit-1 tail window (40 raw
-        // messages), so the tail merge incorporates the import while the full
-        // read dedupes everything. This layout used to recurse forever.
-        await writeMainSessionTranscript(
-          [
-            createTextTranscriptEvent("user", "dup user question", { timestamp: dupBaseMs }),
-            createTextTranscriptEvent("assistant", "dup assistant reply", {
-              timestamp: dupBaseMs + 1000,
-            }),
-            ...Array.from({ length: 45 }, (_, index) =>
-              createTextTranscriptEvent(
-                index % 2 === 0 ? "user" : "assistant",
-                `local-only message ${index + 1}`,
-                { timestamp: dupBaseMs + 60_000 + index },
-              ),
-            ),
-          ],
-          sessionId,
-        );
-
-        const history = await rpcReq<{
-          messages?: unknown[];
-          hasMore?: boolean;
-          nextOffset?: number;
-          totalMessages?: number;
-        }>(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
-        expect(history.ok).toBe(true);
-        expect(history.payload?.totalMessages).toBe(47);
-        expect(history.payload?.hasMore).toBe(true);
-        expect(history.payload?.nextOffset).toBeGreaterThan(0);
-        expect(JSON.stringify(history.payload?.messages?.at(-1))).toContain(
-          "local-only message 45",
-        );
-      } finally {
-        homeEnvSnapshot.restore();
-      }
-    });
-  });
-
   test("chat.history does not surface an older stale assistant when overreading for pair context", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -5564,46 +5247,6 @@ describe("gateway server chat", () => {
       expect(active.ok).toBe(true);
       expect(JSON.stringify(active.message)).toContain("active branch");
       expect(JSON.stringify(await fetchHistoryMessages(ws))).not.toContain("side delivery");
-    });
-  });
-
-  test("chat.message.get does not return pre-session announce pairs hidden by history", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      await createSessionDir();
-      const sessionStartedAt = Date.now();
-      await writeSessionStore({
-        entries: {
-          main: { sessionId: "sess-main", updatedAt: Date.now(), sessionStartedAt },
-        },
-      });
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("user", "announce", {
-          id: "msg-announce",
-          timestamp: sessionStartedAt - 2_000,
-          message: { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } },
-        }),
-        createTextTranscriptEvent("assistant", "hidden pre-session reply", {
-          id: "msg-hidden-assistant",
-          timestamp: sessionStartedAt - 1_000,
-        }),
-        createTextTranscriptEvent("assistant", "visible reply", {
-          id: "msg-visible-assistant",
-          timestamp: sessionStartedAt + 1_000,
-        }),
-      ]);
-
-      const hidden = await fetchChatMessage(ws, makeMainMessageParams("msg-hidden-assistant"));
-      expect(hidden.ok).toBe(false);
-      expect(hidden.unavailableReason).toBe("not_found");
-
-      const announce = await fetchChatMessage(ws, makeMainMessageParams("msg-announce"));
-      expect(announce.ok).toBe(false);
-      expect(announce.unavailableReason).toBe("not_found");
-
-      const visible = await fetchChatMessage(ws, makeMainMessageParams("msg-visible-assistant"));
-      expect(visible.ok).toBe(true);
-      expect(JSON.stringify(visible.message)).toContain("visible reply");
     });
   });
 

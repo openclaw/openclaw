@@ -7,10 +7,7 @@ import {
 } from "../claws/provenance-runtime-read.js";
 import { collectClawToolPolicyCandidates } from "../claws/tool-policy-candidates.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  captureRuntimeConfigWithSource,
-  getRuntimeConfigCapture,
-} from "../config/runtime-config-capture-state.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
@@ -65,9 +62,7 @@ function captureToolConstructionScope(
     env.OPENCLAW_STATE_DIR = path.resolve(cwd, stateDir);
   }
   Object.assign(env, captureSessionTranscriptStorageEnvironment(env));
-  const capturedConfig = config
-    ? captureRuntimeConfigWithSource(config, getRuntimeConfigCapture(config)?.source ?? config)
-    : undefined;
+  const capturedConfig = config ? captureRuntimeConfig(config) : undefined;
   const statePath = path.resolve(cwd, resolveOpenClawStateSqlitePath(env));
   let assertStateCurrent: (() => void) | undefined;
   const assertCurrent = () => {

@@ -73,19 +73,6 @@ function shapeResolvedExecApprovals(params: {
   });
 }
 
-function resolveExecApprovalsWithoutSocket(params: {
-  file: ExecApprovalsFile;
-  filePath: string;
-  agentId?: string;
-  overrides?: ExecApprovalsDefaultOverrides;
-}): ExecApprovalsResolved | null {
-  const resolved = shapeResolvedExecApprovals({ ...params, socket: "none" });
-  const noPrompt =
-    (resolved.agent.security === "full" || resolved.agent.security === "deny") &&
-    resolved.agent.ask === "off";
-  return noPrompt && !params.file.socket?.token?.trim() ? resolved : null;
-}
-
 export async function resolveExecApprovalsLocked(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
@@ -93,13 +80,18 @@ export async function resolveExecApprovalsLocked(
   const filePath = resolveExecApprovalsDisplayPath();
   if (!overrides?.requireSocket) {
     const file = loadExecApprovals();
-    const resolved = resolveExecApprovalsWithoutSocket({
+    const resolved = shapeResolvedExecApprovals({
       file,
       filePath,
       agentId,
       overrides,
+      socket: "none",
     });
-    if (resolved) {
+    if (
+      (resolved.agent.security === "full" || resolved.agent.security === "deny") &&
+      resolved.agent.ask === "off" &&
+      !file.socket?.token?.trim()
+    ) {
       return resolved;
     }
   }

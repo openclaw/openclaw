@@ -64,7 +64,6 @@ const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 type SessionColdPlan = {
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
   sessionId: string;
-  beforeMs: number;
   snapshot: SessionStateDeleteSnapshot;
 };
 type SessionColdPrepared = {

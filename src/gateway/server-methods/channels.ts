@@ -7,6 +7,7 @@ import {
   validateChannelsLogoutParams,
   validateChannelsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromRuntime } from "../../channels/account-summary.js";
@@ -48,23 +49,18 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import type { GatewayRequestHandler, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
-type ChannelOperationParams = {
-  channel?: unknown;
-  accountId?: unknown;
-};
-
-function resolveChannelOperationParams<TParams extends ChannelOperationParams>(params: {
+function resolveChannelOperationParams(params: {
   method: "channels.start" | "channels.stop" | "channels.logout";
   rawParams: unknown;
   respond: RespondFn;
-  validate: Validator<TParams>;
-}): { params: TParams; channelId: ChannelId; plugin: ChannelPlugin } | null {
+  validate: Validator<ChannelsStartParams>;
+}): { params: ChannelsStartParams; channelId: ChannelId; plugin: ChannelPlugin } | null {
   const rawParams = params.rawParams;
   if (!assertValidParams(rawParams, params.validate, params.method, params.respond)) {
     return null;
   }
   const rawChannel = rawParams.channel;
-  const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+  const channelId = normalizeChannelId(rawChannel);
   if (!channelId) {
     params.respond(
       false,
@@ -153,14 +149,16 @@ async function runChannelStatusHook(params: {
   const timeoutMs = Math.max(1, params.timeoutMs);
   const warningPrefix = `${params.channelId}${params.accountId === undefined ? "" : `:${params.accountId}`} ${params.step}`;
   const timedOut = Symbol("channel-status-timeout");
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<typeof timedOut>((resolve) => {
-    timer = setTimeout(() => resolve(timedOut), timeoutMs);
-    timer.unref();
-  });
   try {
     // Plugin hooks can be slow or fail independently; keep the remaining status usable.
-    const value = await Promise.race([Promise.resolve().then(params.run), timeout]);
+    const value = await raceWithTimeout(
+      Promise.resolve().then(params.run),
+      timeoutMs,
+      () => timedOut,
+      {
+        ref: false,
+      },
+    );
     if (value === timedOut) {
       params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
       return { ok: false, timedOut: true, error: `${params.step} timed out after ${timeoutMs}ms` };
@@ -170,8 +168,6 @@ async function runChannelStatusHook(params: {
     const message = formatForLog(error);
     params.warnings.push(`${warningPrefix} failed: ${message}`);
     return { ok: false, error: message };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -184,14 +180,6 @@ function channelStatusFailureMessage(value: unknown): string | null {
     return null;
   }
   return record.error;
-}
-
-function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: unknown }): number {
-  const fallback = params.probe ? CHANNEL_STATUS_MAX_TIMEOUT_MS : 10_000;
-  if (typeof params.timeoutMsRaw !== "number" || !Number.isFinite(params.timeoutMsRaw)) {
-    return fallback;
-  }
-  return Math.min(Math.max(1000, params.timeoutMsRaw), CHANNEL_STATUS_MAX_TIMEOUT_MS);
 }
 
 async function startChannelAccount(params: ChannelAccountParams) {
@@ -262,12 +250,15 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const probe = params.probe === true;
-    const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw: params.timeoutMs });
+    const timeoutMs = Math.min(
+      Math.max(1000, params.timeoutMs ?? (probe ? CHANNEL_STATUS_MAX_TIMEOUT_MS : 10_000)),
+      CHANNEL_STATUS_MAX_TIMEOUT_MS,
+    );
     const rawChannel = params.channel;
     const cfg = context.getRuntimeConfig();
     const plugins = listReadOnlyChannelPluginsForConfig(cfg);
     const requestedChannel =
-      typeof rawChannel === "string"
+      rawChannel !== undefined
         ? (normalizeChannelId(rawChannel) ??
           plugins.find((plugin) => plugin.id === rawChannel.trim().toLowerCase())?.id)
         : undefined;

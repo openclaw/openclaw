@@ -57,11 +57,7 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
-import type {
-  ChatTranscriptProjection,
-  ChatTranscriptSession,
-  TranscriptHeader,
-} from "./chat-transcript-session.ts";
+import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
@@ -72,10 +68,7 @@ const workPreviewCache =
   createTranscriptMemo<ReturnType<typeof renderWorkGroupBrowserTabPreviews>>();
 const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
-export function projectChatTranscript(
-  props: ChatThreadProps,
-  transcript: ChatTranscriptSession,
-): ChatTranscriptProjection {
+export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
   const state = getTranscriptState(props.paneId);
   const asyncQuestions = props.asyncQuestions;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -259,7 +252,6 @@ export function projectChatTranscript(
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
       : undefined,
     resolveReplyPreview,
-    onResolveReply: props.replyMessageAccess?.request,
     onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
     replyNavigationId: props.replyMessageAccess?.navigationId,
     onOpenSidebar: props.onOpenSidebar,
@@ -317,7 +309,6 @@ export function projectChatTranscript(
       showToolCalls: props.showToolCalls,
       activityRunId,
       activityGroupKey,
-      autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: toggleToolCardExpanded,
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,

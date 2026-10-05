@@ -294,7 +294,12 @@ export function renderTextInput(
       ?disabled=${disabled}
       ?readonly=${effectiveRedacted}
       @click=${() => {
-        if (sensitiveState.isRedacted && !isStructuredSecretRef && params.onToggleSensitivePath) {
+        if (
+          !masked &&
+          sensitiveState.isRedacted &&
+          !isStructuredSecretRef &&
+          params.onToggleSensitivePath
+        ) {
           params.onToggleSensitivePath(path);
         }
       }}
@@ -343,7 +348,11 @@ export function renderTextInput(
         disabled,
         onToggleSensitivePath: params.onToggleSensitivePath,
       });
-  const wrappedInput = wrapSensitiveControl(inputControl, revealToggle);
+  const wrappedInput = wrapSensitiveControl(
+    inputControl,
+    revealToggle,
+    sensitiveState.isSensitiveField && params.onToggleSensitivePath !== undefined,
+  );
   const presentedInput = isPhonePresentation
     ? html`
         <span class="settings-phone-presentation">

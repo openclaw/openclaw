@@ -2,6 +2,7 @@ import { basenameFromMediaSource } from "@openclaw/fs-safe/advanced";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
@@ -207,10 +208,11 @@ function resolveAttachmentMaxBytes(params: {
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
-  // Priority: account-specific > channel-level > global default
-  const limitMb =
-    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
-  return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
+  // Priority: account-specific > channel-level > global default.
+  const limitMb = asPositiveFiniteNumber(
+    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb,
+  );
+  return limitMb === undefined ? undefined : limitMb * 1024 * 1024;
 }
 
 function inferAttachmentFilename(params: {
@@ -244,81 +246,6 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
     base64: payload,
     contentType: params.contentType ?? mime,
   };
-}
-
-function validateBoundedBase64Attachment(params: { base64: string; maxBytes: number }): string {
-  const estimatedBytes = estimateBase64DecodedBytes(params.base64);
-  if (estimatedBytes > params.maxBytes) {
-    throw new Error(`Media too large: ${estimatedBytes} bytes (limit: ${params.maxBytes} bytes)`);
-  }
-  const canonicalBase64 = canonicalizeBase64(params.base64);
-  if (!canonicalBase64) {
-    throw new Error("message.send buffer has invalid base64 data");
-  }
-  return canonicalBase64;
-}
-
-async function hydrateSendBufferMediaParams(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  accountId?: string | null;
-  args: Record<string, unknown>;
-  dryRun?: boolean;
-  preserveBuffer?: boolean;
-  assertClientUploadAllowed?: () => void;
-  extraParamKeys?: readonly string[];
-}): Promise<void> {
-  if (hasExplicitSendMediaSource(params.args, params.extraParamKeys)) {
-    delete params.args.buffer;
-    return;
-  }
-  const rawBuffer = readToolStringParam(params.args, "buffer", { trim: false });
-  if (!rawBuffer) {
-    return;
-  }
-  const normalized = normalizeBase64Payload({
-    base64: rawBuffer,
-    contentType:
-      readToolStringParam(params.args, "contentType") ??
-      readToolStringParam(params.args, "mimeType"),
-  });
-  if (!normalized.base64) {
-    return;
-  }
-  const filename =
-    readToolStringParam(params.args, "filename") ??
-    inferAttachmentFilename({
-      contentType: normalized.contentType,
-    });
-  const maxBytes = resolveAttachmentMaxBytes(params) ?? MEDIA_MAX_BYTES;
-  const canonicalBase64 = validateBoundedBase64Attachment({
-    base64: normalized.base64,
-    maxBytes,
-  });
-  const staged =
-    params.dryRun || params.preserveBuffer
-      ? { path: SEND_BUFFER_DRY_RUN_MEDIA_URL, contentType: normalized.contentType }
-      : await resolveOutboundAttachmentFromBuffer(
-          Buffer.from(canonicalBase64, "base64"),
-          maxBytes,
-          {
-            contentType: normalized.contentType,
-            filename,
-            assertCommitAllowed: params.assertClientUploadAllowed,
-          },
-        );
-  params.args.media = staged.path;
-  params.args.mediaUrl = staged.path;
-  params.args.mediaUrls = [staged.path];
-  if (!params.preserveBuffer) {
-    delete params.args.buffer;
-  }
-  if (staged.contentType && !readToolStringParam(params.args, "contentType")) {
-    params.args.contentType = staged.contentType;
-  }
-  if (filename && !readToolStringParam(params.args, "filename")) {
-    params.args.filename = filename;
-  }
 }
 
 type AttachmentMediaPolicy =
@@ -475,16 +402,61 @@ export async function hydrateAttachmentParamsForAction(params: {
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
   if (params.action === "send") {
-    await hydrateSendBufferMediaParams({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-      args: params.args,
-      dryRun: params.dryRun,
-      preserveBuffer: params.preserveSendBuffer,
-      assertClientUploadAllowed: params.assertClientUploadAllowed,
-      extraParamKeys: params.extraParamKeys,
+    const { args, preserveSendBuffer } = params;
+    if (hasExplicitSendMediaSource(args, params.extraParamKeys)) {
+      delete args.buffer;
+      return;
+    }
+    const rawBuffer = readToolStringParam(args, "buffer", { trim: false });
+    if (!rawBuffer) {
+      return;
+    }
+    const normalized = normalizeBase64Payload({
+      base64: rawBuffer,
+      contentType:
+        readToolStringParam(args, "contentType") ?? readToolStringParam(args, "mimeType"),
     });
+    if (!normalized.base64) {
+      return;
+    }
+    const filename =
+      readToolStringParam(args, "filename") ??
+      inferAttachmentFilename({
+        contentType: normalized.contentType,
+      });
+    const maxBytes = resolveAttachmentMaxBytes(params) ?? MEDIA_MAX_BYTES;
+    const estimatedBytes = estimateBase64DecodedBytes(normalized.base64);
+    if (estimatedBytes > maxBytes) {
+      throw new Error(`Media too large: ${estimatedBytes} bytes (limit: ${maxBytes} bytes)`);
+    }
+    const canonicalBase64 = canonicalizeBase64(normalized.base64);
+    if (!canonicalBase64) {
+      throw new Error("message.send buffer has invalid base64 data");
+    }
+    const staged =
+      params.dryRun || preserveSendBuffer
+        ? { path: SEND_BUFFER_DRY_RUN_MEDIA_URL, contentType: normalized.contentType }
+        : await resolveOutboundAttachmentFromBuffer(
+            Buffer.from(canonicalBase64, "base64"),
+            maxBytes,
+            {
+              contentType: normalized.contentType,
+              filename,
+              assertCommitAllowed: params.assertClientUploadAllowed,
+            },
+          );
+    args.media = staged.path;
+    args.mediaUrl = staged.path;
+    args.mediaUrls = [staged.path];
+    if (!preserveSendBuffer) {
+      delete args.buffer;
+    }
+    if (staged.contentType && !readToolStringParam(args, "contentType")) {
+      args.contentType = staged.contentType;
+    }
+    if (filename && !readToolStringParam(args, "filename")) {
+      args.filename = filename;
+    }
     return;
   }
   // Reply gets the same hydration as sendAttachment so threaded sends with

@@ -1,24 +1,24 @@
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   prepareSqliteScope,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import type { PendingInputScope } from "./session-pending-input-store.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export async function readPendingInputSource(
-  scope: SessionAccessScope & { agentId: string; sessionId: string },
+  scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,
 ) {
@@ -34,6 +34,36 @@ export async function readPendingInputSource(
     idempotencyKey,
     pendingOnly,
   };
+  if (captured.incognito) {
+    const { actor, authority } = captured.incognito;
+    actor.assertCurrent();
+    authority.assertCurrent();
+    if (
+      !isIncognitoSessionKey(logical.sessionKey) ||
+      actor.agentId !== logical.agentId ||
+      actor.path !== resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical))
+    ) {
+      throw new Error("Submitted input target differs from its captured incognito actor");
+    }
+    const claim = actor.sessions.captureCurrent(logical.sessionKey);
+    const assertCurrent = () => {
+      actor.assertCurrent();
+      authority.assertCurrent();
+      claim.assertCurrent();
+    };
+    const snapshot = await actor.sessions.readPendingInput(
+      {
+        assertCurrent,
+        authorize: (stage, facts) => authority.authorize?.(stage, facts),
+      },
+      input,
+    );
+    assertCurrent();
+    if (snapshot.kind !== "source") {
+      throw new Error("Submitted input returned a different operation");
+    }
+    return { path: actor.path, snapshot, assertCurrent };
+  }
   if (isIncognitoSessionKey(captured.sessionKey)) {
     // Process-held incognito storage retains its native owner until the actor cutover.
     const options = toDatabaseOptions(resolveSqliteScope(captured));
@@ -60,14 +90,7 @@ export async function readPendingInputSource(
     captured.storePath ??
     resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
+  const identities = captureSessionStoreCandidateIdentities(candidates);
   const resolved = await prepareSqliteScope(captured);
   const options = toDatabaseOptions(resolved);
   const path = resolveOpenClawAgentSqlitePath(options);

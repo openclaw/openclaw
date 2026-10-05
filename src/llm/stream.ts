@@ -6,6 +6,8 @@ import { defaultApiRegistry, defaultLlmRuntime } from "@openclaw/ai/internal/run
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { getModelLlmRuntime } from "./model-runtime-binding.js";
 import "./ai-transport-host.js";
 import type {
@@ -21,16 +23,11 @@ import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
 registerBuiltInApiProviders(defaultApiRegistry);
 
-let transportRuntimeHostPromise: Promise<void> | undefined;
-
-async function ensureTransportRuntimeHost(): Promise<void> {
-  // Async completion entry points install heavy provider ports before the runtime
-  // can invoke them, without adding their plugin graph to this eager facade.
-  transportRuntimeHostPromise ??= import("../agents/ai-transport-runtime-host.js").then(
-    ({ configureAiTransportRuntimeHost }) => configureAiTransportRuntimeHost(),
-  );
-  await transportRuntimeHostPromise;
-}
+// The process host outlives requests; only provider invocation carries caller authority.
+const ensureTransportRuntimeHost = createLazyPromise(
+  () => runInDetachedAsyncContext(() => import("../agents/ai-transport-runtime-host.js")),
+  { cacheRejections: true },
+);
 
 function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantMessage {
   return {

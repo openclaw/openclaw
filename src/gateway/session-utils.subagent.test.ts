@@ -72,7 +72,7 @@ describe("session list subagent metadata", () => {
 
   const cfg = {
     session: { mainKey: "main" },
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   } as OpenClawConfig;
 
   function listSubagentSessions(

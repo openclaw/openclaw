@@ -6,48 +6,47 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
 }));
+const runtime = vi.hoisted(() => ({
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+  writeJson: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  defaultRuntime: runtime,
+}));
+vi.mock("openclaw/plugin-sdk/node-cli-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/node-cli-runtime")>()),
+  runNodesCommand: (_label: string, action: () => Promise<void>) => action(),
+  getNodesTheme: () => ({ ok: (value: string) => value }),
+}));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
   callGatewayFromCli: gatewayMocks.callGatewayFromCli,
 }));
 
-import {
-  createDefaultCanvasCliDependencies,
-  registerNodesCanvasCommands,
-  type CanvasCliDependencies,
-} from "./cli.js";
+import { registerNodesCanvasCommands } from "./cli.js";
 
-function createDeps() {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-    writeJson: vi.fn(),
-  };
-  const defaults = createDefaultCanvasCliDependencies();
-  const deps: CanvasCliDependencies = {
-    ...defaults,
-    defaultRuntime: runtime,
-    runNodesCommand: (_label, action) => action(),
-    getNodesTheme: () => ({ ok: (value) => value }),
-    resolveNodeId: vi.fn(async () => "mac-1"),
-    callGatewayCli: vi.fn(async () => ({ ok: true })),
-  };
-  return { deps, runtime };
-}
+const nodeList = { nodes: [{ nodeId: "mac-1", displayName: "Studio" }] };
 
-function createProgram(deps: CanvasCliDependencies) {
+function createProgram() {
   const program = new Command();
   program.exitOverride();
-  registerNodesCanvasCommands(program.command("nodes"), deps);
+  registerNodesCanvasCommands(program.command("nodes"));
   return program;
 }
 
 describe("nodes canvas CLI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    gatewayMocks.callGatewayFromCli.mockReset();
+    gatewayMocks.callGatewayFromCli
+      .mockReset()
+      .mockImplementation(async (method: string) =>
+        method === "node.list" ? nodeList : { ok: true },
+      );
   });
 
   it.each([
@@ -72,17 +71,15 @@ describe("nodes canvas CLI", () => {
   ])(
     "invokes $command and prints its acknowledgement",
     async ({ args, command, params, message }) => {
-      const { deps, runtime } = createDeps();
-      const program = createProgram(deps);
+      const program = createProgram();
 
       await program.parseAsync(["nodes", "canvas", ...args, "--node", "Studio"], {
         from: "user",
       });
 
-      expect(deps.resolveNodeId).toHaveBeenCalledWith(expect.any(Object), "Studio");
-      expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledWith(
         "node.invoke",
-        expect.any(Object),
+        expect.objectContaining({ timeout: "40000" }),
         {
           nodeId: "mac-1",
           command,
@@ -90,15 +87,14 @@ describe("nodes canvas CLI", () => {
           timeoutMs: 30_000,
           idempotencyKey: expect.any(String),
         },
-        { transportTimeoutMs: 40_000 },
+        { progress: true },
       );
       expect(runtime.log).toHaveBeenCalledWith(message);
     },
   );
 
   it("preserves present target and placement fields", async () => {
-    const { deps } = createDeps();
-    const program = createProgram(deps);
+    const program = createProgram();
 
     await program.parseAsync(
       [
@@ -121,7 +117,7 @@ describe("nodes canvas CLI", () => {
       { from: "user" },
     );
 
-    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+    expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledWith(
       "node.invoke",
       expect.any(Object),
       expect.objectContaining({
@@ -136,10 +132,9 @@ describe("nodes canvas CLI", () => {
   });
 
   it("prints the full Gateway response in JSON mode", async () => {
-    const { deps, runtime } = createDeps();
     const response = { ok: true, command: "canvas.hide", payload: { acknowledged: true } };
-    vi.mocked(deps.callGatewayCli).mockResolvedValue(response);
-    const program = createProgram(deps);
+    gatewayMocks.callGatewayFromCli.mockResolvedValueOnce(nodeList).mockResolvedValueOnce(response);
+    const program = createProgram();
 
     await program.parseAsync(["nodes", "canvas", "hide", "--node", "mac-1", "--json"], {
       from: "user",
@@ -150,19 +145,18 @@ describe("nodes canvas CLI", () => {
   });
 
   it("keeps the Gateway deadline longer than an explicit node deadline", async () => {
-    const { deps } = createDeps();
-    const program = createProgram(deps);
+    const program = createProgram();
 
     await program.parseAsync(
       ["nodes", "canvas", "hide", "--node", "mac-1", "--invoke-timeout", "35000"],
       { from: "user" },
     );
 
-    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+    expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledWith(
       "node.invoke",
-      expect.any(Object),
+      expect.objectContaining({ timeout: "45000" }),
       expect.objectContaining({ timeoutMs: 35_000 }),
-      { transportTimeoutMs: 45_000 },
+      { progress: true },
     );
   });
 
@@ -170,20 +164,17 @@ describe("nodes canvas CLI", () => {
     ["--width", "640px", "--width must be a number."],
     ["--invoke-timeout", "20ms", "--invoke-timeout must be a positive integer."],
   ])("rejects invalid present %s values", async (flag, value, message) => {
-    const { deps } = createDeps();
-    const program = createProgram(deps);
+    const program = createProgram();
 
     await expect(
       program.parseAsync(["nodes", "canvas", "present", "--node", "mac-1", flag, value], {
         from: "user",
       }),
     ).rejects.toThrow(message);
-    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   it("resolves and invokes a paired node when an older Gateway lacks node.list", async () => {
-    const { deps } = createDeps();
-    deps.resolveNodeId = createDefaultCanvasCliDependencies().resolveNodeId;
     gatewayMocks.callGatewayFromCli
       .mockRejectedValueOnce(
         new GatewayClientRequestError({
@@ -196,15 +187,16 @@ describe("nodes canvas CLI", () => {
         paired: [{ nodeId: "legacy-node", displayName: "Legacy Node" }],
       });
 
-    await createProgram(deps).parseAsync(["nodes", "canvas", "hide", "--node", "Legacy Node"], {
+    await createProgram().parseAsync(["nodes", "canvas", "hide", "--node", "Legacy Node"], {
       from: "user",
     });
 
     expect(gatewayMocks.callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
       "node.list",
       "node.pair.list",
+      "node.invoke",
     ]);
-    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+    expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledWith(
       "node.invoke",
       expect.any(Object),
       expect.objectContaining({ nodeId: "legacy-node", command: "canvas.hide" }),
@@ -255,15 +247,13 @@ describe("nodes canvas CLI", () => {
       error: new Error("unknown method: node.list"),
     },
   ])("preserves $label without resolving or invoking a stale node", async ({ error }) => {
-    const { deps, runtime } = createDeps();
-    deps.resolveNodeId = createDefaultCanvasCliDependencies().resolveNodeId;
     gatewayMocks.callGatewayFromCli.mockRejectedValueOnce(error).mockResolvedValueOnce({
       pending: [],
       paired: [{ nodeId: "stale-node", displayName: "Stale Node" }],
     });
 
     await expect(
-      createProgram(deps).parseAsync(["nodes", "canvas", "hide", "--node", "Stale Node"], {
+      createProgram().parseAsync(["nodes", "canvas", "hide", "--node", "Stale Node"], {
         from: "user",
       }),
     ).rejects.toBe(error);
@@ -271,7 +261,6 @@ describe("nodes canvas CLI", () => {
     expect(gatewayMocks.callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
       "node.list",
     ]);
-    expect(deps.callGatewayCli).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 });

@@ -264,10 +264,13 @@ describe("worker turn launcher remote handoff", () => {
             entry.type === "custom_message" && entry.customType === "cloud-workspace-conflict",
         ),
     ).toBe(true);
-    expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
-    expect(descriptor?.assignment.systemPrompt).toBe(
-      "Keep the worker guidance.\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=active-mac active_node_identity=unknown",
-    );
+    expect(descriptor?.assignment.prompt).toMatch(/^\[[^\]]+\] Inspect this workspace$/u);
+    const systemPrompt = descriptor?.assignment.systemPrompt;
+    expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+    expect(systemPrompt).toContain("Keep the worker guidance.");
+    expect(systemPrompt).toContain("active_node=active-mac");
+    expect(systemPrompt).toContain("active_node_identity=unknown");
+    expect(systemPrompt).toContain("Working directory: /worker/workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
     expect(descriptor?.version).toBe(4);
@@ -318,15 +321,10 @@ describe("worker turn launcher remote handoff", () => {
       },
       {
         role: "user",
-        content: [{ type: "text", text: "Earlier request" }],
+        content: [{ type: "text", text: expect.stringMatching(/^\[[^\]]+\] Earlier request$/u) }],
         timestamp: 10,
       },
       expect.objectContaining({ role: "assistant" }),
-      {
-        role: "user",
-        content: [{ type: "text", text: "Custom durable context" }],
-        timestamp: expect.any(Number),
-      },
       {
         role: "toolResult",
         toolCallId: "call-1",
@@ -334,6 +332,11 @@ describe("worker turn launcher remote handoff", () => {
         content: [{ type: "text", text: "result" }],
         isError: false,
         timestamp: 12,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Custom durable context" }],
+        timestamp: expect.any(Number),
       },
     ]);
     expect(
@@ -472,9 +475,12 @@ describe("worker turn launcher remote handoff", () => {
       "media/inbound/openclaw-staged-",
     );
     expect(tunnel.stageAttachments).toHaveBeenCalledOnce();
-    expect(descriptor?.assignment.systemPrompt).toBe(
-      "Current active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
+    expect(descriptor?.assignment.systemPrompt).toContain(
+      "You are a personal assistant running inside OpenClaw.",
     );
+    expect(descriptor?.assignment.systemPrompt).toContain("active_node=unknown");
+    expect(descriptor?.assignment.systemPrompt).toContain("active_node_identity=unknown");
+    expect(descriptor?.assignment.systemPrompt).not.toContain("disconnected-mac");
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );

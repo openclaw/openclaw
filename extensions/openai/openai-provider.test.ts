@@ -2086,12 +2086,11 @@ describe("buildOpenAIProvider", () => {
       },
       cfg: {
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["web_search"] },
             },
-          ],
+          },
         },
       },
       model: {

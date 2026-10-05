@@ -7,6 +7,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { completeUpdateFailureSummary } from "./update-failure-result.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
@@ -259,8 +260,26 @@ export function finishUpdateRun(
           }
         }
         record.before = { ...record.before, ...result.before };
+        const failed =
+          record.steps.find((step) => step.status === "failed" && step.failureFacts?.length) ??
+          (result.status === "failed"
+            ? record.steps.find((step) => step.step === record.phase)
+            : undefined);
+        finishUpdateRunRecord(record, result);
+        if (result.status === "failed" || result.status === "rolled-back") {
+          const summary = completeUpdateFailureSummary(record.reason, failed?.failureFacts);
+          record.reason = summary.reason;
+          if (failed) {
+            failed.failureFacts = summary.failureFacts;
+          } else {
+            upsertStep(record, {
+              step: "update",
+              status: "failed",
+              failureFacts: summary.failureFacts,
+            });
+          }
+        }
       }
-      finishUpdateRunRecord(record, result);
     },
     options,
   );

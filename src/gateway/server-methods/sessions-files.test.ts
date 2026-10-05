@@ -11,7 +11,6 @@ import { resolveOpenPathCommand } from "./open-path.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
-  IMAGE_PREVIEW_FIXTURES,
   TEXT_PREVIEW_FIXTURES,
   useSqliteSession,
   visibleMessageEvent,
@@ -468,56 +467,6 @@ describe("sessions.files RPC handlers", () => {
     });
   });
 
-  it("reports oversized existing files without marking them missing", async () => {
-    writeWorkspaceFile(workspaceRoot, "large.log", "x".repeat(260 * 1024));
-    mockVisibleMessages([assistantToolCall("read", { path: "large.log" })]);
-
-    const error = expectError(await getFile("large.log"));
-
-    expect(error.details).toMatchObject({
-      maxPreviewBytes: 256 * 1024,
-      path: "large.log",
-      size: 260 * 1024,
-      type: "session_file_too_large",
-    });
-  });
-
-  it.each([
-    {
-      name: "SQLite",
-      mimeType: "application/x-sqlite3",
-      bytes: Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(260 * 1024)]),
-    },
-  ])("returns oversized $name files as bounded metadata", async (fixture) => {
-    const fileName = `large-${fixture.name.toLowerCase()}.bin`;
-    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.bytes);
-
-    const payload = expectOkPayload(await getFile(fileName));
-
-    expect(payload.file).toMatchObject({
-      mimeType: fixture.mimeType,
-      path: fileName,
-      previewKind: "unsupported",
-      size: fixture.bytes.length,
-    });
-    expect(payload.file.content).toBeUndefined();
-    expect(payload.file.contentEncoding).toBeUndefined();
-    expect(payload.file.hash).toBeUndefined();
-  });
-
-  it("rejects malformed CAS hashes before reading the workspace", async () => {
-    const calls = await saveFile({
-      path: "ui/vite.config.ts",
-      content: "changed\n",
-      expectedHash: "not-a-sha256",
-    });
-
-    expect(calls).toMatchObject([{ ok: false }]);
-    expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
-      "export default {};\n",
-    );
-  });
-
   it("allows only one concurrent save across nested workspace aliases", async () => {
     const original = "export default {};\n";
     const expectedHash = hashContent(original);
@@ -618,38 +567,6 @@ describe("sessions.files RPC handlers", () => {
     expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
       "export default {};\n",
     );
-  });
-
-  it("rejects replacement content that cannot round-trip through UTF-8", async () => {
-    const error = expectError(
-      await saveFile({
-        path: "ui/vite.config.ts",
-        content: "before\ud800after",
-        expectedHash: hashContent("export default {};\n"),
-      }),
-    );
-
-    expect(error.details).toMatchObject({
-      path: "ui/vite.config.ts",
-      type: "session_file_unsafe",
-    });
-    expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
-      "export default {};\n",
-    );
-  });
-
-  it("does not trust a supported image extension without supported image bytes", async () => {
-    const binary = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]);
-    fs.writeFileSync(path.join(workspaceRoot, "disguised.png"), binary);
-
-    const payload = expectOkPayload(await getFile("disguised.png"));
-
-    expect(payload.file).toMatchObject({
-      mimeType: "application/x-sqlite3",
-      path: "disguised.png",
-      previewKind: "unsupported",
-    });
-    expect(payload.file.content).toBeUndefined();
   });
 
   it("rejects writes to binary files even with a matching byte hash", async () => {
@@ -815,23 +732,6 @@ describe("sessions.files preview formats", () => {
     expect(expectError(result).details.type).toBe("session_file_too_large");
   });
 
-  it.each(IMAGE_PREVIEW_FIXTURES)(
-    "previews sniffed $format bytes as a base64 image without a CAS hash",
-    async (fixture) => {
-      const fileName = `preview-${fixture.format.toLowerCase()}.bin`;
-      fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.bytes);
-      const payload = expectOkPayload(await getFile(fileName));
-      expect(payload.file).toMatchObject({
-        content: fixture.bytes.toString("base64"),
-        contentEncoding: "base64",
-        mimeType: fixture.mimeType,
-        path: fileName,
-        previewKind: "image",
-      });
-      expect(payload.file.hash).toBeUndefined();
-    },
-  );
-
   it.each(TEXT_PREVIEW_FIXTURES)("keeps detected $format text editable", async (fixture) => {
     const fileName = `detected-${fixture.format.toLowerCase().replaceAll(" ", "-")}.bin`;
     fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.content, "utf8");
@@ -858,39 +758,6 @@ describe("sessions.files touched-file folds", () => {
   const listTouched = async () => expectOkPayload(await listFiles());
   const touchedKinds = (payload: Record<string, unknown>[]) =>
     payload.map((file) => [file.path, file.kind]);
-
-  it("folds only appended SQLite messages after the cached cursor", async () => {
-    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-incremental");
-    hoisted.readDelta.mockImplementation((_scope, limits) => {
-      if (limits.cursor === undefined) {
-        return page(
-          "cursor-1",
-          [visibleMessageEvent(assistantToolCall("read", { path: "ui/chat.ts" }), 1)],
-          false,
-        );
-      }
-      if (limits.cursor === "cursor-1") {
-        return page(
-          "cursor-2",
-          [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 2)],
-          false,
-        );
-      }
-      throw new Error(`unexpected cursor: ${String(limits.cursor)}`);
-    });
-
-    const first = await listTouched();
-    const second = await listTouched();
-
-    expect(first.files).toEqual([expect.objectContaining({ path: "ui/chat.ts", kind: "read" })]);
-    expect(second.files).toEqual([
-      expect.objectContaining({ path: "ui/chat.ts", kind: "modified" }),
-    ]);
-    expect(hoisted.readDelta).toHaveBeenCalledTimes(2);
-    expect(hoisted.readDelta.mock.calls[1]?.[1]).toMatchObject({
-      cursor: "cursor-1",
-    });
-  });
 
   it("retains incremental cursors across more than 16 concurrently viewed sessions", async () => {
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);

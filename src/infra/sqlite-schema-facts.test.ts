@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
+import { assertCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertSupportedAgentSchemaVersion } from "../state/openclaw-agent-db-schema-read.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   enableNodeSqliteKyselyStatementCache,
@@ -18,6 +21,7 @@ import {
   readSqliteDataVersion,
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 describe("admitted SQLite schema facts", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,6 +48,48 @@ describe("admitted SQLite schema facts", () => {
         database.close();
       }
     }
+  });
+
+  it("serves admitted runtime schema checks without executing SQL", () => {
+    const database = openDatabase(
+      `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
+    );
+    assertCanonicalSessionValidationSchema(database);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(tableExists(database, "session_nodes")).toBe(true);
+        assertCanonicalSessionValidationSchema(database);
+      }
+      expect(observation.queries).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+  });
+
+  it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
+    const database = openDatabase(
+      `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
+      true,
+      filename,
+    );
+    database.exec("PRAGMA journal_mode=WAL");
+    assertCanonicalSessionValidationSchema(database);
+    const peer = new DatabaseSync(filename);
+    databases.push(peer);
+    runSqliteReadOperationSync(database, () => {
+      peer.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
+      expect(() =>
+        runSqliteImmediateTransactionSync(database, () =>
+          assertCanonicalSessionValidationSchema(database),
+        ),
+      ).toThrow(/canonical validation schema is missing or drifted/u);
+      expect(database.isTransaction).toBe(false);
+    });
   });
 
   it.each(["exec", "all"] as const)(
@@ -157,9 +203,11 @@ describe("admitted SQLite schema facts", () => {
       expect(hasTable("later")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
       writer.exec("PRAGMA user_version = 2147483647");
-      expect(() => assertSupportedAgentSchemaVersion(reader, filename)).toThrow(
-        /newer schema version/iu,
-      );
+      expect(() =>
+        runSqliteReadOperationSync(reader, () =>
+          assertSupportedAgentSchemaVersion(reader, filename),
+        ),
+      ).toThrow(/newer schema version/iu);
     },
   );
 
@@ -339,22 +387,62 @@ describe("admitted SQLite schema facts", () => {
     },
   );
 
-  it.each(["run", "get", "all", "iterate"] as const)(
-    "observes prepared DDL when executed through %s",
-    (method) => {
-      const database = openDatabase();
-      const create = database.prepare("CREATE TABLE prepared_table (id)");
-      expect(tableExists(database, "prepared_table")).toBe(false);
-      if (method === "iterate") {
-        expect([...create.iterate()]).toEqual([]);
-      } else {
-        create[method]();
+  it.each([
+    { method: "run", admitted: true, binding: undefined },
+    { method: "get", admitted: true, binding: undefined },
+    { method: "all", admitted: true, binding: undefined },
+    { method: "iterate", admitted: true, binding: undefined },
+    { method: "run", admitted: false, binding: undefined },
+    { method: "run", admitted: true, binding: "positional" },
+    { method: "run", admitted: true, binding: "named" },
+  ] as const)(
+    "tracks prepared DDL: $method, admitted=$admitted, binding=$binding",
+    ({ method, admitted, binding }) => {
+      const database = openDatabase(undefined, admitted);
+      const table = admitted ? "prepared_table" : "original";
+      const sql = !admitted
+        ? "DROP TABLE original"
+        : binding
+          ? `CREATE TABLE prepared_table AS SELECT ${binding === "named" ? "$id" : "?"} AS id`
+          : "CREATE TABLE prepared_table (id)";
+      const statement = database.prepare(sql);
+      if (!admitted) {
+        admitSqliteSchema(database);
       }
-      expect(tableExists(database, "prepared_table")).toBe(true);
+      expect(tableExists(database, table)).toBe(!admitted);
+      if (method === "iterate") {
+        expect([...statement.iterate()]).toEqual([]);
+      } else if (binding === "named") {
+        statement.run({ $id: 11 });
+      } else if (binding === "positional") {
+        statement.run(7);
+      } else {
+        statement[method]();
+      }
+      expect(tableExists(database, table)).toBe(admitted);
+      if (binding) {
+        expect(database.prepare("SELECT id FROM prepared_table").get()).toEqual({
+          id: binding === "named" ? 11 : 7,
+        });
+      }
       database.prepare("PRAGMA user_version = 5").run();
       expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(5);
     },
   );
+
+  it("closes failed native write iterators before their statement is reused", () => {
+    const database = openDatabase("CREATE TABLE original (id INTEGER PRIMARY KEY)");
+    const insert = database.prepare("INSERT INTO original VALUES (?) RETURNING id");
+    expect([...insert.iterate(1)]).toEqual([{ id: 1 }]);
+
+    const rejected = insert.iterate(1);
+    expect(() => rejected.next()).toThrow("UNIQUE constraint failed");
+    rejected.return?.();
+
+    database.prepare("DELETE FROM original WHERE id = ?").run(1);
+    expect([...insert.iterate(2)]).toEqual([{ id: 2 }]);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 2 }]);
+  });
 
   it("retains successful DDL preceding a failed multi-statement batch", () => {
     const database = openDatabase();
@@ -365,45 +453,15 @@ describe("admitted SQLite schema facts", () => {
     expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(6);
   });
 
-  it("tracks schema statements retained before admission", () => {
-    const database = openDatabase(undefined, false);
-    const drop = database.prepare("DROP TABLE original");
-    admitSqliteSchema(database);
-    expect(tableExists(database, "original")).toBe(true);
-    drop.run();
-    expect(tableExists(database, "original")).toBe(false);
-  });
-
-  it("preserves positional and named parameters for prepared DDL", () => {
-    const database = openDatabase();
-    database.prepare("CREATE TABLE positional AS SELECT ? AS id").run(7);
-    database.prepare("CREATE TABLE named AS SELECT $id AS id").run({ $id: 11 });
-    expect(tableExists(database, "positional")).toBe(true);
-    expect(tableExists(database, "named")).toBe(true);
-    expect(database.prepare("SELECT id FROM positional").get()).toEqual({ id: 7 });
-    expect(database.prepare("SELECT id FROM named").get()).toEqual({ id: 11 });
-  });
-
-  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
-    "retains authorizer policy installed before admission",
-    () => {
-      const database = openDatabase(undefined, false);
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function").each([false, true])(
+    "honors dynamic authorizer policy installed with admitted=%s",
+    (admitted) => {
+      const database = openDatabase(undefined, admitted);
       let allowed = true;
       database.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
-      admitSqliteSchema(database);
-      expect(tableExists(database, "original")).toBe(true);
-      allowed = false;
-      expect(() => tableExists(database, "original")).toThrow(/not authorized/iu);
-      database.setAuthorizer(null);
-    },
-  );
-
-  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
-    "honors dynamic authorizer denials after admission and removal",
-    () => {
-      const database = openDatabase();
-      let allowed = true;
-      database.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
+      if (!admitted) {
+        admitSqliteSchema(database);
+      }
       expect(tableExists(database, "original")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(1);
       allowed = false;

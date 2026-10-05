@@ -25,7 +25,6 @@ import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { createOpenClawReadTool } from "../agent-tools.read.js";
 import { createExecTool } from "../bash-tools.exec-run.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
-import { createEmbeddedAgentResourceLoader } from "../embedded-agent-runner/resource-loader.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { installToolResultContextGuard } from "../embedded-agent-runner/tool-result-context-guard.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -39,6 +38,7 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
+import { DefaultResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
 import type { SessionMessageEntry } from "./session-manager-types.js";
 import { SessionManager } from "./session-manager.js";
@@ -359,10 +359,9 @@ describe("AgentSession model-visible tool-result redaction", () => {
       config: {},
       allowedToolNames: [toolName],
     });
-    const resourceLoader = createEmbeddedAgentResourceLoader({
+    const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir: cwd,
-      settingsManager,
       extensionFactories: buildEmbeddedExtensionFactories({
         cfg: {},
         sessionManager,
@@ -418,12 +417,11 @@ describe("AgentSession model-visible tool-result redaction", () => {
       streamSimple: streamMocks.streamSimple,
     });
     const { session } = await createAgentSession({
+      systemPrompt: "Test session prompt",
       cwd,
-      agentDir: cwd,
       model,
       thinkingLevel: "medium",
       modelRegistry,
-      authStorage,
       tools: [toolName],
       sessionManager,
       settingsManager,

@@ -12,6 +12,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -534,8 +535,7 @@ describe("model transitions after SQLite write admission", () => {
     const { session, sessionManager, settingsManager, target, readModelChanges } =
       await createModelSession();
     await session.setModel(nextModel);
-    const publicationFailure = new Error("Scalar publication failed");
-    publicationFailure.name = "SqliteTranscriptMutationConflictError";
+    const publicationFailure = new SqliteTranscriptMutationConflictError(target.sessionId);
     const publication = vi
       .spyOn(settingsManager, "setDefaultModelAndProvider")
       .mockImplementationOnce(() => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, test, expect, vi } from "vitest";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
@@ -505,23 +506,27 @@ describe("session list resolver cache", () => {
               providerOverride: "example",
               modelOverride:
                 index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
-              ...(index % 8 < 2
-                ? {
-                    acp: {
-                      backend: "acpx",
-                      agent: agentId,
-                      runtimeSessionName: `catalog-${index}`,
-                      mode: "persistent" as const,
-                      state: "idle" as const,
-                      lastActivityAt: index,
-                    },
-                  }
-                : {}),
             } satisfies SessionEntry,
           ];
         }),
       );
       writeResidentEntries(store);
+      for (const [index, [sessionKey, entry]] of Object.entries(store).entries()) {
+        if (index % 8 < 2) {
+          seedCanonicalAcpSessionMeta({
+            sessionKey,
+            sessionId: entry.sessionId,
+            meta: {
+              backend: "acpx",
+              agent: index % 2 ? "research" : "main",
+              runtimeSessionName: `catalog-${index}`,
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: index,
+            },
+          });
+        }
+      }
       const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
       let projection: SessionRowProjection | undefined;
       try {
@@ -577,6 +582,7 @@ describe("session list resolver cache", () => {
             canonicalKey: key,
             targetAgentId: "main",
             entry: store[key]!,
+            preparedAcpMeta: projection.describe({ key, agentId: "main" })?.preparedAcpMeta ?? null,
             storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
             modelCatalog: modelCatalog.get("main")!.entries,
           });

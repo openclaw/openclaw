@@ -42,10 +42,7 @@ export function ensureFlagCompatibility(opts: { json?: boolean; plain?: boolean 
 }
 
 export const formatMs = (value?: number | null) => {
-  if (value === null || value === undefined) {
-    return "-";
-  }
-  if (!Number.isFinite(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "-";
   }
   if (value < 1000) {

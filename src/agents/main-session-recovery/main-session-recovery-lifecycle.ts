@@ -2,6 +2,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
 import { retryAsync } from "../../infra/retry.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import {
   buildMainSessionRecoveryClearPatch,
   removeMainSessionRecoveryForegroundClaim,
@@ -58,16 +59,23 @@ export function scheduleMainSessionRecoveryMutation<T>(params: {
   }, delayMs).unref?.();
 }
 
-function inspectRecoveryLifecycleEvent(params: {
+export function inspectRecoveryLifecycleEvent(params: {
   entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns">> | null;
   event: MainRecoveryLifecycleEvent;
+  abortSignal?: AbortSignal;
 }) {
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const phase = params.event.data?.phase;
   const terminal =
     phase === "end" || phase === "error"
-      ? buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: params.event.data })
+      ? buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase,
+          data: {
+            ...params.event.data,
+            ...resolveAgentRunErrorLifecycleFields(params.event.data?.error, params.abortSignal),
+          },
+        })
       : undefined;
   const matchesFence = Boolean(
     runId &&
@@ -82,6 +90,7 @@ function inspectRecoveryLifecycleEvent(params: {
     lifecycleGeneration,
     phase,
     terminal,
+    interrupted,
     matchesFence,
     suppressed: matchesFence && (phase === "start" || interrupted),
   };
@@ -137,7 +146,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
   snapshotPatch: Partial<SessionEntry>;
 }): { action: "suppress" } | { action: "apply"; patch: Partial<SessionEntry> } {
   const apply = (patch: Partial<SessionEntry>) => ({ action: "apply" as const, patch });
-  const { runId, lifecycleGeneration, phase, terminal, matchesFence, suppressed } =
+  const { runId, lifecycleGeneration, phase, terminal, interrupted, matchesFence, suppressed } =
     inspectRecoveryLifecycleEvent(params);
   if (suppressed) {
     return { action: "suppress" };
@@ -163,7 +172,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
             run.lifecycleGeneration !== lifecycleGeneration),
       )
     : runs;
-  if (terminal && !(terminal.reason === "cancelled" && terminal.stopReason === "restart")) {
+  if (terminal && !interrupted) {
     if (!matchesFence || !runId || !lifecycleGeneration) {
       // No terminal snapshot may settle a recovery row it cannot identify.
       return params.entry?.mainRestartRecovery || runs?.length

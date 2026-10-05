@@ -21,7 +21,14 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  readIncognitoSessionHistory,
+  type IncognitoSessionHistoryBinding,
+} from "./session-incognito-history-read.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
@@ -31,7 +38,18 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 /** Load durable raw events through the existing full-transcript hydration owner. */
 export async function loadTranscriptEvents(
   scope: SessionTranscriptReadScope,
+  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<TranscriptEvent[]> {
+  if (incognito) {
+    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
+      type: "session.history.hydrate",
+      input: { ...target, maxEventBytes: scope.maxEventBytes },
+    }));
+    if (result.kind !== "full") {
+      throw new Error("Transcript events received a bounded hydration result");
+    }
+    return result.snapshot.events;
+  }
   const captured = {
     agentId: scope.agentId,
     clone: scope.clone,
@@ -66,14 +84,7 @@ export async function loadTranscriptEvents(
     captured.storePath ??
     resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteTranscriptReadScope(captured)));
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
+  const identities = captureSessionStoreCandidateIdentities(candidates);
   const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
   const assertStateCurrent = () => {
     context.maintenanceScope?.assertAdmission();

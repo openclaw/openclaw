@@ -131,13 +131,10 @@ function createMSTeamsSendReceipt(params: {
 function createMSTeamsSendResult(params: {
   conversationId: string;
   messageId: string;
-  platformMessageIds?: readonly string[];
   kind: MessageReceiptPartKind;
   pendingUploadId?: string;
 }): SendMSTeamsMessageResult {
-  const platformMessageIds = (
-    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
-  )
+  const platformMessageIds = [params.messageId]
     .map((messageId) => messageId.trim())
     .filter((messageId) => messageId && messageId !== "unknown");
   return {
@@ -381,7 +378,6 @@ async function sendTextWithMedia(
       app,
       conversationRef: ref,
       messages,
-      retry: {},
       onRetry: (event) => {
         log.debug?.("retrying send", { conversationId, ...event });
       },

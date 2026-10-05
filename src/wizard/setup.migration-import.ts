@@ -14,7 +14,6 @@ import type {
   MigrationProviderPlugin,
 } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigationScope } from "./navigation-prompter.js";
@@ -57,15 +56,6 @@ type SetupMigrationProviderDescriptor = {
   label: string;
   description?: string;
 };
-const loadMigrationProviderRuntimeModule = createLazyRuntimeModule(
-  () => import("../plugins/migration-provider-runtime.js"),
-);
-
-const loadMigrationContextModule = createLazyRuntimeModule(
-  () => import("../commands/migrate/context.js"),
-);
-
-const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
 
 async function detectSetupMigrationSource(
   provider: MigrationProviderPlugin,
@@ -103,9 +93,9 @@ export async function detectSetupMigrationSources(params: {
 }> {
   const [{ withPluginMigrationProviders }, { createMigrationLogger }, { resolveStateDir }] =
     await Promise.all([
-      loadMigrationProviderRuntimeModule(),
-      loadMigrationContextModule(),
-      loadConfigPathsModule(),
+      import("../plugins/migration-provider-runtime.js"),
+      import("../commands/migrate/context.js"),
+      import("../config/paths.js"),
     ]);
   return await withPluginMigrationProviders(
     {
@@ -302,7 +292,7 @@ async function withSetupMigrationProvider<T>(
   params: { providerId: string; baseConfig: OpenClawConfig },
   run: (resolved: { provider: MigrationProviderPlugin; baseConfig: OpenClawConfig }) => Promise<T>,
 ): Promise<T> {
-  const { withPluginMigrationProviders } = await loadMigrationProviderRuntimeModule();
+  const { withPluginMigrationProviders } = await import("../plugins/migration-provider-runtime.js");
   return await withPluginMigrationProviders(
     { cfg: params.baseConfig, providerId: params.providerId },
     async (providers) => {
@@ -370,9 +360,9 @@ export async function runSetupMigrationImport(params: {
     onboardHelpers,
   ] = await Promise.all([
     import("../commands/onboard-config.js"),
-    loadMigrationContextModule(),
+    import("../commands/migrate/context.js"),
     import("../commands/migrate/output.js"),
-    loadConfigPathsModule(),
+    import("../config/paths.js"),
     import("../commands/onboard-helpers.js"),
   ]);
   const providerId = await selectSetupMigrationProvider({
@@ -581,7 +571,6 @@ export async function runSetupMigrationImport(params: {
               opts: params.opts,
               prompter: params.prompter,
               runtime: params.runtime,
-              workspaceDir: stage.staged.workspaceDir,
               agentDir: stage.staged.agentDir,
               stateDir: stage.staged.stateDir,
               configTarget: stage.inferenceConfigTarget,

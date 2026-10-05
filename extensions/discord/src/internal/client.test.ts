@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
 import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { Button, StringSelectMenu, parseCustomId } from "./components.js";
+import { parseCustomId } from "./components.base.js";
+import { Button, StringSelectMenu } from "./components.message.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 

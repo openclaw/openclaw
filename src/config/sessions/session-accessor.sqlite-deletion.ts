@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getNativeSessionDeletionParticipant } from "../../agents/harness/native-session/deletion-participant.js";
 import {
   captureAgentHarnessSessionDeletions,
   captureAgentHarnessSessionContextResets,
@@ -36,6 +37,11 @@ import {
   findSessionRepositoryWorkspaces,
 } from "../../state/session-repository-workspaces.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import {
+  pinSqliteSessionReceiptDeletionDatabase,
+  prepareSqliteSessionReceiptDeletions,
+  type IncognitoDeletionSource,
+} from "./session-accessor.sqlite-deletion-receipts.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   runExclusiveSqliteSessionWrite,
@@ -64,6 +70,17 @@ type PreparedDeletion = {
   contextReset?: boolean;
 };
 const deletions = new AsyncLocalStorage<ReadonlyMap<string, PreparedDeletion>>();
+const workerParticipant = new AsyncLocalStorage<
+  (sessionKey: string, entry: SessionEntry) => void
+>();
+
+/** The executing owner supplies the typed precommit participant at the existing deletion edge. */
+export function withSqliteSessionDeletionWorkerParticipant<T>(
+  commit: (sessionKey: string, entry: SessionEntry) => void,
+  run: () => T,
+): T {
+  return workerParticipant.run(commit, run);
+}
 const transactionMutations = new AsyncLocalStorage<{
   rollback: AgentHarnessSessionDeletionMutation[];
   initializations: Set<SessionInitialization>;
@@ -78,6 +95,48 @@ export function hasPreparedNativeSessionDeletion(): boolean {
       (entry) => entry.mutations.length > 0 || entry.target.initialization !== undefined,
     )
   );
+}
+
+/** Opaque SDK mutations keep their native transaction; only owner-minted participants qualify. */
+export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEntry[]) {
+  const captured = entries.map(({ sessionKey, entry }) => ({
+    sessionKey,
+    entry,
+    prepared: deletions.getStore()?.get(sessionKey),
+  }));
+  if (
+    !captured.some(({ prepared }) => prepared?.mutations.length || prepared?.target.initialization)
+  ) {
+    return undefined;
+  }
+  const participants = [];
+  for (const { sessionKey, entry, prepared } of captured) {
+    if (!prepared) {
+      return undefined;
+    }
+    for (const mutation of prepared.mutations) {
+      const participant = getNativeSessionDeletionParticipant(mutation);
+      if (!participant) {
+        return undefined;
+      }
+      participants.push({ sessionKey, entry, participant });
+    }
+  }
+  return {
+    participants,
+    assertCurrent() {
+      for (const { prepared } of captured) {
+        prepared?.assertIdle();
+      }
+    },
+    committed(sessionKeys?: ReadonlySet<string>) {
+      for (const { sessionKey, prepared } of captured) {
+        if (prepared?.target.initialization && (!sessionKeys || sessionKeys.has(sessionKey))) {
+          commitSessionInitializationRollback(prepared.target.initialization);
+        }
+      }
+    },
+  };
 }
 
 type PreparedSessionWrite<T> = {
@@ -134,7 +193,9 @@ export async function runPreparedSqliteSessionWrite<T>(
         return await write.commit(assertHeld);
       };
       // Opaque native mutations stay on their original writer and ALS owner.
-      return scheduling === "worker" && !hasPreparedNativeSessionDeletion()
+      return scheduling === "worker" &&
+        (!hasPreparedNativeSessionDeletion() ||
+          captureNativeSessionWorkerDeletion(write.deletedEntries))
         ? await commitHeld()
         : await runExclusiveSqliteSessionWrite(scope, commitHeld, operation);
     };
@@ -155,7 +216,11 @@ export async function withSqliteSessionDeletions<T>(
   >,
   entries: readonly DeletionEntry[],
   run: SessionMutationRun<T>,
-  options: { additionalIdentities?: readonly string[] } = {},
+  options: {
+    additionalIdentities?: readonly string[];
+    callerSettlesReceipts?: boolean;
+    incognito?: IncognitoDeletionSource;
+  } = {},
 ): Promise<T> {
   return withSqliteSessionMutations(scope, entries, run, options);
 }
@@ -173,8 +238,20 @@ async function withSqliteSessionMutations<T>(
   scope: Parameters<typeof withSqliteSessionDeletions>[0],
   entries: readonly DeletionEntry[],
   run: SessionMutationRun<T>,
-  options: { additionalIdentities?: readonly string[]; contextReset?: boolean },
+  options: {
+    additionalIdentities?: readonly string[];
+    callerSettlesReceipts?: boolean;
+    contextReset?: boolean;
+    incognito?: IncognitoDeletionSource;
+  },
 ): Promise<T> {
+  const actor = options.incognito;
+  if (actor) {
+    actor.assertCurrent();
+    if (actor.agentId !== scope.agentId || actor.path !== scope.path) {
+      throw new Error("Session deletion differs from its captured incognito actor");
+    }
+  }
   const targets: AgentHarnessSessionDeletionTarget[] = [
     ...new Map(
       entries
@@ -228,6 +305,10 @@ async function withSqliteSessionMutations<T>(
     ? captureOpenClawStateWorkerContext({ path: repositories.path, env: scope.env })
     : undefined;
   const databaseOptions = toDatabaseOptions(scope);
+  const receiptSource =
+    !options.contextReset && !options.callerSettlesReceipts && targets.length > 0
+      ? pinSqliteSessionReceiptDeletionDatabase(databaseOptions, actor)
+      : undefined;
   const execution =
     repositories && supportsOpenClawAgentDatabaseExecution(databaseOptions)
       ? captureOpenClawAgentDatabaseExecution(databaseOptions)
@@ -236,6 +317,13 @@ async function withSqliteSessionMutations<T>(
     const repositoryWorkspaces = repositories
       ? await findSessionRepositoryWorkspaces(targets, { path: repositories.path, env: scope.env })
       : [];
+    const receiptOnlyTargets =
+      !options.contextReset && !options.callerSettlesReceipts
+        ? targets.filter(
+            (target) =>
+              !repositoryWorkspaces.some((workspace) => workspace.sessionKey === target.sessionKey),
+          )
+        : [];
     const invoke = async (
       prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
     ) => {
@@ -247,6 +335,7 @@ async function withSqliteSessionMutations<T>(
         }
       >();
       const assertCurrent = () => {
+        actor?.assertCurrent();
         if (repositoryWorkspaces.length > 0) {
           repositorySource?.admission.assertCurrent();
           execution?.assertCurrent();
@@ -353,6 +442,14 @@ async function withSqliteSessionMutations<T>(
           }),
         );
       }
+      const settleReceiptOnlyDeletions =
+        receiptSource && receiptOnlyTargets.length > 0
+          ? await prepareSqliteSessionReceiptDeletions(receiptSource, receiptOnlyTargets, {
+              env: scope.env,
+              assertCurrent,
+              assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
+            })
+          : undefined;
       return await deletions.run(
         new Map(
           targets.map((target) => [
@@ -384,6 +481,7 @@ async function withSqliteSessionMutations<T>(
             // sources after a Gateway move. History rotation and failed deletion keep the row.
             for (const workspace of repositoryWorkspaces) {
               const currentRead = currentReads.get(workspace.workspaceId);
+              const actorSnapshot = actor?.sessions.captureSnapshot(workspace.sessionKey);
               const assertSourceCurrent = () => {
                 if (execution && !currentRead) {
                   throw new Error("Repository cleanup omitted its prepared session source");
@@ -391,6 +489,7 @@ async function withSqliteSessionMutations<T>(
                 repositorySource?.admission.assertCurrent();
                 execution?.assertCurrent();
                 currentRead?.current.assertSourceCurrent();
+                actorSnapshot?.assertCurrent();
               };
               const currentEntry = () =>
                 readSessionEntryRow(
@@ -400,7 +499,9 @@ async function withSqliteSessionMutations<T>(
               assertSourceCurrent();
               const present = currentRead
                 ? await currentRead.readPresent(assertSourceCurrent)
-                : currentEntry() !== undefined;
+                : actor
+                  ? actor.sessions.readSharing(workspace.sessionKey)?.entry !== undefined
+                  : currentEntry() !== undefined;
               if (present) {
                 continue;
               }
@@ -417,20 +518,24 @@ async function withSqliteSessionMutations<T>(
                 : undefined;
               const assertSessionAbsent = () => {
                 assertSourceCurrent();
-                if (!currentRead && currentEntry()) {
+                if (
+                  !currentRead &&
+                  (actor ? actor.sessions.readSharing(workspace.sessionKey)?.entry : currentEntry())
+                ) {
                   throw new Error("Repository workspace session changed before deletion");
                 }
               };
-              await receiptDeletions.get(workspace.workspaceId)!(
-                assertSessionAbsent,
+              await receiptDeletions.get(workspace.workspaceId)!({
+                assertCurrent: assertSessionAbsent,
                 sessionEntryCurrent,
-              );
+              });
               await repositories?.delete({
                 workspaceId: workspace.workspaceId,
                 sessionEntryCurrent,
                 assertCurrent: assertSessionAbsent,
               });
             }
+            await settleReceiptOnlyDeletions?.();
           }
         },
       );
@@ -450,6 +555,11 @@ async function withSqliteSessionMutations<T>(
 
 /** Called only at the synchronous SQL edge, after the operation revalidates its row snapshot. */
 export function commitSqliteSessionDeletion(sessionKey: string, entry: SessionEntry): void {
+  const workerCommit = workerParticipant.getStore();
+  if (workerCommit) {
+    workerCommit(sessionKey, entry);
+    return;
+  }
   const prepared = deletions.getStore()?.get(sessionKey);
   if (!prepared) {
     if (captureAgentHarnessSessionDeletions()) {

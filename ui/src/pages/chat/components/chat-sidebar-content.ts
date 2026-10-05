@@ -123,7 +123,6 @@ function renderSidebarAttachment(
       .label=${content.title}
       .mimeType=${content.mimeType ?? ""}
       .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
-      .downloadHref=${src ?? ""}
     ></openclaw-chat-pdf-preview>`;
   }
   if (
@@ -132,7 +131,6 @@ function renderSidebarAttachment(
     !isCrossOriginHttpSource(src ?? "")
   ) {
     return html`<openclaw-chat-text-attachment
-      .compact=${true}
       .plainText=${content.plainText ?? false}
       .actions=${content.renderActions?.() ?? nothing}
       .embedSandboxMode=${embedSandboxMode}

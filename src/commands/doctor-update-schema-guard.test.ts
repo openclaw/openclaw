@@ -648,7 +648,11 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
     }
     await state.writeConfig({
       plugins: { enabled: false },
-      agents: { entries: { main: { default: true }, external: { agentDir: externalDir } } },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "main" } },
+        entries: { main: {}, external: { agentDir: externalDir } },
+      },
     });
     await closeStateDatabaseForTest();
     const schemas = await prepareDoctorDatabasePreflight();

@@ -1,7 +1,6 @@
 // Doctor cleanup for per-agent OAuth profiles shadowing fresher main-agent credentials.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir, listAgentEntries } from "../../../agents/agent-scope.js";
 import { hasUsableOAuthCredential } from "../../../agents/auth-profiles/credential-state.js";
@@ -196,12 +195,6 @@ function removeStaleProfilesFromStore(params: {
   return removedProfileIds;
 }
 
-function formatProfileList(profileIds: string[]): string {
-  return profileIds.length === 1
-    ? expectDefined(profileIds[0], "profile ids entry at 0")
-    : `${profileIds.length} profiles`;
-}
-
 async function repairStaleOAuthProfilesForAgent(params: {
   agentDir: string;
   mainStore: AuthProfileStore;
@@ -277,9 +270,7 @@ export async function repairStaleOAuthProfileShadows(params: {
       });
       if (removedProfileIds.length > 0) {
         changes.push(
-          `Removed stale OAuth auth profile shadow ${formatProfileList(
-            removedProfileIds.toSorted(),
-          )} from ${shortenHomePath(resolveAuthStorePath(agentDir))}; this agent now inherits main auth.`,
+          `Removed stale OAuth auth profile shadow ${removedProfileIds.length === 1 ? removedProfileIds[0] : `${removedProfileIds.length} profiles`} from ${shortenHomePath(resolveAuthStorePath(agentDir))}; this agent now inherits main auth.`,
         );
       }
     } catch (error) {

@@ -5,6 +5,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
+import { resolvePreauthHandshakeTimeoutMs } from "../../packages/gateway-client/src/timeouts.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -79,7 +80,6 @@ import {
   canSkipGatewayConfigLoad,
   isExplicitGatewayConnection,
 } from "./explicit-connection-policy.js";
-import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   ADMIN_SCOPE,
@@ -613,41 +613,165 @@ function isAllowlistedGatewayConnectRequestError(err: Error): boolean {
   );
 }
 
-async function executeGatewayRequestWithScopes<T>(params: {
-  opts: CallGatewayBaseOptions;
-  scopes: OperatorScope[] | undefined;
-  url: string;
-  token?: string;
-  password?: string;
-  edgeAuthHeaders?: Readonly<Record<string, string>>;
-  tlsFingerprint?: string;
-  timeoutMs: number | null;
-  startupTimeoutMs: number;
-  safeTimerTimeoutMs: number;
-  connectionDetails: GatewayConnectionDetails;
-  deviceIdentity: DeviceIdentity | null;
-  deviceAuthScope?: string;
-  sshTunnel?: GatewayClientOptions["sshTunnel"];
-  storedAuth?: DeviceAuthEntry;
-  surfaceGatewayClientRequestErrors: boolean;
-}): Promise<T> {
-  const {
-    opts,
-    scopes,
+async function callGatewayWithScopes<T = Record<string, unknown>>(
+  input: CallGatewayBaseOptions,
+  scopes: OperatorScope[] | undefined,
+  localCliAbort = false,
+): Promise<T> {
+  const context = await resolveGatewayCallContext(input);
+  const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
+    input.timeoutMs,
+  );
+  const urlOverrideSource = resolveGatewayUrlOverride({
+    gatewayUrl: input.url,
+    env: process.env,
+    ignoreEnvUrlOverride: input.ignoreEnvUrlOverride,
+    localPortOverride: input.localPortOverride,
+  }).source;
+  if (input.requireLocalBackendSharedAuth && (urlOverrideSource || context.isRemoteMode)) {
+    throw new GatewayLocalBackendSharedAuthUnavailableError(
+      "local backend shared auth is limited to the configured local gateway",
+    );
+  }
+  const requestedStoredDeviceAuth = input.useStoredDeviceAuth === true;
+  const hasExplicitAuth = Boolean(context.explicitAuth.token || context.explicitAuth.password);
+  const useStoredDeviceAuth = requestedStoredDeviceAuth && !hasExplicitAuth;
+  const bootstrap = await resolveGatewayClientBootstrap({
+    config: context.config,
+    gatewayUrl: input.url,
+    explicitAuth: context.explicitAuth,
+    env: process.env,
+    configPath: context.configPath,
+    ignoreEnvUrlOverride:
+      input.localPortOverride !== undefined ||
+      input.ignoreEnvUrlOverride === true ||
+      input.serviceTargetUrl !== undefined,
+    localPortOverride: input.localPortOverride,
+    explicitTlsFingerprint: input.tlsFingerprint,
+    skipImplicitAuth: useStoredDeviceAuth || input.skipImplicitAuth === true,
+    ...(useStoredDeviceAuth
+      ? {}
+      : {
+          overrideAuthErrorHint:
+            "Fix: pass --token or --password with --url (or gatewayToken in tools).",
+        }),
+    buildConnectionDetails: buildGatewayConnectionDetails,
+    ...(input.serviceTargetUrl ? { serviceTargetUrl: input.serviceTargetUrl } : {}),
+  });
+  ensureRemoteModeUrlConfigured({
+    context,
+    urlOverrideSource: bootstrap.urlOverrideSource,
+  });
+  const connectionDetails = bootstrap.connectionDetails;
+  const url = bootstrap.url;
+  if (input.expectUrl !== undefined && url !== input.expectUrl) {
+    throw new Error("Gateway destination changed. Refresh the selected Gateway before retrying.");
+  }
+  const deviceAuthScope = bootstrap.deviceAuthScope;
+  const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
+  const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
+  const { clientOptions, omitDeviceIdentity, deviceIdentity } = resolveGatewayCallDeviceAuth({
+    opts: input,
     url,
+    authMode: resolveGatewayCallAuth(context.config).mode,
+    isImplicitLocalTarget: !urlOverrideSource && !context.isRemoteMode,
     token,
     password,
-    edgeAuthHeaders,
-    tlsFingerprint,
-    timeoutMs,
-    startupTimeoutMs,
-    safeTimerTimeoutMs,
+  });
+  // Authentication metadata must not change the CLI-selected scopes or dispatch checks.
+  const opts = { ...input, ...clientOptions };
+  let storedAuth: DeviceAuthEntry | null | undefined = opts.preparedDeviceAuth;
+  if (useStoredDeviceAuth) {
+    storedAuth ??= await loadStoredOperatorDeviceAuthToken(
+      deviceIdentity,
+      deviceAuthScope,
+      opts.sharedStateMode,
+    );
+    if (!storedAuth?.token && deviceAuthScope) {
+      throw new GatewayStoredDeviceAuthUnavailableError(
+        [
+          "No stored device auth for this gateway origin.",
+          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+        ].join("\n"),
+      );
+    }
+  }
+  const tlsFingerprint = bootstrap.tlsFingerprint;
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config: context.config,
+    value: edgeAuthConfig,
+    targetUrl: url,
+    env: process.env,
+  });
+  if (useStoredDeviceAuth) {
+    if (!storedAuth?.token) {
+      throw new GatewayCredentialsRequiredError({
+        method: opts.method,
+        configPath: context.configPath,
+      });
+    }
+    if (
+      Array.isArray(opts.requiredStoredDeviceAuthScopes) &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: opts.requiredStoredDeviceAuthScopes,
+        allowedScopes: storedAuth.scopes,
+      })
+    ) {
+      throw new GatewayStoredDeviceAuthUnavailableError(
+        "stored device auth does not grant the required operator scopes",
+      );
+    }
+  }
+  await ensureGatewayCallCanAuthenticate({
+    opts,
+    context,
+    token,
+    password,
     deviceIdentity,
     deviceAuthScope,
-    sshTunnel,
     storedAuth,
-    surfaceGatewayClientRequestErrors,
-  } = params;
+  });
+  try {
+    await prepareGatewayClientDeviceAuth(
+      {
+        url,
+        token,
+        password,
+        edgeAuthHeaders,
+        tlsFingerprint,
+        deviceIdentity,
+        deviceAuthScope,
+        sharedStateMode: opts.sharedStateMode,
+        preparedDeviceAuth: storedAuth ?? undefined,
+        approvalRuntimeToken: opts.approvalRuntimeToken,
+        agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken,
+      },
+      opts.signal,
+    );
+  } catch (error) {
+    if (opts.signal?.aborted) {
+      throw createGatewayRequestAbortError(opts.method);
+    }
+    throw error;
+  }
+  // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
+  // Request admin authority for cancellation; the Gateway still validates it.
+  const effectiveScopes: OperatorScope[] | undefined =
+    requestedStoredDeviceAuth && hasExplicitAuth && opts.requiredStoredDeviceAuthScopes
+      ? opts.requiredStoredDeviceAuthScopes
+      : useStoredDeviceAuth
+        ? undefined
+        : localCliAbort && omitDeviceIdentity && !deviceIdentity
+          ? [ADMIN_SCOPE]
+          : scopes;
+  const surfaceGatewayClientRequestErrors =
+    useStoredDeviceAuth ||
+    opts.requireLocalBackendSharedAuth === true ||
+    Boolean(opts.agentRuntimeIdentityToken);
   return await new Promise<T>((resolve, reject) => {
     if (opts.signal?.aborted) {
       reject(createGatewayRequestAbortError(opts.method));
@@ -706,7 +830,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client: GatewayClient = new GatewayClient({
       url,
-      sshTunnel,
+      sshTunnel: bootstrap.sshTunnel,
       token,
       password,
       edgeAuthHeaders,
@@ -724,7 +848,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         ? { agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken }
         : {}),
       role: "operator",
-      ...(Array.isArray(scopes) ? { scopes } : {}),
+      ...(Array.isArray(effectiveScopes) ? { scopes: effectiveScopes } : {}),
       deviceIdentity,
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
       ...(storedAuth ? { preparedDeviceAuth: storedAuth } : {}),
@@ -795,7 +919,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
             isGatewayUnreachableSocketError(info.connectError)
               ? createGatewayUnreachableTransportError({
                   cause: info.connectError,
-                  connectionDetails: params.connectionDetails,
+                  connectionDetails,
                 })
               : info.connectError,
           );
@@ -813,7 +937,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           createGatewayCloseTransportError({
             code,
             reason,
-            connectionDetails: params.connectionDetails,
+            connectionDetails,
             requestDispatched: primaryRequestStarted,
           }),
         );
@@ -840,7 +964,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       stop(
         createGatewayTimeoutTransportError({
           timeoutMs: wrapperTimeoutMs,
-          connectionDetails: params.connectionDetails,
+          connectionDetails,
           requestDispatched: primaryRequestStarted,
         }),
       );
@@ -857,7 +981,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         stop(
           createGatewayTimeoutTransportError({
             timeoutMs: startupTimeoutMs,
-            connectionDetails: params.connectionDetails,
+            connectionDetails,
             requestDispatched: false,
           }),
         );
@@ -868,184 +992,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         stop(err instanceof Error ? err : new Error(String(err)));
       });
-  });
-}
-
-async function callGatewayWithScopes<T = Record<string, unknown>>(
-  opts: CallGatewayBaseOptions,
-  scopes: OperatorScope[] | undefined,
-  localCliAbort = false,
-): Promise<T> {
-  const context = await resolveGatewayCallContext(opts);
-  const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
-    opts.timeoutMs,
-  );
-  const urlOverrideSource = resolveGatewayUrlOverride({
-    gatewayUrl: opts.url,
-    env: process.env,
-    ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
-    localPortOverride: opts.localPortOverride,
-  }).source;
-  if (opts.requireLocalBackendSharedAuth && (urlOverrideSource || context.isRemoteMode)) {
-    throw new GatewayLocalBackendSharedAuthUnavailableError(
-      "local backend shared auth is limited to the configured local gateway",
-    );
-  }
-  const requestedStoredDeviceAuth = opts.useStoredDeviceAuth === true;
-  const hasExplicitAuth = Boolean(context.explicitAuth.token || context.explicitAuth.password);
-  const useStoredDeviceAuth = requestedStoredDeviceAuth && !hasExplicitAuth;
-  const bootstrap = await resolveGatewayClientBootstrap({
-    config: context.config,
-    gatewayUrl: opts.url,
-    explicitAuth: context.explicitAuth,
-    env: process.env,
-    configPath: context.configPath,
-    ignoreEnvUrlOverride:
-      opts.localPortOverride !== undefined ||
-      opts.ignoreEnvUrlOverride === true ||
-      opts.serviceTargetUrl !== undefined,
-    localPortOverride: opts.localPortOverride,
-    explicitTlsFingerprint: opts.tlsFingerprint,
-    skipImplicitAuth: useStoredDeviceAuth || opts.skipImplicitAuth === true,
-    ...(useStoredDeviceAuth
-      ? {}
-      : {
-          overrideAuthErrorHint:
-            "Fix: pass --token or --password with --url (or gatewayToken in tools).",
-        }),
-    buildConnectionDetails: buildGatewayConnectionDetails,
-    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
-  });
-  ensureRemoteModeUrlConfigured({
-    context,
-    urlOverrideSource: bootstrap.urlOverrideSource,
-  });
-  const connectionDetails = bootstrap.connectionDetails;
-  const url = bootstrap.url;
-  if (opts.expectUrl !== undefined && url !== opts.expectUrl) {
-    throw new Error("Gateway destination changed. Refresh the selected Gateway before retrying.");
-  }
-  const deviceAuthScope = bootstrap.deviceAuthScope;
-  const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
-  const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
-  const { clientOptions, omitDeviceIdentity, deviceIdentity } = resolveGatewayCallDeviceAuth({
-    opts,
-    url,
-    authMode: resolveGatewayCallAuth(context.config).mode,
-    isImplicitLocalTarget: !urlOverrideSource && !context.isRemoteMode,
-    token,
-    password,
-  });
-  // Authentication metadata must not change the CLI-selected scopes or dispatch checks.
-  const connectionOpts = { ...opts, ...clientOptions };
-  let storedAuth: DeviceAuthEntry | null | undefined = connectionOpts.preparedDeviceAuth;
-  if (useStoredDeviceAuth) {
-    storedAuth ??= await loadStoredOperatorDeviceAuthToken(
-      deviceIdentity,
-      deviceAuthScope,
-      connectionOpts.sharedStateMode,
-    );
-    if (!storedAuth?.token && deviceAuthScope) {
-      throw new GatewayStoredDeviceAuthUnavailableError(
-        [
-          "No stored device auth for this gateway origin.",
-          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
-        ].join("\n"),
-      );
-    }
-  }
-  const tlsFingerprint = bootstrap.tlsFingerprint;
-  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
-    gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
-  );
-  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
-    config: context.config,
-    value: edgeAuthConfig,
-    targetUrl: url,
-    env: process.env,
-  });
-  if (useStoredDeviceAuth) {
-    if (!storedAuth?.token) {
-      throw new GatewayCredentialsRequiredError({
-        method: connectionOpts.method,
-        configPath: context.configPath,
-      });
-    }
-    if (
-      Array.isArray(connectionOpts.requiredStoredDeviceAuthScopes) &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: connectionOpts.requiredStoredDeviceAuthScopes,
-        allowedScopes: storedAuth.scopes,
-      })
-    ) {
-      throw new GatewayStoredDeviceAuthUnavailableError(
-        "stored device auth does not grant the required operator scopes",
-      );
-    }
-  }
-  await ensureGatewayCallCanAuthenticate({
-    opts: connectionOpts,
-    context,
-    token,
-    password,
-    deviceIdentity,
-    deviceAuthScope,
-    storedAuth,
-  });
-  try {
-    await prepareGatewayClientDeviceAuth(
-      {
-        url,
-        token,
-        password,
-        edgeAuthHeaders,
-        tlsFingerprint,
-        deviceIdentity,
-        deviceAuthScope,
-        sharedStateMode: connectionOpts.sharedStateMode,
-        preparedDeviceAuth: storedAuth ?? undefined,
-        approvalRuntimeToken: connectionOpts.approvalRuntimeToken,
-        agentRuntimeIdentityToken: connectionOpts.agentRuntimeIdentityToken,
-      },
-      connectionOpts.signal,
-    );
-  } catch (error) {
-    if (connectionOpts.signal?.aborted) {
-      throw createGatewayRequestAbortError(connectionOpts.method);
-    }
-    throw error;
-  }
-  // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
-  // Request admin authority for cancellation; the Gateway still validates it.
-  const effectiveScopes: OperatorScope[] | undefined =
-    requestedStoredDeviceAuth && hasExplicitAuth && connectionOpts.requiredStoredDeviceAuthScopes
-      ? connectionOpts.requiredStoredDeviceAuthScopes
-      : useStoredDeviceAuth
-        ? undefined
-        : localCliAbort && omitDeviceIdentity && !deviceIdentity
-          ? [ADMIN_SCOPE]
-          : scopes;
-  return await executeGatewayRequestWithScopes<T>({
-    opts: connectionOpts,
-    scopes: effectiveScopes,
-    url,
-    token,
-    password,
-    edgeAuthHeaders,
-    tlsFingerprint,
-    timeoutMs,
-    startupTimeoutMs,
-    safeTimerTimeoutMs,
-    connectionDetails,
-    deviceIdentity,
-    deviceAuthScope,
-    sshTunnel: bootstrap.sshTunnel,
-    ...(storedAuth ? { storedAuth } : {}),
-    surfaceGatewayClientRequestErrors:
-      useStoredDeviceAuth ||
-      connectionOpts.requireLocalBackendSharedAuth === true ||
-      Boolean(connectionOpts.agentRuntimeIdentityToken),
   });
 }
 

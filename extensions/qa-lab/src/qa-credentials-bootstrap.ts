@@ -142,10 +142,8 @@ export async function runQaConvexLookup(
 }
 
 function parseConnection(siteUrl: string, secret: string, allowInsecureHttp?: string) {
-  let parsed: URL;
-  try {
-    parsed = new URL(siteUrl);
-  } catch {
+  const parsed = URL.parse(siteUrl);
+  if (!parsed) {
     throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL.");
   }
   const loopback =

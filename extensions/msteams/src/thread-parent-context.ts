@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchChannelMessage, stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import type { GraphThreadMessage } from "./graph-thread.js";
+import type { MSTeamsRequestDeadline } from "./request-timeout.js";
 
 const PARENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const PARENT_CACHE_MAX = 100;
@@ -20,13 +21,6 @@ const parentCache = new Map<string, ParentCacheEntry>();
 // Isolated thread sessions need their parent once, without repeating it on every reply.
 const INJECTED_MAX = 200;
 const injectedParents = new Map<string, string>();
-
-type ThreadParentContextFetcher = (
-  token: string,
-  groupId: string,
-  channelId: string,
-  messageId: string,
-) => Promise<GraphThreadMessage | undefined>;
 
 function touchLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
   map.delete(key);
@@ -50,7 +44,7 @@ export async function fetchParentMessageCached(
   groupId: string,
   channelId: string,
   parentId: string,
-  fetchParent: ThreadParentContextFetcher = fetchChannelMessage,
+  deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage | undefined> {
   const key = buildParentCacheKey(groupId, channelId, parentId);
   const now = asDateTimestampMs(Date.now());
@@ -64,7 +58,7 @@ export async function fetchParentMessageCached(
   if (cached) {
     parentCache.delete(key);
   }
-  const message = await fetchParent(token, groupId, channelId, parentId);
+  const message = await fetchChannelMessage(token, groupId, channelId, parentId, deadline);
   const expiresAt = resolveParentCacheExpiresAt(Date.now());
   if (expiresAt !== undefined) {
     touchLru(parentCache, key, { message, expiresAt }, PARENT_CACHE_MAX);

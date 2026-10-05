@@ -122,12 +122,43 @@ const GitUpdateStatusSchema = Type.Union([
 ]);
 
 const ImmutableGenerationSha = Type.String({ pattern: "^[a-f0-9]{40}$" });
+const ImmutableOperationId = Type.String({ format: "uuid" });
 
 /** Recorded installation facts; preparation does not authorize activation. */
 const UpdateImmutableInstallSchema = closedObject({
   root: NonEmptyString,
   currentSha: ImmutableGenerationSha,
   currentPath: NonEmptyString,
+  activationEnabled: Type.Optional(Type.Boolean()),
+  activation: Type.Optional(
+    closedObject({
+      operationId: ImmutableOperationId,
+      phase: Type.Union([
+        Type.Literal("prepared"),
+        Type.Literal("draining"),
+        Type.Literal("stopping"),
+        Type.Literal("stopped"),
+        Type.Literal("publishing"),
+        Type.Literal("starting"),
+        Type.Literal("verifying"),
+        Type.Literal("rollback-stopping"),
+        Type.Literal("rollback-publishing"),
+        Type.Literal("rollback-starting"),
+        Type.Literal("rolled-back"),
+        Type.Literal("recovery-required"),
+      ]),
+      previousSha: ImmutableGenerationSha,
+      candidateSha: ImmutableGenerationSha,
+    }),
+  ),
+  lastActivation: Type.Optional(
+    closedObject({
+      operationId: ImmutableOperationId,
+      outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("rolled-back")]),
+      selectedSha: ImmutableGenerationSha,
+      verifiedAtMs: Type.Integer({ minimum: 0 }),
+    }),
+  ),
   prepared: Type.Optional(
     closedObject({
       sha: ImmutableGenerationSha,

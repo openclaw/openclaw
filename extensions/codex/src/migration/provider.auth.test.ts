@@ -327,7 +327,7 @@ describe("Codex migration credential inspection and persistence", () => {
           model: { primary: "other/model" },
           models: { "other/model": {} },
         },
-        list: [{ id: "research", agentDir: "~/research-agent" }],
+        entries: { research: { agentDir: "~/research-agent" } },
       },
     };
     const before = structuredClone(config);

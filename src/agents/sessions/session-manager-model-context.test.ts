@@ -11,6 +11,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -517,6 +518,9 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
     expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
       [],
     );
+    expect(
+      await SessionManager.readSessionContextAsync(scope, (messages) => [...messages]),
+    ).toEqual([]);
     expect(fs.existsSync(scope.storePath)).toBe(false);
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
@@ -655,15 +659,14 @@ it.each(
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { admission });
         if (incognito) {
@@ -729,15 +732,14 @@ it.each(
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope);
         if (incognito) {

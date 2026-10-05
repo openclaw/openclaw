@@ -164,6 +164,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
+  const printWarning = (message: string) => defaultRuntime.log(theme.warn(message));
   const configValidation = validateConfigObjectRaw(config);
   const configWarnings = configValidation.ok
     ? []
@@ -285,6 +286,18 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...(update.immutable
+      ? [
+          {
+            Item: "Immutable activation",
+            Value: update.immutable.activation
+              ? `${update.immutable.activation.phase} (${update.immutable.activation.operationId})`
+              : update.immutable.activationEnabled
+                ? "enabled"
+                : "preparation only",
+          },
+        ]
+      : []),
     ...(packageActivation
       ? [
           {
@@ -347,10 +360,10 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     defaultRuntime.log("");
   }
   for (const warning of serviceDefinition?.warnings ?? []) {
-    defaultRuntime.log(theme.warn(`Warning: ${warning}`));
+    printWarning(`Warning: ${warning}`);
   }
   for (const issue of safeChannelIssues) {
-    defaultRuntime.log(theme.warn(`Channel ${issue.channel} ${issue.accountId}: ${issue.message}`));
+    printWarning(`Channel ${issue.channel} ${issue.accountId}: ${issue.message}`);
     if (issue.fix) {
       defaultRuntime.log(issue.fix);
     }
@@ -360,25 +373,21 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   }
 
   for (const warning of migrationWarnings) {
-    defaultRuntime.log(theme.warn(`Warning: ${warning}`));
+    printWarning(`Warning: ${warning}`);
   }
   if (migrationWarningsError) {
-    defaultRuntime.log(
-      theme.warn(`Pending migration status unavailable: ${migrationWarningsError}`),
-    );
+    printWarning(`Pending migration status unavailable: ${migrationWarningsError}`);
   }
   if (migrationWarnings.length > 0 || migrationWarningsError) {
     defaultRuntime.log("");
   }
 
   if ("runReconciliationError" in runStatus) {
-    defaultRuntime.log(
-      theme.warn(`Update run reconciliation failed: ${runStatus.runReconciliationError}`),
-    );
+    printWarning(`Update run reconciliation failed: ${runStatus.runReconciliationError}`);
     defaultRuntime.log("");
   }
   if ("runStatusError" in runStatus) {
-    defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
+    printWarning(`Update run status unavailable: ${runStatus.runStatusError}`);
     defaultRuntime.log("");
   } else {
     const { lastRun, staleRun, abandonedRun, advisories } = runStatus;
@@ -417,10 +426,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   }
 
   if ("recoverySetsError" in recoveryStatus) {
-    defaultRuntime.log(
-      theme.warn(
-        safeMessage(`Update recovery sets unavailable: ${recoveryStatus.recoverySetsError}`),
-      ),
+    printWarning(
+      safeMessage(`Update recovery sets unavailable: ${recoveryStatus.recoverySetsError}`),
     );
     defaultRuntime.log("");
   } else {
@@ -441,9 +448,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateHint = activeRun ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
-    defaultRuntime.log(theme.warn(updateHint));
+    printWarning(updateHint);
   }
   for (const warning of configWarnings) {
-    defaultRuntime.log(theme.warn(`Warning: ${warning}`));
+    printWarning(`Warning: ${warning}`);
   }
 }

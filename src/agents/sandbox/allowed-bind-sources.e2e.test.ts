@@ -11,6 +11,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { DOCKER_SANDBOX_ENGINE } from "./container-engine.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { ensureSandboxContainer } from "./docker.js";
 import type { SandboxConfig } from "./types.js";
@@ -129,6 +130,7 @@ function memberParams(member: Member) {
   // Agent scope keys start with `agent:<id>`, so the refusal's recreate hint names the agent.
   // With workspaceAccess "rw" the mounted workspace is the agent workspace, as in production.
   return {
+    engine: DOCKER_SANDBOX_ENGINE,
     scopeKey: `agent:${member.id}`,
     workspaceDir: member.workspaceDir,
     agentWorkspaceDir: member.workspaceDir,

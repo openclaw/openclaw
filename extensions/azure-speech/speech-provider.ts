@@ -25,18 +25,6 @@ import {
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
 
-type AzureSpeechProviderConfig = {
-  apiKey?: string;
-  region?: string;
-  endpoint?: string;
-  baseUrl?: string;
-  voice: string;
-  lang: string;
-  outputFormat: string;
-  voiceNoteOutputFormat: string;
-  timeoutMs?: number;
-};
-
 function readAzureSpeechEnvApiKey(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
@@ -63,9 +51,7 @@ function resolveAzureSpeechConfigRecord(
   );
 }
 
-function normalizeAzureSpeechProviderConfig(
-  rawConfig: Record<string, unknown>,
-): AzureSpeechProviderConfig {
+function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const raw = resolveAzureSpeechConfigRecord(rawConfig);
   const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
   const endpoint =
@@ -92,7 +78,7 @@ function normalizeAzureSpeechProviderConfig(
   };
 }
 
-function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeechProviderConfig {
+function readAzureSpeechProviderConfig(config: SpeechProviderConfig) {
   const defaults = normalizeAzureSpeechProviderConfig({});
   const region = trimToUndefined(config.region) ?? defaults.region;
   const endpoint = trimToUndefined(config.endpoint) ?? defaults.endpoint;

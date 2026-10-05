@@ -55,6 +55,13 @@ prompt body for Gateway replies, queued followups, ACP, CLI, and embedded
 OpenClaw runs. Stored visible user turns use that transcript body instead of
 the runtime-enriched prompt.
 
+Compaction and saved CLI session notes exclude the reserved
+`openclaw.runtime-context` custom message type, including older entries without
+carrier metadata and entries that opt out of provider replay. Provider carrier
+metadata controls replay authority; it does not make private context eligible
+for summaries or saved notes. Existing transcripts receive this filtering when
+read, without rewriting stored history.
+
 For legacy sessions that already persisted runtime wrappers, Gateway history
 surfaces apply a display projection before returning messages to WebChat,
 TUI, REST, or SSE clients.
@@ -117,6 +124,10 @@ Implementation:
 ---
 
 ## Global rule: tool result pairing
+
+The live runner rewrites a provider ID that repeats an earlier call, keeping IDs
+unique across responses within an embedded run attempt, including after compaction.
+Persisted older transcripts still use occurrence-based pairing.
 
 Tool results are paired to tool-call occurrences within each assistant turn before
 provider-specific call IDs are rewritten. Provider-generated IDs may repeat on later
@@ -233,12 +244,15 @@ inter-session user turns that only have provenance metadata.
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
-  Carriers contain only the delimited context body; the shared instruction lives
-  once in the stable system prompt. Carriers remain user-role context and
-  are excluded from chat history and compaction summarization. Other Claude
-  models and Anthropic-compatible models keep transient carriers, avoiding
-  repeated cache-read charges and context use for old carriers when nothing
-  binds the prefix.
+  Agent core marks carriers with typed runtime-context metadata on a user-role
+  compatibility message. Provider adapters project the message at the strongest
+  authority their protocol supports; Anthropic-family and external plugin adapters
+  retain the labeled user representation, while OpenAI-compatible adapters use
+  system or developer authority.
+  Carriers are excluded from chat history and compaction summarization. Other
+  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  repeated cache-read charges and context use for old carriers when nothing binds
+  the prefix.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict
   alternation). For prefix-binding models on the Messages API, append-only replay keeps

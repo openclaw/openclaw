@@ -74,6 +74,7 @@ export function readNativeSessionBindingEntries<T>(
   return withSessionEntriesFromStoresInWorker(
     durable.map((read) => ({
       ...read,
+      snapshotFields: [],
       sessionKeys: [
         ...new Set([
           normalizeStoreSessionKey(read.sessionKey),

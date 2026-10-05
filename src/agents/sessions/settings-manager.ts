@@ -25,19 +25,12 @@ import {
   type WarningSettings,
 } from "./settings-storage.js";
 
-export { FileSettingsStorage, InMemorySettingsStorage } from "./settings-storage.js";
 export type {
-  BranchSummarySettings,
-  ImageSettings,
-  MarkdownSettings,
   PackageSource,
-  ProviderRetrySettings,
-  RetrySettings,
   Settings,
   SettingsError,
   SettingsScope,
   SettingsStorage,
-  TerminalSettings,
   ThinkingBudgetsSettings,
   TransportSetting,
   WarningSettings,

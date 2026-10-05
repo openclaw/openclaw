@@ -3,6 +3,10 @@ import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
+import {
+  getSteeringRuntimeContext,
+  shouldRetainSteeringRuntimeContext,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   Agent,
   AgentEvent,
@@ -28,11 +32,11 @@ import {
   type ExtensionErrorListener,
   ExtensionRunner,
   type ExtensionUIContext,
-  type SessionStartEvent,
   type ShutdownHandler,
   type ToolDefinition,
   type ToolInfo,
 } from "./extensions/index.js";
+import type { RegisteredTool } from "./extensions/types.js";
 import type { CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -45,22 +49,10 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
-import type { SourceInfo } from "./source-info.js";
 import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
-import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
+import type { BuildSystemPromptOptions } from "./system-prompt-metadata.js";
 
 const log = createSubsystemLogger("agents/session");
-
-interface ToolDefinitionEntry {
-  definition: ToolDefinition;
-  sourceInfo: SourceInfo;
-}
-
-type ActiveToolPromptMetadata = {
-  validToolNames: string[];
-  toolSnippets: Record<string, string>;
-  promptGuidelines: string[];
-};
 
 export abstract class AgentSessionBase {
   readonly agent: Agent;
@@ -94,14 +86,9 @@ export abstract class AgentSessionBase {
 
   protected sessionResourceLoader: ResourceLoader;
   protected customTools: ToolDefinition[];
-  protected baseToolDefinitions: Map<string, ToolDefinition> = new Map();
   protected cwd: string;
   protected extensionRunnerRef?: { current?: ExtensionRunner };
-  protected initialActiveToolNames?: string[];
-  protected allowedToolNames?: Set<string>;
-  protected disableBuiltInTools: boolean;
-  protected baseToolsOverride?: Record<string, AgentTool>;
-  protected sessionStartEvent: SessionStartEvent;
+  protected allowedToolNames: Set<string>;
   protected withExternalSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   protected extensionUIContext?: ExtensionUIContext;
   protected extensionCommandContextActions?: ExtensionCommandContextActions;
@@ -114,18 +101,16 @@ export abstract class AgentSessionBase {
   protected sessionModelRegistry: ModelRegistry;
 
   protected toolRegistry: Map<string, AgentTool> = new Map();
-  protected toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
-  protected toolPromptSnippets: Map<string, string> = new Map();
-  protected toolPromptGuidelines: Map<string, string[]> = new Map();
+  protected toolDefinitions: Map<string, RegisteredTool> = new Map();
 
   // Base system prompt (without extension appends) - used to apply fresh appends each turn
-  protected baseSystemPrompt = "";
+  protected baseSystemPrompt: string;
   protected baseSystemPromptOptions!: BuildSystemPromptOptions;
-  protected exactBaseSystemPrompt: string | undefined;
   protected systemPromptOverride: string | undefined;
 
   constructor(config: AgentSessionConfig) {
     this.agent = config.agent;
+    this.baseSystemPrompt = config.systemPrompt;
     this.sessionManager = config.sessionManager;
     this.settingsManager = config.settingsManager;
     this.sessionResourceLoader = config.resourceLoader;
@@ -133,14 +118,7 @@ export abstract class AgentSessionBase {
     this.cwd = config.cwd;
     this.sessionModelRegistry = config.modelRegistry;
     this.extensionRunnerRef = config.extensionRunnerRef;
-    this.initialActiveToolNames = config.initialActiveToolNames;
-    this.allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
-    this.disableBuiltInTools = config.disableBuiltInTools === true;
-    this.baseToolsOverride = config.baseToolsOverride;
-    this.sessionStartEvent = config.sessionStartEvent ?? {
-      type: "session_start",
-      reason: "startup",
-    };
+    this.allowedToolNames = new Set(config.allowedToolNames);
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
@@ -397,6 +375,20 @@ export abstract class AgentSessionBase {
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         try {
+          const retainedSteeringContext =
+            event.message.role === "user" && shouldRetainSteeringRuntimeContext(this)
+              ? getSteeringRuntimeContext(event.message)
+              : undefined;
+          if (retainedSteeringContext) {
+            // Prefix-bound thinking replays this carrier before its owning user.
+            // Persist that append-only prefix before the user can acquire a signed reply.
+            await this.sessionManager.appendCustomMessageEntryAsync(
+              retainedSteeringContext.customType,
+              retainedSteeringContext.content,
+              retainedSteeringContext.display,
+              retainedSteeringContext.details,
+            );
+          }
           const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
             sourceAppend: sourceSlots,
@@ -638,7 +630,7 @@ export abstract class AgentSessionBase {
   /**
    * Set active tools by name.
    * Only tools in the registry can be enabled. Unknown tool names are ignored.
-   * Also rebuilds the system prompt to reflect the new tool set.
+   * Refreshes extension prompt metadata while preserving the runtime-owned prompt.
    * Changes take effect on the next agent turn.
    */
   setActiveToolsByName(toolNames: string[]): void {
@@ -653,24 +645,14 @@ export abstract class AgentSessionBase {
     }
     this.agent.state.tools = tools;
 
-    this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);
+    this.refreshSystemPromptMetadata(validToolNames);
     this.agent.state.systemPrompt = this.systemPromptOverride ?? this.baseSystemPrompt;
   }
 
   /** Set an exact base prompt owned by the current runtime. */
   setBaseSystemPrompt(systemPrompt: string): void {
-    const { validToolNames, toolSnippets, promptGuidelines } = this.collectActiveToolPromptMetadata(
-      this.getActiveToolNames(),
-    );
-    this.exactBaseSystemPrompt = systemPrompt;
     this.baseSystemPrompt = systemPrompt;
-    this.baseSystemPromptOptions = {
-      cwd: this.cwd,
-      selectedTools: validToolNames,
-      toolSnippets,
-      promptGuidelines,
-      customPrompt: systemPrompt,
-    };
+    this.refreshSystemPromptMetadata(this.getActiveToolNames());
     this.agent.state.systemPrompt = systemPrompt;
   }
 
@@ -688,12 +670,10 @@ export abstract class AgentSessionBase {
     return this.agent.state.messages;
   }
 
-  /** Current steering mode */
   get steeringMode(): "all" | "one-at-a-time" {
     return this.agent.steeringMode;
   }
 
-  /** Current follow-up mode */
   get followUpMode(): "all" | "one-at-a-time" {
     return this.agent.followUpMode;
   }
@@ -713,7 +693,6 @@ export abstract class AgentSessionBase {
     return this.sessionKey;
   }
 
-  /** Current session ID */
   get sessionId(): string {
     return this.sessionManager.getSessionId();
   }
@@ -728,74 +707,30 @@ export abstract class AgentSessionBase {
     return this.sessionResourceLoader.getPrompts().prompts;
   }
 
-  protected normalizePromptSnippet(text: string | undefined): string | undefined {
-    if (!text) {
-      return undefined;
-    }
-    const oneLine = text
-      .replace(/[\r\n]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    return oneLine.length > 0 ? oneLine : undefined;
-  }
-
-  protected normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
-    return [...new Set(guidelines?.map((guideline) => guideline.trim()).filter(Boolean))];
-  }
-
-  protected collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {
+  private refreshSystemPromptMetadata(toolNames: string[]): void {
     const validToolNames = toolNames.filter((name) => this.toolRegistry.has(name));
     const toolSnippets: Record<string, string> = {};
     const promptGuidelines: string[] = [];
     for (const name of validToolNames) {
-      const snippet = this.toolPromptSnippets.get(name);
+      const definition = this.toolDefinitions.get(name)?.definition;
+      const snippet = definition?.promptSnippet?.replace(/\s+/g, " ").trim();
       if (snippet) {
         toolSnippets[name] = snippet;
       }
 
-      const toolGuidelines = this.toolPromptGuidelines.get(name);
-      if (toolGuidelines) {
-        promptGuidelines.push(...toolGuidelines);
-      }
+      promptGuidelines.push(
+        ...new Set(
+          definition?.promptGuidelines?.map((guideline) => guideline.trim()).filter(Boolean),
+        ),
+      );
     }
-
-    return { validToolNames, toolSnippets, promptGuidelines };
-  }
-
-  protected rebuildSystemPrompt(toolNames: string[]): string {
-    const { validToolNames, toolSnippets, promptGuidelines } =
-      this.collectActiveToolPromptMetadata(toolNames);
-
-    if (this.exactBaseSystemPrompt !== undefined) {
-      this.baseSystemPromptOptions = {
-        ...this.baseSystemPromptOptions,
-        cwd: this.cwd,
-        customPrompt: this.exactBaseSystemPrompt,
-        selectedTools: validToolNames,
-        toolSnippets,
-        promptGuidelines,
-      };
-      return this.exactBaseSystemPrompt;
-    }
-
-    const loaderSystemPrompt = this.sessionResourceLoader.getSystemPrompt();
-    const loaderAppendSystemPrompt = this.sessionResourceLoader.getAppendSystemPrompt();
-    const appendSystemPrompt =
-      loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
-    const loadedSkills = this.sessionResourceLoader.getSkills().skills;
-    const loadedContextFiles = this.sessionResourceLoader.getAgentsFiles().agentsFiles;
-
     this.baseSystemPromptOptions = {
       cwd: this.cwd,
-      skills: loadedSkills,
-      contextFiles: loadedContextFiles,
-      customPrompt: loaderSystemPrompt,
-      appendSystemPrompt,
+      customPrompt: this.baseSystemPrompt,
       selectedTools: validToolNames,
       toolSnippets,
       promptGuidelines,
     };
-    return buildSystemPrompt(this.baseSystemPromptOptions);
   }
 
   protected abstract isRetryableError(message: AssistantMessage): boolean;

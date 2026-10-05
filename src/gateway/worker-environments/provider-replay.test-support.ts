@@ -20,6 +20,7 @@ export function createProviderReplayNodeTunnel() {
   }));
   const nodeTunnelManager = {
     status: () => "stopped" as const,
+    observeProcesses: vi.fn<WorkerEnvironmentNodeTunnel["observeProcesses"]>(),
     start: vi.fn<WorkerEnvironmentNodeTunnel["start"]>(async ({ environmentId, ownerEpoch }) => ({
       environmentId,
       ownerEpoch,

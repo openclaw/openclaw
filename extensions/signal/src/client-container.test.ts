@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -156,6 +157,66 @@ describe("container REST responses", () => {
 });
 
 describe("container send payloads", () => {
+  it.each([false, true])(
+    "prepares the REST handoff and rechecks its caller after waiting (revoked=%s)",
+    async (revoked) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const arrived = createDeferred<void>();
+      const response = createDeferred<Response>();
+      const authority = fetchModule.captureEffectAuthority();
+      vi.spyOn(fetchModule, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          return authority.initiate(effect);
+        },
+      });
+      mockFetch.mockImplementation(() => {
+        arrived.resolve();
+        return response.promise;
+      });
+      const caller = new AbortController();
+      const failure = new Error("Signal caller ended during preparation");
+      const sending = rpc(
+        "send",
+        { account, recipient, message: "prepared" },
+        {
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          arrived.promise.then(() => {
+            throw new Error("REST request bypassed preparation");
+          }),
+        ]);
+        expect(mockFetch).not.toHaveBeenCalled();
+        if (revoked) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!revoked) {
+          await arrived.promise;
+          response.resolve(Response.json({ timestamp: 1700000000000 }));
+        }
+        expect(await sending).toEqual(
+          revoked ? { error: failure } : { value: { timestamp: 1700000000000 } },
+        );
+        expect(mockFetch).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ timestamp: 1700000000000 }));
+        await sending;
+      }
+    },
+  );
+
   it("rejects a non-decimal send timestamp", async () => {
     respond({ timestamp: "0x18bcfe56800" });
     await expect(rpc("send", { account, recipient, message: "Hello" })).rejects.toThrow(

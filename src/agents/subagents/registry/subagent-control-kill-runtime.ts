@@ -9,10 +9,10 @@ import {
   startSessionWorkAdmissionInterruption,
   waitForSessionWorkAdmissionRelease,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
+import * as runtime from "./subagent-control.runtime.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
   type SubagentCancellationControl,
@@ -34,10 +34,6 @@ import {
   releaseSubagentRunKillClaim,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-const subagentKillRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-control.runtime.js"),
-);
 
 async function markSubagentRunTerminatedBestEffort(
   params: Parameters<typeof markSubagentRunTerminated>[0],
@@ -157,7 +153,6 @@ export async function mutateSubagentRunForKill(
   const resolved = params.session;
   const sessionId = resolved.entry?.sessionId;
   const sessionLifecycleRevision = resolved.entry?.lifecycleRevision;
-  let runtime: Awaited<ReturnType<typeof subagentKillRuntimeLoader.load>> | undefined;
   let admission: "ready" | "declined" | "busy" = "ready";
   let killClaim: Awaited<ReturnType<typeof claimSubagentRunKill>>;
   const claimSelectedRunKill = async () => {
@@ -457,7 +452,7 @@ export async function mutateSubagentRunForKill(
         }
       }
     },
-    run: async function run(): Promise<Awaited<ReturnType<typeof mutateSubagentRunForKill>>> {
+    run: async (): Promise<Awaited<ReturnType<typeof mutateSubagentRunForKill>>> => {
       if (preparationResult) {
         return preparationResult;
       }
@@ -485,7 +480,7 @@ export async function mutateSubagentRunForKill(
         }
         readFailure = { error };
       }
-      // Runtime loading and admission draining yield. Fence the exact row before
+      // Admission draining yields. Fence the exact row before
       // touching session-owned queues so a successor cannot inherit an older kill.
       if (!isCurrent()) {
         return { killed: false, superseded: true };
@@ -499,16 +494,16 @@ export async function mutateSubagentRunForKill(
       if (!isCurrent()) {
         return { killed: false, superseded: true };
       }
-      const targetStateAfterRuntimeLoad = targetState();
-      if (targetStateAfterRuntimeLoad) {
-        const killedTarget = isKilledTarget(targetStateAfterRuntimeLoad);
+      const targetStateAfterAdmission = targetState();
+      if (targetStateAfterAdmission) {
+        const killedTarget = isKilledTarget(targetStateAfterAdmission);
         const claimedCurrentKill = killClaim !== undefined && killOwnerCurrent();
         if (killedTarget && (!killClaim || claimedCurrentKill)) {
           await markKilledBestEffort();
         }
         return {
           killed: killedTarget && claimedCurrentKill,
-          targetState: targetStateAfterRuntimeLoad,
+          targetState: targetStateAfterAdmission,
           ...(readFailure ? { error: formatErrorMessage(readFailure.error) } : {}),
         };
       }
@@ -612,18 +607,6 @@ export async function mutateSubagentRunForKill(
                   .join(" "),
               }
             : settled;
-        }
-        if (!runtime) {
-          try {
-            runtime = await subagentKillRuntimeLoader.load();
-          } catch (error) {
-            if (hasSqliteWorkerOutcomeUnknown(error)) {
-              throw error;
-            }
-            return cancellationFailure(error);
-          }
-          // Loading can yield; repeat authority checks inside the retained mutation.
-          return await run();
         }
         const active = sessionId ? runtime.isEmbeddedAgentRunActive(sessionId) : false;
         if (!ownsSessionIncarnation()) {

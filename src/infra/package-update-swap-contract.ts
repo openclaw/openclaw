@@ -12,6 +12,7 @@ export type PackageActivationOptions = {
   runtime: PackageActivationRuntime;
   onPrepared: (command: string) => void;
   onUnavailable?: (message: string) => void;
+  onWarning?: (message: string) => void;
 };
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */

@@ -99,15 +99,14 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
             },
             modelPolicy: { allow: ["approved"] },
           },
-          list: [
-            {
-              id: "worker",
+          entries: {
+            worker: {
               models: {
                 "anthropic/claude-sonnet-4-6": { alias: "approved" },
               },
               ...(agentPolicy ? { modelPolicy: { allow: ["approved"] } } : {}),
             },
-          ],
+          },
         },
       } as OpenClawConfig;
       const catalog = [

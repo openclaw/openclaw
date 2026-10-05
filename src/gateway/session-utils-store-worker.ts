@@ -1,8 +1,10 @@
 import { ok } from "@openclaw/normalization-core/result";
+import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -10,6 +12,10 @@ import {
   prepareGatewaySessionStoreTargetReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+import {
+  findCanonicalStoreMatch,
+  omitInternalSessionEffectsEntries,
+} from "./session-utils-store-selection.js";
 
 /** Acquire the ordered lookup's data while its discovery and physical readers remain current. */
 export async function resolveGatewaySessionStoreTargetInWorker(params: {
@@ -18,6 +24,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
+  projection?: SessionEntryReadScope["projection"];
 }) {
   params.assertActive?.();
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
@@ -31,7 +38,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
       ...params,
       agentId,
       readOnly: true,
-      projection: "list",
+      projection: params.projection ?? "list",
       exactRead: true,
     });
   }
@@ -63,6 +70,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
         agentId,
         env: inventory.env,
         targetDiscoveryCache,
+        projection: params.projection,
       },
       async (reads, select) => {
         assertCurrent();
@@ -71,7 +79,9 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
             agentId: read.agentId ?? agentId,
             storePath: read.storePath,
             sessionKeys: read.options.exactKeys!,
-            projection: "list",
+            projection: read.options.projection === "list" ? ("list" as const) : ("exact" as const),
+            snapshotFields:
+              typeof read.options.projection === "object" ? read.options.projection : undefined,
             env: inventory.env,
           })),
           (loaded) => {
@@ -87,6 +97,15 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
                 agentId: prepared.database.agentId,
                 path: prepared.database.path,
               };
+              const identity = readDatabasePathIdentitySync(prepared.database.path);
+              prepared.assertCurrent();
+              if (identity.key.startsWith("file:")) {
+                read.capturedReadSource = {
+                  ...read.readSource,
+                  databaseIdentity: identity.key.slice("file:".length),
+                  databaseBirthtime: identity.birthtime,
+                };
+              }
             }
             return select();
           },
@@ -98,4 +117,28 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   }, params.assertActive);
   params.assertActive?.();
   return target;
+}
+
+/** Entry preparation shares the Gateway's alias, discovery, and reader owners. */
+export async function loadGatewaySessionEntryReadOnlyInWorker(
+  params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0] & {
+    excludeInternalEffects?: boolean;
+  },
+) {
+  const { excludeInternalEffects, ...lookup } = params;
+  const target = await resolveGatewaySessionStoreTargetInWorker({
+    ...lookup,
+    projection: params.projection ?? "full",
+  });
+  params.assertActive?.();
+  if (excludeInternalEffects) {
+    omitInternalSessionEffectsEntries(target.store, target.storeKeys);
+  }
+  const match = findCanonicalStoreMatch(target.store, target.storeKeys);
+  return {
+    ...target,
+    cfg: params.cfg,
+    entry: match?.entry,
+    legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
+  };
 }

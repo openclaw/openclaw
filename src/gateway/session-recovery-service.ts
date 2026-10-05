@@ -554,7 +554,7 @@ export async function recoverGatewaySession(params: {
   }
 
   if (committed.created) {
-    recordSessionCreated(params.cfg, {
+    await recordSessionCreated(params.cfg, {
       sessionKey: committed.successorKey,
       entry: committed.successorEntry,
       agentId: sourceTarget.agentId,

@@ -247,11 +247,10 @@ async function buildDevelopmentSnapshot(params: {
           "$.workspace",
         );
       }
-      const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
       const digest = digestClawBytes(bytes);
-      add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
+      add(`workspace:${sourcePath}`, bytes);
       workspaceSources.push({
-        sourcePath: normalizedSourcePath,
+        sourcePath,
         realPath: opened.realPath,
         byteLength: bytes.byteLength,
         digest,

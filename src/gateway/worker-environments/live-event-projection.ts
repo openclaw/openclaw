@@ -6,8 +6,12 @@ import {
   sanitizeToolResult,
 } from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
+
+const log = createSubsystemLogger("gateway/worker-trajectory");
 
 export type WorkerLiveTrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
@@ -50,13 +54,17 @@ export function createWorkerLiveTrajectoryRecorder(params: {
     sessionKey: target.sessionKey,
     sessionTarget: target,
     assertCommitAllowed: params.source.receiptAuthority,
+  }).catch((error: unknown) => {
+    log.warn(`Trajectory preparation failed for run ${params.runId}: ${formatErrorMessage(error)}`);
+    return null;
   });
 }
 
-export function recordWorkerLiveTrajectoryEvent(
-  recorder: WorkerLiveTrajectoryRecorder,
+export async function recordWorkerLiveTrajectoryEvent(
+  preparingRecorder: WorkerLiveTrajectoryRecorder,
   event: WorkerLiveEventParams["event"],
-): Promise<void> | undefined {
+): Promise<void> {
+  const recorder = await preparingRecorder;
   if (!recorder) {
     return undefined;
   }

@@ -53,10 +53,17 @@ const fixture = vi.hoisted(() => {
     sessionId: "requester-session",
     lifecycleRevision: "original",
   };
-  return { session, markRequesterTurnYielded: vi.fn() };
+  return {
+    session,
+    markRequesterTurnYielded: vi.fn(),
+    claimSubagentYield: vi.fn<typeof import("./registry/subagent-registry.js").claimSubagentYield>(
+      async () => "nothing-pending",
+    ),
+  };
 });
 vi.mock("./registry/subagent-registry.js", () => ({
   markRequesterTurnYielded: fixture.markRequesterTurnYielded,
+  claimSubagentYield: fixture.claimSubagentYield,
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../gateway/session-sharing-preparation.js", () => ({
@@ -673,6 +680,7 @@ describe("requester cron authority lifetime", () => {
       const outside = new AsyncResource("requester-yield-callback");
       const batch = createBatch("original");
       fixture.markRequesterTurnYielded.mockImplementation(() => mark(batch));
+      fixture.claimSubagentYield.mockClear();
       try {
         await inAdminRun("original", async () => {
           const caller = getGatewayToolCallerIdentity()!;
@@ -686,6 +694,15 @@ describe("requester cron authority lifetime", () => {
             replaced ? inAdminRun("original", claim) : withGatewayToolCallerIdentity(caller, claim),
           );
         });
+        expect(fixture.claimSubagentYield).toHaveBeenCalledExactlyOnceWith({
+          runId: "original",
+          sessionKey: SESSION,
+          agentId: "main",
+          waitForMessage: false,
+          acknowledgment: undefined,
+          hasPendingWork: expect.any(Function),
+        });
+        // This root has a real completion claim, not a native child message wait.
         expect(await settle(batch)).toBe(true);
         await dispatch(batch, async () => expect(Boolean(consume(batch))).toBe(!replaced));
       } finally {

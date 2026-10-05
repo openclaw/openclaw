@@ -19,6 +19,10 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import type {
+  SessionEntryMaintenanceInput,
+  SqliteSessionReclamationPlan,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as candidates from "./session-accessor.sqlite-maintenance-candidates.js";
 import {
@@ -27,7 +31,7 @@ import {
 } from "./session-accessor.sqlite-maintenance-transaction.js";
 import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
+import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
 import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
@@ -61,10 +65,12 @@ function createStore(entryCount: number, updatedAt = Date.now()) {
 
 function createPlanningOperation(
   options: ReturnType<typeof createStore>["options"],
-  input: Partial<Parameters<typeof createSessionMaintenancePlanningOperation>[0]["input"]> = {},
-) {
-  return createSessionMaintenancePlanningOperation({
-    databaseOptions: options,
+  input: Partial<SessionEntryMaintenanceInput> = {},
+): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }> {
+  return {
+    kind: "maintenance-plan",
+    databaseOptions: resolveSessionReclamationDatabaseOptions(options),
+    materializedPlans: [],
     input: {
       maintenance: resolveMaintenanceConfigFromInput(),
       storePath: options.path,
@@ -72,7 +78,7 @@ function createPlanningOperation(
       preservation: captureSessionMaintenancePreservation(options.path),
       ...input,
     },
-  });
+  };
 }
 
 function renameEntry(storePath: string, index: number, label: string) {

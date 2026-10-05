@@ -139,6 +139,7 @@ it.each([
 ] as const)(
   "delivers the managed $platform/$supervisor.name restart intent to the serving owner in its service state",
   async ({ platform, supervisor }) => {
+    const nativePlatform = process.platform;
     const stateDir = tempDirs.make("openclaw-serving-state-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const coordinator = acquireServingStateOwner(env);
@@ -150,7 +151,17 @@ it.each([
     });
     try {
       await lease.ready;
-      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const servicePlatform = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const readOwnerStatus = processOwners.readStateLeaseProcessOwnerStatus;
+      // Service selection is synthetic; the real lease still belongs to this host.
+      vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockImplementation((...args) => {
+        servicePlatform.mockReturnValue(nativePlatform);
+        try {
+          return readOwnerStatus(...args);
+        } finally {
+          servicePlatform.mockReturnValue(platform);
+        }
+      });
       service.readRuntime.mockResolvedValue({
         status: "running",
         pid: process.pid + 1,

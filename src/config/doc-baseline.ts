@@ -6,7 +6,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import {
@@ -49,12 +49,6 @@ type ConfigDocBaseline = {
   coreEntries: ConfigDocBaselineEntry[];
   channelEntries: ConfigDocBaselineEntry[];
   pluginEntries: ConfigDocBaselineEntry[];
-};
-
-type ConfigDocBaselineKindBaseline = {
-  generatedBy: "scripts/generate-config-doc-baseline.ts";
-  kind: ConfigDocBaselineKind;
-  entries: ConfigDocBaselineEntry[];
 };
 
 type ConfigDocBaselineArtifacts = {
@@ -111,8 +105,6 @@ function resolveRepoRoot(): string {
   }
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
-
-const loadDocBaselineRuntime = createLazyRuntimeModule(() => import("./doc-baseline.runtime.js"));
 
 function normalizeBaselinePath(rawPath: string): string {
   return rawPath
@@ -238,13 +230,6 @@ function normalizeTypeValue(value: string | string[] | undefined): string | stri
   return value;
 }
 
-function mergeTypeValues(
-  left: string | string[] | undefined,
-  right: string | string[] | undefined,
-): string | string[] | undefined {
-  return normalizeTypeValue([left, right].flatMap((value) => value || []));
-}
-
 function mergeJsonValueArrays(
   left: JsonValue[] | undefined,
   right: JsonValue[] | undefined,
@@ -277,7 +262,7 @@ function mergeConfigDocBaselineEntry(
   return {
     path: current.path,
     kind: current.kind,
-    type: mergeTypeValues(current.type, next.type),
+    type: normalizeTypeValue([current.type, next.type].flatMap((value) => value || [])),
     required: current.required && next.required,
     enumValues: mergeJsonValueArrays(current.enumValues, next.enumValues),
     defaultValue,
@@ -302,7 +287,7 @@ function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
 
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
   const repoRoot = resolveRepoRoot();
-  const runtime = await loadDocBaselineRuntime();
+  const runtime = await import("./doc-baseline.runtime.js");
   const env = resolveRepoBundledPluginEnv(path.join(repoRoot, "extensions"));
 
   const manifestRegistry = runtime.loadPluginManifestRegistry({
@@ -448,12 +433,7 @@ function renderKindBaseline(
   kind: ConfigDocBaselineKind,
   entries: ConfigDocBaselineEntry[],
 ): string {
-  const baseline: ConfigDocBaselineKindBaseline = {
-    generatedBy: GENERATED_BY,
-    kind,
-    entries,
-  };
-  return `${JSON.stringify(baseline, null, 2)}\n`;
+  return `${JSON.stringify({ generatedBy: GENERATED_BY, kind, entries }, null, 2)}\n`;
 }
 
 export async function renderConfigDocBaselineArtifacts(
@@ -500,14 +480,6 @@ function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts):
   return `${lines.join("\n")}\n`;
 }
 
-function computeConfigBaselineCounts(baseline: ConfigDocBaseline): ConfigDocBaselineCounts {
-  return {
-    core: baseline.coreEntries.length,
-    channel: baseline.channelEntries.length,
-    plugin: baseline.pluginEntries.length,
-  };
-}
-
 function parseConfigBaselineCounts(content: string | null): ConfigDocBaselineCounts {
   if (content === null) {
     throw new Error("count budget file is missing");
@@ -551,18 +523,6 @@ function collectConfigBaselineCountViolations(
   return violations;
 }
 
-function resolveBaselineArtifactPaths(
-  repoRoot: string,
-  params?: ConfigDocBaselinePathOptions,
-): ConfigDocBaselineArtifacts {
-  return {
-    combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
-    core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
-    channel: path.resolve(repoRoot, params?.channelPath ?? DEFAULT_CHANNEL_OUTPUT),
-    plugin: path.resolve(repoRoot, params?.pluginPath ?? DEFAULT_PLUGIN_OUTPUT),
-  };
-}
-
 export async function writeConfigDocBaselineArtifacts(
   params?: ConfigDocBaselinePathOptions & {
     repoRoot?: string;
@@ -573,7 +533,12 @@ export async function writeConfigDocBaselineArtifacts(
   },
 ): Promise<ConfigDocBaselineArtifactsWriteResult> {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  const jsonPaths = resolveBaselineArtifactPaths(repoRoot, params);
+  const jsonPaths = {
+    combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
+    core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
+    channel: path.resolve(repoRoot, params?.channelPath ?? DEFAULT_CHANNEL_OUTPUT),
+    plugin: path.resolve(repoRoot, params?.pluginPath ?? DEFAULT_PLUGIN_OUTPUT),
+  };
   const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
   const countsPath = path.resolve(repoRoot, params?.countsPath ?? DEFAULT_COUNTS_OUTPUT);
   const rendered = params?.rendered
@@ -581,7 +546,11 @@ export async function writeConfigDocBaselineArtifacts(
     : await renderConfigDocBaselineArtifacts();
 
   const nextHashContent = computeConfigBaselineHashFileContent(rendered.json);
-  const counts = computeConfigBaselineCounts(rendered.baseline);
+  const counts: ConfigDocBaselineCounts = {
+    core: rendered.baseline.coreEntries.length,
+    channel: rendered.baseline.channelEntries.length,
+    plugin: rendered.baseline.pluginEntries.length,
+  };
   const nextCountsContent = `${JSON.stringify(counts, null, 2)}\n`;
   const currentHashContent = readFileIfExists(hashPath);
   const hashChanged = currentHashContent !== nextHashContent;

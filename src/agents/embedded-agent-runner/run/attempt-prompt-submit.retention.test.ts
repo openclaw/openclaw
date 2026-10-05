@@ -193,7 +193,6 @@ it("submits deferred child results after canonical archive pruning without poiso
     persistToolResultProjections: vi.fn(async () => {}),
     promptActiveSession: (text, options) => session.prompt(text, options),
     runtimeOnly: false,
-    sessionPromptState,
     systemPrompt: "Use the child findings.",
     toolResultAggregateMaxChars: 8_000,
     toolResultMaxChars: 4_000,

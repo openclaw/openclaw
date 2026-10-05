@@ -69,7 +69,7 @@ function assertValidGatewayStartupConfigSnapshot(
       : "Unknown validation issue.";
   if (isConfigReadFailure(snapshot)) {
     throw createConfigReadError(
-      snapshot.path,
+      snapshot,
       `${issues}\nResolve the read error shown above, then retry.`,
     );
   }
@@ -196,9 +196,7 @@ export function logGatewayAuthSurfaceDiagnostics(
       continue;
     }
     const stateLabel = state.active ? "active" : "inactive";
-    const inactiveDetails =
-      !state.active && inactiveWarnings.get(path) ? inactiveWarnings.get(path) : undefined;
-    const details = inactiveDetails ?? state.reason;
+    const details = (!state.active && inactiveWarnings.get(path)) || state.reason;
     logSecrets.info(`[SECRETS_GATEWAY_AUTH_SURFACE] ${path} is ${stateLabel}. ${details}`);
   }
 }

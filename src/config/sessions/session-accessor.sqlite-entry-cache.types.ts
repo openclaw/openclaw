@@ -22,34 +22,10 @@ export type SessionEntryCacheSnapshot = {
 
 export type SessionSharingEntry = Pick<
   InternalSessionEntry,
-  | "sessionId"
-  | "previousSessionId"
-  | "updatedAt"
-  | "createdAt"
-  | "initializationPending"
-  | "providerReview"
-  | "mainRestartRecovery"
-  | "modelSelectionLocked"
-  | "pendingProjectGitUrl"
-  | "pendingWorktree"
-  | "lifecycleRevision"
-  | "lifecycleRunId"
-  | "activeWriterRunId"
-  | "subagentRecovery"
-  | "archivedAt"
-  | "repositoryWorkspaceId"
-  | "visibility"
-  | "incognito"
-  | "createdActor"
-  | "owner"
-  | "sandbox"
-  | "spawnedBy"
-  | "spawnDepth"
-  | "parentSessionKey"
-  | "sessionStartedAt"
+  keyof ReturnType<typeof projectSessionSharingEntry>
 >;
 
-export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
+export function projectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
     previousSessionId: entry.previousSessionId,
@@ -130,6 +106,7 @@ export type SessionEntryPublicationSource = {
   birthtime: string | undefined;
   incarnation: string;
   filename: string;
+  canonicalPath?: string;
   revision?: number;
 };
 
@@ -178,14 +155,19 @@ export type PlaceholderReceipt = {
   committed: boolean;
 };
 
-export type SessionEntryPublicationRecord =
+export type SessionEntryPublicationRecord = {
+  databaseIdentity?: string | symbol;
+  canonicalPath?: string;
+} & (
+  | { kind: "source" }
   | { kind: "marker"; sharingChange: "changed" | "unchanged" }
   | {
       kind: "metadata";
       sharingChange: "changed" | "unchanged";
       prepared: PreparedSessionEntryChanges;
     }
-  | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt };
+  | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt }
+);
 
 export type PendingSessionEntryPublication = {
   superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;

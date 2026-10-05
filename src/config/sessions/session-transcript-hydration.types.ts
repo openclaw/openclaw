@@ -21,6 +21,12 @@ export type SessionTranscriptMaintenanceRead =
   | { operation: "identity"; eventId: string }
   | { operation: "version" }
   | {
+      operation: "nested-activity";
+      scopeId: string;
+      firstEntryId: string;
+      lastEntryId: string;
+    }
+  | {
       operation: "suffix";
       startSeq: number;
       maxBytes: number;
@@ -71,6 +77,8 @@ export type SessionTranscriptHydrationWorkerInput = {
   target: SessionTranscriptReadScope;
   resolvedScope: ResolvedTranscriptReadScope;
   expectedIdentity?: DatabaseFileIdentity;
+  afterSeq?: number;
+  includeEventJson?: boolean;
   limits?: { maxBytes: number; maxEvents: number };
   admission?: UserTurnTranscriptAdmissionReceipt;
 };

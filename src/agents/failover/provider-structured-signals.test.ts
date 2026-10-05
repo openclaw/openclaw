@@ -99,7 +99,7 @@ describe("provider failover hook structured signals", () => {
         context_overflow:
           "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
         model_not_found: "This model was not found. Choose another model in the Control UI.",
-        format: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+        format: "LLM request rejected: fixture refusal",
       };
       expect(
         formatUserFacingAssistantErrorText(message, {
@@ -144,7 +144,7 @@ describe("provider failover hook structured signals", () => {
       errorCode: "RESOURCE_EXHAUSTED",
       copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     },
-    { errorType: "invalid_request_error", copy: PROVIDER_SCHEMA_REJECTION_USER_TEXT },
+    { errorType: "invalid_request_error", copy: "LLM request rejected: provider refusal" },
     {
       errorMessage: undefined,
       errorCode: "RESOURCE_EXHAUSTED",

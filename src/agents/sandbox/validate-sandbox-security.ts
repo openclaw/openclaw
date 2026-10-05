@@ -439,9 +439,6 @@ function resolveAllowedBindSourceRoots(
 export type SandboxCreateSecurityParams = {
   cfg: SandboxDockerConfig;
   bindSourceRoots?: string[];
-  allowSourcesOutsideAllowedRoots?: boolean;
-  allowReservedContainerTargets?: boolean;
-  allowContainerNamespaceJoin?: boolean;
 };
 
 // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
@@ -449,14 +446,7 @@ export function validateSandboxCreateSecurity(params: SandboxCreateSecurityParam
   validateSandboxSecurity({
     ...params.cfg,
     allowedSourceRoots: resolveAllowedBindSourceRoots(params.cfg, params.bindSourceRoots),
-    allowSourcesOutsideAllowedRoots:
-      params.allowSourcesOutsideAllowedRoots ??
-      params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets:
-      params.allowReservedContainerTargets ??
-      params.cfg.dangerouslyAllowReservedContainerTargets === true,
-    dangerouslyAllowContainerNamespaceJoin:
-      params.allowContainerNamespaceJoin ??
-      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+    allowSourcesOutsideAllowedRoots: params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets: params.cfg.dangerouslyAllowReservedContainerTargets === true,
   });
 }

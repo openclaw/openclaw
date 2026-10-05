@@ -8,7 +8,6 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
@@ -18,6 +17,7 @@ import {
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -230,7 +230,8 @@ export const captureSubagentRunResult = async (
   try {
     const transcriptTarget = entry.execution.transcriptTarget;
     const agentId =
-      transcriptTarget?.agentId ?? resolveAgentIdFromSessionKey(entry.childSessionKey);
+      transcriptTarget?.agentId ??
+      resolveSubagentChildSessionOwner(entry, params.getRuntimeConfig()).agentId;
     const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
     const configuredStorePath = agentId
       ? (transcriptTarget?.storePath ??

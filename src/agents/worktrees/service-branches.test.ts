@@ -12,6 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -79,6 +80,7 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
+    useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
     vi.spyOn(fsSync, "statfsSync").mockReturnValue({
       type: disk.type,
@@ -218,6 +220,44 @@ describe("ManagedWorktreeService branch discovery", () => {
     await git(linked, "switch", "--detach");
     expect((await service.listRepositoryBranches(linked)).headBranch).toBeUndefined();
     expect((await service.listRepositoryBranches(repo)).headBranch).toBe("main");
+
+    const commit = await git(repo, "rev-parse", "HEAD");
+    const refs = path.join(repo, ".git", "refs", "heads", "fleet");
+    await fs.mkdir(refs);
+    await Promise.all(
+      Array.from({ length: 810 }, (_, index) =>
+        fs.writeFile(path.join(refs, String(index).padStart(4, "0")), `${commit}\n`),
+      ),
+    );
+    const fleet = await service.listRepositoryBranches(repo);
+    run.mockClear();
+    expect(await service.listRepositoryBranches(repo)).toEqual(fleet);
+    expect(run).toHaveBeenCalledTimes(1);
+    await fs.unlink(path.join(refs, "0000"));
+    expect((await service.listRepositoryBranches(repo)).branches).not.toContainEqual({
+      name: "fleet/0000",
+      kind: "local",
+    });
+  });
+
+  it("rejects a missing HEAD object after a branch-list cache hit", async () => {
+    const first = await service.listRepositoryBranches(repo, { includeRepositoryStatus: true });
+    expect(first.repositoryStatus).toBe("git");
+    expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+      first,
+    );
+    const head = await git(repo, "rev-parse", "HEAD");
+    await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
+
+    await expect(
+      service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
+    ).resolves.toEqual({
+      branches: [],
+      repositoryStatus: "unavailable",
+    });
+    await expect(service.listRepositoryBranches(repo)).rejects.toThrow(
+      "Git metadata is unavailable",
+    );
   });
 
   it("keeps large repositories usable with bounded suggestions and an explicit unlisted base", async () => {
@@ -264,6 +304,14 @@ describe("ManagedWorktreeService branch discovery", () => {
         kind: "local",
       })),
     ]);
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+      result,
+    );
+    // Oversized inventories also reuse their bounded result; only admission runs again.
+    expect(run).toHaveBeenCalledTimes(1);
+    run.mockRestore();
+
     const baseRef = `origin/overflow-${String(2_999).padStart(80, "0")}`;
     expect(result.branches.some((branch) => branch.name === baseRef)).toBe(false);
     const worktree = await service.create({ repoRoot: repo, name: "unlisted-base", baseRef });

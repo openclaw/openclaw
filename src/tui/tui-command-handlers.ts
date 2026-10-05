@@ -716,10 +716,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       );
     },
     activation: async (args) => {
-      if (!args) {
-        chatLog.addSystem("usage: /activation <mention|always>");
-        return;
-      }
       const activation = normalizeGroupActivation(args);
       if (!activation) {
         chatLog.addSystem("usage: /activation <mention|always>");
@@ -826,7 +822,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     exit: () => requestExit(),
   } satisfies Record<TuiCommandHandlerName, CommandHandler>;
 
-  const handleCommand = async (raw: string) => {
+  const handleCommand = async (raw: string, onBlockedChat?: () => void) => {
     const { name, args } = parseCommand(raw);
     if (!name) {
       return;
@@ -844,6 +840,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     } else if (opts.local && resolveTextCommand(raw) !== null) {
       addUnsupportedLocalCommand(name);
     } else {
+      const admission = resolveMessageAdmission(raw);
+      if (admission.status === "blocked") {
+        onBlockedChat?.();
+        reportBlockedMessageSubmit(admission);
+        return;
+      }
       await sendMessage(raw);
     }
     tui.requestRender();
@@ -1047,8 +1049,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     openModelSelector,
     openAgentSelector,
     openSessionSelector,
-    openSettings,
-    setAgent,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

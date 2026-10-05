@@ -27,6 +27,7 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
+import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
@@ -402,6 +403,7 @@ export class UpdateCommandFailure extends Error {
     options?: ErrorOptions & { automaticTriage?: TriageFailureContext },
   ) {
     super(detail ?? result.reason ?? "Update failed", options);
+    this.result = normalizeUpdateFailureResult(result, options?.cause);
     this.name = "UpdateCommandFailure";
     this.automaticTriage = options?.automaticTriage;
   }
@@ -414,6 +416,10 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
       {
         ...result,
         status: "error",
+        reason:
+          result.status === "error"
+            ? (result.reason ?? "update-recovery-pending")
+            : "update-recovery-pending",
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       },
       1,

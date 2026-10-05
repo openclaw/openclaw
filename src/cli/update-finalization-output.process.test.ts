@@ -199,7 +199,12 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }
       }
       if (repairDeadline) {
-        const output = JSON.parse(result.stdout);
+        let output: unknown;
+        try {
+          output = JSON.parse(result.stdout);
+        } catch (cause) {
+          throw new Error(failure, { cause });
+        }
         expect(output, failure).toMatchObject({ status: "failed", stuckPhase: "plugins" });
         expect(await fs.readFile(path.join(state, "managed-service-state"), "utf8"), failure).toBe(
           "running",

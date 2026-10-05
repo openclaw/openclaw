@@ -42,6 +42,17 @@ serveOwnedWorkerTasks(
       .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
+    if (request.kind === "cli-process-history") {
+      if (!channel) {
+        throw new Error("Process-held history requires its host reader channel");
+      }
+      const { readProcessHeldCliHistoryInWorker } =
+        await import("../../gateway/cli-session-history.process-held.js");
+      return {
+        ok: true,
+        value: await readProcessHeldCliHistoryInWorker(request.request, channel),
+      };
+    }
     if (request.kind === "sqlite-target") {
       const { resolveSqliteTargetFromSessionStorePath } =
         await import("./session-sqlite-target.js");
@@ -313,8 +324,12 @@ serveOwnedWorkerTasks(
         const { readSessionEntryList } = await import("./session-entry-read.worker.js");
         return {
           kind: "session-entry-list" as const,
-          entries: readSessionEntryList(request),
+          ...readSessionEntryList(request),
         };
+      }
+      if (request.kind === "session-store-projection") {
+        const { readSessionStoreProjection } = await import("./session-entry-read.worker.js");
+        return readSessionStoreProjection(request);
       }
       if (request.kind === "session-store-summary") {
         const { readSessionStoreSummaryReadOnly } =
@@ -330,6 +345,11 @@ serveOwnedWorkerTasks(
             request,
           ),
         };
+      }
+      if (request.kind === "voice-sessions") {
+        const { readOpenVoiceSessions } =
+          await import("../../talk/client-voice-session-lookup.worker.js");
+        return readOpenVoiceSessions({ ...request.database, env: request.env }, request.request);
       }
       if (request.kind === "usage-cache") {
         const { readSessionCostUsageCache } =

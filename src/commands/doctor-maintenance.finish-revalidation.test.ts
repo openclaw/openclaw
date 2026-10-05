@@ -263,6 +263,7 @@ async function runDoctorFinishForStoppedUnit(
       }
       let assertCatalogUnchanged = () => {};
       let assertPreStopArtifactsUnchanged = () => {};
+      let releaseServingLease = () => {};
       let activateCompetingUpdate: (() => void) | undefined;
       if (legacyCatalog) {
         const lateRun =
@@ -330,7 +331,27 @@ async function runDoctorFinishForStoppedUnit(
               : undefined,
           );
         const beforeArtifacts = readArtifacts();
-        const beforeCatalog = fs.readFileSync(pathname);
+        let beforeCatalog = fs.readFileSync(pathname);
+        if (scenario === "gateway-lifecycle-contended") {
+          releaseServingLease = () => {
+            const writer = openNodeSqliteDatabase(pathname);
+            try {
+              writer.enableDefensive?.(false);
+              writer.exec("PRAGMA writable_schema = ON");
+              expect(
+                writer
+                  .prepare(
+                    "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'test-gateway'",
+                  )
+                  .run().changes,
+              ).toBe(1);
+            } finally {
+              writer.close();
+            }
+            // Only the simulated Gateway's shutdown writes; Doctor must preserve its result.
+            beforeCatalog = fs.readFileSync(pathname);
+          };
+        }
         assertCatalogUnchanged = () =>
           expect(fs.readFileSync(pathname).equals(beforeCatalog)).toBe(true);
         assertPreStopArtifactsUnchanged = () => expect(readArtifacts()).toEqual(beforeArtifacts);
@@ -537,6 +558,7 @@ async function runDoctorFinishForStoppedUnit(
               scenario === "gateway-lifecycle-contended" ||
               scenario === "legacy-gateway-lifecycle-contended"
             ) {
+              releaseServingLease();
               otherOwner?.release();
               otherOwner = undefined;
             }

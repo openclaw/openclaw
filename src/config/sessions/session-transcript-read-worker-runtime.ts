@@ -6,6 +6,7 @@ import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
@@ -38,7 +39,9 @@ function createTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
 
 // Preserve context-read admission order and avoid multiplying large SQLite scans.
 const modelContextReads = createTranscriptReadPool<
-  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput
+  | SessionModelContextWorkerInput
+  | SessionSqliteTargetWorkerInput
+  | SessionContextMessagesWorkerInput
 >();
 
 // Background transcript exports cannot occupy the foreground context worker.
@@ -49,17 +52,18 @@ const sessionEntries = createTranscriptReadPool<
 // Branch scans share background compute admission without delaying foreground history or context.
 const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
 
-export async function readSessionTranscriptModelContextAsync(
+export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,
   admission: SessionModelContextWorkerInput["admission"],
   signal?: AbortSignal,
   through?: SessionModelContextWorkerInput["through"],
   limits?: SessionModelContextWorkerInput["limits"],
+  expectedIdentity?: SessionModelContextWorkerInput["expectedIdentity"],
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
-  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
+  const value = unwrapSessionTranscriptWorkerReply(
     await modelContextReads.run(
-      { kind: "model-context", target, admission, through, limits },
+      { kind: "model-context", target, admission, through, limits, expectedIdentity },
       { timeoutMs: 60_000, signal },
     ),
   );
@@ -74,7 +78,7 @@ export async function resolveSessionSqliteTargetInWorker(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
-  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
+  const value = unwrapSessionTranscriptWorkerReply(
     await modelContextReads.run(
       { kind: "sqlite-target", ...input },
       { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
@@ -84,6 +88,25 @@ export async function resolveSessionSqliteTargetInWorker(
     throw new Error("Session context worker returned context instead of a database target");
   }
   return value.target;
+}
+
+export async function readSessionTranscriptContextMessagesInWorker(
+  target: SessionTranscriptRuntimeTarget,
+  admission: SessionContextMessagesWorkerInput["admission"],
+  signal?: AbortSignal,
+  expectedIdentity?: SessionContextMessagesWorkerInput["expectedIdentity"],
+) {
+  signal?.throwIfAborted();
+  const value = unwrapSessionTranscriptWorkerReply(
+    await modelContextReads.run(
+      { kind: "context-messages", target, admission, expectedIdentity },
+      { timeoutMs: 60_000, signal },
+    ),
+  );
+  if (!("messages" in value)) {
+    throw new Error("Session context worker returned a different context operation");
+  }
+  return value;
 }
 
 export async function prepareSessionEntryInWorker(

@@ -125,11 +125,8 @@ function hasLoopbackHostHeader(req: IncomingMessage): boolean {
   if (!host) {
     return true;
   }
-  try {
-    return isLoopbackHost(new URL(`http://${host}`).hostname);
-  } catch {
-    return false;
-  }
+  const url = URL.parse(`http://${host}`);
+  return url !== null && isLoopbackHost(url.hostname);
 }
 
 function writeJson(

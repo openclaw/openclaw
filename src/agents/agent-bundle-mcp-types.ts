@@ -244,7 +244,6 @@ export type SessionMcpRuntimeManager = {
     catalog: McpToolCatalog,
   ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
-  bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
   /** Looks up an existing runtime only; must not create runtimes or connect transports. */
   peekSession: (params: {

@@ -95,7 +95,7 @@ After its checks finish, `doctor --fix` settles its own inspection workers while
 
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
 - Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use canonical agent paths after legacy roster normalization.
-- If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `--fix` migrates valid entries into SQLite and quarantines invalid legacy files.
+- If retired sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), Doctor reports them and `--fix` refuses without changing their contents. Upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original host first; see [legacy state migration](/cli/doctor/state-migrations).
 
 ## Secrets and channel credentials
 

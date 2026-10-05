@@ -51,10 +51,6 @@ import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { isTelegramControlLaneText } from "./sequential-key.js";
 
-export interface TelegramInboundProcessing {
-  processInboundMessage: (params: TelegramInboundMessage) => Promise<TelegramInboundDisposition>;
-}
-
 type TelegramInboundMessage = {
   authorizationCfg: OpenClawConfig;
   ctx: TelegramContext;
@@ -83,7 +79,7 @@ export function createTelegramInboundProcessing({
 }: {
   params: RegisterTelegramHandlerParams;
   message: TelegramMessagePipeline;
-}): TelegramInboundProcessing {
+}) {
   const { accountId, bot, runtime, mediaMaxBytes, logger } = handlerParams;
   const {
     resolveMediaRuntime,

@@ -456,9 +456,7 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
   }
 }
 
-type ResolvedSecretRefPatch =
-  | { changed: false; value: unknown }
-  | { changed: true; value: unknown };
+type ResolvedSecretRefPatch = { changed: boolean; value: unknown };
 
 function patchResolvedSecretRefLeaves(params: {
   current: unknown;
@@ -633,14 +631,8 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
   }
 }
 
-export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
-  return getActiveSecretsRuntimeSnapshotState();
-}
-
-export function getActiveSecretsRuntimeSnapshotRevision(): number {
-  return getActiveSecretsRuntimeSnapshotRevisionState();
-}
-
-export function clearSecretsRuntimeSnapshot(): void {
-  clearSecretsRuntimeSnapshotState();
-}
+export {
+  getActiveSecretsRuntimeSnapshotState as getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevisionState as getActiveSecretsRuntimeSnapshotRevision,
+  clearSecretsRuntimeSnapshotState as clearSecretsRuntimeSnapshot,
+};

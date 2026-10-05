@@ -185,6 +185,7 @@ export async function spawnSubagentDirect(
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       modelPatch: plan.initialSessionPatch,
       swarmGroupId,
       collect: params.collect === true,
@@ -362,13 +363,13 @@ export async function spawnSubagentDirect(
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
     if (childEntry) {
-      recordSessionCreated(cfg, {
+      await recordSessionCreated(cfg, {
         sessionKey: childSessionKey,
         agentId: targetAgentId,
         entry: childEntry,
       });
     }
-    recordSubagentSpawned({
+    await recordSubagentSpawned({
       childSessionKey,
       childRunId: childIdem,
       requesterSessionKey: requesterInternalKey,

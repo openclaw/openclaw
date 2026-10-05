@@ -29,6 +29,7 @@ import {
   resolveGitMetadataPath,
   runGit,
 } from "./git.js";
+import { snapshotProvisionedFiles } from "./provisioned-snapshot.js";
 import {
   captureExactState,
   exactSnapshotPrefix,
@@ -481,24 +482,23 @@ export async function snapshotWorktree(
         temporaryDirectory,
       })
     : undefined;
-  const provisionedState = await requestGitWorkerEffect<"worktree.snapshot-provisioned">({
-    type: "worktree.snapshot-provisioned",
-    input: exact
+  const provisionedState = await snapshotProvisionedFiles(
+    input.checkoutPath,
+    input.provisionedPaths,
+    exact
       ? {
-          expected: {
-            algorithm: exact.metadata.head.length === 64 ? "sha256" : "sha1",
-            files: exact.metadata.files
-              .filter((entry) => entry.provisioned)
-              .map((entry) => ({
-                path: Buffer.from(entry.path, "hex").toString("utf8"),
-                mode: entry.kind === "missing" ? null : entry.mode,
-                size: entry.size,
-                blob: entry.blob,
-              })),
-          },
+          algorithm: exact.metadata.head.length === 64 ? "sha256" : "sha1",
+          files: exact.metadata.files
+            .filter((entry) => entry.provisioned)
+            .map((entry) => ({
+              path: Buffer.from(entry.path, "hex").toString("utf8"),
+              mode: entry.kind === "missing" ? null : entry.mode,
+              size: entry.size,
+              blob: entry.blob,
+            })),
         }
-      : {},
-  });
+      : undefined,
+  );
   const missingPaths: Buffer[] = [];
   const trackedPaths: Buffer[] = [];
   const addedPaths: Buffer[] = [];

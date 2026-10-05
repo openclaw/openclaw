@@ -32,6 +32,7 @@ export type McpAppPrepareToolCall = (request: {
   options: import("../gateway/server-methods/types.js").GatewayRequestHandlerOptions;
   toolName: string;
   input: Record<string, unknown>;
+  view?: McpAppViewLease;
   assertCurrent: () => void;
   signal?: AbortSignal;
 }) => Promise<void | (() => void)>;
@@ -74,6 +75,8 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  /** Requester-scoped, exact server/tool approvals live only as long as this view. */
+  toolApprovalGrants?: Map<string | undefined, Set<string>>;
   prepareToolCall?: McpAppPrepareToolCall;
   uploadResources?: McpFormResourceUpload;
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
@@ -129,6 +132,7 @@ function deleteView(viewId: string, expected?: McpAppViewLease): void {
     return;
   }
   clearTimeout(view.expiryTimer);
+  view.toolApprovalGrants?.clear();
   // Publish the final context clear before retiring this view’s subscribers.
   clearMcpAppModelContextForView(view.runtime, view);
   notifyListeners(view.disposeCallbacks ?? [], undefined, (error) => {

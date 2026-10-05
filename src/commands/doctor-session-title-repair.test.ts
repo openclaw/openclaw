@@ -69,7 +69,7 @@ async function withSession(
 
 function repair() {
   return noteSessionTranscriptHealth({
-    cfg: { agents: { list: [{ id: "main", default: true }] } },
+    cfg: { agents: { entries: { main: {} } } },
     shouldRepair: true,
     postSessionPluginMigrationPlanBound: true,
   });
@@ -173,7 +173,7 @@ describe("Doctor session title repair", () => {
           );
           await expect(
             repairLegacySessionTitles({
-              cfg: { agents: { list: [{ id: "main", default: true }] } },
+              cfg: { agents: { entries: { main: {} } } },
               env: process.env,
               apply: true,
               authority,

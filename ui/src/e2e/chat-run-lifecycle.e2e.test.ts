@@ -183,7 +183,7 @@ suite.define(() => {
     }, sessionKey);
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
     await operationLabel.waitFor();
-    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13s");
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
     await captureMockStopProof(currentPage, "completed-work-heading");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
@@ -191,7 +191,7 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
     await operationLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("Worked for 13s");
+    expect(await operationLabel.textContent()).toBe("Worked for 13 seconds");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
     await operationLabel.click();
     await expect

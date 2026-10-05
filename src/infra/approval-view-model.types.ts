@@ -1,11 +1,8 @@
 // Defines view-model shapes for approval prompts and resolutions.
-import type {
-  MessagePresentationAction,
-  MessagePresentationButton,
-} from "../interactive/payload.js";
 import type { ApprovalScope } from "./approval-scope.js";
 import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
+import type { ExecApprovalActionDescriptor } from "./exec-approval-action.types.js";
 import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals-core.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 import type {
@@ -16,14 +13,8 @@ import type {
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
 /** Button or command action shown with a pending approval prompt. */
-export type ApprovalActionView = {
+export type ApprovalActionView = ExecApprovalActionDescriptor & {
   kind?: "command" | "decision";
-  decision: ExecApprovalDecision;
-  label: string;
-  style: NonNullable<MessagePresentationButton["style"]>;
-  action?: MessagePresentationAction;
-  /** Copyable command fallback for non-interactive surfaces. */
-  command: string;
 };
 
 /** Label/value metadata row rendered with an approval prompt. */
@@ -58,12 +49,14 @@ export type ExecApprovalViewBase = ApprovalViewBase & {
   sessionKey?: string | null;
 };
 
-/** Pending exec approval view, including executable reply actions. */
-export type ExecApprovalPendingView = ExecApprovalViewBase & {
+type PendingApprovalState = {
   phase: "pending";
   actions: ApprovalActionView[];
   expiresAtMs: number;
 };
+
+/** Pending exec approval view, including executable reply actions. */
+export type ExecApprovalPendingView = ExecApprovalViewBase & PendingApprovalState;
 
 /** Resolved exec approval view with the recorded decision. */
 export type ExecApprovalResolvedView = ExecApprovalViewBase & {
@@ -88,11 +81,7 @@ export type PluginApprovalViewBase = ApprovalViewBase & {
 };
 
 /** Pending plugin approval view, including executable reply actions. */
-export type PluginApprovalPendingView = PluginApprovalViewBase & {
-  phase: "pending";
-  actions: ApprovalActionView[];
-  expiresAtMs: number;
-};
+export type PluginApprovalPendingView = PluginApprovalViewBase & PendingApprovalState;
 
 /** Resolved plugin approval view with the recorded decision. */
 export type PluginApprovalResolvedView = PluginApprovalViewBase & {
@@ -123,11 +112,7 @@ export type SystemAgentApprovalViewBase = ApprovalViewBase & {
 };
 
 /** Pending system change approval view, including executable reply actions. */
-type SystemAgentApprovalPendingView = SystemAgentApprovalViewBase & {
-  phase: "pending";
-  actions: ApprovalActionView[];
-  expiresAtMs: number;
-};
+type SystemAgentApprovalPendingView = SystemAgentApprovalViewBase & PendingApprovalState;
 
 /** Resolved system change approval view with the recorded decision. */
 type SystemAgentApprovalResolvedView = SystemAgentApprovalViewBase & {

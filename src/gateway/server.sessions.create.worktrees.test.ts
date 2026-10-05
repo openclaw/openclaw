@@ -525,10 +525,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
   const root = tempDirs.make("openclaw-session-existing-worktree-cwd-");
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   testState.agentsConfig = {
-    list: [
-      { id: "main", default: true },
-      { id: "roboclaw", workspace },
-    ],
+    entries: { main: {}, roboclaw: { workspace } },
   };
   const { dir, storePath } = await createSessionStoreDir();
   const worktree = await managedWorktrees.create({

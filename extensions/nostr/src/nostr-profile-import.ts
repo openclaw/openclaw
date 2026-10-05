@@ -1,5 +1,6 @@
 import { SimplePool, type Event } from "nostr-tools";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
@@ -71,42 +72,40 @@ export async function importProfileFromRelays(
 
   const pool = new SimplePool();
   const relaysQueried = [...relays];
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<void>((resolve) => {
-    deadlineTimer = setTimeout(resolve, timeoutMs);
-    deadlineTimer.unref?.();
-  });
   const subscriptions: Array<ReturnType<typeof pool.subscribeMany>> = [];
 
   try {
     // Keep subscriptions separate: pool-wide ID dedupe runs before signature verification.
     const events: Array<{ event: Event; relay: string }> = [];
-    await Promise.race([
-      Promise.all(
-        relays.map(
-          (relay) =>
-            new Promise<void>((resolve) => {
-              const subscription = pool.subscribeMany(
-                [relay],
-                { kinds: [0], authors: [pubkey], limit: 1 },
-                {
-                  onevent(event) {
-                    events.push({ event, relay });
+    await raceWithTimeout(
+      () =>
+        Promise.all(
+          relays.map(
+            (relay) =>
+              new Promise<void>((resolve) => {
+                const subscription = pool.subscribeMany(
+                  [relay],
+                  { kinds: [0], authors: [pubkey], limit: 1 },
+                  {
+                    onevent(event) {
+                      events.push({ event, relay });
+                    },
+                    oneose() {
+                      resolve();
+                    },
+                    onclose() {
+                      resolve();
+                    },
                   },
-                  oneose() {
-                    resolve();
-                  },
-                  onclose() {
-                    resolve();
-                  },
-                },
-              );
-              subscriptions.push(subscription);
-            }),
+                );
+                subscriptions.push(subscription);
+              }),
+          ),
         ),
-      ),
-      deadline,
-    ]);
+      timeoutMs,
+      () => undefined,
+      { ref: false },
+    );
 
     if (events.length === 0) {
       return {
@@ -178,9 +177,6 @@ export async function importProfileFromRelays(
       sourceRelay: bestEvent.relay,
     };
   } finally {
-    if (deadlineTimer) {
-      clearTimeout(deadlineTimer);
-    }
     // Individual closers catch relay connections that finish after the deadline.
     for (const subscription of subscriptions) {
       subscription.close();

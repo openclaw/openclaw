@@ -50,7 +50,10 @@ import {
 } from "../plugins/http-registry.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
 import { withPluginServiceScheduler } from "../plugins/service-scheduler-binding.js";
 import type { PluginServiceSchedulerV1 } from "../plugins/service-scheduler.types.js";
@@ -89,6 +92,7 @@ import {
   runChannelAccountStartup,
   waitForChannelStartupHandoff,
 } from "./server-channel-startup.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 const RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,
@@ -140,6 +144,7 @@ type ChannelManagerOptions = {
   scheduler: GatewayScheduler;
   getRuntimeConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
+  resolveGatewayContext?: GatewayContextResolver;
   channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
   channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>>;
   /** Supply the complete createPluginRuntime().channel surface; partial stubs are unsupported. */
@@ -235,14 +240,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
   const getChannelPlugin = (channelId: ChannelId) =>
     getLoadedChannelPluginEntryById(channelId, getPluginRegistry())?.plugin;
-  const cloneDefaultRuntime = (
-    channelId: ChannelId,
-    accountId: string,
-  ): ChannelAccountSnapshot => ({
-    ...getChannelPlugin(channelId)?.status?.defaultRuntime,
-    accountId,
-  });
-
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   const restarts = new Map<string, RetrySupervisor>();
   // Tracks accounts that were manually stopped so we don't auto-restart them.
@@ -349,7 +346,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
   const getRuntime = (channelId: ChannelId, accountId: string): ChannelAccountSnapshot => {
     const store = getStore(channelId);
-    return store.runtimes.get(accountId) ?? cloneDefaultRuntime(channelId, accountId);
+    return (
+      store.runtimes.get(accountId) ?? {
+        ...getChannelPlugin(channelId)?.status?.defaultRuntime,
+        accountId,
+      }
+    );
   };
 
   const setRuntime = (
@@ -415,9 +417,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     });
   };
 
-  const getChannelRuntime = async (): Promise<PluginRuntimeChannel | undefined> => {
-    return channelRuntime ?? (await resolveChannelRuntime?.());
-  };
   const createAccountContext = (
     channelId: ChannelId,
     accountId: string,
@@ -462,9 +461,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       }
       store.runtimes.delete(id);
       clearActiveCredentialDegradedOwner("account", restartKey(channelId, normalizeAccountId(id)));
-      restarts.delete(restartKey(channelId, id));
-      manuallyStopped.delete(restartKey(channelId, id));
-      recoveryStartRequested.delete(restartKey(channelId, id));
+      const key = restartKey(channelId, id);
+      restarts.delete(key);
+      manuallyStopped.delete(key);
+      recoveryStartRequested.delete(key);
     }
   };
 
@@ -522,38 +522,35 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (accountIds.length === 0) {
       return new Map();
     }
-    if (autostartSuppression && optsValue.manual !== true) {
+    const suppression = optsValue.manual === true ? null : autostartSuppression;
+    const ambientSuppressed =
+      optsValue.manual !== true && ambientAutostartSuppressedChannelIds.has(channelId);
+    if (suppression || ambientSuppressed) {
       // Safe mode must block every automatic channel start surface; otherwise
       // config reloads can undo the crash-loop breaker while operators inspect.
-      const suffix = accountId ? ` account ${accountId}` : "";
-      ensureChannelLog(channelId).warn?.(
-        `channel autostart suppressed by crash-loop breaker; refusing automatic start for ${channelId}${suffix}. ${formatGatewayCrashLoopManualChannelStartHint({ channelId, ...(accountId ? { accountId } : {}) })}`,
-      );
-      for (const id of accountIds) {
-        releaseRouteHandoff(store, id);
-        setStoppedRuntime(channelId, id, {
-          restartPending: false,
-          lastError: autostartSuppression.message,
-        });
+      if (suppression) {
+        const suffix = accountId ? ` account ${accountId}` : "";
+        ensureChannelLog(channelId).warn?.(
+          `channel autostart suppressed by crash-loop breaker; refusing automatic start for ${channelId}${suffix}. ${formatGatewayCrashLoopManualChannelStartHint({ channelId, ...(accountId ? { accountId } : {}) })}`,
+        );
       }
-      return new Map(
-        accountIds.map((id) => [
-          id,
-          { status: "skipped", reason: "autostart-suppressed" } as const,
-        ]),
-      );
-    }
-    if (ambientAutostartSuppressedChannelIds.has(channelId) && optsValue.manual !== true) {
       for (const id of accountIds) {
         releaseRouteHandoff(store, id);
         setStoppedRuntime(channelId, id, {
           restartPending: false,
           lastError:
+            suppression?.message ??
             "ambient channel credentials suppressed; configure the channel or start the gateway with --ambient-channels",
         });
       }
       return new Map(
-        accountIds.map((id) => [id, { status: "skipped", reason: "ambient-suppressed" } as const]),
+        accountIds.map((id) => [
+          id,
+          {
+            status: "skipped",
+            reason: suppression ? "autostart-suppressed" : "ambient-suppressed",
+          } as const,
+        ]),
       );
     }
 
@@ -801,7 +798,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           scopedChannelRuntime = await measureStartup(`channels.${channelId}.runtime`, async () =>
             createTaskScopedChannelRuntime({
               channelRuntime:
-                registration?.resolveChannelRuntime?.() ?? (await getChannelRuntime()),
+                registration?.resolveChannelRuntime?.() ??
+                channelRuntime ??
+                (await resolveChannelRuntime?.()),
             }),
           );
           capabilityLease.assertActive("startup");
@@ -894,27 +893,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (abort.signal.aborted || manuallyStopped.has(rKey) || opts.isClosing?.()) {
                 return;
               }
-              const runStartAccount = () => {
+              const runStartAccount = async () => {
                 const startedAt = Date.now();
-                const recordDuration = () => {
-                  channelRunDurationMs = Date.now() - startedAt;
-                };
                 try {
-                  return withGatewayNativeApprovalRuntime(opts.getNativeApprovalRuntime?.(), () =>
-                    startAccount({
-                      ...accountContext,
-                      setStatus: (next) =>
-                        isCurrentTask()
-                          ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
-                          : getRuntime(channelId, id),
-                      invalidateDirectoryCache: () =>
-                        resetDirectoryCache({ cfg, channel: channelId, accountId: id }),
-                      ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-                    }),
-                  ).finally(recordDuration);
-                } catch (error) {
-                  recordDuration();
-                  throw error;
+                  return await withGatewayNativeApprovalRuntime(
+                    opts.getNativeApprovalRuntime?.(),
+                    () =>
+                      startAccount({
+                        ...accountContext,
+                        setStatus: (next) =>
+                          isCurrentTask()
+                            ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
+                            : getRuntime(channelId, id),
+                        invalidateDirectoryCache: () =>
+                          resetDirectoryCache({ cfg, channel: channelId, accountId: id }),
+                        ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                      }),
+                  );
+                } finally {
+                  channelRunDurationMs = Date.now() - startedAt;
                 }
               };
               startAccountTask = withPluginHttpRouteRegistry(
@@ -1140,7 +1137,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
   const startChannelInternal: ChannelManager["startChannel"] = (...args) =>
     runChannelAccountStartup(() =>
-      withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
+      withPluginRuntimeGatewayContextResolver(
+        opts.resolveGatewayContext,
+        () => withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
+        { inheritRequestScope: false },
+      ),
     );
 
   const stopChannelInRegistry = async (

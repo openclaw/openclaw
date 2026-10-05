@@ -15,7 +15,7 @@ import {
 
 const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrl = vi.hoisted(() => vi.fn());
-const resolveAgentScopedOutboundMediaAccess = vi.hoisted(() => vi.fn());
+const resolveAgentScopedHostOutboundMediaAccess = vi.hoisted(() => vi.fn());
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 vi.mock("../../agents/sandbox.js", () => ({
@@ -27,7 +27,7 @@ vi.mock("../../media/outbound-attachment.js", () => ({
 }));
 
 vi.mock("../../media/read-capability.js", () => ({
-  resolveAgentScopedOutboundMediaAccess,
+  resolveAgentScopedHostOutboundMediaAccess,
 }));
 
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -78,7 +78,7 @@ function expectOutboundAttachmentCall(
 }
 
 function expectAgentScopedMediaAccessCall(): Record<string, unknown> {
-  const call = resolveAgentScopedOutboundMediaAccess.mock.calls[0] as unknown[] | undefined;
+  const call = resolveAgentScopedHostOutboundMediaAccess.mock.calls[0] as unknown[] | undefined;
   if (!call) {
     throw new Error("missing agent scoped media access call");
   }
@@ -107,7 +107,7 @@ describe("createReplyMediaPathNormalizer", () => {
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl.replace(/^file:\/\//i, ""))),
       contentType: mediaUrl.endsWith(".mp3") ? "audio/mpeg" : "image/png",
     }));
-    resolveAgentScopedOutboundMediaAccess
+    resolveAgentScopedHostOutboundMediaAccess
       .mockReset()
       .mockImplementation(({ workspaceDir }: { workspaceDir?: string }) => ({
         workspaceDir,
@@ -217,7 +217,7 @@ describe("createReplyMediaPathNormalizer", () => {
       path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
       5 * 1024 * 1024,
     );
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+    expect(resolveAgentScopedHostOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({ sessionWorkspaceDir: "/tmp/sandboxes/session-1" }),
     );
   });
@@ -571,7 +571,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/photo.png"],
     });
 
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
+    expect(resolveAgentScopedHostOutboundMediaAccess).toHaveBeenCalledTimes(1);
     expect(expectAgentScopedMediaAccessCall()).toEqual({
       cfg: {},
       agentId: undefined,
@@ -604,7 +604,7 @@ describe("createReplyMediaPathNormalizer", () => {
       });
 
       expectMedia(result, "/tmp/outbound-media/chart.png", ["/tmp/outbound-media/chart.png"]);
-      expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
+      expect(resolveAgentScopedHostOutboundMediaAccess).toHaveBeenCalledTimes(1);
       const accessRequest = expectAgentScopedMediaAccessCall();
       expect(typeof accessRequest.agentId).toBe("string");
       expect({ ...accessRequest, agentId: undefined }).toEqual({

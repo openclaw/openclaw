@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import {
@@ -445,9 +446,11 @@ function createSharedRecoveryFixture(params: {
   if (!params.separateIndexes) {
     fs.writeFileSync(storePath, JSON.stringify(records));
   }
-  const cfg = {
+  const cfg: OpenClawConfig = {
     agents: {
-      entries: Object.fromEntries(owners.map((owner) => [owner, { default: owner === "main" }])),
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "main" } },
+      entries: Object.fromEntries(owners.map((owner) => [owner, {}])),
     },
     session: { store: storePath },
   };

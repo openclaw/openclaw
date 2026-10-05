@@ -388,7 +388,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       } as never;
 
-      const first = resolveSession({
+      const first = await resolveSession({
         cfg,
         sessionId: "explicit-session-123",
       });
@@ -415,7 +415,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as never,
       });
 
-      const second = resolveSession({
+      const second = await resolveSession({
         cfg,
         sessionId: "explicit-session-123",
       });
@@ -450,7 +450,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       });
 
-      const result = resolveSession({
+      const result = await resolveSession({
         cfg: {
           session: {
             store: storePath,

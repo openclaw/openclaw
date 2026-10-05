@@ -256,37 +256,6 @@ function collectSlackMentionMetadata(text: string): SlackMentionMetadata {
   };
 }
 
-async function resolveSlackExplicitMentionState(params: {
-  ctx: SlackMonitorContext;
-  messageText: string;
-  mentionedUserIds: readonly string[];
-  hasSubteamMention: boolean;
-  source: "message" | "app_mention";
-  eventScope?: SlackEventScope;
-}) {
-  const normalizedBotUserId = normalizeSlackId(params.ctx.botUserId);
-  const explicitlyMentionedBotUser = Boolean(
-    normalizedBotUserId && params.mentionedUserIds.includes(normalizedBotUserId),
-  );
-  const explicitlyMentionedBotSubteam =
-    Boolean(params.ctx.botUserId && params.hasSubteamMention) &&
-    (await isSlackSubteamMentionForBot({
-      client: params.eventScope?.client ?? params.ctx.app.client,
-      text: params.messageText,
-      botUserId: params.ctx.botUserId,
-      teamId: params.eventScope?.teamId ?? params.ctx.teamId,
-      log: logVerbose,
-    }));
-  return {
-    explicitlyMentionedBotUser,
-    explicitlyMentionedBotSubteam,
-    explicitlyMentioned:
-      explicitlyMentionedBotUser ||
-      explicitlyMentionedBotSubteam ||
-      params.source === "app_mention",
-  };
-}
-
 function resolveSlackMentionSource(params: {
   explicitBotMention: boolean;
   explicitSubteamMention: boolean;
@@ -610,15 +579,21 @@ export async function prepareSlackMessage(params: {
           eventScope: opts.eventScope,
         })
       : Promise.resolve(undefined);
-  const { explicitlyMentionedBotUser, explicitlyMentionedBotSubteam, explicitlyMentioned } =
-    await resolveSlackExplicitMentionState({
-      ctx,
-      messageText,
-      mentionedUserIds,
-      hasSubteamMention: mentionMetadata.hasSubteamMention,
-      source: opts.source,
-      eventScope: opts.eventScope,
-    });
+  const currentBotUserId = normalizeSlackId(ctx.botUserId);
+  const explicitlyMentionedBotUser = Boolean(
+    currentBotUserId && mentionedUserIds.includes(currentBotUserId),
+  );
+  const explicitlyMentionedBotSubteam =
+    Boolean(ctx.botUserId && mentionMetadata.hasSubteamMention) &&
+    (await isSlackSubteamMentionForBot({
+      client: opts.eventScope?.client ?? ctx.app.client,
+      text: messageText,
+      botUserId: ctx.botUserId,
+      teamId: opts.eventScope?.teamId ?? ctx.teamId,
+      log: logVerbose,
+    }));
+  const explicitlyMentioned =
+    explicitlyMentionedBotUser || explicitlyMentionedBotSubteam || opts.source === "app_mention";
   // Channels with `requireMention: false` and a non-`off` reply mode produce
   // a Slack-side thread on every top-level bot reply (because `replyToMode`
   // creates one). Seed thread routing for the root turn too, so the inbound

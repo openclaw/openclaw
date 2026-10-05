@@ -203,8 +203,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 .new-session-page__incognito-notice-icon svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
 }
 
@@ -299,8 +297,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   display: block;
   width: var(--chat-composer-chip-icon, 14px);
   height: var(--chat-composer-chip-icon, 14px);
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.7px;
 }
 
@@ -906,11 +902,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__menu-chevron svg {
   width: 13px;
   height: 13px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .connect-machine-dialog {
@@ -964,13 +956,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__start-submit.new-session-page__start-submit--busy svg {
-  animation: new-session-start-spin 2.25s linear infinite;
-}
-
-@keyframes new-session-start-spin {
-  to {
-    transform: rotate(1turn);
-  }
+  animation: btn-spinner-spin 2.25s linear infinite;
 }
 
 .new-session-page__start-submit--blocked {
@@ -1181,11 +1167,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__alert-icon svg {
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .new-session-page__alert-message {

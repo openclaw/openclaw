@@ -68,7 +68,6 @@ import type {
 import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { redactStatusSecrets } from "../status-all/format.js";
 import { createAuthProbeWork } from "./list.probe.cleanup.js";
@@ -81,10 +80,6 @@ const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 export function redactAuthProbeError(error: string): string {
   return redactStatusSecrets(error);
 }
-
-const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/embedded-agent.js"),
-);
 
 export type AuthProbeStatus =
   | "ok"
@@ -158,13 +153,7 @@ export type AuthProbeSummary = {
   finishedAt: number;
   durationMs: number;
   totalTargets: number;
-  options: {
-    provider?: string;
-    profileIds?: string[];
-    timeoutMs: number;
-    concurrency: number;
-    maxTokens: number;
-  };
+  options: Omit<AuthProbeOptions, "includeDirectKeys">;
   results: AuthProbeResult[];
 };
 
@@ -781,7 +770,7 @@ async function probeTarget(params: {
         throw new Error("Could not prepare isolated auth probe profile");
       }
     }
-    const { runEmbeddedAgent } = await embeddedRunnerModuleLoader.load();
+    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const probeSessionTarget = sessionTarget;
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       probeConfig,

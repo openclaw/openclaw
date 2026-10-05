@@ -12,15 +12,8 @@ import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts"
 import { renderPluginSecurityAudit } from "./security-audit.ts";
 
 function pluginWebUrl(value: string | undefined): URL | null {
-  if (!value) {
-    return null;
-  }
-  try {
-    const url = new URL(value);
-    return /^https?:$/u.test(url.protocol) && !url.username && !url.password ? url : null;
-  } catch {
-    return null;
-  }
+  const url = value ? URL.parse(value) : null;
+  return url && /^https?:$/u.test(url.protocol) && !url.username && !url.password ? url : null;
 }
 
 function pluginRepository(

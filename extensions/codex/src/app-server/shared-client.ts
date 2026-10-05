@@ -92,7 +92,6 @@ import {
 } from "./spawn-identity.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
-export type { CodexAppServerPreparedAuth } from "./auth-types.js";
 export type { CodexAppServerAcquireObservation } from "./shared-client-lifecycle.js";
 
 export {

@@ -72,7 +72,7 @@ describe("createOpenClawTools context wiring", () => {
 
   it("passes the session agent and active account configuration into TTS", async () => {
     const config = {
-      agents: { list: [{ id: "reader" }, { id: "main" }] },
+      agents: { entries: { reader: {}, main: {} } },
       channels: { feishu: { accounts: { "feishu-main": { tts: { provider: "microsoft" } } } } },
     } satisfies OpenClawConfig;
     const tool = createTools({
@@ -107,8 +107,6 @@ describe("createOpenClawTools context wiring", () => {
     expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentId: "main",
-        agentChannel: "telegram",
-        agentAccountId: "creator",
         caller: { kind: "operator", source: "scheduled" },
         config,
       }),
@@ -123,8 +121,6 @@ describe("createOpenClawTools context wiring", () => {
     });
     expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        agentChannel: "discord",
-        agentAccountId: "delivery",
         caller: expect.objectContaining({
           kind: "channel",
           channel: "discord",
@@ -158,8 +154,6 @@ describe("createOpenClawTools context wiring", () => {
     });
     expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        agentChannel: undefined,
-        agentAccountId: "creator",
         caller: { kind: "operator", source: "scheduled" },
       }),
     );

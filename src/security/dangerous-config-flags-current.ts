@@ -11,14 +11,21 @@ type PluginConfigContractMetadata = {
   configContracts: PluginManifestConfigContracts;
 };
 
-function resolveCurrentPluginConfigContractsById(params: {
-  cfg: OpenClawConfig;
-  pluginIds: readonly string[];
-}): ReadonlyMap<string, PluginConfigContractMetadata> | undefined {
+/**
+ * Collect dangerous flags using the gateway's current plugin metadata snapshot when it is complete.
+ * Returns undefined when any configured plugin is missing so callers can use manifest discovery.
+ */
+export function collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(
+  cfg: OpenClawConfig,
+): string[] | undefined {
+  const pluginEntries = cfg.plugins?.entries;
+  if (!isRecord(pluginEntries)) {
+    return collectEnabledInsecureOrDangerousFlagsFromContracts(cfg);
+  }
   // Gateway startup already owns this metadata snapshot; reuse it here so
   // warning logs do not reload plugin manifests on the ready path.
   const snapshot = getCurrentPluginMetadataSnapshot({
-    config: params.cfg,
+    config: cfg,
     env: process.env,
     allowWorkspaceScopedSnapshot: true,
   });
@@ -27,7 +34,7 @@ function resolveCurrentPluginConfigContractsById(params: {
   }
 
   const contractsById = new Map<string, PluginConfigContractMetadata>();
-  for (const pluginId of params.pluginIds) {
+  for (const pluginId of Object.keys(pluginEntries)) {
     const normalizedPluginId = snapshot.normalizePluginId(pluginId);
     const plugin = snapshot.byPluginId.get(pluginId) ?? snapshot.byPluginId.get(normalizedPluginId);
     if (!plugin) {
@@ -41,27 +48,8 @@ function resolveCurrentPluginConfigContractsById(params: {
       configContracts: plugin.configContracts,
     });
   }
-  return contractsById;
-}
-
-/**
- * Collect dangerous flags using the gateway's current plugin metadata snapshot when it is complete.
- * Returns undefined when any configured plugin is missing so callers can use manifest discovery.
- */
-export function collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(
-  cfg: OpenClawConfig,
-): string[] | undefined {
-  const pluginEntries = cfg.plugins?.entries;
-  if (!isRecord(pluginEntries)) {
-    return collectEnabledInsecureOrDangerousFlagsFromContracts(cfg);
-  }
-  const pluginIds = Object.keys(pluginEntries);
-  const configContracts = resolveCurrentPluginConfigContractsById({ cfg, pluginIds });
-  if (!configContracts) {
-    return undefined;
-  }
   return collectEnabledInsecureOrDangerousFlagsFromContracts(cfg, {
     collectPluginConfigContractMatches,
-    configContractsById: configContracts,
+    configContractsById: contractsById,
   });
 }

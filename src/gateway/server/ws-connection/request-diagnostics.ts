@@ -20,11 +20,12 @@ type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
 type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
 type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+let activeHandlers = 0;
+let exclusiveHandler: GatewayRpcDiagnostics | undefined;
 
 export type GatewayRpcQueueTiming = { receivedAt: number; dequeuedAt: number };
 
-class GatewayRpcDiagnostics {
-  private readonly heapUsedAtStart = isMainThread ? process.memoryUsage().heapUsed : undefined;
+export class GatewayRpcDiagnostics {
   private trace = getActiveDiagnosticTraceContext();
   private queueStartedAt?: number;
   private queueWaitMs?: number;
@@ -88,9 +89,21 @@ class GatewayRpcDiagnostics {
     });
   }
 
-  async runHandler(invoke: () => Promise<void> | void): Promise<void> {
-    const startedAt = performance.now();
-    this.handlerStarted = true;
+  static async runHandler(
+    invoke: () => Promise<void> | void,
+    diagnostics?: GatewayRpcDiagnostics,
+  ): Promise<void> {
+    // All handler entries participate, including in-process calls without diagnostics.
+    // Another start permanently invalidates the sole candidate until all handlers settle.
+    exclusiveHandler = ++activeHandlers === 1 ? diagnostics : undefined;
+    const heapUsedAtStart =
+      diagnostics && exclusiveHandler === diagnostics && isMainThread
+        ? process.memoryUsage().heapUsed
+        : undefined;
+    const startedAt = diagnostics ? performance.now() : 0;
+    if (diagnostics) {
+      diagnostics.handlerStarted = true;
+    }
     let outcome: "returned" | "threw" = "returned";
     try {
       await invoke();
@@ -98,13 +111,20 @@ class GatewayRpcDiagnostics {
       outcome = "threw";
       throw error;
     } finally {
-      this.emit({
+      const heapDeltaBytes =
+        heapUsedAtStart !== undefined && exclusiveHandler === diagnostics
+          ? process.memoryUsage().heapUsed - heapUsedAtStart
+          : undefined;
+      activeHandlers--;
+      exclusiveHandler = undefined;
+      diagnostics?.emit({
         type: "gateway.rpc",
-        method: this.method,
+        method: diagnostics.method,
         phase: "handler",
         outcome,
         durationMs: performance.now() - startedAt,
-        admissionMs: startedAt - this.startedAt,
+        admissionMs: startedAt - diagnostics.startedAt,
+        heapDeltaBytes,
       });
     }
   }
@@ -122,15 +142,9 @@ class GatewayRpcDiagnostics {
       durationMs: performance.now() - this.startedAt,
       ...(this.queueWaitMs !== undefined ? { queueWaitMs: this.queueWaitMs } : {}),
       response: this.responseState,
-      heapDeltaBytes:
-        this.heapUsedAtStart === undefined
-          ? undefined
-          : process.memoryUsage().heapUsed - this.heapUsedAtStart,
     });
   }
 }
-
-export type { GatewayRpcDiagnostics };
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {

@@ -506,7 +506,7 @@ describe("modelsAuthLoginCommand", () => {
   function useCoderAgentConfig() {
     currentConfig = {
       agents: {
-        list: [{ id: "main" }, { id: "coder", workspace: "/tmp/openclaw/workspaces/coder" }],
+        entries: { main: {}, coder: { workspace: "/tmp/openclaw/workspaces/coder" } },
       },
     };
     const originalConfig = currentConfig;
@@ -1877,7 +1877,7 @@ describe("modelsAuthLoginCommand", () => {
 
   it("rejects an unknown agent before prompting for pasted tokens", async () => {
     const runtime = createRuntime();
-    currentConfig = { agents: { list: [{ id: "main" }] } };
+    currentConfig = { agents: { entries: { main: {} } } };
 
     await expect(
       modelsAuthPasteTokenCommand({ provider: "openai", agent: "missing" }, runtime),

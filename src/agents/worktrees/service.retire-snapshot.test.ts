@@ -6,9 +6,14 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerWorktreesCli } from "../../cli/worktrees-cli.js";
-import { localWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
+import { withLocalWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
+import {
+  observeLocalWorkspaceStoreSql,
+  readLocalWorkspaceProjection,
+} from "../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -17,13 +22,9 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as worktreeGit from "./git.js";
-import {
-  getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
-  insertRegistryWorktree,
-  insertRegistryWorktreeProvisionedChunk,
-  updateRegistryWorktree,
-} from "./registry.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
+import { getRegistryWorktree, insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { resolveRepository } from "./service-preparation.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { retireManagedWorktreeSnapshotById } from "./snapshot-host.js";
@@ -92,7 +93,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     await git(repo, "update-ref", record.snapshotRef!, snapshot);
     const retainedSourceRef = "refs/heads/retained-source";
     await git(repo, "update-ref", retainedSourceRef, source);
-    insertRegistryWorktree(env, record, { provisionedPaths: [] });
+    await insertRegistryWorktree(env, record, { provisionedPaths: [] });
     const database = openOpenClawStateDatabase({ env });
     expect(await fs.realpath(database.path)).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     request = {
@@ -177,7 +178,7 @@ describe("Exact removed worktree snapshot retirement", () => {
         branch: "openclaw/foreign",
         snapshotRef: "refs/openclaw/snapshots/a0000000-0000-4000-8000-000000000002",
       };
-      insertRegistryWorktree(env, foreign, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, foreign, { provisionedPaths: [] });
       await git(repo, "update-ref", foreign.snapshotRef!, source);
       const outcome = "refs/openclaw/pr-merge-outcomes/123";
       await git(repo, "update-ref", outcome, source);
@@ -205,9 +206,9 @@ describe("Exact removed worktree snapshot retirement", () => {
     ["repository identity", {}],
   ] as const)("preserves custody when the expected %s does not match", async (label, patch) => {
     if (label === "live registry lifecycle") {
-      updateRegistryWorktree(env, record.id, { removedAt: undefined });
+      await updateRegistryWorktree(env, record.id, { removedAt: undefined });
     } else if (label === "repository identity") {
-      updateRegistryWorktree(env, record.id, {
+      await updateRegistryWorktree(env, record.id, {
         repositoryIdentity: { repoRoot: repo, repoFingerprint: "foreign-fingerprint" },
       });
     }
@@ -228,7 +229,7 @@ describe("Exact removed worktree snapshot retirement", () => {
   it("preserves exact-state recovery instead of treating it as a redundant ordinary snapshot", async () => {
     const exactRef = `refs/openclaw/snapshots/exact-v1/${record.id}`;
     await git(repo, "update-ref", exactRef, request.expectedSnapshotOid);
-    updateRegistryWorktree(env, record.id, { snapshotRef: exactRef });
+    await updateRegistryWorktree(env, record.id, { snapshotRef: exactRef });
     const exactRecord = getRegistryWorktree(env, record.id);
     const recovery = path.join(root, "exact-recovery");
     await git(repo, "worktree", "add", "--detach", recovery, source);
@@ -326,12 +327,12 @@ describe("Exact removed worktree snapshot retirement", () => {
           { env },
         );
       } else if (kind === "provisioned ledger") {
-        updateRegistryWorktree(env, record.id, {
+        await updateRegistryWorktree(env, record.id, {
           provisionedState: [{ path: chunk.path, mode: 0o600, chunks: 1 }],
         });
-        insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+        await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
       } else {
-        insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+        await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
       }
       await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
         /retains provisioned data/,
@@ -380,9 +381,8 @@ describe("Exact removed worktree snapshot retirement", () => {
     await fs.mkdir(projection, { recursive: true });
     const payload = path.join(projection, "ignored-owned.txt");
     await fs.writeFile(payload, "projection-only content");
-    const store = localWorkspaceStore(env);
-    const row = store.create(
-      {
+    const row = await withLocalWorkspaceStore({ worktreeId: record.id, env }, (store) =>
+      store.create({
         worktree_id: record.id,
         agent_id: "main",
         session_key: record.ownerId!,
@@ -391,20 +391,43 @@ describe("Exact removed worktree snapshot retirement", () => {
         projection_path: projection,
         base_commit: source,
         source_paths_json: JSON.stringify(["README.md"]),
-        baseline_json: null,
-        baseline_ref: null,
+        baseline_json: JSON.stringify({ synthetic: "x".repeat(3 * 1024 * 1024) }),
+        baseline_ref: "sha256:" + "a".repeat(64),
         pending_ref: null,
         pending_target: null,
-        journal_json: null,
-        journal_pack: null,
+        journal_json: JSON.stringify({ synthetic: "j".repeat(3 * 1024 * 1024) }),
+        journal_pack: Buffer.from("synthetic recovery pack"),
         paused_runtimes_json: null,
         created_at_ms: removedAt - 1,
-      },
-      () => undefined,
+      }),
     );
-    await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(/projection custody/);
+    expect(row.revision).toBe(0);
+    const reads = observeLocalWorkspaceStoreSql();
+    try {
+      reads.calibrate();
+      const executeRead = stateRead.executeExistingOpenClawStateRead;
+      const projectionReplyBytes: number[] = [];
+      const readReply = vi
+        .spyOn(stateRead, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (options, command, readOptions) => {
+          const reply = await executeRead(options, command, readOptions);
+          if (command.type.startsWith("localWorkspace.")) {
+            projectionReplyBytes.push(Buffer.byteLength(JSON.stringify(reply)));
+          }
+          return reply;
+        });
+      await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
+        /projection custody/,
+      );
+      readReply.mockRestore();
+      expect(projectionReplyBytes.length).toBeGreaterThan(0);
+      expect(Math.max(...projectionReplyBytes)).toBeLessThan(1024);
+      reads.expectIdle();
+    } finally {
+      reads.restore();
+    }
     await expectPreserved(record);
-    expect(store.get(record.id)).toEqual(row);
+    expect(await readLocalWorkspaceProjection(record.id, env)).toEqual(row);
     expect(await fs.readFile(payload, "utf8")).toBe("projection-only content");
   });
 
@@ -495,9 +518,9 @@ describe("Exact removed worktree snapshot retirement", () => {
     "rechecks %s at the deletion boundary",
     async (kind) => {
       let revoked = false;
-      const mutation = beforeSnapshotDeletion(() => {
+      const mutation = beforeSnapshotDeletion(async () => {
         if (kind === "registry lifecycle") {
-          updateRegistryWorktree(env, record.id, { removedAt: removedAt + 1 });
+          await updateRegistryWorktree(env, record.id, { removedAt: removedAt + 1 });
         } else {
           revoked = true;
         }

@@ -7,6 +7,7 @@ import type {
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
 import {
@@ -76,17 +77,7 @@ type PreparedList = {
 async function boundedHost(
   pending: Promise<CodexSessionCatalogHost>,
 ): Promise<CodexSessionCatalogHost | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), 250);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await raceWithTimeout(pending, 250, () => undefined);
 }
 
 function measureNodeHost(

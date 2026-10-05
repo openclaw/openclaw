@@ -208,31 +208,6 @@ function matchesDirectoryEntry(params: {
   );
 }
 
-function resolveMatch(params: {
-  channel: ChannelId;
-  entries: ChannelDirectoryEntry[];
-  query: string;
-  plugin?: ChannelPlugin;
-  exactOnly?: boolean;
-}) {
-  const matches = params.entries.filter((entry) =>
-    matchesDirectoryEntry({
-      channel: params.channel,
-      entry,
-      query: params.query,
-      plugin: params.plugin,
-      exactOnly: params.exactOnly,
-    }),
-  );
-  if (matches.length === 0) {
-    return { kind: "none" as const };
-  }
-  if (matches.length === 1) {
-    return { kind: "single" as const, entry: matches[0] };
-  }
-  return { kind: "ambiguous" as const, entries: matches };
-}
-
 async function listDirectoryEntries(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -391,18 +366,17 @@ export async function resolveChannelTarget(params: {
     preferLiveOnMiss: true,
     plugin,
   });
-  const match = resolveMatch({
-    channel: params.channel,
-    entries,
-    query,
-    plugin,
-    exactOnly: Boolean(reservedLiteral),
-  });
-  if (match.kind === "single") {
-    const entry = match.entry;
-    if (!entry) {
-      throw new Error("Single directory match is missing its entry");
-    }
+  const matches = entries.filter((entry) =>
+    matchesDirectoryEntry({
+      channel: params.channel,
+      entry,
+      query,
+      plugin,
+      exactOnly: Boolean(reservedLiteral),
+    }),
+  );
+  const [entry] = matches;
+  if (matches.length === 1 && entry) {
     return {
       ok: true,
       target: {
@@ -415,11 +389,11 @@ export async function resolveChannelTarget(params: {
       },
     };
   }
-  if (match.kind === "ambiguous") {
+  if (matches.length > 1) {
     return {
       ok: false,
       error: ambiguousTargetError(providerLabel, raw, hint),
-      candidates: match.entries,
+      candidates: matches,
     };
   }
   // Directory misses are the fail-closed boundary for reserved literals.

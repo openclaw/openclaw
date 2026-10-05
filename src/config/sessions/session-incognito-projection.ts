@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import type { IncognitoComputeTarget } from "./session-incognito-compute-contract.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { TranscriptProjectionPublicationOperations } from "./session-transcript-projection-publication.worker.js";
@@ -9,20 +9,21 @@ import type { ProjectionPublisher } from "./session-transcript-projection-writer
 import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
 export type IncognitoProjectionBinding = {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
-  target: IncognitoComputeTarget;
+  target?: IncognitoComputeTarget;
 };
 export type IncognitoProjectionSource = {
-  sessionId: string;
+  sessionIds: string[];
+  storeWide: boolean;
   publication: ProjectionPublisher;
-  read(): Promise<MemoryTranscriptProjectionFrame>;
+  read(sessionId: string): Promise<MemoryTranscriptProjectionFrame>;
 };
 
 /** Retain compute custody while individual frames and publications take their own FIFO turn. */
 export function withIncognitoProjection<T>(
   binding: IncognitoProjectionBinding,
-  database: OpenClawAgentDatabaseOptions,
+  database: OpenClawAgentDatabaseOptions & { preferredSessionId?: string },
   operation: (source: IncognitoProjectionSource) => Promise<T>,
 ): Promise<T> {
   const { actor, authority } = binding;
@@ -34,11 +35,26 @@ export function withIncognitoProjection<T>(
     throw new Error("Incognito reconciliation belongs to another actor");
   }
   return actor.sessions.withCompute(authority, target, async (compute) => {
-    const sourceId = randomUUID();
-    await compute.execute({
-      type: "session.compute.source.open",
-      input: { ...target, sourceId },
-    });
+    const targets = target
+      ? [target]
+      : await compute.execute({ type: "session.compute.store.preflight", input: {} });
+    const preferred = database.preferredSessionId;
+    targets.sort(
+      (left, right) => Number(right.sessionId === preferred) - Number(left.sessionId === preferred),
+    );
+    const sources = new Map(
+      targets.map((entry) => [entry.sessionId, { ...entry, sourceId: randomUUID() }]),
+    );
+    const sourceFor = (sessionId: string) => {
+      const source = sources.get(sessionId);
+      if (!source) {
+        throw new Error("Incognito projection requested an unselected transcript");
+      }
+      return source;
+    };
+    for (const source of sources.values()) {
+      await compute.execute({ type: "session.compute.source.open", input: source });
+    }
     const publishers: {
       [Key in keyof TranscriptProjectionPublicationOperations]: (
         input: TranscriptProjectionPublicationOperations[Key]["input"],
@@ -47,38 +63,37 @@ export function withIncognitoProjection<T>(
       claim: (request) =>
         compute.execute({
           type: "session.compute.projection.claim",
-          input: { ...target, sourceId, request },
+          input: { ...sourceFor(request.plan.sessionId), request },
         }),
       deleteChunk: (request) =>
         compute.execute({
           type: "session.compute.projection.deleteChunk",
-          input: { ...target, sourceId, request },
+          input: { ...sourceFor(request.sessionId), request },
         }),
       appendChunk: (request) =>
         compute.execute({
           type: "session.compute.projection.appendChunk",
-          input: { ...target, sourceId, request },
+          input: { ...sourceFor(request.sessionId), request },
         }),
       finalize: (request) =>
         compute.execute({
           type: "session.compute.projection.finalize",
-          input: { ...target, sourceId, request },
+          input: { ...sourceFor(request.plan.sessionId), request },
         }),
       preflight: () => {
         throw new Error("Incognito projection does not admit store-wide operations");
       },
-      sweep: () => {
-        throw new Error("Incognito projection does not admit store-wide operations");
-      },
+      sweep: () => compute.execute({ type: "session.compute.store.sweep", input: {} }),
     };
     const publication: ProjectionPublisher = {
       execute: ({ type, input }) => publishers[type](input),
     };
     return operation({
-      sessionId: target.sessionId,
+      sessionIds: [...sources.keys()],
+      storeWide: !target,
       publication,
-      read: () =>
-        compute.execute({ type: "session.compute.source.read", input: { ...target, sourceId } }),
+      read: (sessionId) =>
+        compute.execute({ type: "session.compute.source.read", input: sourceFor(sessionId) }),
     });
   });
 }

@@ -1,10 +1,14 @@
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import type { NodeWorkerProcessInput } from "../../worker/worker-process-observation.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -13,7 +17,6 @@ import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.t
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
-import type { WorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import {
   joinWorkerTunnelStops,
@@ -27,7 +30,7 @@ const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 
 export type WorkerEnvironmentNodeTunnel = Pick<
   NodeWorkerTunnelManager,
-  "status" | "start" | "stop" | "stopAll"
+  "status" | "start" | "stop" | "stopAll" | "observeProcesses"
 >;
 
 /** Lease teardown joins every transport sharing that environment owner. */
@@ -77,25 +80,14 @@ type WorkerEnvironmentAccessOptions = {
     provider: WorkerProvider,
     leaseId: string,
   ) => Parameters<WorkerTunnelManager["start"]>[0]["resolveIdentity"];
-  inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   isStopping: () => boolean;
   providerFor: (providerId: string) => WorkerProvider;
   resolveProvider: WorkerProviderLifecycleInputOptions["resolveProvider"];
-  serviceError: (
-    code:
-      | "desktop_app_not_found"
-      | "environment_not_found"
-      | "invalid_state"
-      | "launcher_failure"
-      | "provider_failure"
-      | "unsupported_platform",
-    message: string,
-  ) => Error;
   withLock: <T>(environmentId: string, task: () => Promise<T>) => Promise<T>;
 };
 
 export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOptions) {
-  const { store, now, inState, providerFor, identityResolverFor, serviceError, withLock } = options;
+  const { store, now, providerFor, identityResolverFor, withLock } = options;
   const tunnels = options.tunnelManager;
   const nodeTunnels = options.nodeTunnelManager;
   const nodeDesktop = options.nodeDesktopCarrier;
@@ -128,7 +120,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   const requireDesktopRecord = (environmentId: string) => {
     const record = requireCurrentRecord(environmentId);
     if (
-      !inState(record, "ready", "idle", "attached") ||
+      !["ready", "idle", "attached"].includes(record.state) ||
       record.destroyRequestedAtMs !== null ||
       !record.leaseId ||
       !record.desktop
@@ -145,7 +137,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
-      inState(record, "ready", "idle", "attached") &&
+      ["ready", "idle", "attached"].includes(record.state) &&
       record.desktop !== null;
     const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
     const preparedProject = record.preparation
@@ -293,7 +285,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const { startup, stopStartup } = await withLock(request.environmentId, async () => {
       const record = requireCurrentRecord(request.environmentId);
       if (
-        !inState(record, "ready", "idle", "attached") ||
+        !["ready", "idle", "attached"].includes(record.state) ||
         record.destroyRequestedAtMs !== null ||
         !record.leaseId ||
         !record.bootstrapReceipt
@@ -619,5 +611,46 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     stopAllTunnels: () =>
       joinWorkerTunnelStops([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
     stopTunnel,
+  };
+}
+
+/** Owns build-qualified process observation for one environment-service lifetime. */
+export function createWorkerEnvironmentProcessObservation(options: {
+  store: Pick<WorkerEnvironmentStore, "get">;
+  prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
+  isStopping: () => boolean;
+  getNodeTunnel: () => Pick<WorkerEnvironmentNodeTunnel, "observeProcesses"> | undefined;
+  trackOperation: <T>(operation: Promise<T>) => Promise<T>;
+}) {
+  // The bundle producer owns its immutable artifact; panel refreshes only reuse its identity.
+  const prepareBuild = createLazyPromise(options.prepareCurrentBundle);
+  return async (
+    input: Omit<NodeWorkerProcessInput, "gatewayNamespace" | "expectedBundleHash">,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ) => {
+    assertCurrent();
+    const expected = await racePromiseWithAbortSignal(prepareBuild(), signal);
+    assertCurrent();
+    const record = options.store.get(input.environmentId);
+    const nodeTunnel = options.getNodeTunnel();
+    // An older retained worker must not receive an unknown input that would terminate its turn.
+    if (
+      options.isStopping() ||
+      !record?.bootstrapReceipt ||
+      !sameWorkerBuild(record.bootstrapReceipt, expected) ||
+      !nodeTunnel?.observeProcesses
+    ) {
+      throw new Error(
+        "Worker process inspection needs the current runtime; update or restart the session worker, then retry.",
+      );
+    }
+    return await options.trackOperation(
+      nodeTunnel.observeProcesses(
+        { ...input, expectedBundleHash: expected.bundleHash },
+        assertCurrent,
+        signal,
+      ),
+    );
   };
 }

@@ -10,10 +10,8 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import {
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveSessionLifecycleTimestamps,
-} from "../../config/sessions/lifecycle.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
+import { hasTerminalMainSessionTranscriptNewerThanRegistrySync } from "../../config/sessions/lifecycle.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -573,7 +571,9 @@ export function resolveSessionKeyForRequestCore(opts: SessionRequest): SessionKe
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
 }
 
-export function resolveSession(opts: SessionRequest): SessionResolution {
+export async function resolveSession(
+  opts: SessionRequest & { signal?: AbortSignal; assertCurrent?: () => void },
+): Promise<SessionResolution> {
   const sessionCfg = opts.cfg.session;
   const {
     agentId: resolvedAgentId,
@@ -624,16 +624,21 @@ export function resolveSession(opts: SessionRequest): SessionResolution {
         (skipImplicitExpiry ||
           evaluateSessionFreshness({
             updatedAt: sessionEntry.updatedAt,
-            ...resolveSessionLifecycleTimestamps({
-              entry: sessionEntry,
-              agentId: sessionAgentId,
-              sessionKey,
-              storePath,
-            }),
+            ...(sessionKey
+              ? await resolveSessionLifecycleTimestampsAsync({
+                  entry: sessionEntry,
+                  agentId: sessionAgentId,
+                  sessionKey,
+                  storePath,
+                  signal: opts.signal,
+                })
+              : {}),
             now,
             policy: resetPolicy,
           }).fresh))
     : false;
+  opts.signal?.throwIfAborted();
+  opts.assertCurrent?.();
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;

@@ -77,7 +77,7 @@ async function withStaleResourceFixture(
     });
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true }, sibling: {} },
+        entries: { main: {}, sibling: {} },
         defaults: {
           workspace: state.workspaceDir,
           model: { primary: "base/model" },

@@ -176,9 +176,10 @@ Console logs are **TTY-aware** and formatted for readability:
 Console formatting is controlled by `logging.consoleStyle`.
 
 SQLite worker diagnostics use stderr. After the final backend closes normally,
-the worker gives pending console output up to five seconds to drain before
-acknowledging close. This is best effort; forced worker termination can still
-discard pending diagnostics.
+the worker flushes queued file logs and gives pending console output up to five
+seconds to drain before acknowledging close. Source-loaded backends and compiled
+workers share the same file-log queue. Forced worker termination can still discard
+pending diagnostics.
 
 ### Gateway WebSocket logs
 
@@ -680,11 +681,27 @@ completion behavior.
 Foreground Gateway startup reports a bounded set of `startup phase` records even
 without opt-in tracing. CLI records identify entry-module loading, environment
 selection, command imports, and state preparation before `loading configuration`.
-Gateway records identify database preflight, authentication, startup maintenance,
-listener binding, and readiness. Measured phases log both their start and elapsed
+Bootstrap subphases separate config-guard imports, config and database admission,
+plugin metadata, payload verification, and lease acquisition. Gateway records
+separate maintenance work, listener binding, plugin loading and attachment, worker
+startup, model preparation, channel startup, and restored subagent activation.
+Measured phases log both their start and elapsed
 duration; `total` is elapsed time from process startup (or the current in-process
 restart). These are wall times, including asynchronous waits, not CPU measurements.
-Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the detailed nested phase breakdown.
+Nested durations overlap their parent phases; do not add them to the parent total.
+Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
+import and registration timings.
+
+Desktop permission narrowing and canonical session checks remain on their required
+admission paths. Transcript projection repair, orphan settlement, channel
+maintenance, pairing diagnostics, and restored-subagent activation run after
+readiness. Retired plugin captures join the existing post-ready idle cleanup.
+History reads use the transcript owner's bounded on-demand repair when needed.
+Orphan status and its failure receipt settle together in the database worker,
+with current run ownership checked before commit. These scheduling changes do
+not change stored formats or require an update migration.
+Each CLI admission pass shares one read-only state snapshot and releases it before
+live guards and writes; acquiring a preparation lease still starts a fresh pass.
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
 a persistent database open takes at least one second:

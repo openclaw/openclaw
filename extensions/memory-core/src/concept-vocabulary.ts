@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -388,19 +387,11 @@ function collectSegmentTokens(source: string): string[] {
   return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 }
 
-export function deriveConceptTags(params: {
-  path: string;
-  snippet: string;
-  limit?: number;
-}): string[] {
+export function deriveConceptTags(params: { path: string; snippet: string }): string[] {
   // Recall annotations are control metadata; deriving tags from them can turn
   // project identities into promoted triggers instead of user-visible concepts.
   const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
   const source = `${path.basename(params.path)} ${visibleSnippet}`;
-  const limit = resolveNonNegativeIntegerOption(params.limit, MAX_CONCEPT_TAGS);
-  if (limit === 0) {
-    return [];
-  }
 
   const tags: string[] = [];
   const tokenSources = [
@@ -415,7 +406,7 @@ export function deriveConceptTags(params: {
         continue;
       }
       tags.push(normalized);
-      if (tags.length >= limit) {
+      if (tags.length >= MAX_CONCEPT_TAGS) {
         return tags;
       }
     }

@@ -1,14 +1,13 @@
 // Load the shared migration mocks before their production consumers.
 // oxfmt-ignore
-import { legacyConfig, useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
+import { useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
-function migrateContextBudgetThenNormalize(config: OpenClawConfig) {
+function migrateContextBudgetThenNormalize(config: unknown) {
   const early = applyLegacyDoctorMigrations(config, { sourceConfigBeforeMigrations: config });
-  const normalized = normalizeCompatibilityConfigValues(legacyConfig(early.next ?? config));
+  const normalized = normalizeCompatibilityConfigValues(early.next ?? config);
   return {
     ...normalized,
     changes: [...early.changes, ...normalized.changes],
@@ -31,13 +30,13 @@ function ollamaConfig(
   provider: Record<string, unknown> = {},
   id = "ollama",
 ) {
-  return legacyConfig({
+  return {
     models: {
       providers: {
         [id]: { baseUrl: "http://localhost:11434", api: "ollama", ...provider, models },
       },
     },
-  });
+  };
 }
 
 const bakedWindow =

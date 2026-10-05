@@ -444,6 +444,7 @@ export async function readSystemdServiceExecStartAsRoot(
   env: GatewayServiceEnv,
   target: SystemdServiceReadTarget,
   expectedServiceAccount: string,
+  loadForInspection?: GatewayServiceReadOptions["loadForInspection"],
 ): Promise<GatewayServiceCommandConfig | null> {
   if (
     process.geteuid?.() !== 0 ||
@@ -456,7 +457,7 @@ export async function readSystemdServiceExecStartAsRoot(
   }
   const command = await readSystemdServiceCommand(
     env,
-    { systemdReadTarget: target, requireEffective: true, requireLoaded: true },
+    { systemdReadTarget: target, requireEffective: true, requireLoaded: true, loadForInspection },
     false,
     expectedServiceAccount,
   );

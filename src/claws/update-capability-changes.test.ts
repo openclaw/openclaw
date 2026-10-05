@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
   pushResolvedAgentCapabilityChanges,
@@ -78,7 +79,7 @@ function collectChanges(params: {
       memory: params.memory,
       agents: {
         defaults: params.defaults,
-        list: [params.currentAgent],
+        entries: toAgentEntriesRecord([params.currentAgent]),
       },
     },
     desiredAgent: params.desiredAgent,
@@ -328,16 +329,16 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     desiredAgent: Agent;
   }> = [
     {
-      name: "implicit default-agent heartbeat",
+      name: "explicitly selected agent heartbeat",
       prefix: "agent.heartbeat.",
-      config: { agents: { list: [{ id: "worker" }, { id: "other" }] } },
+      config: { agents: { ownership: "explicit", entries: { worker: {}, other: {} } } },
       desiredAgent: agent(),
     },
     {
       name: "inherited memory search",
       prefix: "agent.memory.search.",
       config: {
-        agents: { list: [agent()] },
+        agents: { entries: toAgentEntriesRecord([agent()]) },
         memory: {
           search: {
             enabled: true,
@@ -353,7 +354,9 @@ describe("pushResolvedAgentCapabilityChanges", () => {
       prefix: "agent.tools.",
       config: {
         agents: {
-          list: [agent({ tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] } })],
+          entries: toAgentEntriesRecord([
+            agent({ tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] } }),
+          ]),
         },
       },
       desiredAgent: agent({
@@ -398,7 +401,7 @@ describe("pushResolvedAgentCapabilityChanges", () => {
       pushResolvedAgentCapabilityChanges({
         changes,
         agentId: "worker",
-        config: { agents: { defaults, list: [] } },
+        config: { agents: { defaults, entries: {} } },
         desiredAgent,
       });
       expect(changes).toEqual(

@@ -108,56 +108,85 @@ describe("canary teardown evidence", () => {
     stubHealthyGateway();
   });
 
-  it("propagates initial progress refusal before snapshot admission", async () => {
-    const refusal = new Error("initial progress receipt was refused");
-    const onStep = vi.fn();
+  it.each([
+    "initial-progress",
+    "candidate-state-snapshot",
+    "candidate-doctor",
+    "candidate-gateway-startup",
+  ])("propagates a %s receipt refusal once, cleaning up only admitted work", async (stepName) => {
+    let copiedStateDir: string | undefined;
+    mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
+      const request: unknown = JSON.parse(options.input);
+      if (isRecord(request) && request.mode === "snapshot") {
+        if (typeof request.targetStateDir !== "string") {
+          throw new Error("Snapshot fixture requires its owned target directory");
+        }
+        copiedStateDir = request.targetStateDir;
+      }
+      return createCanarySnapshotResult(options.input);
+    });
+    const refusal = new Error("progress receipt was refused");
+    let refused = false;
+    const onStep = vi.fn(async (step: UpdateStepResult) => {
+      if (step.name === stepName && !refused) {
+        refused = true;
+        throw refusal;
+      }
+    });
     await expect(
       validateUpdateCandidateCanary({
         ...canaryStateOptions(3_000),
-        onProgress: vi.fn().mockRejectedValue(refusal),
         onStep,
+        onProgress:
+          stepName === "initial-progress" ? vi.fn().mockRejectedValue(refusal) : undefined,
       }),
     ).rejects.toBe(refusal);
-    expect(mocks.snapshot).not.toHaveBeenCalled();
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(onStep).not.toHaveBeenCalled();
+    if (stepName === "initial-progress") {
+      expect(mocks.snapshot).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(onStep).not.toHaveBeenCalled();
+      return;
+    }
+    expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
+      [expect.objectContaining({ exitCode: 0 })],
+    ]);
+    for (const child of children.values()) {
+      expect(child.exitCode).toBe(0);
+    }
+    if (!copiedStateDir) {
+      throw new Error("Candidate did not create its private state copy");
+    }
+    await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["candidate-state-snapshot", "candidate-doctor", "candidate-gateway-startup"])(
-    "propagates a settled %s receipt refusal once after owned cleanup",
-    async (stepName) => {
-      let copiedStateDir: string | undefined;
-      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
-        const request: unknown = JSON.parse(options.input);
-        if (isRecord(request) && request.mode === "snapshot") {
-          if (typeof request.targetStateDir !== "string") {
-            throw new Error("Snapshot fixture requires its owned target directory");
+  it.each(["candidate-doctor", "candidate-gateway-startup"])(
+    "awaits the %s start receipt before launching its process",
+    async (name) => {
+      const entered = createDeferredCore();
+      const receipt = createDeferredCore();
+      const refusal = new Error("check start receipt was refused");
+      const onStep = vi.fn();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onStep,
+        onProgress: (step) => {
+          if (step.step === name && step.status === "in_progress") {
+            entered.resolve();
+            return receipt.promise;
           }
-          copiedStateDir = request.targetStateDir;
-        }
-        return createCanarySnapshotResult(options.input);
+          return undefined;
+        },
       });
-      const refusal = new Error("completion receipt was refused");
-      let refused = false;
-      const onStep = vi.fn(async (step: UpdateStepResult) => {
-        if (step.name === stepName && !refused) {
-          refused = true;
-          throw refusal;
-        }
-      });
-      await expect(
-        validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep }),
-      ).rejects.toBe(refusal);
-      expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
-        [expect.objectContaining({ exitCode: 0 })],
-      ]);
-      for (const child of children.values()) {
-        expect(child.exitCode).toBe(0);
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(mocks.spawn).toHaveBeenCalledTimes(name === "candidate-doctor" ? 0 : 5);
+        receipt.reject(refusal);
+        await expect(pending).rejects.toBe(refusal);
+        expect(onStep.mock.calls.some(([step]) => step.name === name)).toBe(false);
+      } finally {
+        receipt.resolve();
+        await pending.catch(() => undefined);
       }
-      if (!copiedStateDir) {
-        throw new Error("Candidate did not create its private state copy");
-      }
-      await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 

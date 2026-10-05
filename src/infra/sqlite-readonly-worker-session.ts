@@ -4,8 +4,8 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
@@ -235,7 +235,7 @@ export function createSqliteReadOnlyWorkerSession(
         value = reply.value;
       } else {
         value = readSqliteReadOnlyWorkerValue(
-          { stdout: JSON.stringify(message.result), stderr },
+          { kind: "launched", stdout: JSON.stringify(message.result), stderr, status: 0 },
           pending.mode,
         );
       }

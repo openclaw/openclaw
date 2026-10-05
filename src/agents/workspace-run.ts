@@ -159,3 +159,23 @@ export function resolveRootedRunRuntimeWorkspace(params: {
     ? bootstrap
     : undefined;
 }
+
+/** Resolves the agent's canonical workspace for a run that executes somewhere else. */
+export function resolveCanonicalRunRuntimeWorkspace(params: {
+  workspaceDir: string;
+  sessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): ResolveRunWorkspaceResult | undefined {
+  if (!params.config || !hasAgentRosterProperty(params.config)) {
+    return undefined;
+  }
+  const { fallbackReason: _fallbackReason, ...canonical } = resolveRunWorkspaceDir({
+    ...params,
+    workspaceDir: undefined,
+  });
+  return canonical.workspaceDir === resolveUserPath(params.workspaceDir, params.env ?? process.env)
+    ? undefined
+    : { ...canonical, usedFallback: false };
+}

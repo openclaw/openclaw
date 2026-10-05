@@ -41,7 +41,6 @@ type ApprovalRouteSkipReason = "ambiguous-owner" | "ineligible" | "owner-unavail
 
 type ApprovalRouteReport = {
   runtimeId: string;
-  request: ApprovalRequest;
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
@@ -105,21 +104,21 @@ function clearApprovalRouteSelection(
   clearTimeout(selection.cleanupTimeout);
 }
 
-function routeGroupKey(runtime: ApprovalRouteRuntimeRecord): string {
-  return normalizeLowercaseStringOrEmpty(runtime.channel) || runtime.runtimeId;
-}
-
-function createApprovalRouteSelection(
+function resolveApprovalRouteSelection(
   state: ApprovalNativeRouteCoordinatorState,
   params: { request: ApprovalRequest; approvalKind: ChannelApprovalKind },
 ): ApprovalRouteSelection {
+  const existing = state.selections.get(params.request.id);
+  if (existing) {
+    return existing;
+  }
   const runtimes = Array.from(state.activeRuntimes.values()).filter((runtime) =>
     runtime.handledKinds.has(params.approvalKind),
   );
   const verdicts = new Map<string, ApprovalRouteSelectionVerdict>();
   const groups = new Map<string, ApprovalRouteRuntimeRecord[]>();
   for (const runtime of runtimes) {
-    const key = routeGroupKey(runtime);
+    const key = normalizeLowercaseStringOrEmpty(runtime.channel) || runtime.runtimeId;
     groups.set(key, [...(groups.get(key) ?? []), runtime]);
   }
 
@@ -187,13 +186,6 @@ function createApprovalRouteSelection(
   };
   state.selections.set(params.request.id, selection);
   return selection;
-}
-
-function resolveApprovalRouteSelection(
-  state: ApprovalNativeRouteCoordinatorState,
-  params: { request: ApprovalRequest; approvalKind: ChannelApprovalKind },
-): ApprovalRouteSelection {
-  return state.selections.get(params.request.id) ?? createApprovalRouteSelection(state, params);
 }
 
 const defaultCoordinatorState = createApprovalNativeRouteCoordinatorState();
@@ -533,7 +525,6 @@ function createApprovalNativeRouteReporterForState(
       });
     entry.reports.set(runtimeId, {
       runtimeId,
-      request: payload.request,
       channel: params.channel,
       channelLabel: params.channelLabel,
       accountId: params.accountId,

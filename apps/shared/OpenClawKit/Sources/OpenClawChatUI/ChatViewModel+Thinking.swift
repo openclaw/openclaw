@@ -58,9 +58,9 @@ extension OpenClawChatViewModel {
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let patchResult = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    OpenClawChatSessionSettingsPatch(
                         thinkingLevel: .some(clearsOverride ? nil : next)))
                 let acceptedLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) ?? next
                 let acceptedResult = self.mergedThinkingPatchSuccess(
@@ -173,10 +173,6 @@ extension OpenClawChatViewModel {
         }) else { return }
         self.confirmedThinkingPreference = resolved
         self.thinkingPreferenceRequests.removeAll()
-    }
-
-    func recordAuthoritativeInheritedThinkingPreference(_ level: String) {
-        self.confirmedThinkingPreference = PreferenceState(level: level, isExplicit: false)
     }
 
     func updateCurrentSessionThinkingLevels(

@@ -16,6 +16,7 @@ import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
   type SubagentKillSession,
@@ -228,6 +229,7 @@ export async function completeSubagentRunAttempt(
     });
     const prepared = {
       now,
+      childAgentId: resolveSubagentChildSessionOwner(selected, params.getRuntimeConfig()).agentId,
       watcherStorePaths: captureSessionWatcherStorePaths([selected.requesterSessionKey]),
       suppressSessionEffects,
       structuredOutput,
@@ -277,6 +279,7 @@ export async function completeSubagentRunAttempt(
                     prepareSubagentTerminalState(
                       {
                         childSessionKey: entry.childSessionKey,
+                        agentId: prepared.childAgentId,
                         runId: entry.runId,
                         requesterSessionKey: entry.requesterSessionKey,
                         outcomeStatus,

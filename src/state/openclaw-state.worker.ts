@@ -1,7 +1,9 @@
+import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
@@ -16,7 +18,6 @@ import {
   pluginStateWorkerOperations,
 } from "../plugin-state/plugin-state-worker-contract.js";
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -36,22 +37,34 @@ import {
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerOpenPreparation,
+  OpenClawStateWorkerOperations,
 } from "./openclaw-state-worker-contract.js";
+import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
-const loadAgentCleanup = createLazyRuntimeModule(
-  () => import("./openclaw-agent-execution-cleanup.worker.js"),
-);
+// PR provisioning retains allocation and template owners without the application runtime.
+const provisionRegistry = createWorkerOperationRegistry<
+  WorktreeTemplateWorkerOperations &
+    Pick<OpenClawStateWorkerOperations, "worktrees.reserveCapacity">
+>({
+  worktrees: async () => {
+    const [templates, reserveCapacity] = await Promise.all([
+      import("../agents/worktrees/template-registry.worker.js").then(
+        (loaded) => loaded.worktreeTemplateOperations,
+      ),
+      import("../agents/worktrees/capacity.worker.js").then(
+        (loaded) => loaded.reserveWorktreeCapacityInWorker,
+      ),
+    ]);
+    return {
+      ...templates,
+      "worktrees.reserveCapacity": reserveCapacity,
+    };
+  },
+});
+
 let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
-
-const loadPluginState = createLazyRuntimeModule(
-  () => import("../plugin-state/plugin-state.worker.js"),
-);
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
-
-const loadCapture = createLazyRuntimeModule(() => import("../proxy-capture/store.worker.js"));
 let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
-
-const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
 function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
@@ -130,11 +143,17 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (
+        commandType.startsWith("worktrees.templates.") ||
+        commandType === "worktrees.reserveCapacity"
+      ) {
+        return provisionRegistry.prepare(commandType);
+      }
       if (commandType.startsWith("capture.")) {
         if (capture) {
           return undefined;
         }
-        return loadCapture().then((loaded) => {
+        return import("../proxy-capture/store.worker.js").then((loaded) => {
           capture = loaded;
         });
       }
@@ -142,7 +161,7 @@ function createSharedStateWorkerBackend(
         if (agentCleanup) {
           return undefined;
         }
-        return loadAgentCleanup().then((loaded) => {
+        return import("./openclaw-agent-execution-cleanup.worker.js").then((loaded) => {
           agentCleanup = loaded;
         });
       }
@@ -150,7 +169,7 @@ function createSharedStateWorkerBackend(
         if (pluginState) {
           return undefined;
         }
-        return loadPluginState().then((loaded) => {
+        return import("../plugin-state/plugin-state.worker.js").then((loaded) => {
           pluginState = loaded;
         });
       }
@@ -170,7 +189,7 @@ function createSharedStateWorkerBackend(
       if (runtime) {
         return runtime.prepareSharedStateCommand(commandType);
       }
-      return loadRuntime().then((loaded) => {
+      return import("./openclaw-state-worker-runtime.js").then((loaded) => {
         runtime = loaded;
         return runtime.prepareSharedStateCommand(commandType);
       });
@@ -178,6 +197,15 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (provisionRegistry.has(command)) {
+        return provisionRegistry.execute(command, {
+          open,
+          stateOptions: () => ({
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          }),
+        });
       }
       if (
         command.type === "capture.upsertSession" ||
@@ -255,10 +283,22 @@ function createSharedStateWorkerBackend(
         );
       }
       if (command.type === "database.walMaintenance") {
+        const database = open();
+        const admit = (stage: "transaction" | "commit") => {
+          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+        };
         return (
-          open().walMaintenance.maintainPeriodic?.(command.input, (stage) => {
-            requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-          }) ?? { reclaimedPages: 0 }
+          database.walMaintenance.maintainPeriodic?.(command.input, admit, () =>
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                admit("transaction");
+                refreshSqlitePlannerStatistics(db);
+                admit("commit");
+              },
+              { database },
+              { busyTimeoutMs: 0, operationLabel: "state.planner-statistics" },
+            ),
+          ) ?? { reclaimedPages: 0 }
         );
       }
       if (command.type === "database.inspectIdle") {
