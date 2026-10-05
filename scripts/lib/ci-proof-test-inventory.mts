@@ -4777,7 +4777,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/telegram/src/action-progress-edit.telegram-http.test.ts",
   "extensions/telegram/src/bot-message-context.prompt-context.test.ts",
   "extensions/telegram/src/bot-message-dispatch.final-delivery-lifecycle.test.ts",
-  "extensions/telegram/src/bot-native-command-dispatch.auth.test.ts",
   "extensions/telegram/src/bot-native-commands.registry.test.ts",
   "extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.test.ts",
   "extensions/telegram/src/bot.media.stickers-and-fragments.test.ts",
