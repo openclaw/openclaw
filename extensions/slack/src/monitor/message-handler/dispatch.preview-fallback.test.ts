@@ -2254,7 +2254,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
         expect(capturedReplyOptions?.commentaryPayloadsEnabled).toBeUndefined();
         expect(capturedReplyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
-        expect(capturedReplyOptions?.onVerboseProgressVisibility).toBeUndefined();
+        expect(capturedReplyOptions?.onVerboseProgressVisibilityAsync).toBeUndefined();
         expect(capturedReplyOptions?.progressPreambleEnabled).toBe(true);
         expectLastDraftUpdateText(draftStream, `_${latest}_\n\nBash — running\n\n1 tool · 1s`);
       } else {
@@ -2265,7 +2265,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         expectLastDraftUpdateText(draftStream, `_${latest}_`);
         expect(draftUpdateTexts(draftStream).join("\n")).not.toContain("pnpm test");
         const updateCount = draftStream.update.mock.calls.length;
-        capturedReplyOptions?.onVerboseProgressVisibility?.(() => true);
+        await capturedReplyOptions?.onVerboseProgressVisibilityAsync?.(async () => true);
         expect(capturedReplyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(true);
         await requireCapturedItemEventHandler()({
           kind: "preamble",

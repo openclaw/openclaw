@@ -21,20 +21,23 @@ afterEach(() => vi.useRealTimers());
 
 it.each([false, true])(
   "publishes native provider failures without treating them as cancellation (aborted=%s)",
-  (aborted) => {
+  async (aborted) => {
     vi.useFakeTimers();
     const runId = "run-native-provider-error";
     const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
     onTestFinished(() => h.handler.dispose());
     h.register(runId, "session-native-provider-error", runId);
     let seq = 0;
+    const deliveries: Promise<void>[] = [];
     const lifecycle = createAgentHarnessAttemptLifecycle({
       attempt: { provider: "openai", modelId: "gpt-5.6-luna" },
       backend: "codex-app-server",
       startedAtMs: Date.now(),
       state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
-      emitEvent: async (event) => {
-        h.emit(runId, event.stream, event.data, { seq: ++seq });
+      emitEvent: (event) => {
+        const delivery = Promise.resolve(h.emit(runId, event.stream, event.data, { seq: ++seq }));
+        deliveries.push(delivery);
+        return delivery;
       },
     });
     lifecycle.emitLifecycleStart({ provider: "openai", model: "gpt-5.6-luna" });
@@ -45,6 +48,7 @@ it.each([false, true])(
       stopReason: aborted ? "stop" : "error",
       replayInvalid: true,
     });
+    await Promise.all(deliveries);
 
     const terminals = h.chat().filter(([, event]) => event.state !== "delta");
     expect(terminals).toHaveLength(1);

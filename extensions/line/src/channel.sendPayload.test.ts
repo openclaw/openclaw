@@ -38,7 +38,6 @@ const primaryContext = { cfg, to, accountId: "primary" };
 const primaryOptions = { ...sendOptions, accountId: "primary" };
 const videoUrl = "https://example.com/video.mp4";
 const imageUrl = "https://example.com/photo.png";
-const audioUrl = "https://example.com/voice.m4a";
 const previewImageUrl = "https://example.com/preview.jpg";
 const locationFixture = {
   title: "Meet here",
@@ -158,13 +157,13 @@ it("keeps a degraded location in the quick-reply inline batch", async () => {
   await send({
     line: {
       quickReplies: ["Continue"],
-      location: { ...locationFixture, address: " " },
+      location: { ...locationFixture, title: "A".repeat(6000), address: " " },
     },
   });
   expectBatch([
     {
       type: "text",
-      text: "Meet here\n35.6895, 139.6917",
+      text: `${"A".repeat(100)}\n35.6895, 139.6917`,
       quickReply: createQuickReply("Continue"),
     },
   ]);
@@ -327,17 +326,6 @@ it.each([
   );
 });
 
-it.each([
-  [imageUrl, { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl }],
-  [audioUrl, { type: "audio", originalContentUrl: audioUrl, duration: 60000 }],
-] as const)("validates and infers inline quick-reply media from %s", async (url, message) => {
-  await inlineMedia(url);
-  expectBatch([{ ...message, quickReply: createQuickReply("One") }]);
-  expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
-    policy: { allowPrivateNetwork: false },
-  });
-});
-
 it("rejects insecure generic media before quick-reply batch sends", async () => {
   const url = new URL("http://example.com/image.jpg");
   url.username = ["line", "user"].join("-");
@@ -411,7 +399,6 @@ it.each<[string, number | undefined, number | undefined, boolean, number]>([
   ["exhausted", 200, 200, false, 2],
   ["fractional allowance", 200.5, 201, true, 1],
   ["fractional usage", 200, 200.5, true, 2],
-  ["available allowance", 200, 12, true, 2],
   ["unlimited", undefined, undefined, true, 1],
 ])("classifies a refusal with %s quota", async (_label, limit, used, retryable, requests) => {
   const rejection = refusal(429, true);

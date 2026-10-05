@@ -1,4 +1,4 @@
-import type { CopilotClient } from "@github/copilot-sdk";
+import type { CopilotClient, SessionConfig } from "@github/copilot-sdk";
 import {
   compactWithSafetyTimeout,
   getModelProviderRequestTransport,
@@ -22,7 +22,6 @@ import type {
   CopilotAttemptParams,
   ModelRefInputObject,
 } from "./src/attempt-types.js";
-import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
 import {
@@ -69,7 +68,7 @@ interface TrackedSession extends Omit<CopilotSessionBinding, "schemaVersion" | "
   client: CopilotClient;
   clientOptions: ClientCreateOptions;
   poolKey: PoolKey;
-  sessionConfig: CopilotSessionConfig;
+  sessionConfig: SessionConfig;
 }
 
 export type CopilotSessionBinding = {
@@ -240,7 +239,7 @@ async function compactTrackedSdkSession(params: {
   customInstructions?: string;
   gitHubToken?: string;
   onSession?: (session: CopilotHistoryCompactSession) => void;
-  sessionConfig: CopilotSessionConfig;
+  sessionConfig: SessionConfig;
   sdkSessionId: string;
 }): Promise<CopilotHistoryCompactResult> {
   params.assertCurrent();

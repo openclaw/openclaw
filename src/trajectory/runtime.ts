@@ -218,25 +218,21 @@ function limitTrajectoryPayloadValue(
 
 function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
   const finalPromptText = data.finalPromptText;
-  const redactedFinalPromptText =
-    typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;
-  const boundedData =
-    typeof finalPromptText === "string" &&
-    typeof redactedFinalPromptText === "string" &&
-    (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
-      Buffer.byteLength(redactedFinalPromptText, "utf8") >
-        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES)
-      ? {
-          ...data,
-          finalPromptText: truncateUtf8Prefix(
-            redactedFinalPromptText,
-            TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
-          ),
-          finalPromptTextOriginalLength: finalPromptText.length,
-        }
-      : typeof redactedFinalPromptText === "string"
-        ? { ...data, finalPromptText: redactedFinalPromptText }
-        : data;
+  let boundedData = data;
+  if (typeof finalPromptText === "string") {
+    const redactedFinalPromptText = redactSecrets(finalPromptText);
+    boundedData = { ...data, finalPromptText: redactedFinalPromptText };
+    if (
+      Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
+      Buffer.byteLength(redactedFinalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES
+    ) {
+      boundedData.finalPromptText = truncateUtf8Prefix(
+        redactedFinalPromptText,
+        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
+      );
+      boundedData.finalPromptTextOriginalLength = finalPromptText.length;
+    }
+  }
   return redactSecrets(
     sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
   ) as Record<string, unknown>;

@@ -538,6 +538,12 @@ describe("ClawHub prepared publication", () => {
     },
   );
 
+  it("restores established package families in prepared promotion matrices", async () => {
+    const f = preparedFixture("selected", "cloudflare");
+    const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
+    expect(entry.family).toBe("bundle-plugin");
+  });
+
   it.each([
     { publication: { state: "published" } },
     { publication: { state: "absent" } },

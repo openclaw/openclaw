@@ -35,11 +35,7 @@ import {
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
 } from "./configured-runtime-plugin-installs.js";
 import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
-import {
-  collectConfiguredChannelIds,
-  collectConfiguredPluginIds,
-  collectEffectiveConfiguredChannelOwnerPluginIds,
-} from "./missing-configured-plugin-install.ids.js";
+import { collectEffectiveConfiguredChannelOwnerPluginIds } from "./missing-configured-plugin-install.ids.js";
 
 export type DownloadableInstallCandidate = {
   pluginId: string;
@@ -52,8 +48,7 @@ export type DownloadableInstallCandidate = {
   versionBoundToOpenClaw?: boolean;
 };
 
-export type BundledPluginPackageDescriptor = {
-  name?: string;
+type BundledPluginPackageDescriptor = {
   packageName?: string;
   preserveExternalInstallRecord?: boolean;
 };
@@ -294,15 +289,12 @@ export function collectDownloadableInstallCandidates(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   missingPluginIds: ReadonlySet<string>;
-  configuredPluginIds?: ReadonlySet<string>;
-  configuredChannelIds?: ReadonlySet<string>;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
   configuredChannelOwnerPluginIds?: ReadonlyMap<string, ReadonlySet<string>>;
   blockedPluginIds?: ReadonlySet<string>;
 }): DownloadableInstallCandidate[] {
-  const configuredPluginIds =
-    params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg, params.env);
-  const configuredChannelIds =
-    params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg, params.env);
+  const { configuredPluginIds, configuredChannelIds } = params;
   if (
     params.missingPluginIds.size === 0 &&
     configuredPluginIds.size === 0 &&

@@ -47,10 +47,13 @@ export async function listSessionMembersInWorker(
     if (actor.agentId !== resolved.agentId || actor.path !== databasePath) {
       throw new Error("Membership target differs from its captured incognito actor");
     }
-    return actor.sessions.sideData(authority, {
+    const members = await actor.sessions.sideData(authority, {
       type: "session.members.read",
       input: { sessionKey: resolved.sessionKey },
     });
+    authority.assertCurrent();
+    actor.assertReadable();
+    return members;
   }
   if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
     // Incognito SQLite exists only in this process and keeps its native owner.

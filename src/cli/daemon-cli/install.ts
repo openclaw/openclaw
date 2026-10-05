@@ -26,7 +26,10 @@ import {
 import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { sanitizeServiceInspectionError } from "../../daemon/service-inspection-error.js";
+import {
+  sanitizeServiceInspectionError,
+  ServiceStartRefusalError,
+} from "../../daemon/service-inspection-error.js";
 import { reconcileGatewayServiceDefinition } from "../../daemon/service-reconciliation.js";
 import type {
   GatewayServiceDefinitionBackupReceipt,
@@ -189,7 +192,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
   } catch (error) {
-    fail(sanitizeServiceInspectionError(error).message);
+    const message = sanitizeServiceInspectionError(error).message;
+    // No installer writes precede this read; the updater can retain the unchanged definition.
+    fail(
+      error instanceof ServiceStartRefusalError
+        ? `SERVICE_DEFINITION_UNKNOWN: ${message}`
+        : message,
+    );
     return;
   }
   let loaded;

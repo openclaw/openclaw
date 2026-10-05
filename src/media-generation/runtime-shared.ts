@@ -167,8 +167,7 @@ type ParsedSize = {
 };
 
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
-  const configured = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
-  const trimmed = normalizeOptionalString(configured);
+  const trimmed = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
   if (!trimmed) {
     return DEFAULT_PROVIDER;
   }

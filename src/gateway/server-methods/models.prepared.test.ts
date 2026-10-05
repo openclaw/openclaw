@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as providerPolicySurface from "../../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -12,7 +13,7 @@ import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
-import { buildModelsListResult } from "./models-list-result.js";
+import * as modelsListResult from "./models-list-result.js";
 import {
   createModelsListTestContext,
   providerCatalogEntry,
@@ -31,25 +32,29 @@ it("serves the published model-list projection and replaces it with its metadata
         },
       };
       const pluginRegistry = createEmptyPluginRegistry();
+      const catalog = Array.from({ length: 64 }, (_, index) =>
+        providerCatalogEntry("test", index === 0 ? "first" : `model-${index}`),
+      );
       const context = createModelsListTestContext({
         pluginRegistry,
         cfg: config,
         agentDir: state.agentDir(),
         workspaceDir: state.workspaceDir,
-        catalog: [providerCatalogEntry("test", "first")],
+        catalog,
       });
       const params = { agentId: "main", view: "all" as const };
-      const expected = await buildModelsListResult({
+      const expected = await modelsListResult.buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: "main",
         params,
       });
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
       let current = true;
-      const owner = {
+      const owner: ReturnType<typeof createChatMetadataOwner> = {
         ...createChatMetadataOwner(config, "first", {}, "test", "openai-completions"),
         isCurrent: () => current,
         pluginRegistry,
+        modelCatalog: { entries: catalog, routeVariants: catalog },
       };
       harness.setOwner(owner);
       context.readPreparedModelsList = harness.runtime.readModelsList;
@@ -76,10 +81,15 @@ it("serves the published model-list projection and replaces it with its metadata
         } satisfies GatewayRequestHandlerOptions);
         return result;
       };
+      const prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
       try {
         await harness.runtime.refresh();
         expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
         const enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
+        const resolvePolicy = vi.spyOn(
+          providerPolicySurface,
+          "resolveDirectBundledProviderPolicySurface",
+        );
         const prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
         const executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
         try {
@@ -90,8 +100,11 @@ it("serves the published model-list projection and replaces it with its metadata
           expect(prepareStatement).not.toHaveBeenCalled();
           expect(executeStatement).not.toHaveBeenCalled();
           expect(unpreparedRead).not.toHaveBeenCalled();
+          // One provider lookup per read is sufficient; prepared rows retain their identities.
+          expect(resolvePolicy.mock.calls.length).toBeLessThanOrEqual(10);
         } finally {
           enterPluginScope.mockRestore();
+          resolvePolicy.mockRestore();
           prepareStatement.mockRestore();
           executeStatement.mockRestore();
         }
@@ -101,6 +114,7 @@ it("serves the published model-list projection and replaces it with its metadata
         owner.modelCatalog.refreshFailed = true;
         expect(await read()).toMatchObject({ refreshFailed: true });
         expect(await read()).not.toHaveProperty("pendingProviders");
+        expect(prepareProjection).toHaveBeenCalledOnce();
         current = false;
         await expect(read()).rejects.toThrow("Model catalog changed while preparing this result");
         const replacement = {
@@ -112,8 +126,11 @@ it("serves the published model-list projection and replaces it with its metadata
         expect(await read()).toMatchObject({
           models: expect.arrayContaining([expect.objectContaining({ id: "second" })]),
         });
+        await Promise.all(Array.from({ length: 8 }, read));
+        expect(prepareProjection).toHaveBeenCalledTimes(2);
         expect(unpreparedRead).not.toHaveBeenCalled();
       } finally {
+        prepareProjection.mockRestore();
         await harness.runtime.stop();
       }
     },

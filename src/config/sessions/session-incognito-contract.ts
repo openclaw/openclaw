@@ -8,7 +8,10 @@ import type { IncognitoSideDataOperations } from "./session-incognito-side-data-
 import type { IncognitoTranscriptOperations } from "./session-incognito-transcript-contract.js";
 import type { SessionEntry } from "./types.js";
 
-export type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
+export type {
+  IncognitoSessionAuthority,
+  IncognitoSessionFacts,
+} from "./session-incognito-facts.types.js";
 
 type IncognitoSessionVersion = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 
@@ -44,10 +47,4 @@ export type IncognitoSessionOperations = {
 } & {
   "session.entry.read": { input: IncognitoSessionRead; output: IncognitoSessionSnapshot };
   "session.entry.create": { input: IncognitoSessionCreate; output: IncognitoSessionSnapshot };
-};
-
-export type IncognitoSessionAuthority = {
-  assertCurrent(): void;
-  /** Synchronous host policy only. Never query the actor from a native grant. */
-  authorize?(stage: "transaction" | "commit", facts: IncognitoSessionFacts): void;
 };

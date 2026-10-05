@@ -9,14 +9,18 @@ import type {
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
+import type { ProgressCardWorkerOperations } from "../../session-cards/progress-card-store.worker.js";
 import type { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { SessionTitleFields } from "./session-history-read.types.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
 import type {
   SetSessionReactionParams,
   SessionReactionWrite,
 } from "./session-reaction-store.types.js";
+import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionMember } from "./session-sharing-store.kernel.js";
 import type {
   SessionCollaborationMutation,
@@ -40,6 +44,17 @@ export type IncognitoSideDataOperations = {
     Key in keyof (BoardReadOperations & BoardWriteOperations) as `session.${Key}`
   ]: (BoardReadOperations & BoardWriteOperations)[Key];
 } & {
+  "session.row.read": {
+    input: { sessionKey: string };
+    output:
+      | {
+          row: SessionRowDatabaseFacts;
+          children: SessionEntrySummary[];
+          titleFields: SessionTitleFields;
+          terminalModel?: { modelProvider: string; model: string };
+        }
+      | undefined;
+  };
   "session.acp.source": {
     input: { sessionKey: string };
     output: ReturnType<typeof readLegacyAcpMigrationContextInDatabase>;
@@ -77,6 +92,10 @@ export type IncognitoSideDataOperations = {
     input: { sessionKey: string };
     output: ReturnType<typeof readSessionProgressCard>;
   };
+  "session.progressCard.put": {
+    input: ProgressCardWorkerOperations["put"]["input"];
+    output: Extract<ProgressCardWorkerOperations["put"]["output"], { ok: true }>["value"];
+  };
 };
 
 export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations): boolean {
@@ -84,6 +103,7 @@ export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations
     type === "session.acp.entry" ||
     type === "session.category.apply" ||
     type === "session.reaction.set" ||
+    type === "session.progressCard.put" ||
     type === "session.boards.applyOps" ||
     type === "session.boards.putWidget" ||
     type === "session.boards.grant" ||

@@ -46,7 +46,10 @@ import {
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
-import { readTrustedPluginSessionFacts } from "./server-plugin-session-facts.js";
+import {
+  readTrustedPluginSessionFacts,
+  withTrustedPluginSessionReadScope,
+} from "./server-plugin-session-facts.js";
 import {
   canTrustedOfficialPluginRequestScopes,
   createGatewaySubagentRuntime,
@@ -70,6 +73,7 @@ export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-pro
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 export {
   readTrustedPluginSessionFacts,
+  withTrustedPluginSessionReadScope,
   withTrustedPluginUserProfileIdentity,
   resolveTrustedPluginGitHubAccount,
 };
@@ -270,6 +274,8 @@ function createGatewayPluginRuntimeBindings(
           openPluginPanelForRequester(params, resolveBoundGatewayContext),
         readSessionFacts: (params) =>
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        withSessionReadScope: (run) =>
+          withTrustedPluginSessionReadScope(run, resolveBoundGatewayContext),
         subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),

@@ -8,6 +8,7 @@ type ScopeCase = {
 const scoped: ScopeCase["expected"] = {
   baselineRatchets: true,
   madgeImportCycles: true,
+  kyselyGuardrails: true,
   lint: true,
   types: true,
 };
@@ -24,6 +25,7 @@ const cases: ScopeCase[] = [
   },
   ...[
     "src/shared/runtime.ts",
+    "src/shared/view.tsx",
     "packages/media-core/src/runtime.mts",
     "packages/media-core/src/runtime.cts",
     "extensions/telegram/src/runtime.ts",
@@ -95,12 +97,23 @@ const cases: ScopeCase[] = [
   { paths: ["src/config/catalog.yaml"], expected: { lint: true, types: false } },
   {
     paths: ["src/config/catalog.json"],
-    expected: { lint: true, types: true, madgeImportCycles: false },
+    expected: { lint: true, types: true, madgeImportCycles: false, kyselyGuardrails: false },
   },
-  { paths: ["src/shared/runtime.js"], expected: { madgeImportCycles: false } },
+  {
+    paths: ["src/shared/runtime.js"],
+    expected: { madgeImportCycles: false, kyselyGuardrails: false },
+  },
   {
     paths: ["ui/src/runtime.tsx"],
-    expected: { madgeImportCycles: true, checkTasks: ["guards", "dependencies"] },
+    expected: {
+      madgeImportCycles: true,
+      kyselyGuardrails: false,
+      checkTasks: ["guards", "dependencies"],
+    },
+  },
+  {
+    paths: ["ui/src/runtime.tsx", "src/config/catalog.json"],
+    expected: { madgeImportCycles: true, kyselyGuardrails: false },
   },
   { paths: ["test/openclaw-launcher.e2e.test.ts"], expected: { fastTasks: ["bun-launcher"] } },
 ];
@@ -114,6 +127,7 @@ describe("narrow PR check families", () => {
       additionalGroups: [],
       baselineRatchets: false,
       madgeImportCycles: false,
+      kyselyGuardrails: false,
       lint: true,
       types: false,
     });

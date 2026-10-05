@@ -279,8 +279,7 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
 }
 
 function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
-  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-  if (stopReason !== "error") {
+  if (record.stopReason !== "error") {
     return "";
   }
   const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
@@ -343,7 +342,7 @@ export function extractContentFromMessage(message: unknown): string {
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
   const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
   const pairingQr = extractPairingQrTerminalText(record);
-  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
+  const content = [visible, pairingQr].filter(Boolean).join("\n\n");
   if (content) {
     return content;
   }
@@ -361,10 +360,6 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
   const textParts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   const thinkingParts =
     opts?.includeThinking === true
@@ -372,8 +367,8 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
       : [];
 
   return composeThinkingAndContent({
-    thinkingText: thinkingParts.join("\n").trim(),
-    contentText: textParts.join("\n").trim(),
+    thinkingText: thinkingParts.join("\n"),
+    contentText: textParts.join("\n"),
     showThinking: opts?.includeThinking ?? false,
   });
 }

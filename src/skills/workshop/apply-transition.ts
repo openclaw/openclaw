@@ -215,7 +215,7 @@ export async function applySkillProposalTransition(
         // A rejected filesystem write may have partially changed its target
         // before throwing. Keep recovery facts unless the full bundle is
         // proven back at the authoritative pre-apply state.
-        if (await isWorkspaceSkillMutationRestored(mutation).catch(() => false)) {
+        if (await isWorkspaceSkillMutationRestored(mutation)) {
           await clearSkillProposalRollback({
             proposalId: record.id,
             expectedRecordJson: JSON.stringify(record),

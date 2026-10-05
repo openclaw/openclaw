@@ -364,12 +364,9 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
-    this.indexedContents.push(options.content ?? "");
+    this.indexedContents.push(entry.content ?? "");
   }
 
   protected override async deleteIndexedFile(

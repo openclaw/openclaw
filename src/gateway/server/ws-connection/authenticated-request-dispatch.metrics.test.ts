@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../../agents/admitted-run-context.js";
 import {
   onDiagnosticEvent,
@@ -132,6 +133,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
       fixture.client,
     );
     await fixture.finished;
+    expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     const log = output.mock.calls.flat().join("\n");
     expect(log).toContain("sessions.list");
     expect(log).toContain(`source=${query.rowMode ? "dashboard" : "unspecified"}`);
@@ -217,7 +219,11 @@ describe("authenticated Gateway RPC diagnostics", () => {
       }
       const secondDispatch = second.dispatch();
       try {
-        await secondEntered.promise;
+        await awaitGateBeforeSettlement(
+          secondEntered.promise,
+          secondDispatch,
+          "overlapping request settled before handler entry",
+        );
         setDiagnosticsEnabledForProcess(true);
         if (overlap === "crossing") {
           firstRelease.resolve();

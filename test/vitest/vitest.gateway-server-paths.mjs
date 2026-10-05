@@ -328,7 +328,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-store-terminal.test.ts",
   "src/gateway/worker-environments/placement-store.activation.test.ts",
   "src/gateway/worker-environments/placement-store.move.test.ts",
-  "src/gateway/worker-environments/placement-store.reconcile.test.ts",
   "src/gateway/worker-environments/placement-store.redispatch.test.ts",
   "src/gateway/worker-environments/placement-store.test.ts",
   "src/gateway/worker-environments/placement-store.turn-claim-closure.test.ts",

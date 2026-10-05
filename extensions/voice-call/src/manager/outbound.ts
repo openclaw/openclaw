@@ -35,6 +35,7 @@ type EndCallContext = Pick<
   | "stateRuntime"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "notifyHangupTimers"
   | "endCallOperations"
   | "mutationQueue"
 >;
