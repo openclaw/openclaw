@@ -1133,8 +1133,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           activity: "none",
           activityBackground: "rgba(0, 0, 0, 0)",
           activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
-          // Summary gap (8px) less the chevron's own -3px inset.
-          chevronGap: 5,
+          // Shared row gap (7px) less the chevron's own -3px inset.
+          chevronGap: 4,
           tool: "none",
           toolPaddingBlock: ["3px", "3px"],
         });
