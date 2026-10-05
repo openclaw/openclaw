@@ -792,7 +792,6 @@
 ["extensions/google-meet/lazy-import.test.ts","./src/create.js","4bc5d80a625e660a8c7965ec233f0c87848226edbeaf0beac4a6470414a6ae57",1]
 ["extensions/google-meet/lazy-import.test.ts","./src/node-host.js","ab988c857c5a291316454d1200b657db5c1b00ec5bea7e68aad77602250c2238",1]
 ["extensions/google-meet/lazy-import.test.ts","./src/node-invoke-policy.js","abd26d90fd9af8bedfb0516c82bcde922521e4a59492ada83f985982cb631b38",1]
-["extensions/google-meet/lazy-import.test.ts","./src/runtime.js","40efb71ddb28dfd9c7dea9805428a03dd0f61c3ac445fb5e330222f3e4a84ca5",1]
 ["extensions/google-meet/lazy-import.test.ts","openclaw/plugin-sdk/gateway-runtime","5371629b41138ade35966c3cb7c55a856a6c8d6054f847fbefb44ac64ca45609",1]
 ["extensions/google-meet/lazy-import.test.ts","openclaw/plugin-sdk/param-readers","478d3217302fe735ba4847aefef04d344a9bb552e6f0c7a98772350828ba06ac",1]
 ["extensions/google-meet/lazy-import.test.ts","openclaw/plugin-sdk/routing","ce8df22e4d69f59e53ea92bb5f402e0ee720b3aebafd2289c4af3cac1dfbc85e",1]

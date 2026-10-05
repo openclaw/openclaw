@@ -596,9 +596,7 @@ function createMeetingChromeTransportWithAudioPolicy<
     });
   }
   return {
-    async assertAudioDeviceAvailable(
-      params: Parameters<typeof prepareAudioRuntime>[0],
-    ): Promise<void> {
+    assertAudioDeviceAvailable: async (params: Parameters<typeof prepareAudioRuntime>[0]) => {
       await prepareAudioRuntime(params);
     },
     launchInChrome,
