@@ -124,6 +124,8 @@ function projectControlUiPluginTabs(
       ...(descriptor.slug ? { slug: descriptor.slug } : {}),
       group: descriptor.group,
       order: descriptor.order,
+      sessionActions: descriptor.sessionActions ? [...descriptor.sessionActions] : undefined,
+      allowChatNavigation: descriptor.allowChatNavigation,
     });
   }
   // Deterministic ordering keeps hello payloads stable across connects.

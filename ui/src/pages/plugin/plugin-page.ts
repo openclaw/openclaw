@@ -24,6 +24,7 @@ import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -31,6 +32,8 @@ import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import type { renderLogbook } from "./logbook-view.ts";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
+import type { PluginUiBridgeController } from "./plugin-ui-bridge.ts";
+import { PluginUiFrameController } from "./plugin-ui-document.ts";
 import { pluginTabKey } from "./route.ts";
 
 registerLoginEnglish();
@@ -114,6 +117,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private externalAuthRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthRefreshedAt = 0;
+  private readonly pluginUiFrame = new PluginUiFrameController(() => this.requestUpdate());
+  private readonly pluginUiBridge: PluginUiBridgeController = this.pluginUiFrame.bridge;
   private pluginThemeFrame: HTMLIFrameElement | null = null;
   private releasePluginTheme: (() => void) | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
@@ -132,7 +137,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       // until the parent refreshes its route-bound cookie on resume.
       this.externalAuthReadyKey = null;
       this.externalAuthRefreshedAt = 0;
-      this.pluginFrameGeneration = {};
+      this.retirePluginFrame();
       this.requestExternalTabAuthRestart(this.externalAuthTargetKey);
       return;
     }
@@ -153,6 +158,59 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     this.subscriptions.clear();
     this.stopBundledView();
     super.disconnectedCallback();
+  }
+
+  override updated() {
+    if (!this.isConnected) {
+      return;
+    }
+    const context = this.context;
+    const info = this.tabInfo();
+    const frame = this.querySelector<HTMLIFrameElement>(".plugin-tab-embed__frame");
+    this.syncPluginThemeFrame(frame);
+    const sessionActions = info?.sessionActions ?? [];
+    if (!context || !info) {
+      this.pluginUiFrame.detach(true);
+      return;
+    }
+    if (!frame) {
+      this.pluginUiFrame.detach(false);
+      return;
+    }
+    if (
+      !this.pluginUiFrame.bridgeNonce ||
+      (sessionActions.length === 0 && info.allowChatNavigation !== true)
+    ) {
+      this.pluginUiBridge.sync(null);
+      return;
+    }
+    const sessionKey = context.gateway.snapshot.sessionKey;
+    const sessions = context.sessions?.state.result;
+    const contextTokens =
+      sessions?.sessions.find((session) => session.key === sessionKey)?.contextTokens ??
+      sessions?.defaults.contextTokens ??
+      undefined;
+    this.pluginUiBridge.sync({
+      frame,
+      key: this.tabKey(),
+      nonce: this.pluginUiFrame.bridgeNonce,
+      pluginId: info.pluginId,
+      client: context.gateway.snapshot.client,
+      connected: context.gateway.snapshot.phase === "connected",
+      sessionKey,
+      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
+      sessionActions,
+      allowChatNavigation: info.allowChatNavigation === true,
+      navigateToChat: (targetSessionKey) => {
+        const target = sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey: targetSessionKey,
+        });
+        context.gateway.setSessionKey(targetSessionKey);
+        context.navigate("chat", { ...target.options, hash: "" });
+      },
+    });
   }
 
   private tabKey(): string {
@@ -216,13 +274,6 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       this.startBundledViewLoad(key);
     }
     this.syncExternalTabAuth(info, hasBundledDescriptor);
-  }
-
-  override updated() {
-    if (!this.isConnected) {
-      return;
-    }
-    this.syncPluginThemeFrame(this.querySelector<HTMLIFrameElement>(".plugin-tab-embed__frame"));
   }
 
   private syncPluginThemeFrame(frame: HTMLIFrameElement | null) {
@@ -497,7 +548,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       // abandon any hung refresh, and obtain a fresh grant before remounting.
       this.externalAuthReadyKey = null;
       this.externalAuthRefreshedAt = 0;
-      this.pluginFrameGeneration = {};
+      this.retirePluginFrame();
       this.clearExternalTabAuthTimers();
       this.requestExternalTabAuthRestart(targetKey);
     }, delay);
@@ -521,8 +572,14 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     this.externalAuthExpiryTimer = null;
   }
 
-  private clearExternalTabAuth() {
+  private retirePluginFrame() {
     this.pluginFrameGeneration = {};
+    // Retiring the document also revokes its bridge and aborts pending HTML loads.
+    this.pluginUiFrame.clear();
+  }
+
+  private clearExternalTabAuth() {
+    this.retirePluginFrame();
     this.clearExternalTabAuthTimers();
     if (this.externalAuthRefreshWatchdog) {
       clearTimeout(this.externalAuthRefreshWatchdog);
@@ -539,7 +596,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private resetExternalTabAuthForGatewayChange(targetKey: string, connected: boolean) {
-    this.pluginFrameGeneration = {};
+    this.retirePluginFrame();
     this.clearExternalTabAuthTimers();
     this.externalAuthReadyKey = null;
     this.externalAuthUnavailableKey = null;
@@ -657,17 +714,23 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       if (info.requiresGatewayAuth === true && this.externalAuthReadyKey !== externalAuthKey) {
         return nothing;
       }
+      const sandbox = resolveEmbedSandbox(context.config.current.embedSandboxMode);
+      const bridgeEnabled =
+        info.requiresGatewayAuth === true &&
+        ((info.sessionActions?.length ?? 0) > 0 || info.allowChatNavigation === true);
       return html`
         <section class="plugin-tab-embed" ${shellLayoutTraits({ pluginEmbed: true })}>
           ${keyed(
             this.pluginFrameGeneration,
-            html`<iframe
-              class="plugin-tab-embed__frame"
-              src=${info.path}
-              title=${info.label}
-              sandbox=${resolveEmbedSandbox(context.config.current.embedSandboxMode)}
-              @load=${this.handlePluginThemeLoad}
-            ></iframe>`,
+            this.pluginUiFrame.resolve({
+              pluginId: this.pluginId,
+              tabId: this.tabId,
+              path: info.path,
+              label: info.label,
+              sandbox,
+              bridgeEnabled,
+              onLoad: this.handlePluginThemeLoad,
+            }),
           )}
         </section>
       `;

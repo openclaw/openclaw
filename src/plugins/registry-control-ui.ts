@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { classifyGatewayProbePath } from "../gateway/gateway-http-route-contracts.js";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
 import type { ControlUiLinkReaderMetadata } from "../shared/control-ui-link-reader.js";
+import { normalizeControlUiBridgeCapabilities } from "./control-ui-bridge-capabilities.js";
 import {
   isPluginJsonValue,
   normalizeHostHookString,
@@ -108,6 +109,7 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
     const placement = normalizeOptionalHostHookString(descriptor.placement);
     const slug = descriptor.slug;
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
+    const bridgeCapabilities = normalizeControlUiBridgeCapabilities(descriptor);
     // The flat API predates required surface/label; preserve shipped JS-plugin behavior.
     const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
     if (
@@ -116,7 +118,8 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       !controlUiSurfaces.has(surface) ||
       description === "" ||
       placement === "" ||
-      requiredScopes === null
+      requiredScopes === null ||
+      bridgeCapabilities === null
     ) {
       reportRegistrationError(
         record,
@@ -248,6 +251,7 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
           path: tabPath,
           group,
           order,
+          ...bridgeCapabilities,
         },
       }),
     );
