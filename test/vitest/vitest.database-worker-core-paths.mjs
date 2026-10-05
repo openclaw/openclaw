@@ -334,6 +334,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply.timeout.test.ts",
   "src/auto-reply/reply/get-reply.workspace-failure.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.test.ts",
+  "src/auto-reply/reply/restart-recovery-claim.successor.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.lifecycle.test.ts",
   "src/auto-reply/reply/agent-runner-memory.private-transcript.test.ts",
   "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
