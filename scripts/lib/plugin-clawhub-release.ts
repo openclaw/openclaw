@@ -43,6 +43,7 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
   publication: ClawHubPublicationState;
   alreadyPublished: boolean;
   artifactName: string;
+  family: "" | "bundle-plugin";
 };
 
 type PluginReleasePlan = {
@@ -89,6 +90,12 @@ const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 const CLAWHUB_RELEASE_PLAN_CONCURRENCY = 8;
 const OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY = "openclaw/openclaw";
 const OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME = "plugin-clawhub-release.yml";
+const OPENCLAW_BUNDLE_PLUGIN_PACKAGES = new Set([
+  "@openclaw/acpx",
+  "@openclaw/cloudflare",
+  "@openclaw/diffs",
+  "@openclaw/feishu",
+]);
 const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
   ".github/actions/setup-node-env",
@@ -243,6 +250,12 @@ function formatClawHubPackageArtifactName(
     .replace(/[^A-Za-z0-9_.-]+/gu, "-")
     .replace(/^-+|-+$/gu, "");
   return `clawhub-package-${safeName}-${plugin.version}`;
+}
+
+export function resolveOpenClawClawHubPackageFamily(
+  packageName: string,
+): "" | "bundle-plugin" {
+  return OPENCLAW_BUNDLE_PLUGIN_PACKAGES.has(packageName) ? "bundle-plugin" : "";
 }
 
 export function collectClawHubPublishablePluginPackages(
@@ -624,6 +637,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
       alreadyPublished: publication.state === "published",
       publication,
       artifactName: formatClawHubPackageArtifactName(plugin),
+      family: resolveOpenClawClawHubPackageFamily(plugin.packageName),
     } satisfies PluginReleasePlanItemWithPackageState;
   });
   const planResult = await runTasksWithConcurrency({
