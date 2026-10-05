@@ -292,7 +292,7 @@ describe("inspectTelegramConversationRouteOwner", () => {
     // Two agents and no route binding: ordinary routing cannot choose an agent on its own.
     // The conversation's runtime binding already names one, so it must be read first.
     const ambiguousCfg: OpenClawConfig = {
-      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      agents: { entries: { main: {}, codex: {} } },
       bindings: [],
       channels: { telegram: { accounts: { default: {} } } },
     };
