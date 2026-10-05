@@ -29,7 +29,11 @@ export function registerChatAttachmentPayload(params: {
 }): ChatAttachment {
   releaseChatAttachmentPayload(params.attachment.id);
   payloads.set(params.attachment.id, {
-    blob: params.file,
+    // A selected File can still reference a temporary screenshot on disk after
+    // FileReader succeeds. Persist the bytes already read, not that live handle.
+    blob: params.file.type.startsWith("image/")
+      ? (blobFromDataUrl(params.dataUrl) ?? undefined)
+      : params.file,
     dataUrl: params.dataUrl,
   });
   return params.attachment;

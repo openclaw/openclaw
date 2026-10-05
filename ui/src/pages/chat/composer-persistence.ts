@@ -64,6 +64,8 @@ import {
 } from "./durable-composer-persistence.ts";
 
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
+export const CHAT_COMPOSER_DRAFT_SIZE_ERROR =
+  "These attachments exceed the draft storage limit. They remain available in this tab; remove attachments before reloading to save this draft.";
 export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
   "Could not store the previous draft in browser storage. It remains available in this tab.";
 
@@ -516,13 +518,17 @@ export class ChatComposerPersistence {
   private durableRetiredScopeKey = "";
   private forceDurableOwnerRestore = false;
   private readonly durablePersistence = new DurableChatComposerPersistence(
-    () => {
+    (reason) => {
       const state = this.getState();
       if (!state) {
         return;
       }
-      state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-      state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+      const message =
+        reason === "payload-too-large"
+          ? CHAT_COMPOSER_DRAFT_SIZE_ERROR
+          : CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+      state.lastError = message;
+      state.chatError = message;
       state.requestUpdate?.();
     },
     () => this.getState()?.requestUpdate?.(),

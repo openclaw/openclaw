@@ -93,7 +93,7 @@ export class NewSessionDraftPersistence {
       resetVisibility?: boolean,
       mentions?: readonly HumanMention[],
     ) => void,
-    private readonly onStorageError: () => void,
+    private readonly onStorageError: (reason?: "payload-too-large") => void,
   ) {}
 
   setOwner(gatewayUrl: string, recoveryScope: string, preserveCurrent = false) {
@@ -454,7 +454,7 @@ export class NewSessionDraftPersistence {
             result.writeId ?? snapshot.writeId,
           );
           if (result.status === "payload-too-large") {
-            reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
+            reportDurableComposerStorageError(snapshot.scope, this.onStorageError, result.status);
           }
           return;
         }

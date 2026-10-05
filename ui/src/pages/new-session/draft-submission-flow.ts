@@ -11,7 +11,10 @@ import {
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
+import {
+  CHAT_COMPOSER_DRAFT_SIZE_ERROR,
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+} from "../chat/composer-persistence.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { promptNewSessionNotifications } from "./background-session-notice.ts";
@@ -118,7 +121,12 @@ export class DraftSubmissionFlow {
           visibility: resetVisibility ? "normal" : this.visibilityValue,
         });
       },
-      () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
+      (reason) =>
+        this.setError(
+          reason === "payload-too-large"
+            ? CHAT_COMPOSER_DRAFT_SIZE_ERROR
+            : CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+        ),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(callbacks.requestUpdate, () => {
       this.rejectedPromptError = null;
