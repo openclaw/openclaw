@@ -3,7 +3,10 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -269,6 +272,22 @@ function isEmptyBootstrapIdentityTableMiss(
   );
 }
 
+function readStoredIdentityFromReadOnlyDatabase(
+  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  identityKey: string,
+): StoredDeviceIdentity | null {
+  try {
+    return readStoredIdentityFromDatabase(database, identityKey);
+  } catch (error) {
+    // A creator publishes the SQLite file before its schema transaction commits.
+    // Only that empty bootstrap snapshot is a read miss; partial schemas still fail closed.
+    if (isEmptyBootstrapIdentityTableMiss(database, error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 /** Resolve the concrete database and row identity used by process caches and diagnostics. */
 export function resolveDeviceIdentityStore(options: DeviceIdentityStoreOptions = {}): {
   databasePath: string;
@@ -324,20 +343,22 @@ export function readStoredDeviceIdentityReadOnly(
   const resolved = resolveDeviceIdentityStore(options);
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      (database) => {
-        try {
-          return readStoredIdentityFromDatabase(database, resolved.identityKey);
-        } catch (error) {
-          // A creator publishes the SQLite file before its schema transaction commits.
-          // Only that empty bootstrap snapshot is a read miss; partial schemas still fail closed.
-          if (isEmptyBootstrapIdentityTableMiss(database, error)) {
-            return null;
-          }
-          throw error;
-        }
-      },
+      (database) => readStoredIdentityFromReadOnlyDatabase(database, resolved.identityKey),
       { env: options.env, path: resolved.databasePath },
     ) ?? null
+  );
+}
+
+/** Same read as {@link readStoredDeviceIdentityReadOnly}, preparing its snapshot off the caller's thread. */
+export async function readStoredDeviceIdentityReadOnlyAsync(
+  options: DeviceIdentityStoreOptions = {},
+): Promise<StoredDeviceIdentity | null> {
+  const resolved = resolveDeviceIdentityStore(options);
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      (database) => readStoredIdentityFromReadOnlyDatabase(database, resolved.identityKey),
+      { env: options.env, path: resolved.databasePath },
+    )) ?? null
   );
 }
 

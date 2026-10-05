@@ -17,6 +17,7 @@ import {
 import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
+  loadDeviceIdentityIfPresentReadOnlyAsync,
   loadOrCreateDeviceIdentity,
   loadOrCreateProcessDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
@@ -265,6 +266,31 @@ describe("device identity SQLite store", () => {
     });
   });
 
+  it("applies the read-only admission checks when loading asynchronously", async () => {
+    await withTempDir("openclaw-device-identity-async-readonly-", async (rootDir) => {
+      const options = storeOptions(rootDir);
+      await expect(loadDeviceIdentityIfPresentReadOnlyAsync(options)).resolves.toBeNull();
+      expect(fs.existsSync(path.dirname(options.path!))).toBe(false);
+
+      const created = loadOrCreateDeviceIdentity(options);
+      closeOpenClawStateDatabaseForTest();
+      const databaseDirectory = path.dirname(options.path!);
+      const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
+      await expect(loadDeviceIdentityIfPresentReadOnlyAsync(options)).resolves.toEqual(created);
+      expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
+
+      const sqlite = await import("node:sqlite");
+      const database = new sqlite.DatabaseSync(options.path!);
+      database
+        .prepare("UPDATE device_identities SET device_id = ? WHERE identity_key = ?")
+        .run("corrupt-device-id", "primary");
+      database.close();
+      await expect(loadDeviceIdentityIfPresentReadOnlyAsync(options)).rejects.toThrow(
+        /invalid persisted device identity/,
+      );
+    });
+  });
+
   it("creates and reuses the primary identity in SQLite", async () => {
     await withTempDir("openclaw-device-identity-create-", async (rootDir) => {
       const options = storeOptions(rootDir);
@@ -484,6 +510,9 @@ describe("device identity SQLite store", () => {
         fs.writeFileSync(legacyPath, "{}\n");
 
         expect(() => loadDeviceIdentityIfPresent(options)).toThrow(/doctor --fix/);
+        await expect(loadDeviceIdentityIfPresentReadOnlyAsync(options)).rejects.toThrow(
+          /doctor --fix/,
+        );
         expect(() => loadOrCreateDeviceIdentity(options)).toThrow(/doctor --fix/);
         expect(fs.existsSync(options.path!)).toBe(false);
       });

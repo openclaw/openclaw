@@ -270,8 +270,9 @@ export async function readAdmittedConfigSnapshot(params: {
       });
       if (candidate.valid) {
         await params.validateConfig?.(candidate);
-        const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-        loadDeviceIdentityIfPresent({ env: params.env });
+        const { loadDeviceIdentityIfPresentReadOnlyAsync } =
+          await import("../infra/device-identity.js");
+        await loadDeviceIdentityIfPresentReadOnlyAsync({ env: params.env });
       }
       // Discovery policy and the index must see one admitted generation. Release
       // its read scope before recovery, guards, or acquiring a writer lease.
@@ -306,8 +307,9 @@ export async function readAdmittedConfigSnapshot(params: {
         throwStartupMigrationGuardRejected();
       }
       if (read.snapshot.valid) {
-        const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-        loadDeviceIdentityIfPresent({ env: params.env });
+        const { loadDeviceIdentityIfPresentReadOnlyAsync } =
+          await import("../infra/device-identity.js");
+        await loadDeviceIdentityIfPresentReadOnlyAsync({ env: params.env });
       }
       return { ...read, ...(recovery ? { recovery } : {}) };
     } catch (error) {

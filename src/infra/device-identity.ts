@@ -10,6 +10,7 @@ import {
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
   readStoredDeviceIdentityReadOnly,
+  readStoredDeviceIdentityReadOnlyAsync,
   resolveDeviceIdentityStore,
   type DeviceIdentity,
   type DeviceIdentityStoreOptions,
@@ -79,6 +80,18 @@ export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity | null {
   const stored = readStoredDeviceIdentityReadOnly(options);
+  if (stored) {
+    return toDeviceIdentity(stored);
+  }
+  assertNoPendingLegacyIdentity(options);
+  return null;
+}
+
+/** Same checks as {@link loadDeviceIdentityIfPresent} without blocking on its snapshot child. */
+export async function loadDeviceIdentityIfPresentReadOnlyAsync(
+  options: DeviceIdentityStoreOptions = {},
+): Promise<DeviceIdentity | null> {
+  const stored = await readStoredDeviceIdentityReadOnlyAsync(options);
   if (stored) {
     return toDeviceIdentity(stored);
   }
