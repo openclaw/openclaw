@@ -389,6 +389,39 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertSource();
     identity = current;
   };
+  const preparePrivateSource = async (
+    input: { temporaryRoot: string; signal: AbortSignal },
+    format: "pack" | "workspace",
+  ) => {
+    assertAdmission();
+    await revalidate(input.signal);
+    const readIdentity = identity;
+    const assertFetchCurrent = () => {
+      input.signal.throwIfAborted();
+      assertAdmission();
+      readIdentity.assertSelected();
+    };
+    const token = readIdentity.token;
+    if (!token) {
+      throw new GitHubIdentityError("unavailable");
+    }
+    const { prepareRepositoryWorkerGitPack, prepareRepositoryWorkerReadWorkspace } =
+      await import("./repository-git-pack.js");
+    assertFetchCurrent();
+    const prepare =
+      format === "pack" ? prepareRepositoryWorkerGitPack : prepareRepositoryWorkerReadWorkspace;
+    const result = await prepare({
+      ...input,
+      url,
+      baseCommit,
+      token,
+      assertCurrent: assertFetchCurrent,
+    });
+    assertFetchCurrent();
+    await revalidate(input.signal);
+    assertAdmission();
+    return result;
+  };
   return {
     project,
     setupRecipe,
@@ -396,33 +429,10 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     revalidate,
     ...(metadata.private
       ? {
-          prepareGitPack: async (input: { temporaryRoot: string; signal: AbortSignal }) => {
-            assertAdmission();
-            await revalidate(input.signal);
-            const readIdentity = identity;
-            const assertFetchCurrent = () => {
-              input.signal.throwIfAborted();
-              assertAdmission();
-              readIdentity.assertSelected();
-            };
-            const token = readIdentity.token;
-            if (!token) {
-              throw new GitHubIdentityError("unavailable");
-            }
-            const { prepareRepositoryWorkerGitPack } = await import("./repository-git-pack.js");
-            assertFetchCurrent();
-            const pack = await prepareRepositoryWorkerGitPack({
-              ...input,
-              url,
-              baseCommit,
-              token,
-              assertCurrent: assertFetchCurrent,
-            });
-            assertFetchCurrent();
-            await revalidate(input.signal);
-            assertAdmission();
-            return pack;
-          },
+          prepareGitPack: (input: { temporaryRoot: string; signal: AbortSignal }) =>
+            preparePrivateSource(input, "pack"),
+          prepareWorkspace: (input: { temporaryRoot: string; signal: AbortSignal }) =>
+            preparePrivateSource(input, "workspace"),
         }
       : {}),
   };

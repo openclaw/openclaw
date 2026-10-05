@@ -3,6 +3,7 @@ import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
   prepareGitHubPublicationOptionsIdentity,
+  prepareGitHubReadIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
 import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
@@ -55,6 +56,20 @@ export function assertExpectedSharedGitHubPublisher(
 
 export function currentGitHubPublicationConfig() {
   return publicationConfigSnapshot().config;
+}
+
+/** Source reads select the live Gateway identity, independent of captured workspace config. */
+export async function prepareCurrentGitHubReadIdentity(agentId: string, assertActive: () => void) {
+  const snapshot = publicationConfigSnapshot();
+  return await prepareGitHubReadIdentity({
+    config: snapshot.config,
+    sourceConfig: snapshot.sourceConfig,
+    getCurrentConfig: currentGitHubPublicationConfig,
+    agentId,
+    assertActive,
+    refresh: () => requestCurrentGitHubOAuthRefresh(agentId),
+    allowAnonymous: true,
+  });
 }
 
 export async function prepareCurrentGitHubPublicationIdentity(

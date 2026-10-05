@@ -8,7 +8,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { createWorkerProjectPreparation } from "./project-preparation.js";
-import { prepareRepositoryWorkerGitPack } from "./repository-git-pack.js";
+import {
+  prepareRepositoryWorkerGitPack,
+  prepareRepositoryWorkerReadWorkspace,
+} from "./repository-git-pack.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
 
@@ -309,6 +312,29 @@ describe("private repository preparation", () => {
     expect(
       await fs.stat(path.join(f.scratch, "repository.git", "input.txt")).catch(() => undefined),
     ).toBeUndefined();
+  });
+
+  it("materializes a credential-free pinned recovery source without executing setup", async () => {
+    const f = await fixture();
+    const workspace = await prepareRepositoryWorkerReadWorkspace({
+      url: URL,
+      baseCommit: f.baseCommit,
+      token: TOKEN,
+      temporaryRoot: f.scratch,
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    expect(await requireGit(workspace, ["rev-parse", "HEAD"])).toBe(f.baseCommit);
+    expect(await fs.readFile(path.join(workspace, "input.txt"), "utf8")).toBe(
+      "pinned private content\n",
+    );
+    expect(
+      await fs.stat(path.join(workspace, "build/result")).catch(() => undefined),
+    ).toBeUndefined();
+    expect(f.requests.length).toBeGreaterThan(0);
+    expect(f.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
+    await assertNoCredentialFiles(f.scratch);
+    expect((await runGit(workspace, ["cat-file", "-e", f.later])).code).not.toBe(0);
   });
 
   it("discards failed authenticated Git diagnostics including encoded credentials", async () => {

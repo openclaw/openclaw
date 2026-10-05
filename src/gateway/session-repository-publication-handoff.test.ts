@@ -46,9 +46,26 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: mocked.run,
   runCommandWithTimeout: mocked.timed,
 }));
-vi.mock("./worker-environments/worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
-}));
+vi.mock("../agents/github-tool-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/github-tool-identity.js")>();
+  const { createGitHubReadIdentity } = await import("../agents/github-read-identity.js");
+  return {
+    ...actual,
+    prepareGitHubReadIdentity: async (params: {
+      allowAnonymous?: boolean;
+      assertActive: () => void;
+    }) => {
+      expect(params.allowAnonymous).toBe(true);
+      params.assertActive();
+      return createGitHubReadIdentity({
+        token: undefined,
+        selection: { source: "anonymous" },
+        assertSelected: params.assertActive,
+        readToken: async () => undefined,
+      });
+    },
+  };
+});
 afterEach(() => vi.restoreAllMocks());
 it.each([
   "shared",

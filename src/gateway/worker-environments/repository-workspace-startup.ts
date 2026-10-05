@@ -1,5 +1,10 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import {
   stageSessionRepositoryCheckpoint,
   withSessionRepositoryCheckpoint,
@@ -9,7 +14,6 @@ import type {
   WorkerTunnelHandle,
   WorkerWorkspaceSyncRequest,
 } from "./tunnel-contract.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 
 /** Prepare source on the worker and durably accept its initial state before activation. */
 export async function syncSessionRepositoryWorkspace(params: {
@@ -24,6 +28,7 @@ export async function syncSessionRepositoryWorkspace(params: {
   recovery?: true;
   preparedRepository?: PreparedRepositoryWorkspace;
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }) {
   const store = getSessionRepositoryWorkspaceStore();
   let repository = params.repository;
@@ -54,18 +59,6 @@ export async function syncSessionRepositoryWorkspace(params: {
     );
   }
   params.assertCurrent();
-  const github = prepared
-    ? undefined
-    : await prepareWorkerGitHubBinding({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        assertCurrent: () => {
-          params.assertCurrent();
-          return true;
-        },
-      });
-  params.assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
     kind: "repository",
     url: repository.url,
@@ -78,18 +71,58 @@ export async function syncSessionRepositoryWorkspace(params: {
       !repository.checkpointRef &&
       repository.runSetupScript &&
       params.runSetupScript === true,
-    ...(github ? { gitToken: github.token } : {}),
   };
-  const sync = async (checkpoint?: typeof source.checkpoint) => {
-    params.assertCurrent();
+  const syncSource = async (selected: typeof source, authorize = params.assertCurrent) => {
+    authorize();
     return await params.tunnel.syncWorkspace({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       generation: params.generation,
       gitAuthor: params.gitAuthor,
-      source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
-      authorize: params.assertCurrent,
+      source: selected,
+      authorize,
     });
+  };
+  const sync = async (checkpoint?: typeof source.checkpoint) => {
+    const selected = { ...source, ...(checkpoint ? { checkpoint } : {}) };
+    if (prepared) {
+      return await syncSource(selected);
+    }
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      namespace: "session-repository",
+      getConfig: getRuntimeConfig,
+      repository: {
+        agentId: params.agentId,
+        url: repository.url,
+        ref: repository.requestedRef ?? undefined,
+        baseCommit: repository.baseCommit ?? undefined,
+      },
+      assertCurrent: params.assertCurrent,
+      signal: params.signal,
+    });
+    const assertSourceCurrent = () => {
+      params.assertCurrent();
+      admitted.assertCurrent();
+    };
+    assertSourceCurrent();
+    selected.baseCommit = admitted.project.baseCommit;
+    if (!admitted.prepareWorkspace) {
+      return await syncSource(selected, assertSourceCurrent);
+    }
+    // Recovery transfers a credential-free snapshot. The selected GitHub bearer
+    // remains with the Gateway even when the repository needs authentication.
+    const temporaryRoot = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "repository-source-"),
+    );
+    try {
+      const localSourcePath = await admitted.prepareWorkspace({
+        temporaryRoot,
+        signal: params.signal ?? new AbortController().signal,
+      });
+      return await syncSource({ ...selected, localSourcePath }, assertSourceCurrent);
+    } finally {
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    }
   };
   const synced = repository.checkpointRef
     ? await withSessionRepositoryCheckpoint(

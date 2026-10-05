@@ -27,16 +27,12 @@ type RepositoryIdentity = {
   commit?: string;
   ref?: string;
   branch?: string;
-  gitToken?: string;
 };
 
-const AUTHENTICATED_GIT_JS = String.raw`const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
-const { origin, token } = JSON.parse(fs.readFileSync(0, "utf8"));
+const CREDENTIAL_FREE_GIT_JS = String.raw`const { spawnSync } = require("node:child_process");
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
-if (token) Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http." + origin + ".extraheader", GIT_CONFIG_VALUE_0: "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64") });
 const args = process.argv.slice(1);
 // Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
 if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
@@ -46,7 +42,7 @@ process.exitCode = result.status ?? 1;`;
 
 const BIND_PREPARED_REPOSITORY_JS = String.raw`const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { origin, commit, branch, workspaceDir, author } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { origin, commit, branch, workspaceDir, author, transferred } = JSON.parse(fs.readFileSync(0, "utf8"));
 if (fs.realpathSync(process.cwd()) !== fs.realpathSync(workspaceDir)) throw Error("Prepared repository workspace changed");
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
@@ -60,8 +56,13 @@ const git = (args, allowDetached = false) => {
   if (result.error || result.status !== 0) throw Error("Prepared repository Git verification failed");
   return result.stdout.trim();
 };
-if (git(["rev-parse", "--verify", "HEAD^{commit}"]) !== commit ||
-    git(["remote", "get-url", "origin"]) !== origin) throw Error("Prepared repository differs from its admitted source");
+if (git(["rev-parse", "--verify", "HEAD^{commit}"]) !== commit) throw Error("Prepared repository differs from its admitted source");
+if (transferred) {
+  // The snapshot transfer imports objects and files only, with no origin or credential config.
+  if (git(["remote"]) !== "" || git(["symbolic-ref", "--quiet", "--short", "HEAD"]) !== "openclaw-worker") throw Error("Transferred repository identity changed");
+  git(["remote", "add", "origin", origin]);
+  git(["branch", "-m", branch]);
+} else if (git(["remote", "get-url", "origin"]) !== origin) throw Error("Prepared repository differs from its admitted source");
 git(["check-ref-format", "--branch", branch]);
 const current = git(["symbolic-ref", "--quiet", "--short", "HEAD"], true);
 if (current !== branch) {
@@ -120,14 +121,9 @@ export function createNodeWorkerRepositoryPreparation(
     return result;
   };
   let seedStoreFailureLogged = false;
-  const git = (
-    identity: RepositoryIdentity | undefined,
-    args: string[],
-    resetWorkspace?: boolean,
-  ) =>
+  const git = (args: string[], resetWorkspace?: boolean) =>
     exec({
-      argv: ["node", "-e", AUTHENTICATED_GIT_JS, "--", ...WORKER_REPOSITORY_GIT_ARGS, ...args],
-      input: JSON.stringify({ origin: identity?.origin, token: identity?.gitToken }),
+      argv: ["node", "-e", CREDENTIAL_FREE_GIT_JS, "--", ...WORKER_REPOSITORY_GIT_ARGS, ...args],
       ...(resetWorkspace ? { resetWorkspace: true } : {}),
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "never",
@@ -152,7 +148,7 @@ export function createNodeWorkerRepositoryPreparation(
     seeded: boolean,
   ): Promise<NodeWorkerRepositoryOutcome> => {
     // Restore asks for the immutable SHA even when a force push removed its branch ref.
-    const fetched = await git(identity, [
+    const fetched = await git([
       "fetch",
       "--no-tags",
       "--",
@@ -162,7 +158,7 @@ export function createNodeWorkerRepositoryPreparation(
     if (!succeeded(fetched)) {
       return gitFailure("checkout-failed", "git fetch", fetched);
     }
-    const resolved = await git(identity, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
+    const resolved = await git(["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
     const revision = resolved.stdout.trim();
     if (!succeeded(resolved)) {
       return gitFailure("checkout-failed", "git rev-parse", resolved);
@@ -173,7 +169,7 @@ export function createNodeWorkerRepositoryPreparation(
     if (identity.commit !== undefined && revision !== identity.commit) {
       return gitFailure("checkout-failed", "git rev-parse", resolved, "requested commit mismatch");
     }
-    const checkedOut = await git(identity, ["checkout", "--detach", "--force", revision]);
+    const checkedOut = await git(["checkout", "--detach", "--force", revision]);
     if (!succeeded(checkedOut)) {
       return gitFailure("checkout-failed", "git checkout --detach", checkedOut);
     }
@@ -209,6 +205,7 @@ export function createNodeWorkerRepositoryPreparation(
       identity: RepositoryIdentity & { commit: string; branch: string },
       prepared: PreparedRepositoryWorkspace,
       author?: { name?: string; email?: string },
+      transferred?: true,
     ): Promise<WorkerWorkspaceSyncResult & { mode: "repository" }> => {
       if (identity.commit !== prepared.baseCommit) {
         throw new Error("Prepared repository does not match the pinned session commit");
@@ -223,6 +220,7 @@ export function createNodeWorkerRepositoryPreparation(
           branch: identity.branch,
           workspaceDir: prepared.workspaceDir,
           author,
+          transferred,
         }),
         timeoutMs: GIT_TIMEOUT_MS,
         transportRetry: "never",
@@ -243,7 +241,7 @@ export function createNodeWorkerRepositoryPreparation(
         if (!value) {
           continue;
         }
-        const configured = await git(undefined, [
+        const configured = await git([
           "-C",
           workspaceDir,
           "config",
@@ -285,7 +283,7 @@ export function createNodeWorkerRepositoryPreparation(
             transportRetry: "never",
           });
           if (succeeded(applied) && applied.stdout.trim() === "applied") {
-            const remote = await git(identity, ["remote", "get-url", "origin"]);
+            const remote = await git(["remote", "get-url", "origin"]);
             if (!succeeded(remote) || remote.stdout.trim() !== identity.origin) {
               throw new Error("Node workspace seed origin mismatch");
             }
@@ -311,7 +309,6 @@ export function createNodeWorkerRepositoryPreparation(
       }
       if (outcome?.kind !== "prepared") {
         const cloned = await git(
-          identity,
           [
             "-c",
             "init.templateDir=",
@@ -359,12 +356,7 @@ export function createNodeWorkerRepositoryPreparation(
         }
       }
       if (outcome.kind === "prepared" && identity.branch) {
-        const bound = await git(identity, [
-          "checkout",
-          "-B",
-          identity.branch,
-          outcome.result.baseCommit,
-        ]);
+        const bound = await git(["checkout", "-B", identity.branch, outcome.result.baseCommit]);
         if (!succeeded(bound)) {
           return gitFailure("checkout-failed", "git checkout -B", bound);
         }

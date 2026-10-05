@@ -388,7 +388,6 @@ export function createNodeWorkerWorkspaceActions(params: {
       ref: source.ref,
       commit: source.baseCommit,
       branch: source.branch,
-      gitToken: source.gitToken,
     };
     let baseline: WorkerWorkspaceSyncResult & { baseCommit: string };
     if (source.prepared) {
@@ -400,6 +399,39 @@ export function createNodeWorkerWorkspaceActions(params: {
         source.prepared,
         request.gitAuthor,
       );
+    } else if (source.localSourcePath) {
+      const prepared = await params.workspaceTransfer.prepareSync({
+        ...transferOwner,
+        localPath: source.localSourcePath,
+        authorize: request.authorize,
+      });
+      try {
+        if (!source.baseCommit || prepared.snapshot.manifest.baseCommit !== source.baseCommit) {
+          throw new Error("Repository transfer differs from its pinned commit");
+        }
+        const transferred = await transfer(
+          {
+            direction: "download",
+            token: prepared.token,
+            manifestRef: prepared.snapshot.manifestRef,
+          },
+          "Private repository snapshot transfer failed",
+          { assertCurrent: request.authorize },
+        );
+        baseline = await repository.bindPreparedRepository(
+          { ...identity, commit: source.baseCommit },
+          {
+            baseCommit: source.baseCommit,
+            workspaceDir: transferred.workspaceDir,
+            sourceManifestRef: prepared.snapshot.manifestRef,
+            preparedManifestRef: prepared.snapshot.manifestRef,
+          },
+          request.gitAuthor,
+          true,
+        );
+      } finally {
+        await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
+      }
     } else {
       const prepared = await repository.prepareRepository(identity);
       if (prepared.kind === "failed") {
@@ -413,7 +445,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       baseline.mode === "repository" ? baseline.baseManifestRef : baseline.manifestRef;
     const baseCommit = baseline.baseCommit;
     const remoteWorkspaceDir = baseline.remoteWorkspaceDir;
-    if (request.gitAuthor && !source.prepared) {
+    if (request.gitAuthor && !source.prepared && !source.localSourcePath) {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
     await params.workspaceTransfer.prepareRepository({

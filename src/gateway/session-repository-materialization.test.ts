@@ -176,12 +176,26 @@ describe("explicit repository move to Gateway", () => {
     "publication unavailable",
     "requested topic",
   ] as const)("retains only committed materialization: %s", async (outcome) => {
-    await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
+    const options = {
+      label: "repository-materialize",
+      env: {
+        GH_TOKEN: "synthetic-materialization-token",
+        GITHUB_TOKEN: undefined,
+        GH_CONFIG_DIR: undefined,
+        XDG_CONFIG_HOME: undefined,
+      },
+    };
+    await withOpenClawTestState(options, async (state) => {
       const cfg = {
         agents: { entries: { main: { workspace: state.workspaceDir } } },
-        tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
       };
       await state.writeConfig(cfg);
+      // Keep materialization on a fixture identity, independent of the host CLI's login state.
+      const verify = vi.spyOn(githubOAuth, "verifyGitHubCredential").mockResolvedValue({
+        status: "available",
+        account: { accountId: 42, login: "materialization-bot", avatarUrl: null },
+        scopes: [],
+      });
       const source = state.path("source");
       await fsp.mkdir(source);
       await git(source, ["init", "-b", "main"]);
@@ -334,6 +348,7 @@ describe("explicit repository move to Gateway", () => {
         });
         expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)?.id).toBe(worktree.id);
       }
+      expect(verify).toHaveBeenCalledWith("synthetic-materialization-token");
       // Retained publication may still need the original immutable source after the move.
       expect(await repositories.get(repository.workspaceId)).toEqual(repository);
       expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);

@@ -446,6 +446,7 @@ export function createWorkerPlacementDispatchStartup(options: {
               runSetupScript: request.runSetupScript,
               recovery: params.recovery,
               assertCurrent: assertSyncOwner,
+              signal: params.signal,
             })
           : await tunnel.syncWorkspace({
               source: {

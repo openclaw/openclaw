@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   matchesAgentLifecycleBinding: vi.fn(),
   prepareGitHubReadIdentity: vi.fn(),
   prepareGitPack: vi.fn(),
+  prepareWorkspace: vi.fn(),
 }));
 vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
   captureAgentLifecycleBinding: mocks.captureAgentLifecycleBinding,
@@ -24,6 +25,7 @@ vi.mock("../github-oauth-lifecycle.js", () => ({
 }));
 vi.mock("./repository-git-pack.js", () => ({
   prepareRepositoryWorkerGitPack: mocks.prepareGitPack,
+  prepareRepositoryWorkerReadWorkspace: mocks.prepareWorkspace,
 }));
 
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
@@ -73,6 +75,7 @@ describe("repository project admission", () => {
     unavailable = false;
     mocks.captureAgentLifecycleBinding.mockReset().mockReturnValue(agent);
     mocks.prepareGitPack.mockReset().mockResolvedValue("/synthetic/source.pack");
+    mocks.prepareWorkspace.mockReset().mockResolvedValue("/synthetic/workspace");
     mocks.matchesAgentLifecycleBinding.mockReset().mockReturnValue(true);
     mocks.prepareGitHubReadIdentity.mockReset().mockImplementation(async ({ assertActive }) => {
       assertActive();
@@ -486,72 +489,79 @@ describe("repository project admission", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("admits private source with a separate key and retains credentials only in the pack producer", async () => {
-    const publicSource = await prepareRepositoryWorkerProjectSource(initial);
-    expect(publicSource.project.key).toBe(
-      "5f3a252d4721416c63de96e5736650e1b83d356e31df48b7442ec4d60ea17189",
-    );
-    expect(publicSource.prepareGitPack).toBeUndefined();
-    privateRepository = true;
-    const admitted = await prepareRepositoryWorkerProjectSource(initial);
-    expect(admitted).toBeDefined();
-    expect(admitted.project.key).not.toBe(publicSource.project.key);
-    expect(admitted.project.source).toEqual(publicSource.project.source);
-    expect(JSON.stringify(admitted)).not.toContain(token);
-    const storedProject = JSON.stringify(admitted.project);
-    const reopened = await prepareRepositoryWorkerProjectSource({
-      ...admission,
-      expected: JSON.parse(storedProject),
-    });
-    expect(reopened.project).toEqual(admitted.project);
-    token = "rotated-synthetic-token";
-    const signal = new AbortController().signal;
-    await expect(reopened.prepareGitPack!({ temporaryRoot: "/synthetic", signal })).resolves.toBe(
-      "/synthetic/source.pack",
-    );
-    expect(mocks.prepareGitPack).toHaveBeenCalledExactlyOnceWith({
-      url: repositoryUrl,
-      baseCommit: commit,
-      token,
-      temporaryRoot: "/synthetic",
-      signal,
-      assertCurrent: expect.any(Function),
-    });
-  });
-
-  it.each(["caller", "account", "visibility", "during fetch"] as const)(
-    "rejects private pack preparation after %s authority changes",
-    async (change) => {
+  it.each(["prepareGitPack", "prepareWorkspace"] as const)(
+    "admits private source with Gateway-only credentials in %s",
+    async (producer) => {
+      const publicSource = await prepareRepositoryWorkerProjectSource(initial);
+      expect(publicSource.project.key).toBe(
+        "5f3a252d4721416c63de96e5736650e1b83d356e31df48b7442ec4d60ea17189",
+      );
+      expect(publicSource[producer]).toBeUndefined();
       privateRepository = true;
-      const caller = new AbortController();
-      const admitted = await prepareRepositoryWorkerProjectSource({
-        ...initial,
-        signal: caller.signal,
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      expect(admitted).toBeDefined();
+      expect(admitted.project.key).not.toBe(publicSource.project.key);
+      expect(admitted.project.source).toEqual(publicSource.project.source);
+      expect(JSON.stringify(admitted)).not.toContain(token);
+      const storedProject = JSON.stringify(admitted.project);
+      const reopened = await prepareRepositoryWorkerProjectSource({
+        ...admission,
+        expected: JSON.parse(storedProject),
       });
-      if (change === "caller") {
-        caller.abort();
-      }
-      if (change === "account") {
-        selected = false;
-      }
-      if (change === "visibility") {
-        privateRepository = false;
-      }
-      if (change === "during fetch") {
-        mocks.prepareGitPack.mockImplementationOnce(async () => {
-          selected = false;
-          return "/synthetic/source.pack";
-        });
-      }
-      await expect(
-        admitted.prepareGitPack!({
-          temporaryRoot: "/synthetic",
-          signal: new AbortController().signal,
-        }),
-      ).rejects.toThrow();
-      expect(mocks.prepareGitPack).toHaveBeenCalledTimes(change === "during fetch" ? 1 : 0);
+      expect(reopened.project).toEqual(admitted.project);
+      token = "rotated-synthetic-token";
+      const signal = new AbortController().signal;
+      await expect(reopened[producer]!({ temporaryRoot: "/synthetic", signal })).resolves.toBe(
+        producer === "prepareGitPack" ? "/synthetic/source.pack" : "/synthetic/workspace",
+      );
+      expect(mocks[producer]).toHaveBeenCalledExactlyOnceWith({
+        url: repositoryUrl,
+        baseCommit: commit,
+        token,
+        temporaryRoot: "/synthetic",
+        signal,
+        assertCurrent: expect.any(Function),
+      });
     },
   );
+
+  it.each(
+    (["prepareGitPack", "prepareWorkspace"] as const).flatMap((producer) =>
+      (["caller", "account", "visibility", "during fetch"] as const).map((change) => ({
+        producer,
+        change,
+      })),
+    ),
+  )("rejects private $producer after $change authority changes", async ({ producer, change }) => {
+    privateRepository = true;
+    const caller = new AbortController();
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      signal: caller.signal,
+    });
+    if (change === "caller") {
+      caller.abort();
+    }
+    if (change === "account") {
+      selected = false;
+    }
+    if (change === "visibility") {
+      privateRepository = false;
+    }
+    if (change === "during fetch") {
+      mocks[producer].mockImplementationOnce(async () => {
+        selected = false;
+        return "/synthetic/source.pack";
+      });
+    }
+    await expect(
+      admitted[producer]!({
+        temporaryRoot: "/synthetic",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+    expect(mocks[producer]).toHaveBeenCalledTimes(change === "during fetch" ? 1 : 0);
+  });
 
   it("rejects visibility changes while the initial commit and recipe are being admitted", async () => {
     const implementation = fetchImpl.getMockImplementation()!;

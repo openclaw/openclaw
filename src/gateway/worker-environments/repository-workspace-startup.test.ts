@@ -14,6 +14,7 @@ import {
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
   stageSessionRepositoryCheckpoint,
@@ -24,12 +25,13 @@ import type {
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
-vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
+vi.mock("./repository-project-admission.js", () => ({
+  prepareRepositoryWorkerProjectSource: vi.fn(),
+}));
 
 const session = {
   sessionId: "repository-session",
@@ -38,7 +40,6 @@ const session = {
   generation: 3,
 };
 const gitAuthor = { name: "Repository Test", email: "repository@example.invalid" };
-const token = "synthetic-repository-startup-token";
 let state: OpenClawTestState | undefined;
 let databasePath: string | undefined;
 let nodeDatabasePath: string | undefined;
@@ -117,12 +118,25 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     runSetupScript,
     assertCurrent,
   });
-  vi.mocked(prepareWorkerGitHubBinding).mockReset().mockResolvedValue({
-    token,
-    login: "repository-bot",
-    remoteUrl: repository.url,
-    branch: repository.branch,
-  });
+  const admitted = {
+    project: {
+      key: "a".repeat(64),
+      baseCommit,
+      source: {
+        kind: "repository" as const,
+        url: repository.url,
+        repositoryId: "R_repository",
+        owner: {
+          agent: { agentId: "main", provenance: null },
+          identity: { source: "anonymous" as const },
+        },
+      },
+    },
+    setupRecipe: undefined,
+    assertCurrent,
+    revalidate: async () => assertCurrent(),
+  };
+  vi.mocked(prepareRepositoryWorkerProjectSource).mockReset().mockResolvedValue(admitted);
   const syncWorkspace = vi.fn<WorkerTunnelHandle["syncWorkspace"]>(async (request) => {
     if (request.source.kind !== "repository") {
       throw new Error("Expected repository source");
@@ -193,6 +207,7 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     });
   return {
     nodeHome,
+    admitted,
     remote,
     store,
     repository,
@@ -244,14 +259,20 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     await pending;
   }
   const result = await pending;
-  expect(prepareWorkerGitHubBinding).toHaveBeenCalledWith({
-    sessionId: session.sessionId,
-    sessionKey: session.sessionKey,
-    agentId: session.agentId,
-    assertCurrent: expect.any(Function),
+  expect(prepareRepositoryWorkerProjectSource).toHaveBeenCalledWith({
+    namespace: "session-repository",
+    getConfig: expect.any(Function),
+    repository: {
+      agentId: session.agentId,
+      url: f.repository.url,
+      ref: "refs/tags/v1.2.3",
+      baseCommit: undefined,
+    },
+    assertCurrent: f.assertCurrent,
+    signal: undefined,
   });
   expect(f.syncWorkspace).toHaveBeenCalledWith({
-    authorize: f.assertCurrent,
+    authorize: expect.any(Function),
     sessionId: session.sessionId,
     sessionKey: session.sessionKey,
     generation: session.generation,
@@ -261,8 +282,7 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
       url: f.repository.url,
       ref: "refs/tags/v1.2.3",
       branch: f.repository.branch,
-      baseCommit: undefined,
-      gitToken: token,
+      baseCommit: f.baseCommit,
       runSetupScript: true,
     },
   });
@@ -290,7 +310,6 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
 
 it("does not run setup when the repository did not request it", async () => {
   const f = await fixture(false);
-  vi.mocked(prepareWorkerGitHubBinding).mockResolvedValue(undefined);
   await f.start({ runSetupScript: true });
   expect(f.syncWorkspace.mock.calls[0]?.[0].source).toMatchObject({ runSetupScript: false });
   expect(f.syncWorkspace.mock.calls[0]?.[0].source).not.toHaveProperty("gitToken");
@@ -303,7 +322,7 @@ it("does not run setup when the repository did not request it", async () => {
 it("refuses requested setup without fresh authority instead of saving an incomplete initial state", async () => {
   const f = await fixture(true);
   await expect(f.start({ runSetupScript: undefined })).rejects.toThrow("administrator");
-  expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+  expect(prepareRepositoryWorkerProjectSource).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
   expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
 });
@@ -311,7 +330,7 @@ it("refuses requested setup without fresh authority instead of saving an incompl
 it("refuses interrupted setup recovery before credentials or worker commands are requested", async () => {
   const f = await fixture(true);
   await expect(f.start({ recovery: true, runSetupScript: true })).rejects.toThrow("administrator");
-  expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+  expect(prepareRepositoryWorkerProjectSource).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
   expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
 });
@@ -481,7 +500,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
   for (const [request] of f.syncWorkspace.mock.calls) {
     expect(request.source).not.toHaveProperty("gitToken");
   }
-  expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+  expect(prepareRepositoryWorkerProjectSource).not.toHaveBeenCalled();
   expect(await fs.readFile(path.join(f.remote, "setup.txt"), "utf8")).toBe("already prepared\n");
   expect(await f.store.get(f.repository.workspaceId)).toMatchObject({
     baseCommit: f.baseCommit,
@@ -495,7 +514,7 @@ it.each(["commit", "source manifest"] as const)(
   async (change) => {
     const f = await fixture();
     await f.start();
-    vi.mocked(prepareWorkerGitHubBinding).mockClear();
+    vi.mocked(prepareRepositoryWorkerProjectSource).mockClear();
     f.syncWorkspace.mockClear();
     await expect(
       f.start({
@@ -509,7 +528,7 @@ it.each(["commit", "source manifest"] as const)(
         },
       }),
     ).rejects.toThrow(change === "commit" ? "pinned session commit" : "pinned source manifest");
-    expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+    expect(prepareRepositoryWorkerProjectSource).not.toHaveBeenCalled();
     expect(f.syncWorkspace).not.toHaveBeenCalled();
   },
 );
@@ -546,9 +565,9 @@ it.each(["identity", "sync", "verification"] as const)(
   async (phase) => {
     const f = await fixture();
     if (phase === "identity") {
-      vi.mocked(prepareWorkerGitHubBinding).mockImplementationOnce(async () => {
+      vi.mocked(prepareRepositoryWorkerProjectSource).mockImplementationOnce(async () => {
         f.closeAuthority();
-        return undefined;
+        return f.admitted;
       });
     } else if (phase === "sync") {
       const sync = f.syncWorkspace.getMockImplementation()!;
@@ -641,5 +660,45 @@ it.each(["unchanged", "source commit", "base manifest", "accepted manifest"] as 
     expect(await f.store.get(accepted.workspaceId)).toEqual(accepted);
     expect(f.quiesceWorkspace).not.toHaveBeenCalled();
     expect(f.reconcileWorkspace).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "keeps private recovery credentials on the Gateway and cleans source after failure=%s",
+  async (fail) => {
+    const f = await fixture();
+    let sourcePath: string | undefined;
+    const prepareWorkspace = vi.fn(async ({ temporaryRoot }: { temporaryRoot: string }) => {
+      sourcePath = path.join(temporaryRoot, "workspace");
+      await fs.cp(f.remote, sourcePath, { recursive: true });
+      return sourcePath;
+    });
+    vi.mocked(prepareRepositoryWorkerProjectSource).mockResolvedValue({
+      ...f.admitted,
+      prepareWorkspace,
+    });
+    const sync = f.syncWorkspace.getMockImplementation()!;
+    f.syncWorkspace.mockImplementationOnce(async (request) => {
+      expect(request.source).toMatchObject({
+        baseCommit: f.baseCommit,
+        localSourcePath: sourcePath,
+      });
+      expect(request.source).not.toHaveProperty("gitToken");
+      expect(await fs.readFile(path.join(sourcePath!, "tracked.txt"), "utf8")).toBe(
+        "pinned source\n",
+      );
+      if (fail) {
+        throw new Error("worker failed");
+      }
+      return await sync(request);
+    });
+    if (fail) {
+      await expect(f.start({ recovery: true })).rejects.toThrow("worker failed");
+    } else {
+      await f.start({ recovery: true });
+      expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeTruthy();
+    }
+    expect(prepareWorkspace).toHaveBeenCalledOnce();
+    await expect(fs.stat(sourcePath!)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );

@@ -18,7 +18,7 @@ const FIXTURE_WORKSPACE = "/node/workspace";
 const FIXTURE_TOKEN = `ghp_${"x".repeat(36)}`;
 
 it.each(["win32", "linux", "darwin"] as const)(
-  "preserves authenticated Git arguments with native long paths on %s",
+  "strips inherited Git credentials while preserving native long paths on %s",
   async (platform) => {
     const origin = "https://example.invalid/repository.git";
     const spawnSync = vi.fn(() => ({ status: 1 }));
@@ -62,9 +62,6 @@ it.each(["win32", "linux", "darwin"] as const)(
               GIT_TERMINAL_PROMPT: "0",
               GIT_ASKPASS: "",
               SSH_ASKPASS: "",
-              GIT_CONFIG_COUNT: "1",
-              GIT_CONFIG_KEY_0: `http.${origin}.extraheader`,
-              GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${FIXTURE_TOKEN}`).toString("base64")}`,
             },
           },
         );
@@ -79,9 +76,7 @@ it.each(["win32", "linux", "darwin"] as const)(
         workspaceDir: FIXTURE_WORKSPACE,
       };
     });
-    await expect(
-      repository.prepareRepository({ origin, gitToken: FIXTURE_TOKEN }),
-    ).resolves.toMatchObject({
+    await expect(repository.prepareRepository({ origin })).resolves.toMatchObject({
       kind: "failed",
       reason: "clone-failed",
     });
