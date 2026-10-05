@@ -80,8 +80,8 @@ function computerActIdempotencyKey(params: {
   const stableScope = params.scope?.trim();
   const stableCallId = params.toolCallId.trim();
   if (!stableScope || !stableCallId) {
-    // A call id is only unique inside its model response. Without a stable run
-    // scope and provider/fallback id, avoid collapsing unrelated actions.
+    // Runner-normalized call ids are unique within an attempt, not across all runs.
+    // Without both a stable run scope and call id, avoid collapsing unrelated actions.
     return crypto.randomUUID();
   }
   const parts = [stableScope, stableCallId, COMPUTER_ACT_COMMAND];
