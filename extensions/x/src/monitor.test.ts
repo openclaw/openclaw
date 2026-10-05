@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openXAllowlist } from "./allowlist.js";
+import { createXApiClient } from "./api.js";
+import { openXGuestUsage } from "./guest-usage.js";
 import { sendXDelivery } from "./send.js";
 import {
   client,
@@ -111,6 +113,118 @@ describe("X account monitor", () => {
         expect(running.status()).toMatchObject({ connected: true, mode: "stream" });
       } finally {
         clearInterval(keepAlive);
+        await test.stop();
+      }
+    },
+  );
+
+  it.each([
+    { recipientId: "100", dispatches: 1, guest: false },
+    { recipientId: "99", dispatches: 0, guest: false },
+    { recipientId: "100", dispatches: 1, guest: true },
+    { recipientId: "99", dispatches: 0, guest: true },
+  ])(
+    "verifies pending recipient $recipientId (guest=$guest) before quota and dispatch after budget reset",
+    async ({ recipientId, dispatches, guest }) => {
+      vi.setSystemTime(new Date("2026-10-05T23:59:59Z"));
+      const completed = Promise.withResolvers<void>();
+      const blocked = Promise.withResolvers<void>();
+      const released: string[] = [];
+      const authorId = guest ? "20" : "10";
+      const queue = createQueue<Payload>({
+        onCompleted: () => completed.resolve(),
+        onReleased: (id) => released.push(id),
+      });
+      await queue.enqueue(
+        "501",
+        {
+          version: 1,
+          rawEvent: JSON.stringify({
+            post: post("501", authorId),
+            users: [],
+            recipientPending: true,
+          }),
+        },
+        { laneKey: "500" },
+      );
+      const test = fixture({
+        posts: [],
+        queue,
+        cfg: guest
+          ? {
+              ...config,
+              agents: {
+                entries: { maintainer: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+              },
+              channels: {
+                x: {
+                  ...config.channels?.x,
+                  guests: { enabled: true, maxMentionsPerAuthorPerDay: 1 },
+                },
+              },
+            }
+          : config,
+      });
+      const guestUsage = openXGuestUsage(test.runtime);
+      await test.api.spend.charge(99_995_000);
+      let lookups = 0;
+      const api = createXApiClient({
+        spend: test.api.spend,
+        clientId: "client",
+        clientSecret: "secret",
+        refreshToken: "refresh",
+        saveRefreshToken: async () => {},
+        fetch: async (input) => {
+          if (input.endsWith("/oauth2/token")) {
+            return Response.json({ access_token: "access" });
+          }
+          lookups++;
+          return Response.json({
+            data: [
+              {
+                ...post("501", authorId),
+                entities: { mentions: [{ id: recipientId, username: "bot" }] },
+              },
+            ],
+            includes: {
+              users: [{ id: authorId, username: guest ? "guest" : "config_maintainer" }],
+            },
+          });
+        },
+      });
+      test.api.getPosts.mockImplementation(async (ids) => {
+        try {
+          return await api.getPosts(ids);
+        } catch (error) {
+          blocked.resolve();
+          throw error;
+        }
+      });
+      const running = test.start();
+      try {
+        await blocked.promise;
+        expect(test.dispatch).not.toHaveBeenCalled();
+        expect(lookups).toBe(0);
+        expect(await guestUsage.counts("default")).toEqual({
+          admittedToday: 0,
+          rateLimitedToday: 0,
+        });
+        expect(running.status()).toMatchObject({
+          spend: { dayUsd: 100, dailyLimitUsd: 100, monthlyLimitUsd: 1000 },
+        });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(lookups).toBe(0);
+        await vi.advanceTimersByTimeAsync(1);
+        await completed.promise;
+        expect(lookups).toBe(1);
+        expect(test.dispatch).toHaveBeenCalledTimes(dispatches);
+        expect(await guestUsage.counts("default")).toEqual({
+          admittedToday: guest ? dispatches : 0,
+          rateLimitedToday: 0,
+        });
+        expect(released).toEqual([]);
+        expect(running.status()).toMatchObject({ spend: { dayUsd: 0.02 } });
+      } finally {
         await test.stop();
       }
     },
