@@ -33,6 +33,11 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { pluginInstanceInvocation } from "../../plugins/plugin-instance-invocation.js";
+import {
+  getPluginValueInstance,
+  wrapCurrentPluginInstance,
+} from "../../plugins/plugin-instance-scope.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
@@ -374,8 +379,13 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const [params, ownership] = args;
   const replyPipeline = resolveAssembledReplyPipeline(params);
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  const deliveryOwner = getPluginValueInstance(params.delivery);
   const delivery =
-    params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
+    params.admission?.kind === "observeOnly"
+      ? createObserveOnlyDeliveryAdapter()
+      : deliveryOwner && deliveryOwner === pluginInstanceInvocation.getStore()?.instance
+        ? params.delivery
+        : wrapCurrentPluginInstance(params.delivery);
   const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
   const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];

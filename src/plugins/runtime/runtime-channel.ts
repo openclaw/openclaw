@@ -79,7 +79,10 @@ import {
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { pluginInstanceInvocation } from "../plugin-instance-invocation.js";
+import { getPluginInstanceOwner } from "../plugin-instance-scope.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
+import { getPluginRuntimeGenerationRegistry } from "./generation-state.js";
 import type { PluginRuntime } from "./types.js";
 
 // Text and registration helpers must not initialize the agent dispatch graph.
@@ -94,10 +97,35 @@ const dispatchReplyWithBufferedBlockDispatcherCore = createLazyRuntimeMethod(
 const loadChannelTurnLifecycle = createLazyRuntimeModule(
   () => import("../../channels/turn/lifecycle.js"),
 );
-const dispatchAssembledChannelTurn = createLazyRuntimeMethod(
+const dispatchAssembledChannelTurnCore = createLazyRuntimeMethod(
   loadChannelTurnLifecycle,
   (runtime) => runtime.dispatchAssembledChannelTurn,
 );
+
+async function withChannelDeliveryCustody<T extends { delivery: object }, R>(
+  params: T,
+  dispatch: (params: T) => Promise<R>,
+): Promise<R> {
+  const invocation = pluginInstanceInvocation.getStore();
+  const owner = invocation && getPluginInstanceOwner(invocation.instance);
+  const generation = getPluginRuntimeGenerationRegistry();
+  const consumer = owner?.instance?.retainConsumer(
+    undefined,
+    generation?.plugins.includes(owner.record) ? generation : owner.registry,
+  );
+  try {
+    // Acquire before lazy loading or foreign hooks; release after queued delivery settles.
+    return await dispatch(
+      consumer ? { ...params, delivery: consumer.wrap(params.delivery) } : params,
+    );
+  } finally {
+    consumer?.release();
+  }
+}
+
+const dispatchAssembledChannelTurn: PluginRuntime["channel"]["inbound"]["dispatchReply"] = (
+  params,
+) => withChannelDeliveryCustody(params, dispatchAssembledChannelTurnCore);
 const loadPreparedChannelTurn = createLazyRuntimeModule(
   () => import("../../channels/turn/execution.js"),
 );
@@ -113,13 +141,15 @@ const runChannelTurn = createLazyRuntimeMethod(
 export function createRuntimeChannel(options?: {
   dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
 }): PluginRuntime["channel"] {
-  const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = async (params) =>
-    (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
-      ...params,
-      ...(options?.dispatchReplyFromConfig
-        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
-        : {}),
-    });
+  const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = (params) =>
+    withChannelDeliveryCustody(params, async (ownedParams) =>
+      (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
+        ...ownedParams,
+        ...(options?.dispatchReplyFromConfig
+          ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+          : {}),
+      }),
+    );
   const inboundRuntime = {
     ingress: {
       createResolver: createChannelIngressPolicyResolver,
