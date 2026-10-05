@@ -86,8 +86,7 @@ function collectDeclarationReferences(sourceFile: ts.SourceFile): ts.StringLiter
   };
   visit(sourceFile);
   return [...references.values()].toSorted(
-    (left, right) =>
-      compareText(left.specifier, right.specifier) || left.literal.pos - right.literal.pos,
+    (left, right) => compareText(left.text, right.text) || left.pos - right.pos,
   );
 }
 

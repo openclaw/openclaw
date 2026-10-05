@@ -151,6 +151,7 @@ export async function handleOpenResponsesHttpRequest(
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     ...opts,
     pathname: "/v1/responses",
+    requiredOperatorMethod: "chat.send",
     maxBodyBytes,
   });
   if (handled === false) {

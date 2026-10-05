@@ -66,6 +66,7 @@ function endpointOptions(overrides: Partial<EndpointOptions> = {}): EndpointOpti
   return {
     pathname: "/v1/ok",
     auth: {} as unknown as ResolvedGatewayAuth,
+    requiredOperatorMethod: "chat.send",
     maxBodyBytes: 123,
     ...overrides,
   };

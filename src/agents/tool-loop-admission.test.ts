@@ -372,7 +372,6 @@ describe("whole-batch tool-loop admission", () => {
           content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
           details: { status: "running" },
         },
-        config: ctx.loopDetection,
         runId: ctx.runId,
       });
     }

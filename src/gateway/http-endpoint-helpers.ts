@@ -20,6 +20,7 @@ export async function handleGatewayPostJsonEndpoint(
   opts: GatewayHttpRequestAuthOptions & {
     pathname: string;
     maxBodyBytes: number;
+    requiredOperatorMethod: string;
   },
 ): Promise<
   | false
@@ -47,7 +48,7 @@ export async function handleGatewayPostJsonEndpoint(
 
   // Compat HTTP treats shared-secret bearer auth as full operator access.
   const operatorScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("chat.send", operatorScopes);
+  const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
   if (!scopeAuth.allowed) {
     sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return undefined;

@@ -499,6 +499,7 @@ export async function handleOpenAiHttpRequest(
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     ...opts,
     pathname: "/v1/chat/completions",
+    requiredOperatorMethod: "chat.send",
     maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
   });
   if (handled === false) {

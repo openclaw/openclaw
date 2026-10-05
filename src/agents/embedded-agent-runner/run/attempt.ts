@@ -116,7 +116,6 @@ async function runEmbeddedAttemptOwned(
     emitCorePluginToolStageSummary,
     prepStages,
     sandbox,
-    sandboxSessionKey,
     sessionAgentId,
   } = setup;
 

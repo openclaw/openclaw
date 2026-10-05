@@ -11,7 +11,7 @@ import {
 } from "./session-cost-usage-collection.js";
 
 // These storage tests inspect their own native handles; runtime collection uses worker custody.
-function collectionAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
+export function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
   return {
     env,
     materializeArchive: async (sourcePath) => materializeSessionArchiveForRead(sourcePath),
@@ -22,7 +22,7 @@ function collectionAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
       const scopes = markers.map((marker) => ({ ...marker, env }));
       return scopes.length === 1
         ? scopes.map(readTranscriptStatsSync)
-        : readTranscriptStatsBatchReadOnlySync(scopes);
+        : readTranscriptStatsBatchReadOnlySync(scopes).map((stats) => stats ?? undefined);
     },
   };
 }
@@ -34,9 +34,12 @@ export function listUsageCountedTranscriptStats(
     "minMtimeMs" | "sessionsDir" | "storePath" | "env"
   > = {},
 ) {
-  return collectTranscriptStats(agentId, { ...collectionAccess(params.env), ...params });
+  return collectTranscriptStats(agentId, {
+    ...createNativeStorageUsageAccess(params.env),
+    ...params,
+  });
 }
 
 export function resolveUsageCostTranscriptFile(sessionFile: string) {
-  return resolveTranscriptFile(sessionFile, collectionAccess());
+  return resolveTranscriptFile(sessionFile, createNativeStorageUsageAccess());
 }

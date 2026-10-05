@@ -171,6 +171,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     ...opts,
     pathname: "/v1/embeddings",
+    requiredOperatorMethod: "chat.send",
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_EMBEDDINGS_BODY_BYTES,
   });
   if (handled === false) {

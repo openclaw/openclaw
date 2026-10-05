@@ -227,11 +227,11 @@ export function dispatchAgentRunFromGateway(params: {
       return {
         sessionId,
         sessionKey,
-        handoff: (settle) => {
+        handoff: (settleTranscript) => {
           if (!isCurrent()) {
             return false;
           }
-          const settlement = settle(producerCompletion.promise);
+          const settlement = settleTranscript(producerCompletion.promise);
           terminalSettlement = terminalSettlement
             ? Promise.all([terminalSettlement, settlement]).then(() => undefined)
             : settlement;
@@ -309,7 +309,13 @@ export function dispatchAgentRunFromGateway(params: {
       )
     : runAgent();
   // Startup failures may never enter command finalization; delivery already joined this boundary.
-  const agentRun = agentExecution.finally(completeTerminalProducer);
+  const agentRun = (async () => {
+    try {
+      return await agentExecution;
+    } finally {
+      await completeTerminalProducer();
+    }
+  })();
   let inputCompletionWriteFailed = false;
   const dispatchCompletion = agentRun
     .then(async (result) => {
